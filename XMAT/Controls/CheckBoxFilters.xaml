@@ -1,0 +1,41 @@
+<UserControl x:Class="XMAT.CheckBoxFilters"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:XMAT"
+             xmlns:logic="clr-namespace:XMAT"
+             xmlns:scm="clr-namespace:System.ComponentModel;assembly=WindowsBase"
+             x:Name="CheckBoxFiltersControl"
+             mc:Ignorable="d">
+    <UserControl.Resources>
+        <CollectionViewSource x:Key="BoundItems" Source="{Binding ItemsSource,RelativeSource={RelativeSource FindAncestor, 
+                                                                  AncestorType=local:CheckBoxFilters, 
+                                                                  AncestorLevel=1}}">
+            <CollectionViewSource.SortDescriptions>
+                <scm:SortDescription PropertyName="Text"/>
+            </CollectionViewSource.SortDescriptions>
+        </CollectionViewSource>
+    </UserControl.Resources>
+    <StackPanel Orientation="Horizontal">
+        <CheckBox x:Name="EnableFilters" IsChecked="{Binding IsFilterEnabled, ElementName=CheckBoxFiltersControl}" Checked="EnableFilters_Checked" VerticalAlignment="Center" VerticalContentAlignment="Center" Unchecked="EnableFilters_Unchecked"/>
+        <ComboBox x:Name="FilterList" Text="{Binding FilterDesc, ElementName=CheckBoxFiltersControl, Mode=OneWay}" Width="100" Height="20" Margin="0,0,20,0" IsSynchronizedWithCurrentItem="False"
+                    IsReadOnly="True" IsEditable="True">
+            <ComboBox.ItemsSource>
+                <CompositeCollection>
+                    <logic:CheckedListItem>
+                        <logic:CheckedListItem.Text>*</logic:CheckedListItem.Text>
+                        <logic:CheckedListItem.IsChecked>True</logic:CheckedListItem.IsChecked>
+                    </logic:CheckedListItem>
+                    <CollectionContainer Collection="{Binding Source={StaticResource BoundItems}}"/>
+                </CompositeCollection>
+            </ComboBox.ItemsSource>
+            <ComboBox.ItemTemplate>
+                <DataTemplate>
+                    <CheckBox x:Name="ItemCheckBox" Content="{Binding Text}" IsChecked="{Binding IsChecked}" Tag="{Binding}" Checked="FilterCheckBox_Checked" Unchecked="FilterCheckBox_Unchecked"/>
+                </DataTemplate>
+            </ComboBox.ItemTemplate>
+        </ComboBox>
+
+    </StackPanel>
+</UserControl>

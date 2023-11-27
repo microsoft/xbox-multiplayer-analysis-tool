@@ -1,0 +1,24 @@
+<UserControl x:Class="XMAT.NetworkTraceCaptureAnalysis.NetworkTraceAnalysisOptions"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:XMAT.NetworkTraceCaptureAnalysis"
+             mc:Ignorable="d" 
+             d:DesignHeight="300" d:DesignWidth="300"
+             DataContext="{Binding NetworkAnalysisPreferences}">
+    <StackPanel Width="300" HorizontalAlignment="Left">
+        <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,5,0,0" HorizontalAlignment="Left">
+            <TextBlock Grid.Row="1"  Grid.Column="0" HorizontalAlignment="Stretch"  FontWeight="Bold" x:Name="PacketsPerSecondLabel"/>
+            <TextBox Width="50" Text="{Binding PacketsPerSecondThreshold}" HorizontalAlignment="Left" HorizontalContentAlignment="Center" VerticalContentAlignment="Top"/>
+        </StackPanel>
+        <StackPanel Grid.Row="1" Orientation="Vertical"  Margin="0,5,0,0" HorizontalAlignment="Left">
+            <TextBlock Grid.Row="1"  Grid.Column="0" HorizontalAlignment="Stretch"  FontWeight="Bold" x:Name="MaxMtuLabel"/>
+            <TextBox Width="50" Text="{Binding MaximumMTU}" HorizontalAlignment="Left" HorizontalContentAlignment="Center" VerticalContentAlignment="Top"/>
+        </StackPanel>
+        <StackPanel Grid.Row="1" Orientation="Vertical"  Margin="0,5,0,0" HorizontalAlignment="Left">
+            <TextBlock Grid.Row="1"  Grid.Column="0" HorizontalAlignment="Stretch"  FontWeight="Bold" x:Name="DuplicatePacketLabel"/>
+            <TextBox Width="50" Text="{Binding DuplicatePacketWindow}" HorizontalAlignment="Left" HorizontalContentAlignment="Center" VerticalContentAlignment="Top"/>
+        </StackPanel>
+    </StackPanel>
+</UserControl>

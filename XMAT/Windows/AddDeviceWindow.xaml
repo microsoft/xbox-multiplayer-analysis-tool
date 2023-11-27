@@ -1,0 +1,36 @@
+<Window x:Class="XMAT.AddDeviceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:XMAT"
+        mc:Ignorable="d"
+        Title="New Capture"
+        SizeToContent="WidthAndHeight"
+        WindowStartupLocation="CenterOwner"
+         WindowStyle="SingleBorderWindow"
+        ResizeMode="NoResize">
+    <StackPanel Orientation="Vertical" Margin="10">
+        <Label x:Name="SelectDevice" FontWeight="Bold">Select device</Label>
+        <RadioButton GroupName="device" x:Name="LocalPC" Content="Local PC" IsChecked="True" Checked="ResetOKButtonState"/>
+        <RadioButton GroupName="device" x:Name="DefaultConsole" Content="Default Console" Checked="ResetOKButtonState"/>
+        <RadioButton GroupName="device" x:Name="CustomIpConsole" Checked="ResetOKButtonState">
+            <RadioButton.Content>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="ConsoleAtIP" Text="Console at IP address " TextAlignment="Right"/>
+                    <TextBox x:Name="ConsoleIpAddress" Text="" Width="100" HorizontalContentAlignment="Center" TextChanged="ConsoleIpAddress_TextChanged" ToolTip="IPv4 internet address for the console."/>
+                </StackPanel>
+            </RadioButton.Content>
+        </RadioButton>
+
+        <Label x:Name="CaptureTypeLabel" FontWeight="Bold">Select capture type</Label>
+        <RadioButton GroupName="capture" x:Name="WebProxyLabel" IsChecked="True" Content="Web Proxy"/>
+        <RadioButton GroupName="capture" x:Name="NetworkTraceLabel" Content="Network Trace"/>
+
+        <Separator Margin="0,10,0,10"/>
+        <StackPanel Orientation="Horizontal" FlowDirection="RightToLeft">
+            <Button x:Name="CancelButton" Content="Cancel" IsCancel="True" Width="100" Margin="0,0,10,0"/>
+            <Button x:Name="OkButton" Content="Add capture" Width="100" IsDefault="True" Click="OkButton_Click"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

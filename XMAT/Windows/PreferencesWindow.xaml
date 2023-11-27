@@ -1,0 +1,36 @@
+<Window x:Class="XMAT.PreferencesWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:XMAT"
+        xmlns:wscc="clr-namespace:XMAT.WebServiceCapture"
+        xmlns:ntca="clr-namespace:XMAT.NetworkTraceCaptureAnalysis"
+        mc:Ignorable="d"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="SingleBorderWindow"
+        ResizeMode="NoResize"
+        x:Name="PreferencesWindowTitle" Title="Preferences" Height="250" Width="350">
+    <Window.CommandBindings>
+        <CommandBinding Command="Save" Executed="Save_Executed"/>
+    </Window.CommandBindings>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition/>
+            <RowDefinition Height="30"/>
+        </Grid.RowDefinitions>
+        <TabControl Grid.Row="0">
+            <TabItem x:Name="ProxyTab" Header="Web Proxy">
+                <wscc:CaptureOptionsFull/>
+            </TabItem>
+            <TabItem x:Name="TraceTab" Header="Network Analysis">
+                <ntca:NetworkTraceAnalysisOptions/>
+            </TabItem>
+        </TabControl>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" FlowDirection="RightToLeft" HorizontalAlignment="Center">
+            <Button x:Name="Cancel" Content="_Close" Width="100" IsCancel="True" Margin="0,0,10,0"/>
+            <Button x:Name="Save"   Content="_Save"   Width="100" IsDefault="True" Command="Save"/>
+        </StackPanel>
+    </Grid>
+</Window>

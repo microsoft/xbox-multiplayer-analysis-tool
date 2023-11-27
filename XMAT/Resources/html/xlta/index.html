@@ -1,0 +1,33 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Xbox Live Trace Analyzer Report</title>
+  <meta charset="utf-8">
+  <link href="bootstrap.css" rel="stylesheet"/>
+  <link href="site.css" rel="stylesheet"/>
+  <link href="report.css" rel="stylesheet"/>
+  
+  <!-- Libraries -->
+  <script src="jquery.js"></script>
+  <script src="bootstrap.min.js"></script>
+  <!-- Report Functions -->
+  <script src="report_view.js"></script>
+  <!-- Report Data -->
+  <script src="calls.js"></script>
+  <script src="stats.js"></script>
+</head>
+<body>
+<div class="atg-container">
+	<div id="displayArea"></div>
+</div>
+<script>
+	$(function(){
+		statsPage = new StatsPage();
+		statsPage.build(stats, calls);
+		statsPage.show($("#displayArea").empty());
+		statsPage.changeAPI(API);
+	});
+</script>
+
+</body>
+</html>

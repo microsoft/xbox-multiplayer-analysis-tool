@@ -1,0 +1,499 @@
+{
+  "Version": "1.0.0.0",
+  "Rules": [
+    {
+      "Type": "StatsRecorderRule",
+      "Name": "StatsRecorderRule_All",
+      "Endpoint": "*"
+    },
+    {
+      "Type": "CallRecorderRule",
+      "Name": "CalLRecorderRule_All",
+      "Endpoint": "*"
+    },
+    {
+      "Type": "XR049Rule",
+      "Name": "XR049Rule_UserPresence",
+      "Endpoint": "userpresence.xboxlive.com"
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyProfile_Rule",
+      "Endpoint": "profile.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "30",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "10"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyClubHub_Rule",
+      "Endpoint": "clubhub.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "30",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "10"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyPresence_Rule",
+      "Endpoint": "userpresence.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "Description": "write presence",
+            "Subpaths": [
+              "/users/xuid(*)/devices/current/titles/current"
+            ],
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "30",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "3"
+          },
+          {
+            "Description": "read presence",
+            "Subpaths": [
+              "/users/xuid(*)",
+              "/users/batch",
+              "/users/xuid(*)/groups/*"
+            ],
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "100",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "3"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyPrivacy_Rule",
+      "Endpoint": "privacy.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "30",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "10"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyLeaderboards_Rule",
+      "Endpoint": "leaderboards.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "100",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "30"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyAchievements_Rule",
+      "Endpoint": "achievements.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "300",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "100"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyTitleStorage_Rule",
+      "Endpoint": "titlestorage.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "30",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "10"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencySmartMatch_Rule",
+      "Endpoint": "momatch.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "100",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "10"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyPeople_Rule",
+      "Endpoint": "social.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "30",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "10"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencySessionDirectory_Rule",
+      "Endpoint": "sessiondirectory.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "300",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "30"
+          },
+          {
+            "Description": "query MPSD search handles",
+            "Subpaths": [
+              "/handles/query?include=relatedInfo,roleInfo,customProperties"
+            ],
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "20",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "1"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyUserStats_Rule",
+      "Endpoint": "userstats.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "30",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "10"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyStatsRead_Rule",
+      "Endpoint": "statsread.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "300",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "100"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyStatsWrite_Rule",
+      "Endpoint": "statswrite.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "10",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "10"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyClubs_Rule",
+      "Endpoint": "club*.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "30",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "10"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyInventory_Rule",
+      "Endpoint": "inventory.xboxlive.com",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "100",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "100"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "CallFrequencyRule",
+      "Name": "CallFrequencyGeneral_Rule",
+      "Endpoint": "*",
+      "Properties": {
+        "Limits": [
+          {
+            "SustainedCallPeriod": "300",
+            "SustainedCallLimit": "30",
+            "BurstCallPeriod": "15",
+            "BurstCallLimit": "10"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "BurstDetectionRule",
+      "Name": "BurstDetection_Rule",
+      "Endpoint": "inGameEvents",
+      "Properties": {
+        "BurstDetectionWindowMs": "5000",
+        "BurstSizeToDetect": "10"
+      }
+    },
+    {
+      "Type": "BurstDetectionRule",
+      "Name": "BurstDetection_Rule",
+      "Endpoint": "*.*",
+      "Properties": {
+        "BurstDetectionWindowMs": "2000",
+        "BurstSizeToDetect": "3"
+      }
+    },
+    {
+      "Type": "RepeatedCallsRule",
+      "Name": "RepeatedCalls_Rule",
+      "Endpoint": "*.*",
+      "Properties": {
+        "MinAllowedRepeatIntervalMs": "5000"
+      }
+    },
+    {
+      "Type": "SmallBatchDetectionRule",
+      "Name": "SmallBatchDetection_UserStats_Rule",
+      "Endpoint": "userstats.xboxlive.com",
+      "Properties": {
+        "MinBatchXUIDsPerBatchCall": "2",
+        "MatchPatterns": [
+          {
+            "BatchURI": "/batch",
+            "XUIDListClass": "requestedusers"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "SmallBatchDetectionRule",
+      "Name": "SmallBatchDetection_Profile_Rule",
+      "Endpoint": "profile.xboxlive.com",
+      "Properties": {
+        "MinBatchXUIDsPerBatchCall": "1",
+        "MatchPatterns": [
+          {
+            "BatchURI": "/users/batch/profile/settings",
+            "XUIDListClass": "userIds"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "SmallBatchDetectionRule",
+      "Name": "SmallBatchDetection_UserPresence_Rule",
+      "Endpoint": "userpresence.xboxlive.com",
+      "Properties": {
+        "MinBatchXUIDsPerBatchCall": "2",
+        "MatchPatterns": [
+          {
+            "BatchURI": "/users/batch",
+            "XUIDListClass": "users"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "SmallBatchDetectionRule",
+      "Name": "SmallBatchDetection_TitleStorage_Rule",
+      "Endpoint": "titlestorage.xboxlive.com",
+      "Properties": {
+        "MinBatchXUIDsPerBatchCall": "2",
+        "MatchPatterns": [
+          {
+            "BatchURI": "/json/users/batch",
+            "XUIDListClass": "xuids"
+          },
+          {
+            "BatchURI": "/trustedplatform/users/batch",
+            "XUIDListClass": "xuids"
+          },
+          {
+            "BatchURI": "/untrustedplatform/users/batch",
+            "XUIDListClass": "xuids"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "SmallBatchDetectionRule",
+      "Name": "SmallBatchDetection_SessionDirectory_Rule",
+      "Endpoint": "sessiondirectory.xboxlive.com",
+      "Properties": {
+        "MinBatchXUIDsPerBatchCall": "2",
+        "MatchPatterns": [
+          {
+            "BatchURI": "/serviceconfigs/[\\w]+/batch",
+            "XUIDListClass": "xuids"
+          },
+          {
+            "BatchURI": "/serviceconfigs/[\\w]+/sessiontemplates/[\\w]+/batch",
+            "XUIDListClass": "xuids"
+          },
+          {
+            "BatchURI": "/handles/query\\?include=relatedInfo,customProperties",
+            "XUIDListClass": "owners.xuids"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "BatchFrequencyRule",
+      "Name": "BatchFrequency_UserStats_Rule",
+      "Endpoint": "userstats.xboxlive.com",
+      "Properties": {
+        "BatchSetDetectionWindowMs": "2000",
+        "MatchPatterns": [
+          {
+            "BatchURI": "/batch",
+            "XUIDListClass": "requestedusers"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "BatchFrequencyRule",
+      "Name": "BatchFrequency_Profile_Rule",
+      "Endpoint": "profile.xboxlive.com",
+      "Properties": {
+        "BatchSetDetectionWindowMs": "2000",
+        "MatchPatterns": [
+          {
+            "BatchURI": "/users/batch/profile/settings",
+            "XUIDListClass": "userIds"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "BatchFrequencyRule",
+      "Name": "BatchFrequency_UserPresence_Rule",
+      "Endpoint": "userpresence.xboxlive.com",
+      "Properties": {
+        "BatchSetDetectionWindowMs": "2000",
+        "MatchPatterns": [
+          {
+            "BatchURI": "/users/batch",
+            "XUIDListClass": "users"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "BatchFrequencyRule",
+      "Name": "BatchFrequency_TitleStorage_Rule",
+      "Endpoint": "titlestorage.xboxlive.com",
+      "Properties": {
+        "BatchSetDetectionWindowMs": "2000",
+        "MatchPatterns": [
+          {
+            "BatchURI": "/json/users/batch",
+            "XUIDListClass": "xuids"
+          },
+          {
+            "BatchURI": "/trustedplatform/users/batch",
+            "XUIDListClass": "xuids"
+          },
+          {
+            "BatchURI": "/untrustedplatform/users/batch",
+            "XUIDListClass": "xuids"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "BatchFrequencyRule",
+      "Name": "BatchFrequency_SessionDirectory_Rule",
+      "Endpoint": "sessiondirectory.xboxlive.com",
+      "Properties": {
+        "BatchSetDetectionWindowMs": "2000",
+        "MatchPatterns": [
+          {
+            "BatchURI": "/serviceconfigs/[\\w]+/batch",
+            "XUIDListClass": "xuids"
+          },
+          {
+            "BatchURI": "/serviceconfigs/[\\w]+/sessiontemplates/[\\w]+/batch",
+            "XUIDListClass": "xuids"
+          },
+          {
+            "BatchURI": "/handles/query\\?include=relatedInfo,customProperties",
+            "XUIDListClass": "owners.xuids"
+          }
+        ]
+      }
+    },
+    {
+      "Type": "ThrottledCallsRule",
+      "Name": "ThrottleRule_Rule",
+      "Endpoint": "*.*",
+      "Properties": {
+      }
+    },
+    {
+      "Type": "PollingDetectionRule",
+      "Name": "PollingDetection_Rule",
+      "Endpoint": "*.*",
+      "Properties": {
+        "SameDeltaThresholdPercent": ".01"
+      }
+    }
+  ]
+}

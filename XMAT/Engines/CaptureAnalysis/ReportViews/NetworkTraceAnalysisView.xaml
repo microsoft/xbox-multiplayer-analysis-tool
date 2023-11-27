@@ -1,0 +1,57 @@
+<UserControl x:Class="XMAT.NetworkTraceCaptureAnalysis.NetworkTraceAnalysisView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:XMAT.NetworkTraceCaptureAnalysis"
+             mc:Ignorable="d" 
+             d:DesignHeight="450" d:DesignWidth="800">
+    <UserControl.Resources>
+        <local:BooleanValueToColorConverter x:Key="BooleanValueToColorConverter"/>
+    </UserControl.Resources>
+
+    <ScrollViewer>
+        <StackPanel Margin="20,0,40,0">
+            <TextBlock x:Name="NetAnalysisTitle" Margin="0,0,0,20" FontWeight="Bold" TextDecorations="Underline" FontSize="14"/>
+            <ItemsControl ItemsSource="{Binding AnalysisData.NumericStatsLists, Mode=OneWay}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Margin="20,0,0,20">
+                            <TextBlock Text="{Binding Topic}" FontWeight="Bold" />
+                            <Grid>
+                                <DataGrid ItemsSource="{Binding Values}" AutoGenerateColumns="False" GridLinesVisibility="None" AlternatingRowBackground="#F7F7F7" Background="White" HeadersVisibility="None">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Binding="{Binding Name}" Width="200"/>
+                                        <DataGridTextColumn Binding="{Binding Value}" MinWidth="80"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <ItemsControl ItemsSource="{Binding AnalysisData.NumericStats, Mode=OneWay}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Margin="20,0,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="200"/>
+                                <ColumnDefinition />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{Binding Name}" FontWeight="Bold" Background="{Binding Value, Converter={StaticResource BooleanValueToColorConverter}}"/>
+                            <TextBlock Grid.Column="1" Text="{Binding Value}" Background="{Binding Value, Converter={StaticResource BooleanValueToColorConverter}}"/>
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Grid Margin="20,20,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="200"/>
+                    <ColumnDefinition />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" x:Name="TotalPacketsLabel"/>
+                <TextBlock Grid.Column="1" Text="{Binding AnalysisData.TotalPacketsScanned}"/>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

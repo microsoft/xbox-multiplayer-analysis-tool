@@ -1,0 +1,148 @@
+<UserControl xmlns:Controls="clr-namespace:XMAT.XboxLiveCaptureAnalysis.ReportViews.Controls"
+             x:Class="XMAT.XboxLiveCaptureAnalysis.PerEndpointReportView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:XMAT.XboxLiveCaptureAnalysis"
+             xmlns:logic="clr-namespace:XMAT.XboxLiveCaptureAnalysis"
+             mc:Ignorable="d" 
+             d:DesignHeight="450" d:DesignWidth="800">
+    <UserControl.Resources>
+        <logic:ViolationLevelToColorBrushConverter x:Key="ViolationLevelToColorBrushConverter"/>
+    </UserControl.Resources>
+    <UserControl.CommandBindings>
+        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToId}" Executed="GoToEndpoint_Id"/>
+        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpoint}" Executed="GoToEndpoint_Executed"/>
+        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBfr}" Executed="GoToEndpointBfr_Executed"/>
+        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBdr}" Executed="GoToEndpointBdr_Executed"/>
+        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointCfr}" Executed="GoToEndpointCfr_Executed"/>
+        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointPdr}" Executed="GoToEndpointPdr_Executed"/>
+        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointRcr}" Executed="GoToEndpointRcr_Executed"/>
+        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointSbdr}" Executed="GoToEndpointSbdr_Executed"/>
+        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointTcr}" Executed="GoToEndpointTcr_Executed"/>
+    </UserControl.CommandBindings>
+    <ScrollViewer>
+        <StackPanel>
+            <TextBlock x:Name="SummaryLabel" Text="SUMMARY" FontWeight="Bold"/>
+            <Separator/>
+            <DataGrid
+                x:Name="EndpointSummary"
+                IsReadOnly="True"
+                ItemsSource="{Binding Summary.Endpoints}"
+                AutoGenerateColumns="False">
+                <DataGrid.Columns>
+                    <DataGridTemplateColumn Header="Endpoint Name" Width="SizeToCells" IsReadOnly="True">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button
+                                    Content="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpoint}" CommandParameter="{Binding EndpointName}"
+                                    />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Batch Frequency Rule" IsReadOnly="True">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button
+                                    Content="{Binding BatchFrequencyIssueCount.ErrorsAndWarnings}"
+                                    Background="{Binding BatchFrequencyIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    Tag="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBfr}" CommandParameter="{Binding EndpointName}"
+                                    />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Burst Detection Rule" IsReadOnly="True">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button
+                                    Content="{Binding BurstDetectionIssueCount.ErrorsAndWarnings}"
+                                    Background="{Binding BurstDetectionIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    Tag="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBdr}" CommandParameter="{Binding EndpointName}"
+                                    />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Call Frequency Rule" IsReadOnly="True">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button
+                                    Content="{Binding CallFrequencyIssueCount.ErrorsAndWarnings}"
+                                    Background="{Binding CallFrequencyIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    Tag="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointCfr}" CommandParameter="{Binding EndpointName}"
+                                    />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Polling Detection Rule" IsReadOnly="True">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button
+                                    Content="{Binding PollingDetectionIssueCount.ErrorsAndWarnings}"
+                                    Background="{Binding PollingDetectionIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    Tag="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointPdr}" CommandParameter="{Binding EndpointName}"
+                                    />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Repeated Calls Rule" IsReadOnly="True">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button
+                                    Content="{Binding RepeatedCallsIssueCount.ErrorsAndWarnings}"
+                                    Background="{Binding RepeatedCallsIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    Tag="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointRcr}" CommandParameter="{Binding EndpointName}"
+                                    />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Small Batch Detection Rule" IsReadOnly="True">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button
+                                    Content="{Binding SmallBatchDetectionIssueCount.ErrorsAndWarnings}"
+                                    Background="{Binding SmallBatchDetectionIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    Tag="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointSbdr}" CommandParameter="{Binding EndpointName}"
+                                    />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Throttled Call Rule" IsReadOnly="True">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button
+                                    Content="{Binding ThrottledCallIssueCount.ErrorsAndWarnings}"
+                                    Background="{Binding ThrottledCallIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    Tag="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointTcr}" CommandParameter="{Binding EndpointName}"
+                                    />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+            <Separator/>
+            <TextBlock x:Name="DetailsLabel" Text="DETAILS" FontWeight="Bold"/>
+            <Separator/>
+            <ItemsControl ItemsSource="{Binding Details.Endpoints}" x:Name="EndpointStack">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Vertical"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Controls:PerEndpointDetails />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

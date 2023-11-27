@@ -1,0 +1,85 @@
+<Window x:Class="XMAT.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:XMAT"
+        mc:Ignorable="d"
+        Loaded="Window_Loaded"
+        Title="{StaticResource appName}"
+        AllowDrop="True"
+        Drop="Window_Drop"
+        WindowStartupLocation="CenterScreen"
+        d:Height="720" d:Width="1280" >
+    <Window.CommandBindings>
+        <CommandBinding Command="New"  Executed="New_Executed"/>
+        <CommandBinding Command="Open" Executed="Open_Executed"/>
+        <CommandBinding Command="Save" Executed="Save_Executed"/>
+        <CommandBinding Command="{x:Static local:AppCommands.Import}"           Executed="Import_Executed"/>
+        <CommandBinding Command="{x:Static local:AppCommands.Export}"           Executed="Export_Executed"/>
+        <CommandBinding Command="{x:Static local:AppCommands.Preferences}"      Executed="Preferences_Executed"/>
+        <CommandBinding Command="{x:Static local:AppCommands.Exit}"             Executed="Exit_Executed"/>
+        <CommandBinding Command="{x:Static local:AppCommands.ClearAllCaptures}" Executed="ClearAllCaptures_Executed" CanExecute="ClearAllCaptures_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.AnalyzeCaptures}"  Executed="AnalyzeCaptures_Executed" CanExecute="AnalyzeCaptures_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.CollectLogs}"      Executed="CollectLogs_Executed"/>
+        <CommandBinding Command="{x:Static local:AppCommands.ViewGDKXInfo}"      Executed="ViewGDKXInfo_Executed"/>
+    </Window.CommandBindings>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="20"/>
+            <RowDefinition/>
+            <RowDefinition Height="20"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="9*"/>
+            <ColumnDefinition Width="119*"/>
+        </Grid.ColumnDefinitions>
+
+        <Menu Grid.Column="0" x:Name="MainMenuBar" Height="20" VerticalAlignment="Center" HorizontalContentAlignment="Left" VerticalContentAlignment="Top" Grid.ColumnSpan="2">
+            <MenuItem x:Name="FileMenu" HorizontalAlignment="Left" Header="_File">
+                <MenuItem x:Name="FileNewCapture"     Header="_New Capture..."   Command="New"/>
+                <MenuItem x:Name="FileLoadCaptures"   Header="_Load Captures..." Command="Open"/>
+                <MenuItem x:Name="FileSaveCaptures"   Header="_Save Captures..." Command="Save"/>
+                <Separator />
+                <MenuItem x:Name="FileImportCaptures" Command="{x:Static local:AppCommands.Import}" />
+                <MenuItem x:Name="FileExportCaptures" Command="{x:Static local:AppCommands.Export}" />
+                <Separator />
+                <MenuItem x:Name="FileExit"           Command="{x:Static local:AppCommands.Exit}" />
+            </MenuItem>
+            <MenuItem x:Name="EditMenu" HorizontalAlignment="Left" Header="_Edit">
+                <MenuItem x:Name="ViewClearCaptures" Command="{x:Static local:AppCommands.ClearAllCaptures}" />
+                <Separator />
+                <MenuItem x:Name="EditPreferences" Command="{x:Static local:AppCommands.Preferences}"/>
+
+            </MenuItem>
+            <MenuItem x:Name="AnalysisMenu" HorizontalAlignment="Left" Header="_Analysis">
+                <MenuItem x:Name="ViewAnalyzeCaptures" Command="{x:Static local:AppCommands.AnalyzeCaptures}" />
+            </MenuItem>
+            <MenuItem x:Name="HelpMenu" HorizontalAlignment="Left" Header="_Help">
+                <MenuItem x:Name="CollectLogs" Command="{x:Static local:AppCommands.CollectLogs}" />
+                <MenuItem x:Name="ViewGDKXInfo" Command="{x:Static local:AppCommands.ViewGDKXInfo}" />
+            </MenuItem>
+        </Menu>
+
+        <Grid Grid.Row="1" Grid.Column="0" x:Name="MainClientArea" Grid.ColumnSpan="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="4"/>
+                <RowDefinition Height="200"/>
+            </Grid.RowDefinitions>
+
+            <local:AllCaptureDevicesTabControl x:Name="AllCaptureDevicesPanel" Grid.Row="0" DeviceTabClosed="AllCaptureDevicesPanel_TabClosed"/>
+            <GridSplitter Grid.Row="1" Grid.Column="0" Height="4" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+            <local:CaptureAnalysisControl x:Name="CaptureErrorsPanel" Grid.Row="2" AnalysisTabAdded="CaptureErrorsPanel_TabAdded" AnalysisTabClosed="CaptureErrorsPanel_TabClosed"/>
+        </Grid>
+
+        <StatusBar Grid.Row="2" Grid.Column="0" x:Name="MainStatusBar" VerticalAlignment="Center" VerticalContentAlignment="Top" HorizontalContentAlignment="Left" Grid.ColumnSpan="2">
+            <StackPanel x:Name="StatusBarPanels" Orientation="Horizontal">
+                <TextBlock x:Name="StatusBar1" Width="200" Text="{Binding StatusBarText1}" />
+                <TextBlock x:Name="StatusBar2" Width="200" Text="{Binding StatusBarText2}" />
+                <TextBlock x:Name="StatusBar3" MinWidth="400" Text="{Binding StatusBarText3}"/>
+            </StackPanel>
+        </StatusBar>
+
+    </Grid>
+</Window>
