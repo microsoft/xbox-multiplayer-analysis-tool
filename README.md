@@ -389,12 +389,12 @@ _Workaround: None currently. Apps like Outlook may fail to function properly whe
 **Enabling proxying does not confirm settings with user, nor allow cancellation of the process.**
 _Workaround: Be sure to double check that your console device is ready to reboot when enabling._
 
-**Future Improvements:**
+**Potential Future Improvements:**
 
 - Keep alive handling needs further improvement.
 - Web sockets are not supported yet.
 - Root certificate(s) and analysis output(s) are not stored in a user specified location.
-- Other languages are not supported yet.
+- Additional Localization
 
 ## Support
 
