@@ -16,13 +16,13 @@ higher.
 
 ## Table of Contents
 
-- **Web Proxying with a Device**
-- **Scripting & Modification of Web Proxy Traffic**
-- **Live Trace Analysis**
-- **Network Capture**
-- **Network Capture Analysis**
-- **Known Issues**
-- **Support**
+- **[Web Proxying with a Device](#web-proxying-with-a-device)**
+- **[Scripting & Modification of Web Proxy Traffic](#scripting--modification-of-web-proxy-traffic)**
+- **[Live Trace Analysis](#live-trace-analysis)**
+- **[Network Capture](#network-capture)**
+- **[Network Capture Analysis](#network-capture-analysis)**
+- **[Known Issues](#known-issues)**
+- **[Support](#support)**
 
 
 ## Web Proxying with a Device
