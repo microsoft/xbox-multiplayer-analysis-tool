@@ -2,10 +2,10 @@
 
 ## Description
 
-Xbox Multiplayer Analysis Tool is a network traffic capturing tool to aid in the debugging of Xbox Live issues and other network
+Xbox Multiplayer Analysis Tool is a network traffic capturing tool to aid in the debugging of Xbox services issues and other network
 traffic from both a PC and Xbox development console. It incorporates features to proxy web and low-level
 network requests and responses in real-time, decrypt and view SSL traffic, modify traffic on the fly, and
-analyze Xbox Live and network traffic for problems.
+analyze Xbox services and network traffic for problems.
 
 ## Basic Environment Requirements & Dependencies
 
@@ -117,9 +117,9 @@ While proxying, we can launch an app installed on the kit – like the ATG NetRu
 traffic created as a result of the app’s activity like below:
 
 ![](./ReadmeImages/7.png)
-_Screenshot of user Xbox Live sign-in for the ATG NetRumble sample._
+_Screenshot of user Xbox services sign-in for the ATG NetRumble sample._
 
-As a result of the Xbox Live user signin process that happens at the start of the app, we can click on the
+As a result of the Xbox services user signin process that happens at the start of the app, we can click on the
 individual user authentication request and response in Xbox Multiplayer Analysis Tool. The “Headers” and “Body” tabs show
 formatted text for the separate request and response. In addition, additional connection details are
 provided that include when the request was made, and how long the request took to complete (when the
@@ -155,7 +155,7 @@ button on the tool bar. Disabling proxing for a device will cause the kit to reb
 web service traffic through the Xbox Multiplayer Analysis Tool proxy, thereby implicit stopping proxying.
 
 If proxying remains enabled, but Xbox Multiplayer Analysis Tool is not proxying web traffic for that particular device, then the kit
-will fail to perform Xbox Live status checks, as well as successfully execute other Xbox Live related APIs or
+will fail to perform Xbox services status checks, as well as successfully execute other Xbox services related APIs or
 REST requests. The kit will eventually show an “unknown” status like this:
 
 ![](./ReadmeImages/11.png)
@@ -223,11 +223,11 @@ There are several known issues and limitations with the scripting functionality:
 
 ### Introduction to Xbox Live Trace Analysis
 
-The Xbox Live Trace Analyzer has traditionally been a standalone command line tool for performing rule-
+The Xbox Live Trace Analyzer tool has traditionally been a standalone command line tool for performing rule-
 based analysis against Fiddler web service capture files with extension SAZ. It continues to be supported
 and is provided with the Microsoft GDK. One can also build their own tool directly from source as it is
 available on a public GitHub repository. Xbox Multiplayer Analysis Tool has the Xbox Live Trace Analyzer’s capabilities built
-directly within and are invaluable for detecting problematic Xbox Live REST API calling patterns discovered
+directly within and are invaluable for detecting problematic Xbox services REST API calling patterns discovered
 amongst a title’s web service traffic.
 
 ### Execution of analysis
@@ -291,12 +291,12 @@ opened, and will also select the corresponding request like shown:
 ![](./ReadmeImages/20.png)
 _Screenshot of one of the rule warnings’ request selected in the connections list._
 
-In the example presented above, there exist many Live APIs that can take several users as parameters for
+In the example presented above, there exist many Xbox services APIs that can take several users as parameters for
 the API call. The warning notes that only one user was provided to the API as can be seen when
 
 inspecting the actual request body JSON seen in the above screenshot.
 
-Reducing the quantity of calls to Xbox Live REST APIs is always preferable to prevent throttled call
+Reducing the quantity of calls to Xbox services REST APIs is always preferable to prevent throttled call
 execution, reduce overall bandwidth consumption, and ease load and latency for calls.
 
 
