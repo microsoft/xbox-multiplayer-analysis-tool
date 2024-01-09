@@ -1,0 +1,124 @@
+<UserControl x:Class="XMAT.ScriptEditorView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:XMAT"
+             xmlns:script="clr-namespace:XMAT.Scripting"
+             mc:Ignorable="d"
+             x:Name="ScriptEditorViewControl"
+             d:DesignHeight="550" d:DesignWidth="800">
+    <UserControl.CommandBindings>
+        <CommandBinding Command="{x:Static local:ScriptCommands.SaveScript}"          Executed="SaveScript_Executed"          CanExecute="LoadSaveScript_CanExecute"/>
+        <CommandBinding Command="{x:Static local:ScriptCommands.LoadScript}"          Executed="LoadScript_Executed"          CanExecute="LoadSaveScript_CanExecute"/>
+        <CommandBinding Command="{x:Static local:ScriptCommands.RevertScript}"        Executed="RevertScript_Executed"        CanExecute="RevertScript_CanExecute"/>
+        <CommandBinding Command="{x:Static local:ScriptCommands.ValidateScript}"      Executed="ValidateScript_Executed"      CanExecute="ValidateScript_CanExecute"/>
+        <CommandBinding Command="{x:Static local:ScriptCommands.ScriptErrorSelected}" Executed="ScriptErrorSelected_Executed"/>
+    </UserControl.CommandBindings>
+
+    <StackPanel Orientation="Vertical" Background="White" DockPanel.Dock="Top">
+        <StackPanel Orientation="Horizontal">
+            <Label x:Name="EventSelectorLabel" Target="{Binding ElementName=EventSelector}"/>
+            <ComboBox x:Name="EventSelector" Width="200" SelectedIndex="0" IsSynchronizedWithCurrentItem="True" ItemsSource="{Binding ScriptCollection, ElementName=ScriptEditorViewControl}" DisplayMemberPath="DisplayName"/>
+            <TextBlock Text="{Binding SelectedItem.Description, ElementName=EventSelector}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+        </StackPanel>
+        <Label x:Name="ScriptLabel" Target="{Binding ElementName=ScriptEditor}"/>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="ScriptEditor" Grid.Column="0" Height="300" VerticalAlignment="Stretch" TextWrapping="Wrap" AcceptsReturn="True" AcceptsTab="True" PreviewKeyDown="ScriptEditor_PreviewKeyDown"
+                     VerticalScrollBarVisibility="Visible" FontFamily="Consolas" Text="{Binding SelectedItem.Script, ElementName=EventSelector, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="3*"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TreeView x:Name="TypeInfoTree" Grid.Row="0" ItemsSource="{Binding ScriptTypeCollection, ElementName=ScriptEditorViewControl}" MaxHeight="250">
+                    <!-- auto-expand all items -->
+                    <TreeView.ItemContainerStyle>
+                        <Style TargetType="{x:Type TreeViewItem}">
+                            <Setter Property="IsExpanded" Value="True"/>
+                            <Setter Property="Tag" Value="{Binding}"/>
+                            <EventSetter Event="MouseDoubleClick" Handler="TreeViewItem_MouseDoubleClick"/>
+                        </Style>
+                    </TreeView.ItemContainerStyle>
+                    <TreeView.ItemTemplate>
+                        <HierarchicalDataTemplate ItemsSource="{Binding Properties}" DataType="{x:Type script:ScriptTypeInfo}">
+
+                            <!-- sub nodes get styled by this -->
+                            <HierarchicalDataTemplate.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock>
+                                        <Run Text="{Binding Name}"/>
+                                        <Run Text=": "/>
+                                        <Run Text="{Binding Type}"/>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </HierarchicalDataTemplate.ItemTemplate>
+
+                            <!-- top level nodes get styled by this -->
+                            <TextBlock Text="{Binding Name}"/>
+                        </HierarchicalDataTemplate>
+                    </TreeView.ItemTemplate>
+                </TreeView>
+                <TextBox Grid.Row="1" IsReadOnly="True" TextWrapping="Wrap" Text="{Binding SelectedItem.Description, ElementName=TypeInfoTree, UpdateSourceTrigger=PropertyChanged}"/>
+            </Grid>
+        </Grid>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <StackPanel.Resources>
+                <Style TargetType="Button">
+                    <Setter Property="Padding" Value="5"/>
+                    <Setter Property="Margin"  Value="5"/>
+                    <Setter Property="Width"   Value="100"/>
+                </Style>
+            </StackPanel.Resources>
+
+            <ToggleButton x:Name="ScriptEnabled" Padding="5" Margin="5" Width="100" IsChecked="{Binding SelectedItem.IsEnabled, ElementName=EventSelector}"
+                                      Command="{x:Static local:ScriptCommands.ValidateScript}" CommandParameter="{Binding SelectedItem, ElementName=EventSelector}">
+                <ToggleButton.Style>
+                    <Style TargetType="{x:Type ToggleButton}">
+                        <Setter Property="Content">
+                            <Setter.Value>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{x:Static local:ScriptEditorView.EnabledText}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Setter.Value>
+                        </Setter>
+                        <Style.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter Property="Content">
+                                    <Setter.Value>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{x:Static local:ScriptEditorView.DisabledText}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </ToggleButton.Style>
+            </ToggleButton>
+
+            <Button Content="{Binding RelativeSource={RelativeSource Self}, Path=Command.Text}" Command="{x:Static local:ScriptCommands.RevertScript}" CommandParameter="{Binding SelectedItem, ElementName=EventSelector}"/>
+            <Button Content="{Binding RelativeSource={RelativeSource Self}, Path=Command.Text}" Command="{x:Static local:ScriptCommands.LoadScript}"   CommandParameter="{Binding SelectedItem, ElementName=EventSelector}"/>
+            <Button Content="{Binding RelativeSource={RelativeSource Self}, Path=Command.Text}" Command="{x:Static local:ScriptCommands.SaveScript}"   CommandParameter="{Binding SelectedItem, ElementName=EventSelector}"/>
+        </StackPanel>
+        <Label x:Name="ScriptStatusLabel" Target="{Binding ElementName=ScriptOutput}"/>
+        <TextBox x:Name="ScriptSuccess" Height="100" FontFamily="Consolas" IsReadOnly="True" Visibility="Collapsed"/>
+        <ListBox x:Name="ScriptOutput" Height="100" FontFamily="Consolas" ItemsSource="{Binding SelectedItem.CompilationStatus, ElementName=EventSelector}">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding}">
+                        <TextBlock.InputBindings>
+                            <MouseBinding MouseAction="LeftDoubleClick"
+                                  Command="{x:Static local:ScriptCommands.ScriptErrorSelected}"
+                                  CommandParameter="{Binding}" />
+                        </TextBlock.InputBindings>
+                    </TextBlock>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </StackPanel>
+</UserControl>

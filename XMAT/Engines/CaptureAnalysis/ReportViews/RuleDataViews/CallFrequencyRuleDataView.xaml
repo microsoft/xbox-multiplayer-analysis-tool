@@ -1,0 +1,16 @@
+<UserControl x:Class="XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews.CallFrequencyRuleDataView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews"
+             mc:Ignorable="d" 
+             d:DesignHeight="450" d:DesignWidth="800">
+    <DataGrid ItemsSource="{Binding Data}" AutoGenerateColumns="False" IsReadOnly="True">
+        <DataGrid.Columns>
+            <DataGridTextColumn Binding="{Binding TotalCalls}" Header="{x:Static local:CallFrequencyRuleDataView.TotalCallsLabel}"/>
+            <DataGridTextColumn Binding="{Binding TimesSustainedExceeded}" Header="{x:Static local:CallFrequencyRuleDataView.TimesSustainedExceededLabel}"/>
+            <DataGridTextColumn Binding="{Binding TimesBurstExceeded}" Header="{x:Static local:CallFrequencyRuleDataView.TimesBurstExceededLabel}"/>
+        </DataGrid.Columns>
+    </DataGrid>
+</UserControl>

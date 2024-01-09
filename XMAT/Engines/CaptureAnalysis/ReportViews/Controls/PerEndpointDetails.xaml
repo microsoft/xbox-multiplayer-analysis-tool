@@ -1,0 +1,29 @@
+<UserControl x:Class="XMAT.XboxLiveCaptureAnalysis.ReportViews.Controls.PerEndpointDetails"
+             xmlns:Controls="clr-namespace:XMAT.XboxLiveCaptureAnalysis.ReportViews.Controls"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:XMAT.XboxLiveCaptureAnalysis.ReportViews.Controls"
+             mc:Ignorable="d" 
+             d:DesignHeight="450" d:DesignWidth="800">
+    <Expander x:Name="EndpointExpanderTemplate" IsExpanded="True" Background="#FF7F7F7F" >
+        <Expander.Header>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding EndpointName}" />
+            </StackPanel>
+        </Expander.Header>
+        <ItemsControl ItemsSource="{Binding ValidationRulesDetails}" x:Name="EndpointRuleStack">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <StackPanel Orientation="Vertical"/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Controls:PerEndpointRuleDetail Margin="20,0,0,0" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </Expander>
+</UserControl>

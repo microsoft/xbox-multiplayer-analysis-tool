@@ -1,0 +1,29 @@
+<Window x:Class="XMAT.CaptureAnalyzerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+        xmlns:local="clr-namespace:XMAT"
+        mc:Ignorable="d" 
+        Title="Analysis"
+        x:Name="CaptureAnalyzerWindowText"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="SingleBorderWindow"
+        ResizeMode="NoResize"
+        Height="250" Width="250">
+    <StackPanel Orientation="Vertical" Margin="10">
+        <Label x:Name="SelectLabel" FontWeight="Bold">Select analyzer</Label>
+        <ItemsControl x:Name="AnalyzerList" IsTabStop="True" ItemsSource="{Binding}" MinHeight="100">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <RadioButton Content="{Binding}" Tag="{Binding}" IsChecked="{Binding IsSelected}" GroupName="analyzer"/>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <Separator Margin="0,10"/>
+        <StackPanel Orientation="Horizontal" FlowDirection="RightToLeft">
+            <Button x:Name="CancelButton" Content="Cancel" IsCancel="True" Width="100" Margin="0,0,10,0"/>
+            <Button x:Name="OkButton" Content="Start analyzer" Width="100" IsDefault="True" Click="OkButton_Click"/>
+        </StackPanel>
+    </StackPanel>
+</Window>
