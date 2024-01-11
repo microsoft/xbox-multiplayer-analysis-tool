@@ -2,7 +2,7 @@
 
 ## Description
 
-Xbox Multiplayer Analysis Tool is a network traffic capturing tool to aid in the debugging of Xbox services issues and other network
+Xbox Multiplayer Analysis Tool is a network traffic capturing tool to aid in the debugging of Xbox & PlayFab services issues and other network
 traffic from both a PC and Xbox development console. It incorporates features to proxy web and low-level
 network requests and responses in real-time, decrypt and view SSL traffic, modify traffic on the fly, and
 analyze Xbox services and network traffic for problems.
