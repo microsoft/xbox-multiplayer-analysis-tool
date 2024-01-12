@@ -38,7 +38,7 @@ jobs:
       
     # Build
     - name: Build XMAT
-      run: dotnet build $env:Solution_Name -c $env:Configuration
+      run: dotnet build $env:Solution_Name -c $env:Configuration --no-restore
       env:
         Configuration: ${{ matrix.configuration }}
 
