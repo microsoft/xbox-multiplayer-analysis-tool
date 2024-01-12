@@ -1,0 +1,52 @@
+name: XMAT Win64 Desktop Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+
+    strategy:
+      matrix:
+        configuration: [Debug, Release]
+
+    runs-on: windows-latest  # For a list of available runner types, refer to
+                             # https://help.github.com/en/actions/reference/workflow-syntax-for-github-actions#jobsjob_idruns-on
+
+    env:
+      Solution_Name: XboxMultiplayerAnalysisTool.sln
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    # Install the .NET Core workload
+    - name: Install .NET Core
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 7.0.x
+
+    # Restore the solution
+    - name: Restore the application
+      run: dotnet restore $env:Solution_Name
+      
+    # Build
+    - name: Build XMAT
+      run: dotnet build $env:Solution_Name -c $env:Configuration
+      env:
+        Configuration: ${{ matrix.configuration }}
+
+    # Upload artifact (Debug)
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: XMAT_CI_Build_${{ env.Configuration }}
+        path: XMAT\bin\x64\${{ env.Configuration }}\net7.0-windows\
+      env:
+        Configuration: ${{ matrix.configuration }}
