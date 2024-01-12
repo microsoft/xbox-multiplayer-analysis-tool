@@ -46,7 +46,7 @@ jobs:
     - name: Upload Artifacts ($env:Configuration)
       uses: actions/upload-artifact@v4
       with:
-        name: XMAT_CI_Build_${{ github.ref_name }}_$env:Configuration
+        name: XMAT_CI_Build_${{ github.ref_name }}_${{ env.Configuration }}
         path: XMAT\bin\x64\${{ env.Configuration }}\net7.0-windows\
       env:
         Configuration: ${{ matrix.configuration }}
