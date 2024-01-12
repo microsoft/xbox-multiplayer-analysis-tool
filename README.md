@@ -1,5 +1,8 @@
 # Xbox Multiplayer Analysis Tool
 
+## Current Build Status
+[![XMAT Win64 Desktop Build](https://github.com/microsoft/xbox-multiplayer-analysis-tool/actions/workflows/dotnet-desktop.yml/badge.svg?branch=main)](https://github.com/microsoft/xbox-multiplayer-analysis-tool/actions/workflows/dotnet-desktop.yml)
+
 ## Description
 
 Xbox Multiplayer Analysis Tool is a network traffic capturing tool to aid in the debugging of Xbox & PlayFab services issues and other network
