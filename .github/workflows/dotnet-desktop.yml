@@ -47,6 +47,6 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: XMAT_CI_Build_${{ env.Configuration }}
-        path: XMAT\bin\x64\${{ env.Configuration }}\net7.0-windows\
+        path: XMAT\bin\x64\${{ env.Configuration }}\net7.0-windows\win-x64\
       env:
         Configuration: ${{ matrix.configuration }}
