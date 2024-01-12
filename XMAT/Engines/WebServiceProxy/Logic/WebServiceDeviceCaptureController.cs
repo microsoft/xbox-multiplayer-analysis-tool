@@ -52,7 +52,7 @@ namespace XMAT.WebServiceCapture
         public bool IsRunning { get => _isRunning; set { _isRunning = value; RaisePropertyChange(); } }
         public UInt16 Port { get => _parameters.Port; set { _parameters.Port = value; RaisePropertyChange(); } }
         public bool PromptToDisableOnClose { get => _parameters.PromptToDisableOnClose; set { _parameters.PromptToDisableOnClose = value; RaisePropertyChange(); } }
-        public bool IsPortValid { get => Port >= 0; }
+        public bool IsPortValid { get => Port > 0; }
 
         // NOTE: this is an 'object' because the parameters are
         // serialized/deserialized and the Json serializer
