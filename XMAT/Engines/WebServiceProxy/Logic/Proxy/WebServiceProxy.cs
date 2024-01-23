@@ -47,7 +47,7 @@ namespace XMAT.WebServiceCapture.Proxy
         private CancellationTokenSource _cancellationToken = null;
         private int _port = -1;
         private readonly AutoResetEvent _exitEvent = new(false);
-        private readonly HttpClient _httpClient = new(new HttpClientHandler() { UseProxy = false, Proxy = null });
+        private readonly HttpClient _httpClient = new(new HttpClientHandler() { UseProxy = false, Proxy = null, AllowAutoRedirect = false });
         private Thread _listenThread;
 
         // these need to be thread-safe
