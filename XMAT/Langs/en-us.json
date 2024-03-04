@@ -205,7 +205,7 @@
 	"WEB_SVC_SCRIPT_PROP_DESC_CONTINUE": "Set to 'false' to terminate the request/response.",
 
 	"WEBCAP_ANALYSIS_ERROR_TITLE": "Analyzer Error",
-	"WEBCAP_ANALYSIS_ERROR_NOSUITABLE": "No suitable data was found in the capture for this analyzer",
+	"WEBCAP_ANALYSIS_ERROR_NOSUITABLE": "The capture does not contain any endpoints which XMAT can analyze.",
 	"WEBCAP_ANALYSIS_ERROR_UNKNOWN": "An unknown error occurred",
 
 	"PROXY_ERROR_DEVICE_TYPE_PC": "Device type must be PC.",

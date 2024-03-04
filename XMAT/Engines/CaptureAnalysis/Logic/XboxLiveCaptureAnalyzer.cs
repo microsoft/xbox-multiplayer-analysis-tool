@@ -302,7 +302,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 Convert.FromBase64String(responseBodyBase64));
 
             item.ConsoleIP = clientIP;
-            item.HttpStatusCode = Convert.ToUInt32(requestStatus);
+            item.HttpStatusCode = String.IsNullOrEmpty(requestStatus) ? 0 : Convert.ToUInt32(requestStatus);
             item.ReqBodyHash = (UInt64)item.ReqBody.GetHashCode();
             item.ElapsedCallTimeMs = (ulong)duration.TotalMilliseconds;
             item.ReqTimeUTC = (ulong)requestTime.ToFileTimeUtc();
