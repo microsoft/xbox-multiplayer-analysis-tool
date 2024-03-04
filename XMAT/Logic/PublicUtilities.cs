@@ -266,6 +266,11 @@ namespace XMAT
 
         public static string BodyAsText(Dictionary<string, string> headers, byte[] body)
         {
+            if (body == null)
+            {
+                body = new byte[0];
+            }
+
             if (headers.TryGetValue("Content-Encoding", out string encoding))
             {
                 switch (encoding.ToLower())
