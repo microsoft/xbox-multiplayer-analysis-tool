@@ -37,6 +37,7 @@ namespace XMAT
             LocalPC.Content = Localization.GetLocalizedString("LOCAL_PC");
             DefaultConsole.Content = Localization.GetLocalizedString("DEFAULT_CONSOLE");
             ConsoleAtIP.Text = Localization.GetLocalizedString("CONSOLE_AT_IPADDR");
+            GenericDevice.Content = Localization.GetLocalizedString("GENERIC_DEVICE");
 
             CaptureTypeLabel.Content = Localization.GetLocalizedString("SELECT_CAPTURE_TYPE");
             WebProxyLabel.Content = Localization.GetLocalizedString("CAPTURE_TYPE_PROXY");
@@ -76,6 +77,11 @@ namespace XMAT
                     Result = AddDeviceResult.Failed_NoDefaultConsole;
                 }
             }
+            else if (GenericDevice.IsChecked.GetValueOrDefault())
+            {
+                SelectedDeviceType = DeviceType.GenericProxyDevice;
+                SelectedDeviceName = Localization.GetLocalizedString("GENERIC_DEVICE");
+            }
 
             if (WebProxyLabel.IsChecked.GetValueOrDefault())
             {
@@ -109,6 +115,10 @@ namespace XMAT
                 if (CustomIpConsole.IsChecked.GetValueOrDefault())
                 {
                     OkButton.IsEnabled = IsConsoleIpAddressValid(ConsoleIpAddress.Text);
+                }
+                else if (GenericDevice.IsChecked.GetValueOrDefault())
+                {
+                    OkButton.IsEnabled = !NetworkTraceLabel.IsChecked.GetValueOrDefault();
                 }
                 else
                 {

@@ -11,21 +11,20 @@
          WindowStyle="SingleBorderWindow"
         ResizeMode="NoResize">
     <StackPanel Orientation="Vertical" Margin="10">
-        <Label x:Name="SelectDevice" FontWeight="Bold">Select device</Label>
+        <Label x:Name="SelectDevice" FontWeight="Bold" Content="Select device"/>
         <RadioButton GroupName="device" x:Name="LocalPC" Content="Local PC" IsChecked="True" Checked="ResetOKButtonState"/>
-        <RadioButton GroupName="device" x:Name="DefaultConsole" Content="Default Console" Checked="ResetOKButtonState"/>
+        <RadioButton GroupName="device" x:Name="DefaultConsole" Content="Default Xbox Console" Checked="ResetOKButtonState"/>
         <RadioButton GroupName="device" x:Name="CustomIpConsole" Checked="ResetOKButtonState">
-            <RadioButton.Content>
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock x:Name="ConsoleAtIP" Text="Console at IP address " TextAlignment="Right"/>
-                    <TextBox x:Name="ConsoleIpAddress" Text="" Width="100" HorizontalContentAlignment="Center" TextChanged="ConsoleIpAddress_TextChanged" ToolTip="IPv4 internet address for the console."/>
-                </StackPanel>
-            </RadioButton.Content>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="ConsoleAtIP" Text="Xbox Console at IP address" TextAlignment="Right"/>
+                <TextBox x:Name="ConsoleIpAddress" Text="" Width="100" HorizontalContentAlignment="Center" TextChanged="ConsoleIpAddress_TextChanged" ToolTip="IPv4 internet address for the console."/>
+            </StackPanel>
         </RadioButton>
+        <RadioButton GroupName="device" x:Name="GenericDevice" Content="Generic Device" IsChecked="True" Checked="ResetOKButtonState"/>
 
-        <Label x:Name="CaptureTypeLabel" FontWeight="Bold">Select capture type</Label>
-        <RadioButton GroupName="capture" x:Name="WebProxyLabel" IsChecked="True" Content="Web Proxy"/>
-        <RadioButton GroupName="capture" x:Name="NetworkTraceLabel" Content="Network Trace"/>
+        <Label x:Name="CaptureTypeLabel" FontWeight="Bold" Content="Select capture type"/>
+        <RadioButton GroupName="capture" x:Name="WebProxyLabel" IsChecked="True" Content="Web Proxy" Checked="ResetOKButtonState"/>
+        <RadioButton GroupName="capture" x:Name="NetworkTraceLabel" Content="Network Trace" Checked="ResetOKButtonState"/>
 
         <Separator Margin="0,10,0,10"/>
         <StackPanel Orientation="Horizontal" FlowDirection="RightToLeft">

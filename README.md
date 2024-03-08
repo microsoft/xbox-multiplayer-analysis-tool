@@ -12,10 +12,11 @@ analyze Xbox services and network traffic for problems.
 
 ## Basic Environment Requirements & Dependencies
 
-Xbox Multiplayer Analysis Tool requires a Windows 10 (or higher) PC.
-
-Low level network capture requires an Xbox One, or Xbox Series Developer Kit running recovery 2106 or
-higher.
+|  |Web Proxy | Low Level Network Capture| Notes |
+|--|--|--|--|
+|Xbox Developer Kit| :heavy_check_mark: | :heavy_check_mark: |Requires an Xbox One or Xbox Series developer kit running recovery 2106 or higher.|
+|Windows PC| :heavy_check_mark: | :heavy_check_mark: |Requires a Windows machine running Windows 10 (17763 or higher) or Windows 11|
+|Generic Device | :heavy_check_mark: | :x: | Web proxy requires a device capable of utilizing a .cer certificate in combination with settings for the devices proxy IP and port. |
 
 ## Table of Contents
 
