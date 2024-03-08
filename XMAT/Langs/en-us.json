@@ -18,10 +18,14 @@
 	"PROXY_ROOT_CERT_WARNING_TITLE": "Root Certificate Information",
 	"PROXY_ROOT_CERT_WARNING_MESSAGE": "You will see a pop-up message asking you to install and trust our Root Certificate.\n\nThis will only occur once and is essential in order for the tool to be able to decrypt HTTPS traffic transmitted to and from services.",
 
+	"GENERIC_DEVICE_PROXY_INFO_CAPTION": "Proxy Information",
+	"GENERIC_DEVICE_PROXY_INFO_MESSAGE": "The proxy is now ready for your device to connect.\n\nPlease use the following information to configure the proxy settings on your device:\n\nProxy Address: {0}\n\nProxy Port: {1}\n\nProxy Certificate (for HTTPS decryption): Use XMATRoot.cer or FiddlerRoot.cer located in {2}.",
+
 	"SELECT_DEVICE": "Select device",
 	"LOCAL_PC": "Local PC",
-	"DEFAULT_CONSOLE": "Default Console",
-	"CONSOLE_AT_IPADDR": "Console at IP Address",
+	"GENERIC_DEVICE": "Generic Device",
+	"DEFAULT_CONSOLE": "Default Xbox Console",
+	"CONSOLE_AT_IPADDR": "Xbox Console at IP Address",
 	"ADD_CAPTURE": "Add Capture",
 	"CANCEL": "Cancel",
 	"SELECT_CAPTURE_TYPE": "Select capture type",

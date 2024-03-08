@@ -188,7 +188,13 @@ namespace XMAT.WebServiceCapture
                 case DeviceType.LocalPC:
                     {
                         wsdcc.EnableProxyingPC();
-                        wsdcc.StartProxy();
+                        wsdcc.StartProxy(false);
+                        break;
+                    }
+
+                case DeviceType.GenericProxyDevice:
+                    {
+                        wsdcc.StartProxy(true);
                         break;
                     }
 
@@ -256,7 +262,7 @@ namespace XMAT.WebServiceCapture
 
                             if (bWasEnabled)
                             {
-                                wsdcc.StartProxy();
+                                wsdcc.StartProxy(false);
                             }
                         }
                         // TODO: if we 've gotten this far, then that means we
@@ -301,6 +307,11 @@ namespace XMAT.WebServiceCapture
             {
                 strProxyStatusMessageLocKey = "PROXY_CHECK_STATUS_MESSAGE_ENABLED";
             }
+            else if (proxyCheckResult == XboxClient.XboxClientConnection.EProxyEnabledCheckResult.ProxyingGenericDevice)
+            {
+                wsdcc.ShowGenericProxyDetails();
+                return;
+            }
 
             MessageBox.Show(XMAT.Localization.GetLocalizedString(strProxyStatusMessageLocKey), XMAT.Localization.GetLocalizedString("PROXY_CHECK_STATUS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -322,7 +333,7 @@ namespace XMAT.WebServiceCapture
                 {
                     wsdcc.EnableProxyingPC();
                 }
-                wsdcc.StartProxy();
+                wsdcc.StartProxy(captureDeviceContext?.DeviceType == DeviceType.GenericProxyDevice);
             }
             else
             {

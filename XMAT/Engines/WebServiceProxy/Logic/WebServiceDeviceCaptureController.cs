@@ -16,6 +16,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using static XboxClient.XboxClientConnection;
+using System.Net;
 
 namespace XMAT.WebServiceCapture
 {
@@ -105,8 +106,12 @@ namespace XMAT.WebServiceCapture
             {
                 result = InternetProxy.IsEnabled() ? EProxyEnabledCheckResult.ProxyEnabled : EProxyEnabledCheckResult.ProxyDisabled;
             }
+            else if (_deviceType == DeviceType.GenericProxyDevice)
+            {
+                result = EProxyEnabledCheckResult.ProxyingGenericDevice;
+            }
 
-            return result;
+               return result;
         }
 
         public WebServiceDeviceCaptureController(string deviceName, DeviceType deviceType, bool readOnly)
@@ -239,7 +244,6 @@ namespace XMAT.WebServiceCapture
             if (proxyCheckResult == EProxyEnabledCheckResult.ProxyEnabled)
             {
                 MessageBox.Show(Localization.GetLocalizedString("PROXY_ALREADY_ENABLED"));
-                // TODO(scmatlof): We should have some indication to the user that the proxy is already enabled
                 return false;
             }
 
@@ -288,6 +292,9 @@ namespace XMAT.WebServiceCapture
                     InternetProxy.Disable();
                     break;
 
+                case DeviceType.GenericProxyDevice:
+                    break;
+
                 case DeviceType.XboxConsole:
                     if (MessageBox.Show(
                         Localization.GetLocalizedString("PROXY_ERROR_RESTART_DESC"),
@@ -315,7 +322,14 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        internal void StartProxy()
+        public void ShowGenericProxyDetails()
+        {
+            // TODO: Support machine with multiple local IPs
+            IEnumerable<IPAddress> arrIPAddrs = PublicUtilities.GetMyIp4Addresses();
+            MessageBox.Show(Localization.GetLocalizedString("GENERIC_DEVICE_PROXY_INFO_MESSAGE", arrIPAddrs.First().ToString(), Port, PublicUtilities.StorageDirectoryPath), Localization.GetLocalizedString("GENERIC_DEVICE_PROXY_INFO_CAPTION"), MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        internal void StartProxy(bool bShowProxyInformation)
         {
             var options = new WebServiceProxyOptions
             {
@@ -325,6 +339,11 @@ namespace XMAT.WebServiceCapture
 
             _webProxy.StartProxy(options);
             IsRunning = true;
+
+            if (bShowProxyInformation)
+            {
+                ShowGenericProxyDetails();
+            }
         }
 
         internal void StopProxy()

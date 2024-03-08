@@ -9,6 +9,7 @@ namespace XMAT.SharedInterfaces
     {
         LocalPC = 0,
         XboxConsole = 1,
+        GenericProxyDevice = 2,
         Unknown = 99
     }
 
