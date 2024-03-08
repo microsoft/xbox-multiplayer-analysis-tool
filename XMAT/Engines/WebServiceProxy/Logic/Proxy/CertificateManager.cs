@@ -16,6 +16,7 @@ namespace XMAT.WebServiceCapture.Proxy
         private readonly string IssuerName = "Microsoft";
 
         private readonly string CertFileName = "XMATRoot.cer";
+        private readonly string CertFileNameFiddler = "FiddlerRoot.cer";
         private readonly string CertPassword = string.Empty;
 
         private readonly X509Store _rootStore;
@@ -215,6 +216,9 @@ namespace XMAT.WebServiceCapture.Proxy
             // write it out to the path specified
             byte[] buff = _rootCert.Export(X509ContentType.Cert);
             File.WriteAllBytes(Path.Combine(path, CertFileName), buff);
+
+            // For back compat with our own tools
+            File.WriteAllBytes(Path.Combine(path, CertFileNameFiddler), buff);
         }
 
         public void RemoveRootCertificate()

@@ -231,7 +231,8 @@ namespace XboxClient
             DeviceIsXbox_NoGDKX,
             ConsoleUnreachable,
             ProxyDisabled,
-            ProxyEnabled
+            ProxyEnabled,
+            ProxyingGenericDevice
         }
         public static EProxyEnabledCheckResult IsProxyEnabled(string ipAddress)
         {
