@@ -16,7 +16,18 @@ namespace XMAT.WebServiceCapture
     {
         public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
         {
-            bool IsErrorStatus(string statusText) => int.TryParse(statusText, out int status) && status >= 400;
+            bool IsPendingStatus(string statusText)
+            {
+                return String.IsNullOrEmpty(statusText);
+            }
+
+            bool IsErrorStatus(string statusText)
+            {
+                int.TryParse(statusText, out int status);
+
+                return status >= 400;
+            }
+
             bool IsConnectMethod(string method) => (method == "CONNECT");
 
             if (DesignerProperties.GetIsInDesignMode(new DependencyObject()))
@@ -37,6 +48,10 @@ namespace XMAT.WebServiceCapture
             if (IsErrorStatus(status))
             {
                 return new SolidColorBrush(Colors.Red);
+            }
+            else if (IsPendingStatus(status))
+            {
+                return new SolidColorBrush(Colors.Orange);
             }
             else if (IsConnectMethod(method))
             {
