@@ -308,11 +308,11 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             _logger.Log(clientState.ID, LogLevel.DEBUG, "Reading client request...");
 
-            var lines = await ReadRequestAndHeadersAsync(clientState, clientState.GetStream()).ConfigureAwait(false);
-            if(lines == null)
+            Tuple<List<string>, byte[]> headerAndBodyTuple = await ReadRequestAndHeadersAsync(clientState, clientState.GetStream()).ConfigureAwait(false);
+            if(headerAndBodyTuple == null || headerAndBodyTuple.Item1 == null)
                 return null;
 
-            var clientRequest = ParseRequestAndHeaders(clientState.ID, lines);
+            var clientRequest = ParseRequestAndHeaders(clientState.ID, headerAndBodyTuple.Item1);
 
             // if we're a CONNECT, bail out, there's nothing more to read...
             if(clientRequest.Method == "CONNECT")
@@ -330,64 +330,14 @@ namespace XMAT.WebServiceCapture.Proxy
 
             // TODO: Is it valid to just ignore the body on a GET request that's a websocket upgrade request?
 
-            using(var ms = new MemoryStream())
+            if (contentLength <= 0)
             {
-                // Read the message sent by the client until we can read no more
-                // bytes within the timeout.
-                var buffer = new byte[8192];
-                int bytes = 0;
-                int totalBytes = 0;
-
-                do
-                {
-                    try
-                    {
-                        using var timeoutToken = new CancellationTokenSource();
-                        using var readToken = new CancellationTokenSource();
-
-                        var readTask = clientState.GetStream().ReadAsync(buffer, 0, buffer.Length, readToken.Token);
-                        var timeoutTask = Task.Delay(1000, timeoutToken.Token);
-                        var completedTask = await Task.WhenAny(readTask, timeoutTask );
-                        if (completedTask == timeoutTask)
-                        {
-                            // cancel the pending read and bail out
-                            readToken.Cancel();
-                            return clientRequest;
-                        }
-
-                        // cancel the timeout task and continue
-                        timeoutToken.Cancel();
-
-                        bytes = await readTask;
-                        if (bytes > 0)
-                        {
-                            await ms.WriteAsync(buffer, 0, bytes).ConfigureAwait(false);
-                            totalBytes += bytes;
-
-                            if (totalBytes == contentLength)
-                            {
-                                _logger.Log(clientState.ID, LogLevel.DEBUG, $"Read total Content-Length: {contentLength}/{totalBytes}");
-                                break;
-                            }
-                        }
-                        else
-                        {
-                            _logger.Log(clientState.ID, LogLevel.DEBUG, $"Read timed out");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        bytes = 0;
-                        _logger.Log(clientState.ID, LogLevel.ERROR, $"EXCEPTION from stream... [{ex}]");
-                    }
-
-                    _logger.Log(clientState.ID, LogLevel.DEBUG, $"READ {bytes}/{totalBytes}/{contentLength} bytes from stream");
-                }
-                while (bytes > 0);
-
-                clientRequest.BodyBytes = ms.ToArray();
                 return clientRequest;
             }
+
+            clientRequest.BodyBytes = headerAndBodyTuple.Item2;
+
+            return clientRequest;
         }
 
         private async Task<bool> ForwardRequestAsync(ClientState clientState, ClientRequest clientRequest)
@@ -633,30 +583,94 @@ namespace XMAT.WebServiceCapture.Proxy
             return true;
         }
 
-        private async Task<List<string>> ReadRequestAndHeadersAsync(ClientState clientState, Stream stream)
+        private async Task<Tuple<List<string>, byte[]>> ReadRequestAndHeadersAsync(ClientState clientState, Stream stream)
         {
-            StreamReader sr = new StreamReader(stream);
             List<string> lines = new List<string>();
-            string line;
 
-            do
+            byte[] buffer = new byte[1024 * 8]; // 8KB, will grow on demand
+            int readTotal = 0;
+            int readThisFrame = 0;
+
+            try
             {
-                line = await sr.ReadLineAsync();
+                do
+                {
 
-                if(line != null)
-                {
-                    if (line != string.Empty)
-                        lines.Add(line);
+
+                    readThisFrame = await stream.ReadAsync(buffer, readTotal, buffer.Length - readTotal);
+                    readTotal += readThisFrame;
+
+                    _logger.Log(clientState.ID, LogLevel.DEBUG, $"Read {readThisFrame} bytes, total size is {readTotal}");
+
+                    // Do we need to resize?
+                    if (readTotal >= buffer.Length)
+                    {
+                        _logger.Log(clientState.ID, LogLevel.DEBUG, $"Resizing buffer from {buffer.Length} bytes, to {buffer.Length*2} bytes");
+                        Array.Resize<byte>(ref buffer, buffer.Length * 2);
+                    }
                 }
-                else
+                while (clientState.TcpClient.Available > 0);
+            }
+            catch
+            {
+
+            }
+
+            //File.WriteAllBytes($"XMAT_{clientState.ID}.dat", buffer);
+
+            // TODO: Clean this up
+            // parse out headers, retain body
+            string strAllData = Encoding.UTF8.GetString(buffer);
+            int startIndex = 0;
+            for (int i = 0; i < readTotal; ++i)
+            {
+
+                // look ahead for \r\n\r\n
+                if (buffer[i+1] == Encoding.UTF8.GetBytes("\r")[0]
+                    && buffer[i + 2] == Encoding.UTF8.GetBytes("\n")[0]
+                    && buffer[i + 3] == Encoding.UTF8.GetBytes("\r")[0]
+                    && buffer[i + 4] == Encoding.UTF8.GetBytes("\n")[0])
                 {
-                    _logger.Log(clientState.ID, LogLevel.DEBUG, "Read headers timed out");
-                    return null;
+                    // EOF
+
+                    // store last header
+                    lines.Add(strAllData.Substring(startIndex, i - startIndex + 1));
+
+                    // set ptr to rest of data (the body)
+                    startIndex = i + 5;
+                    break; // we are done, remainder is body
+                }
+                else if (buffer[i + 1] == Encoding.UTF8.GetBytes("\r")[0]
+                    && buffer[i + 2] == Encoding.UTF8.GetBytes("\n")[0])
+                {
+                    // EOL
+
+                    // store last header
+                    lines.Add(strAllData.Substring(startIndex, i - startIndex + 1));
+
+                    // set start to next
+                    startIndex = i + 3;
+                    i = startIndex;
                 }
             }
-            while (line != string.Empty); // read until \r\n\r\n
 
-            return lines;
+
+            //string strHeadersTotal = strAllData.Substring(0, startIndex);
+            //string strBody = strAllData.Substring(startIndex);
+            //_logger.Log(clientState.ID, LogLevel.DEBUG, $"Whole buffer was {strAllData}");
+            //_logger.Log(clientState.ID, LogLevel.DEBUG, $"Headers buffer was {strHeadersTotal}");
+            //_logger.Log(clientState.ID, LogLevel.DEBUG, $"Body buffer was {strBody}");
+            //_logger.Log(clientState.ID, LogLevel.DEBUG, $"Done with read, read {readTotal} bytes total, and processed {startIndex} as headers, body remainder is {readTotal-startIndex}");
+
+            // resize the buffer, otherwise we're taking up unnecessary memory
+            Array.Resize<byte>(ref buffer, readTotal);
+
+            // copy out the body
+            byte[] bufBody = new byte[readTotal - startIndex];
+            Array.Copy(buffer, startIndex, bufBody, 0, readTotal - startIndex);
+
+            Tuple<List<string>, byte[]> retVal = new Tuple<List<string>, byte[]>(lines, bufBody);
+            return retVal;
         }
 
         private void CloseClientState(ClientState clientState)
