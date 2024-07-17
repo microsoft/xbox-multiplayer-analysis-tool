@@ -508,6 +508,39 @@ namespace XMAT.WebServiceCapture.Proxy
             return clientRequest;
         }
 
+        private int PrefetchContentLengthFromHeaders(int clientId, List<string> lines)
+        {
+            // Return 0 if not found or malformed
+            int contentLength = 0;
+
+            if (lines == null || lines.Count == 0)
+            {
+                _logger.Log(clientId, LogLevel.ERROR, "Connect request has no data.");
+                return contentLength;
+            }
+
+            // Isolate the content-length header only
+            for (int i = 1; i < lines.Count; i++)
+            {
+                string line = lines[i];
+                string[] header = line.Split(':', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (header.Length < 2)
+                {
+                    _logger.Log(clientId, LogLevel.ERROR, $"Malformed header: {line}");
+                }
+                else
+                {
+                    if (header[0].Trim().ToLower() == "content-length")
+                    {
+                        contentLength = int.Parse(header[1].Trim());
+                        _logger.Log(clientId, LogLevel.DEBUG, $"Prefetch of Content-Length: {contentLength}");
+                    }
+                }
+            }
+
+            return contentLength;
+        }
+
         private async Task<bool> ReturnResponseAsync(ClientRequest clientRequest, ClientState clientState, HttpResponseMessage responseMessage)
         {
             ServerResponse serverResponse = await ParseServerResponseAsync(clientState.ID, responseMessage).ConfigureAwait(false);
@@ -595,8 +628,6 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 do
                 {
-
-
                     readThisFrame = await stream.ReadAsync(buffer, readTotal, buffer.Length - readTotal);
                     readTotal += readThisFrame;
 
@@ -611,9 +642,9 @@ namespace XMAT.WebServiceCapture.Proxy
                 }
                 while (clientState.TcpClient.Available > 0);
             }
-            catch
+            catch (Exception ex)
             {
-
+                _logger.Log(clientState.ID, LogLevel.ERROR, $"Failed reading client request: {ex}");
             }
 
             //File.WriteAllBytes($"XMAT_{clientState.ID}.dat", buffer);
@@ -654,13 +685,38 @@ namespace XMAT.WebServiceCapture.Proxy
                 }
             }
 
+            // Get the actual body length from the content-length header
+            int expectedBodyLength = 0;
+            expectedBodyLength = PrefetchContentLengthFromHeaders(clientState.ID, lines);
 
-            //string strHeadersTotal = strAllData.Substring(0, startIndex);
-            //string strBody = strAllData.Substring(startIndex);
-            //_logger.Log(clientState.ID, LogLevel.DEBUG, $"Whole buffer was {strAllData}");
-            //_logger.Log(clientState.ID, LogLevel.DEBUG, $"Headers buffer was {strHeadersTotal}");
-            //_logger.Log(clientState.ID, LogLevel.DEBUG, $"Body buffer was {strBody}");
-            //_logger.Log(clientState.ID, LogLevel.DEBUG, $"Done with read, read {readTotal} bytes total, and processed {startIndex} as headers, body remainder is {readTotal-startIndex}");
+            // Read the rest of the delayed body if needed
+            if (expectedBodyLength > readTotal - startIndex)
+            {
+                try
+                {
+                    do
+                    {
+                        _logger.Log(clientState.ID, LogLevel.DEBUG, $"Delayed body bytes, reading {expectedBodyLength - (readTotal - startIndex)} at {readTotal - startIndex}");
+
+                        readThisFrame = await stream.ReadAsync(buffer, expectedBodyLength - (readTotal - startIndex), buffer.Length - readTotal);
+                        readTotal += readThisFrame;
+
+                        // Do we need to resize?
+                        if (readTotal >= buffer.Length)
+                        {
+                            _logger.Log(clientState.ID, LogLevel.DEBUG, $"Resizing buffer from {buffer.Length} bytes, to {buffer.Length * 2} bytes");
+                            Array.Resize<byte>(ref buffer, buffer.Length * 2);
+                        }
+                    }
+                    while (expectedBodyLength > readTotal - startIndex);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Log(clientState.ID, LogLevel.ERROR, $"Failed reading client request for delayed body: {ex}");
+                }
+            }
+
+            _logger.Log(clientState.ID, LogLevel.DEBUG, $"Done with reading, read {readTotal} bytes total, and processed {startIndex} as headers, {readTotal-startIndex} as body");
 
             // resize the buffer, otherwise we're taking up unnecessary memory
             Array.Resize<byte>(ref buffer, readTotal);
@@ -694,6 +750,8 @@ namespace XMAT.WebServiceCapture.Proxy
                     Timestamp = DateTime.Now
                 }
             );
+
+            _logger.Log(clientState.ID, LogLevel.DEBUG, $"ConnectionClosed Event: {clientState.ID} | {DateTime.Now.ToString()}");
         }
 
         private bool RaiseReceivedInitialConnection(int connectionID, TcpClient client)
