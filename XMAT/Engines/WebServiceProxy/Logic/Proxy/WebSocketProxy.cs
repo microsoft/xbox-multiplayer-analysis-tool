@@ -16,10 +16,10 @@ namespace XMAT.WebServiceCapture.Proxy
 {
     internal class WebSocketProxy : IWebSocketProxy
     {
+        // TODO: use eventing for driving UI
         public event EventHandler<WebSocketOpenedEventArgs> WebSocketOpened;
         public event EventHandler<WebSocketMessageEventArgs> WebSocketMessage;
         public event EventHandler<WebSocketClosedEventArgs> WebSocketClosed;
-        public event EventHandler ProxyStopped;
 
         private ClientWebSocket _serverWebSocket;
         private WebSocket _clientWebSocket;

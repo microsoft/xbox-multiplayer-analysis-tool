@@ -11,14 +11,5 @@ namespace XMAT.WebServiceCapture.Proxy
         event EventHandler<WebSocketOpenedEventArgs> WebSocketOpened;
         event EventHandler<WebSocketMessageEventArgs> WebSocketMessage;
         event EventHandler<WebSocketClosedEventArgs> WebSocketClosed;
-        event EventHandler ProxyStopped;
-
-//        bool IsProxyEnabled { get; }
-
-//        void StartProxy(WebServiceProxyOptions options);
-
-//        void StopProxy();
-
-//        void Reset();
     }
 }

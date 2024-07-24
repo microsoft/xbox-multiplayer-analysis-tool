@@ -401,6 +401,12 @@ namespace XMAT.WebServiceCapture.Proxy
             // after which the threads will terminate and all will be cleaned up
 
             var wspc = new WebSocketProxy();
+
+            // TODO: Add events for driving UI
+            wspc.WebSocketOpened += null;
+            wspc.WebSocketClosed += null;
+            wspc.WebSocketMessage += null;
+
             await wspc.StartWebSocketProxy(uri, clientState, clientRequest, _logger);
         }
 
