@@ -54,16 +54,17 @@ namespace XMAT.WebServiceCapture.Proxy
                 _myStore.Close();
         }
 
-        public bool Initialize()
+        public ECreateRootCertificateResult Initialize()
         {
-            bool success = CreateRootCertificate();
+			ECreateRootCertificateResult result = CreateRootCertificate();
 
-            if (success)
+            if (result == ECreateRootCertificateResult.CERTIFICATE_GENERATED_AND_INSTALLED
+                || result == ECreateRootCertificateResult.CERTIFICATE_ALREADY_INSTALLED)
             {
                 RebuildCertificateCache();
             }
 
-            return success;
+            return result;
         }
 
         private void RebuildCertificateCache()
@@ -89,10 +90,10 @@ namespace XMAT.WebServiceCapture.Proxy
             // strip the hostname down to the bare host/domain (no ports, etc.)
             hostname = GetHostname(hostname);
 
-            lock(_hostLock)
+            lock (_hostLock)
             {
                 // find the cert in the cache, or create a new one
-                if(_certCache.ContainsKey(hostname))
+                if (_certCache.ContainsKey(hostname))
                 {
                     return _certCache[hostname];
                 }
@@ -101,7 +102,7 @@ namespace XMAT.WebServiceCapture.Proxy
                     // create, add to store, and add to our in-memory cache
                     X509Certificate2 cert = CreateHostCertificate(hostname);
                     _certCache.Add(hostname, cert);
-                    if(_myStore != null)
+                    if (_myStore != null)
                     {
                         _myStore.Add(cert);
                     }
@@ -110,26 +111,31 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
-        public bool CreateRootCertificate()
+		public enum ECreateRootCertificateResult
+		{
+			CERTIFICATE_ALREADY_INSTALLED,
+			CERTIFICATE_GENERATED_AND_INSTALLED,
+			CERTIFICATE_INSTALL_FAILED_OR_CANCELLED
+		}
+
+		public ECreateRootCertificateResult CreateRootCertificate()
         {
             lock(_rootLock)
             {
                 // don't create one if we already have one
                 if(_rootCert != null)
-                    return true;
+                    return ECreateRootCertificateResult.CERTIFICATE_ALREADY_INSTALLED;
 
                 // return the existing root if there is one
                 var certs = _rootStore.Certificates.Find(X509FindType.FindBySubjectDistinguishedName, $"CN={AuthorityName}, O={IssuerName}", false);
                 if(certs.Count > 0)
                 {
                     _rootCert = certs[0];
-                    return true;
+                    return ECreateRootCertificateResult.CERTIFICATE_ALREADY_INSTALLED;
                 }
 
                 try
                 {
-                    MessageBox.Show(Localization.GetLocalizedString("PROXY_ROOT_CERT_WARNING_MESSAGE"), Localization.GetLocalizedString("PROXY_ROOT_CERT_WARNING_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
-
                     RSA rsa = RSA.Create(4096);
 
                     // overall, create a cert that's usable for SSL.  This mostly mirrors the type of cert Fiddler would create with the same params
@@ -150,13 +156,16 @@ namespace XMAT.WebServiceCapture.Proxy
 
                     // create a 2nd cert that has the private keys exportable and persistable (there appears to be no way to do this in one step)
                     _rootCert = new X509Certificate2(cert.Export(X509ContentType.Pfx, CertPassword), CertPassword, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet);
+
+                    MessageBox.Show(Localization.GetLocalizedString("PROXY_ROOT_CERT_WARNING_MESSAGE", _rootCert.Thumbprint), Localization.GetLocalizedString("PROXY_ROOT_CERT_WARNING_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
+                    
                     _rootStore.Add(_rootCert);
 
-                    return true;
+                    return ECreateRootCertificateResult.CERTIFICATE_GENERATED_AND_INSTALLED;
                 }
-                catch(Exception)
+                catch (Exception)
                 {
-                    return false;
+                    return ECreateRootCertificateResult.CERTIFICATE_INSTALL_FAILED_OR_CANCELLED;
                 }
             }
         }

@@ -16,6 +16,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using static XMAT.WebServiceCapture.Proxy.CertificateManager;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -42,7 +43,7 @@ namespace XMAT.WebServiceCapture.Proxy
         private const int ServerLoggingId = 0;
 
         private readonly Logger _logger = new();
-        private static bool _isInitialized = false;
+        private static EInitializationResult _isInitialized = EInitializationResult.UNINITIALIZED;
         private static readonly CertificateManager _certManager = new(false);
         private CancellationTokenSource _cancellationToken = null;
         private int _port = -1;
@@ -54,20 +55,39 @@ namespace XMAT.WebServiceCapture.Proxy
         private int _availableConnectionId;
         private int _availableRequestId;
 
-        internal static bool Initialize(string certPath)
+        public enum EInitializationResult
         {
-            if (_isInitialized)
+			UNINITIALIZED,
+            INITIALIZED,
+            FAILED_CERT_INSTALLATION_CANCELLED_OR_FAILED,
+            FAILED_GENERIC
+        }
+
+        internal static EInitializationResult Initialize(string certPath)
+        {
+            if (_isInitialized == EInitializationResult.INITIALIZED)
             {
                 throw new InvalidOperationException("Only call Initialize once.");
             }
 
-            if (_certManager.Initialize())
+            ECreateRootCertificateResult certMgrResult = _certManager.Initialize();
+
+			if (certMgrResult == ECreateRootCertificateResult.CERTIFICATE_GENERATED_AND_INSTALLED
+                || certMgrResult == ECreateRootCertificateResult.CERTIFICATE_ALREADY_INSTALLED)
             {
                 _certManager.ExportRootCertificate(certPath);
-                _isInitialized = true;
+                _isInitialized = EInitializationResult.INITIALIZED;
             }
+            else if (certMgrResult == ECreateRootCertificateResult.CERTIFICATE_INSTALL_FAILED_OR_CANCELLED)
+			{
+                _isInitialized = EInitializationResult.FAILED_CERT_INSTALLATION_CANCELLED_OR_FAILED;
+            }
+			else
+			{
+				_isInitialized = EInitializationResult.FAILED_GENERIC;
+			}
 
-            return _isInitialized;
+			return _isInitialized;
         }
 
         public void Reset()
@@ -78,7 +98,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal static WebServiceProxy CreateProxy()
         {
-            if (!_isInitialized)
+            if (_isInitialized == EInitializationResult.UNINITIALIZED)
             {
                 throw new InvalidOperationException("Please call Initialize first.");
             }

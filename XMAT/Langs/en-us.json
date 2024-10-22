@@ -15,11 +15,13 @@
 	"COLLECT_LOGS": "Collect Logs",
 	"GDKX_INFO": "View GDK Extensions for Xbox details",
 
-	"PROXY_ROOT_CERT_WARNING_TITLE": "Root Certificate Information",
-	"PROXY_ROOT_CERT_WARNING_MESSAGE": "You will see a pop-up message asking you to install and trust our Root Certificate.\n\nThis will only occur once and is essential in order for the tool to be able to decrypt HTTPS traffic transmitted to and from services.",
+	"PROXY_ROOT_CERT_WARNING_TITLE": "Xbox Multiplayer Analysis Tool - Root Certificate Information",
+	"PROXY_ROOT_CERT_WARNING_MESSAGE": "The Xbox Multiplayer Analysis Tool requires a root certificate which has now been generated and Windows will now prompt you to install a root certificate.\n\nThis will only occur once and is essential in order for the tool to be able to decrypt HTTPS traffic transmitted to and from services.\n\nThe root certificate has the following thumbprint: {0}\n\nPlease ensure the thumbprint shown in the certificate install pop-up message from Windows matches the thumbprint above.\n\nFor additional information, please reach out to xmat_oss@microsoft.com",
+	"PROXY_ROOT_CERT_INSTALL_CANCEL_OR_ERROR": "The root certificate was not installed successfully or was cancelled by the user.\n\nFor additional support, please reach out to xmat_oss@microsoft.com or restart the application to try again",
 
 	"GENERIC_DEVICE_PROXY_INFO_CAPTION": "Proxy Information",
 	"GENERIC_DEVICE_PROXY_INFO_MESSAGE": "The proxy is now ready for your device to connect.\n\nPlease use the following information to configure the proxy settings on your device:\n\nProxy Address: {0}\n\nProxy Port: {1}\n\nProxy Certificate (for HTTPS decryption): Use XMATRoot.cer or FiddlerRoot.cer located in {2}.",
+	"GENERIC_DEVICE_PROXY_INFO_ERROR_MESSAGE": "The proxy service did not initialize successfully due to an unknown error.\n\nFor additional support, please reach out to xmat_oss@microsoft.com or restart the application to try again.",
 
 	"SELECT_DEVICE": "Select device",
 	"LOCAL_PC": "Local PC",

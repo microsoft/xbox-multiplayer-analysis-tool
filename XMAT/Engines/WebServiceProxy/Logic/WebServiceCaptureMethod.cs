@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows;
+using static XMAT.WebServiceCapture.Proxy.WebServiceProxy;
 
 namespace XMAT.WebServiceCapture
 {
@@ -47,11 +48,19 @@ namespace XMAT.WebServiceCapture
 
             InitializeDataTables();
 
-            if (!WebServiceProxy.Initialize(PublicUtilities.StorageDirectoryPath))
+            EInitializationResult initResult = WebServiceProxy.Initialize(PublicUtilities.StorageDirectoryPath);
+
+
+			if (initResult == EInitializationResult.FAILED_CERT_INSTALLATION_CANCELLED_OR_FAILED)
             {
-                MessageBox.Show(@"Failed to initialize WebServiceProxy!");
-            }
-        }
+				MessageBox.Show(Localization.GetLocalizedString("PROXY_ROOT_CERT_INSTALL_CANCEL_OR_ERROR"), Localization.GetLocalizedString("PROXY_ROOT_CERT_WARNING_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+			}
+			else if (initResult == EInitializationResult.FAILED_GENERIC)
+            {
+				MessageBox.Show(Localization.GetLocalizedString("GENERIC_DEVICE_PROXY_INFO_ERROR_MESSAGE"), Localization.GetLocalizedString("GENERIC_DEVICE_PROXY_INFO_CAPTION"), MessageBoxButton.OK, MessageBoxImage.Error);
+
+			}
+		}
 
         public void Shutdown()
         {
