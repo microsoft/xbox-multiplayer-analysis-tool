@@ -46,6 +46,8 @@ namespace XMAT
             HelpMenu.Header = Localization.GetLocalizedString("HELP_MENU");
             CollectLogs.Header = Localization.GetLocalizedString("COLLECT_LOGS");
             ViewGDKXInfo.Header = Localization.GetLocalizedString("GDKX_INFO");
+            ActionsMenu.Header = Localization.GetLocalizedString("ACTIONS_MENU");
+            ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -364,6 +366,10 @@ namespace XMAT
                     }
                 }
             }
+        }
+        private void ExportRootCert_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            XMAT.WebServiceCapture.Proxy.WebServiceProxy.CertManager.ExportRootCertificate(PublicUtilities.DesktopDirectoryPath);
         }
     }
 }

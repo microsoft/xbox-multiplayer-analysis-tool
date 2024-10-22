@@ -10,6 +10,8 @@
 	"VIEW_CLEAR_CAPTURES": "Clear Captures",
 	"EDIT_PREFERENCES": "Preferences",
 	"ANALYSIS_MENU": "Analysis",
+	"ACTIONS_MENU": "Actions",
+  "EXPORT_ROOT_CERT": "Export Root Certificate to Desktop",
 	"VIEW_ANALYZE_CAPTURES": "Analyze Captures",
 	"HELP_MENU": "Help",
 	"COLLECT_LOGS": "Collect Logs",

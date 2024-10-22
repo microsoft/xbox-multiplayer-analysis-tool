@@ -17,6 +17,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private readonly string CertFileName = "XMATRoot.cer";
         private readonly string CertFileNameFiddler = "FiddlerRoot.cer";
+        private readonly string CertFileNamePem = "XMATRoot.pem";
+        private readonly string CertFileNameFiddlerPem = "FiddlerRoot.pem";
         private readonly string CertPassword = string.Empty;
 
         private readonly X509Store _rootStore;
@@ -219,6 +221,12 @@ namespace XMAT.WebServiceCapture.Proxy
 
             // For back compat with our own tools
             File.WriteAllBytes(Path.Combine(path, CertFileNameFiddler), buff);
+
+            // write it out to the path specified in PEM format
+            string pem = "-----BEGIN CERTIFICATE-----\n" + Convert.ToBase64String(buff) + "\n-----END CERTIFICATE-----\n";
+            File.WriteAllText(Path.Combine(path, CertFileNamePem), pem);
+            File.WriteAllText(Path.Combine(path, CertFileNameFiddlerPem), pem);
+
         }
 
         public void RemoveRootCertificate()
