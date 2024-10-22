@@ -76,6 +76,8 @@ namespace XMAT.WebServiceCapture.Proxy
             _availableRequestId = 0;
         }
 
+        internal static CertificateManager CertManager { get { return _certManager; } }
+
         internal static WebServiceProxy CreateProxy()
         {
             if (!_isInitialized)

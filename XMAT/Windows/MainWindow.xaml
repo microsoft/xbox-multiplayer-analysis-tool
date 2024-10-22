@@ -23,6 +23,7 @@
         <CommandBinding Command="{x:Static local:AppCommands.AnalyzeCaptures}"  Executed="AnalyzeCaptures_Executed" CanExecute="AnalyzeCaptures_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.CollectLogs}"      Executed="CollectLogs_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ViewGDKXInfo}"      Executed="ViewGDKXInfo_Executed"/>
+        <CommandBinding Command="{x:Static local:AppCommands.ExportRootCert}"   Executed="ExportRootCert_Executed"/>
     </Window.CommandBindings>
     <Grid>
         <Grid.RowDefinitions>
@@ -50,10 +51,12 @@
                 <MenuItem x:Name="ViewClearCaptures" Command="{x:Static local:AppCommands.ClearAllCaptures}" />
                 <Separator />
                 <MenuItem x:Name="EditPreferences" Command="{x:Static local:AppCommands.Preferences}"/>
-
             </MenuItem>
             <MenuItem x:Name="AnalysisMenu" HorizontalAlignment="Left" Header="_Analysis">
                 <MenuItem x:Name="ViewAnalyzeCaptures" Command="{x:Static local:AppCommands.AnalyzeCaptures}" />
+            </MenuItem>
+            <MenuItem x:Name="ActionsMenu" HorizontalAlignment="Left" Header="_Actions">
+                <MenuItem x:Name="ExportRootCert" Header="_Export Root Certificate to Desktop" Command="{x:Static local:AppCommands.ExportRootCert}" />
             </MenuItem>
             <MenuItem x:Name="HelpMenu" HorizontalAlignment="Left" Header="_Help">
                 <MenuItem x:Name="CollectLogs" Command="{x:Static local:AppCommands.CollectLogs}" />

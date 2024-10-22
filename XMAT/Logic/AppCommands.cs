@@ -31,5 +31,7 @@ namespace XMAT
         public static readonly RoutedUICommand ViewGDKXInfo =
            new RoutedUICommand("View _GDK Extensions for Xbox details", "View GDK Extensions for Xbox details", typeof(AppCommands));
 
+        public static readonly RoutedUICommand ExportRootCert = 
+            new RoutedUICommand("Export Root Certificate", "ExportRootCert", typeof(AppCommands));
     }
 }

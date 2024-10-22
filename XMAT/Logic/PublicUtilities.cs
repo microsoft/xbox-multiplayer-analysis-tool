@@ -53,6 +53,14 @@ namespace XMAT
             }
         }
 
+        public static string DesktopDirectoryPath
+        {
+            get
+            {
+                return Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+            }
+        }
+
         public static void RestartAsAdmin()
         {
             ProcessStartInfo psi = new ProcessStartInfo()
