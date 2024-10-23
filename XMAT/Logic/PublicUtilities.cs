@@ -38,7 +38,17 @@ namespace XMAT
             get
             {
                 if (string.IsNullOrEmpty(_appName))
-                    _appName = Application.Current.FindResource("appName").ToString();
+                {
+                    if (Application.Current != null)
+                    {
+						_appName = Application.Current.FindResource("appName").ToString();
+					}
+                    else
+                    {
+                        _appName = "XMAT Tests";
+                    }
+                }
+                    
                 return _appName;
             }
         }
