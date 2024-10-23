@@ -40,6 +40,7 @@ jobs:
         Configuration: ${{ matrix.configuration }}
 
   test:
+    needs: build
     strategy:
       matrix:
         configuration: [Debug, Release]
@@ -78,6 +79,7 @@ jobs:
         Configuration: ${{ matrix.configuration }}
 
   publish:
+    needs: [build, test]
     strategy:
       matrix:
         configuration: [Debug, Release]
