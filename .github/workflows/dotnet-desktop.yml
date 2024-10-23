@@ -42,6 +42,12 @@ jobs:
       env:
         Configuration: ${{ matrix.configuration }}
 
+    # Run tests
+    - name: Run XMAT Tests
+      run: dotnet test $env:Solution_Name -c $env:Configuration --no-restore
+      env:
+        Configuration: ${{ matrix.configuration }}
+
     # Upload artifact (Debug)
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
