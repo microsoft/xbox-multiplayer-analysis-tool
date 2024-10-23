@@ -7,7 +7,7 @@ on:
     branches: [ "*" ]
 
 jobs:
-  build:
+  Build:
     strategy:
       matrix:
         configuration: [Debug, Release]
@@ -39,8 +39,8 @@ jobs:
       env:
         Configuration: ${{ matrix.configuration }}
 
-  test:
-    needs: build
+  Test:
+    needs: Build
     strategy:
       matrix:
         configuration: [Debug, Release]
@@ -78,8 +78,8 @@ jobs:
       env:
         Configuration: ${{ matrix.configuration }}
 
-  publish:
-    needs: [build, test]
+  Publish:
+    needs: [Build, Test]
     strategy:
       matrix:
         configuration: [Debug, Release]
