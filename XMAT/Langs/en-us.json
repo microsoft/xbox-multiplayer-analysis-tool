@@ -28,6 +28,7 @@
 	"GENERIC_DEVICE": "Generic Device",
 	"DEFAULT_CONSOLE": "Default Xbox Console",
 	"CONSOLE_AT_IPADDR": "Xbox Console at IP Address",
+	"CONSOLE_AT_HOSTNAME": "Xbox Console at Hostname",
 	"ADD_CAPTURE": "Add Capture",
 	"CANCEL": "Cancel",
 	"SELECT_CAPTURE_TYPE": "Select capture type",

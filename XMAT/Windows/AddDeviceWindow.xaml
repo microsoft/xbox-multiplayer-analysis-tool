@@ -20,6 +20,12 @@
                 <TextBox x:Name="ConsoleIpAddress" Text="" Width="100" HorizontalContentAlignment="Center" TextChanged="ConsoleIpAddress_TextChanged" ToolTip="IPv4 internet address for the console."/>
             </StackPanel>
         </RadioButton>
+        <RadioButton GroupName="device" x:Name="CustomHostnameConsole" Checked="ResetOKButtonState">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="ConsoleAtHostname" Text="Xbox Console Hostname" TextAlignment="Right"/>
+                <TextBox x:Name="ConsoleHostname" Text="" Width="100" HorizontalContentAlignment="Center" TextChanged="ConsoleHostname_TextChanged" ToolTip="Hostname for the console."/>
+            </StackPanel>
+        </RadioButton>
         <RadioButton GroupName="device" x:Name="GenericDevice" Content="Generic Device" IsChecked="True" Checked="ResetOKButtonState"/>
 
         <Label x:Name="CaptureTypeLabel" FontWeight="Bold" Content="Select capture type"/>

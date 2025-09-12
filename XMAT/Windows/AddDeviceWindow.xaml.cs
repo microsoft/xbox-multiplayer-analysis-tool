@@ -1,10 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT.SharedInterfaces;
+using System.Threading.Tasks;
 using System.Net;
 using System.Windows;
 using System.Windows.Controls;
+using XMAT.SharedInterfaces;
 
 namespace XMAT
 {
@@ -37,6 +38,7 @@ namespace XMAT
             LocalPC.Content = Localization.GetLocalizedString("LOCAL_PC");
             DefaultConsole.Content = Localization.GetLocalizedString("DEFAULT_CONSOLE");
             ConsoleAtIP.Text = Localization.GetLocalizedString("CONSOLE_AT_IPADDR");
+            ConsoleAtHostname.Text = Localization.GetLocalizedString("CONSOLE_AT_HOSTNAME");
             GenericDevice.Content = Localization.GetLocalizedString("GENERIC_DEVICE");
 
             CaptureTypeLabel.Content = Localization.GetLocalizedString("SELECT_CAPTURE_TYPE");
@@ -60,6 +62,16 @@ namespace XMAT
 
                 SelectedDeviceType = DeviceType.XboxConsole;
                 SelectedDeviceName = ConsoleIpAddress.Text;
+            }
+            else if (CustomHostnameConsole.IsChecked.GetValueOrDefault())
+            {
+                if (!GDKXHelper.IsGDKXInstalled(false))
+                {
+                    Result = AddDeviceResult.Failed_NeedGDKX;
+                }
+
+                SelectedDeviceType = DeviceType.XboxConsole;
+                SelectedDeviceName = ConsoleHostname.Text;
             }
             else if (DefaultConsole.IsChecked.GetValueOrDefault())
             {
@@ -102,10 +114,22 @@ namespace XMAT
             OkButton.IsEnabled = IsConsoleIpAddressValid(ConsoleIpAddress.Text);
         }
 
+        private void ConsoleHostname_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            CustomHostnameConsole.IsChecked = true;
+            OkButton.IsEnabled = IsConsoleHostnameValid(ConsoleHostname.Text);
+        }
+
         private bool IsConsoleIpAddressValid(string ip)
         {
             // IPAddress accepts int64 IP addresses in string format as network order byte representations of IP's... so we have to validate the string first (e.g. "123" is a valid IP according to C#)
             return ip.Split('.').Length == 4 && IPAddress.TryParse(ip, out IPAddress ipx);
+        }
+
+        private bool IsConsoleHostnameValid(string hostname)
+        {
+            // Basic validation for hostname format
+            return !string.IsNullOrWhiteSpace(hostname) && hostname.Length <= 255;
         }
 
         private void ResetOKButtonState(object sender, RoutedEventArgs e)
@@ -115,6 +139,10 @@ namespace XMAT
                 if (CustomIpConsole.IsChecked.GetValueOrDefault())
                 {
                     OkButton.IsEnabled = IsConsoleIpAddressValid(ConsoleIpAddress.Text);
+                }
+                if (CustomHostnameConsole.IsChecked.GetValueOrDefault())
+                {
+                    OkButton.IsEnabled = IsConsoleHostnameValid(ConsoleHostname.Text);
                 }
                 else if (GenericDevice.IsChecked.GetValueOrDefault())
                 {
