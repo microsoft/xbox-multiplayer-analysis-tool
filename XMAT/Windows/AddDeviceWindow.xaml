@@ -16,7 +16,7 @@
         <RadioButton GroupName="device" x:Name="DefaultConsole" Content="Default Xbox Console" Checked="ResetOKButtonState"/>
         <RadioButton GroupName="device" x:Name="CustomIpHostnameConsole" Checked="ResetOKButtonState">
             <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="ConsoleAtIPHostname" Text="Xbox Console at IP or Hostname" TextAlignment="Right"/>
+                <TextBlock x:Name="ConsoleAtIPOrHostname" Text="Xbox Console at IP or Hostname" TextAlignment="Right"/>
                 <TextBox x:Name="ConsoleIpOrHostname" Text="" Width="100" HorizontalContentAlignment="Center" TextChanged="ConsoleIpOrHostname_TextChanged" ToolTip="IPv4 internet address or hostname for the console."/>
             </StackPanel>
         </RadioButton>

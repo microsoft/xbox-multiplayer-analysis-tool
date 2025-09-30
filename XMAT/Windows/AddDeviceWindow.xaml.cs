@@ -37,7 +37,7 @@ namespace XMAT
             SelectDevice.Content = Localization.GetLocalizedString("SELECT_DEVICE");
             LocalPC.Content = Localization.GetLocalizedString("LOCAL_PC");
             DefaultConsole.Content = Localization.GetLocalizedString("DEFAULT_CONSOLE");
-            ConsoleIpOrHostname.Text = Localization.GetLocalizedString("CONSOLE_AT_IP_HOSTNAME");
+            ConsoleAtIPOrHostname.Text = Localization.GetLocalizedString("CONSOLE_AT_IP_HOSTNAME");
             GenericDevice.Content = Localization.GetLocalizedString("GENERIC_DEVICE");
 
             CaptureTypeLabel.Content = Localization.GetLocalizedString("SELECT_CAPTURE_TYPE");
@@ -100,7 +100,12 @@ namespace XMAT
         private void ConsoleIpOrHostname_TextChanged(object sender, TextChangedEventArgs e)
         {
             CustomIpHostnameConsole.IsChecked = true;
-            OkButton.IsEnabled = IsConsoleIpAddressValid(ConsoleIpOrHostname.Text) || IsConsoleIpAddressValid(ConsoleIpOrHostname.Text);
+            OkButton.IsEnabled = IsConsoleIPOrHostnameValid(ConsoleIpOrHostname.Text);
+        }
+
+        private bool IsConsoleIPOrHostnameValid(string text)
+        {
+            return IsConsoleIpAddressValid(text) || IsConsoleHostnameValid(text);
         }
 
         private bool IsConsoleIpAddressValid(string ip)
@@ -112,7 +117,7 @@ namespace XMAT
         private bool IsConsoleHostnameValid(string hostname)
         {
             // Basic validation for hostname format
-            return !string.IsNullOrWhiteSpace(hostname) && hostname.Length <= 255;
+            return !string.IsNullOrWhiteSpace(hostname) && hostname.Length <= 255 && !hostname.Contains(" ");
         }
 
         private void ResetOKButtonState(object sender, RoutedEventArgs e)
@@ -121,7 +126,7 @@ namespace XMAT
             {
                 if (CustomIpHostnameConsole.IsChecked.GetValueOrDefault())
                 {
-                    OkButton.IsEnabled = IsConsoleIpAddressValid(ConsoleIpOrHostname.Text);
+                    OkButton.IsEnabled = IsConsoleIPOrHostnameValid(ConsoleIpOrHostname.Text);
                 }
                 else if (GenericDevice.IsChecked.GetValueOrDefault())
                 {
