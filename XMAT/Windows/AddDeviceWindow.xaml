@@ -14,10 +14,10 @@
         <Label x:Name="SelectDevice" FontWeight="Bold" Content="Select device"/>
         <RadioButton GroupName="device" x:Name="LocalPC" Content="Local PC" IsChecked="True" Checked="ResetOKButtonState"/>
         <RadioButton GroupName="device" x:Name="DefaultConsole" Content="Default Xbox Console" Checked="ResetOKButtonState"/>
-        <RadioButton GroupName="device" x:Name="CustomIpConsole" Checked="ResetOKButtonState">
+        <RadioButton GroupName="device" x:Name="CustomIpHostnameConsole" Checked="ResetOKButtonState">
             <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="ConsoleAtIP" Text="Xbox Console at IP address" TextAlignment="Right"/>
-                <TextBox x:Name="ConsoleIpAddress" Text="" Width="100" HorizontalContentAlignment="Center" TextChanged="ConsoleIpAddress_TextChanged" ToolTip="IPv4 internet address for the console."/>
+                <TextBlock x:Name="ConsoleAtIPOrHostname" Text="Xbox Console at IP or Hostname" TextAlignment="Right"/>
+                <TextBox x:Name="ConsoleIpOrHostname" Text="" Width="100" HorizontalContentAlignment="Center" TextChanged="ConsoleIpOrHostname_TextChanged" ToolTip="IPv4 internet address or hostname for the console."/>
             </StackPanel>
         </RadioButton>
         <RadioButton GroupName="device" x:Name="GenericDevice" Content="Generic Device" IsChecked="True" Checked="ResetOKButtonState"/>

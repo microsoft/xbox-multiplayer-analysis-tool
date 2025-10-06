@@ -1,10 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT.SharedInterfaces;
+using System.Threading.Tasks;
 using System.Net;
 using System.Windows;
 using System.Windows.Controls;
+using XMAT.SharedInterfaces;
 
 namespace XMAT
 {
@@ -36,7 +37,7 @@ namespace XMAT
             SelectDevice.Content = Localization.GetLocalizedString("SELECT_DEVICE");
             LocalPC.Content = Localization.GetLocalizedString("LOCAL_PC");
             DefaultConsole.Content = Localization.GetLocalizedString("DEFAULT_CONSOLE");
-            ConsoleAtIP.Text = Localization.GetLocalizedString("CONSOLE_AT_IPADDR");
+            ConsoleAtIPOrHostname.Text = Localization.GetLocalizedString("CONSOLE_AT_IP_HOSTNAME");
             GenericDevice.Content = Localization.GetLocalizedString("GENERIC_DEVICE");
 
             CaptureTypeLabel.Content = Localization.GetLocalizedString("SELECT_CAPTURE_TYPE");
@@ -51,7 +52,7 @@ namespace XMAT
                 SelectedDeviceType = DeviceType.LocalPC;
                 SelectedDeviceName = Localization.GetLocalizedString("LOCAL_PC");
             }
-            else if (CustomIpConsole.IsChecked.GetValueOrDefault())
+            else if (CustomIpHostnameConsole.IsChecked.GetValueOrDefault())
             {
                 if (!GDKXHelper.IsGDKXInstalled(false))
                 {
@@ -59,7 +60,7 @@ namespace XMAT
                 }
 
                 SelectedDeviceType = DeviceType.XboxConsole;
-                SelectedDeviceName = ConsoleIpAddress.Text;
+                SelectedDeviceName = ConsoleIpOrHostname.Text;
             }
             else if (DefaultConsole.IsChecked.GetValueOrDefault())
             {
@@ -96,10 +97,15 @@ namespace XMAT
             Close();
         }
 
-        private void ConsoleIpAddress_TextChanged(object sender, TextChangedEventArgs e)
+        private void ConsoleIpOrHostname_TextChanged(object sender, TextChangedEventArgs e)
         {
-            CustomIpConsole.IsChecked = true;
-            OkButton.IsEnabled = IsConsoleIpAddressValid(ConsoleIpAddress.Text);
+            CustomIpHostnameConsole.IsChecked = true;
+            OkButton.IsEnabled = IsConsoleIPOrHostnameValid(ConsoleIpOrHostname.Text);
+        }
+
+        private bool IsConsoleIPOrHostnameValid(string text)
+        {
+            return IsConsoleIpAddressValid(text) || IsConsoleHostnameValid(text);
         }
 
         private bool IsConsoleIpAddressValid(string ip)
@@ -108,13 +114,19 @@ namespace XMAT
             return ip.Split('.').Length == 4 && IPAddress.TryParse(ip, out IPAddress ipx);
         }
 
+        private bool IsConsoleHostnameValid(string hostname)
+        {
+            // Basic validation for hostname format
+            return !string.IsNullOrWhiteSpace(hostname) && hostname.Length <= 255 && !hostname.Contains(" ");
+        }
+
         private void ResetOKButtonState(object sender, RoutedEventArgs e)
         {
             if (OkButton != null)
             {
-                if (CustomIpConsole.IsChecked.GetValueOrDefault())
+                if (CustomIpHostnameConsole.IsChecked.GetValueOrDefault())
                 {
-                    OkButton.IsEnabled = IsConsoleIpAddressValid(ConsoleIpAddress.Text);
+                    OkButton.IsEnabled = IsConsoleIPOrHostnameValid(ConsoleIpOrHostname.Text);
                 }
                 else if (GenericDevice.IsChecked.GetValueOrDefault())
                 {
