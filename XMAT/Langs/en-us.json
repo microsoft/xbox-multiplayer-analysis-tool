@@ -26,6 +26,7 @@
 	"SELECT_DEVICE": "Select device",
 	"LOCAL_PC": "Local PC",
 	"GENERIC_DEVICE": "Generic Device",
+	"WINDOWS_HANDHELD_REMOTE_DEVICE": "Windows Handheld or Remote Windows Device",
 	"DEFAULT_CONSOLE": "Default Xbox Console",
 	"CONSOLE_AT_IPADDR": "Xbox Console at IP Address",
 	"ADD_CAPTURE": "Add Capture",
