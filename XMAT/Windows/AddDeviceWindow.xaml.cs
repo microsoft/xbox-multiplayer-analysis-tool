@@ -39,6 +39,7 @@ namespace XMAT
             DefaultConsole.Content = Localization.GetLocalizedString("DEFAULT_CONSOLE");
             ConsoleAtIPOrHostname.Text = Localization.GetLocalizedString("CONSOLE_AT_IP_HOSTNAME");
             GenericDevice.Content = Localization.GetLocalizedString("GENERIC_DEVICE");
+            WindowsHandheldOrRemoteDevice.Content = Localization.GetLocalizedString("WINDOWS_HANDHELD_REMOTE_DEVICE");
 
             CaptureTypeLabel.Content = Localization.GetLocalizedString("SELECT_CAPTURE_TYPE");
             WebProxyLabel.Content = Localization.GetLocalizedString("CAPTURE_TYPE_PROXY");
@@ -82,6 +83,12 @@ namespace XMAT
             {
                 SelectedDeviceType = DeviceType.GenericProxyDevice;
                 SelectedDeviceName = Localization.GetLocalizedString("GENERIC_DEVICE");
+            }
+            else if (WindowsHandheldOrRemoteDevice.IsChecked.GetValueOrDefault())
+            {
+                // Treat the same as a generic device internally
+                SelectedDeviceType = DeviceType.GenericProxyDevice;
+                SelectedDeviceName = Localization.GetLocalizedString("WINDOWS_HANDHELD_REMOTE_DEVICE");
             }
 
             if (WebProxyLabel.IsChecked.GetValueOrDefault())
@@ -129,6 +136,10 @@ namespace XMAT
                     OkButton.IsEnabled = IsConsoleIPOrHostnameValid(ConsoleIpOrHostname.Text);
                 }
                 else if (GenericDevice.IsChecked.GetValueOrDefault())
+                {
+                    OkButton.IsEnabled = !NetworkTraceLabel.IsChecked.GetValueOrDefault();
+                }
+                else if (WindowsHandheldOrRemoteDevice.IsChecked.GetValueOrDefault())
                 {
                     OkButton.IsEnabled = !NetworkTraceLabel.IsChecked.GetValueOrDefault();
                 }

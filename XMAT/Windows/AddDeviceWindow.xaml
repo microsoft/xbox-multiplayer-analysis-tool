@@ -21,6 +21,7 @@
             </StackPanel>
         </RadioButton>
         <RadioButton GroupName="device" x:Name="GenericDevice" Content="Generic Device" IsChecked="True" Checked="ResetOKButtonState"/>
+        <RadioButton GroupName="device" x:Name="WindowsHandheldOrRemoteDevice" Content="Windows Handheld or Remote Windows Device" IsChecked="True" Checked="ResetOKButtonState"/>
 
         <Label x:Name="CaptureTypeLabel" FontWeight="Bold" Content="Select capture type"/>
         <RadioButton GroupName="capture" x:Name="WebProxyLabel" IsChecked="True" Content="Web Proxy" Checked="ResetOKButtonState"/>
