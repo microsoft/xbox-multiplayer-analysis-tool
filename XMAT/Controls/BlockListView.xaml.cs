@@ -5,12 +5,13 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using XMAT.NetworkTrace;
 
-namespace XMAT.NetworkTrace.UI
+namespace XMAT
 {
-    public partial class NetworkUrlBlockerTab : UserControl
+    public partial class BlockListView : UserControl
     {
-        public NetworkUrlBlockerTab()
+        public BlockListView()
         {
             InitializeComponent();
             DataContext = NetworkUrlBlocker.Instance;

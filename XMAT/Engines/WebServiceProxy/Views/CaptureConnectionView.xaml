@@ -210,7 +210,7 @@
                 <app:ScriptEditorView ScriptCollection="{Binding CaptureController.Scripts}" ScriptTypeCollection="{Binding CaptureController.ScriptTypes}" TabSize="4"/>
             </TabItem>
             <TabItem x:Name="BlockListTab" Header="Block List">
-                <app:BlockListView ScriptCollection="{Binding CaptureController.Scripts}" ScriptTypeCollection="{Binding CaptureController.ScriptTypes}" TabSize="4"/>
+                <app:BlockListView />
             </TabItem>
         </TabControl>
     </Grid>
