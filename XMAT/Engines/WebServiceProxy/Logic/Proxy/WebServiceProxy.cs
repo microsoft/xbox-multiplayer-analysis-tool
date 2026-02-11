@@ -595,6 +595,11 @@ namespace XMAT.WebServiceCapture.Proxy
             return serverResponse;
         }
 
+        /// <summary>
+        /// Provides default HTTP/1.1 reason phrases for status codes.
+        /// HTTP/2 responses do not include reason phrases, so when the proxy downgrades
+        /// to HTTP/1.1 for client communication, a reason phrase must be supplied.
+        /// </summary>
         private static string GetDefaultReasonPhrase(System.Net.HttpStatusCode statusCode)
         {
             return statusCode switch
@@ -618,7 +623,9 @@ namespace XMAT.WebServiceCapture.Proxy
                 System.Net.HttpStatusCode.ServiceUnavailable => "Service Unavailable",
                 System.Net.HttpStatusCode.GatewayTimeout => "Gateway Timeout",
                 System.Net.HttpStatusCode.TooManyRequests => "Too Many Requests",
-                _ => statusCode.ToString()
+                // Insert spaces before uppercase letters to convert enum names like
+                // "NotAcceptable" to "Not Acceptable" for proper HTTP/1.1 reason phrases
+                _ => System.Text.RegularExpressions.Regex.Replace(statusCode.ToString(), "(?<!^)([A-Z])", " $1")
             };
         }
 
