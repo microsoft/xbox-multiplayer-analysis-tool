@@ -47,7 +47,11 @@ namespace XMAT.WebServiceCapture.Proxy
         private CancellationTokenSource _cancellationToken = null;
         private int _port = -1;
         private readonly AutoResetEvent _exitEvent = new(false);
-        private readonly HttpClient _httpClient = new(new HttpClientHandler() { UseProxy = false, Proxy = null, AllowAutoRedirect = false });
+        private readonly HttpClient _httpClient = new(new HttpClientHandler() { UseProxy = false, Proxy = null, AllowAutoRedirect = false })
+        {
+            DefaultRequestVersion = HttpVersion.Version20,
+            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower
+        };
         private Thread _listenThread;
 
         // these need to be thread-safe
@@ -417,7 +421,9 @@ namespace XMAT.WebServiceCapture.Proxy
             var requestMessage = new HttpRequestMessage
             {
                 Method = new HttpMethod(clientRequest.Method),
-                RequestUri = uri
+                RequestUri = uri,
+                Version = HttpVersion.Version20,
+                VersionPolicy = HttpVersionPolicy.RequestVersionOrLower
             };
 
             // build up the body
@@ -436,7 +442,7 @@ namespace XMAT.WebServiceCapture.Proxy
             try
             {
                 result = await _httpClient.SendAsync(requestMessage).ConfigureAwait(false);
-                _logger.Log(clientState.ID, LogLevel.DEBUG, $"REQUEST SENT:\n{requestMessage}");
+                _logger.Log(clientState.ID, LogLevel.DEBUG, $"REQUEST SENT (HTTP/{result.Version}):\n{requestMessage}");
             }
             catch (Exception ex)
             {
@@ -551,11 +557,25 @@ namespace XMAT.WebServiceCapture.Proxy
                 return null;
             }
 
+            // Store the actual server HTTP version for analysis and display
+            string serverVersion = "HTTP/" + response.Version.ToString();
+            _logger.Log(clientId, LogLevel.DEBUG, $"Server responded with {serverVersion}");
+
+            // HTTP/2 does not use reason phrases; provide a default for HTTP/1.1 client communication
+            string statusDescription = response.ReasonPhrase;
+            if (string.IsNullOrEmpty(statusDescription))
+            {
+                statusDescription = GetDefaultReasonPhrase(response.StatusCode);
+            }
+
             var serverResponse = new ServerResponse
             {
                 Status = ((int)response.StatusCode).ToString(),
-                StatusDescription = response.ReasonPhrase,
-                Version = "HTTP/" + response.Version.ToString(),
+                StatusDescription = statusDescription,
+                // Downgrade to HTTP/1.1 for the proxy-to-client stream since it uses HTTP/1.1 framing
+                Version = "HTTP/1.1",
+                // Preserve the actual server HTTP version for analysis
+                ServerVersion = serverVersion,
             };
 
             // because we currently use HttpClient to get the real data, we will never have a chunked response
@@ -565,11 +585,41 @@ namespace XMAT.WebServiceCapture.Proxy
             serverResponse.Headers.CopyFrom(response.Headers);
             serverResponse.ContentHeaders.CopyFrom(response.Content.Headers);
 
-            // TODO: enforce the fact that we don't handle keep-alives
+            // Preserve the actual server HTTP version as a custom header for analysis
+            serverResponse.Headers["X-ServerHttpVersion"] = serverVersion;
+
+            // enforce Connection: close for HTTP/1.1 client communication
             serverResponse.Headers["Connection"] = "close";
             serverResponse.BodyBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
 
             return serverResponse;
+        }
+
+        private static string GetDefaultReasonPhrase(System.Net.HttpStatusCode statusCode)
+        {
+            return statusCode switch
+            {
+                System.Net.HttpStatusCode.OK => "OK",
+                System.Net.HttpStatusCode.Created => "Created",
+                System.Net.HttpStatusCode.Accepted => "Accepted",
+                System.Net.HttpStatusCode.NoContent => "No Content",
+                System.Net.HttpStatusCode.MovedPermanently => "Moved Permanently",
+                System.Net.HttpStatusCode.Found => "Found",
+                System.Net.HttpStatusCode.NotModified => "Not Modified",
+                System.Net.HttpStatusCode.BadRequest => "Bad Request",
+                System.Net.HttpStatusCode.Unauthorized => "Unauthorized",
+                System.Net.HttpStatusCode.Forbidden => "Forbidden",
+                System.Net.HttpStatusCode.NotFound => "Not Found",
+                System.Net.HttpStatusCode.MethodNotAllowed => "Method Not Allowed",
+                System.Net.HttpStatusCode.Conflict => "Conflict",
+                System.Net.HttpStatusCode.InternalServerError => "Internal Server Error",
+                System.Net.HttpStatusCode.NotImplemented => "Not Implemented",
+                System.Net.HttpStatusCode.BadGateway => "Bad Gateway",
+                System.Net.HttpStatusCode.ServiceUnavailable => "Service Unavailable",
+                System.Net.HttpStatusCode.GatewayTimeout => "Gateway Timeout",
+                System.Net.HttpStatusCode.TooManyRequests => "Too Many Requests",
+                _ => statusCode.ToString()
+            };
         }
 
         private async Task<bool> WriteResponseAsync(ClientState clientState, ServerResponse response)

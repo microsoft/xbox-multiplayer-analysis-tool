@@ -87,6 +87,8 @@ namespace XMAT.WebServiceCapture.Proxy
         public string Status { get; set; }
         [Description("WEB_SVC_SCRIPT_PROP_DESC_STATUSDESC")]
         public string StatusDescription { get; set; }
+        [Description("WEB_SVC_SCRIPT_PROP_DESC_SERVERVERSION")]
+        public string ServerVersion { get; set; }
         public override string FirstLineAndHeaders { get => RefreshFirstLineAndHeaders($"{Version} {Status} {StatusDescription}"); }
     }
 }
