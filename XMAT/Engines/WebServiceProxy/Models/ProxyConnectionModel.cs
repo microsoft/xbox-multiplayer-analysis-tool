@@ -45,6 +45,8 @@ namespace XMAT.WebServiceCapture.Models
         public string ResponseLineAndHeaders { get; private set; }
         public byte[] ResponseBody { get; private set; }
         public string ClientIP { get; private set; }
+        public string RequestHttpVersion { get; private set; }
+        public string ResponseHttpVersion { get; private set; }
 
         public Dictionary<string, string> RequestHeaders { get; private set; }
         public Dictionary<string, string> ResponseHeaders { get; private set; }
@@ -71,6 +73,8 @@ namespace XMAT.WebServiceCapture.Models
             RequestHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             ResponseHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             ClientIP = UnknownStringValue;
+            RequestHttpVersion = UnknownStringValue;
+            ResponseHttpVersion = UnknownStringValue;
 
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
         }
@@ -109,6 +113,9 @@ namespace XMAT.WebServiceCapture.Models
             ResponseBody = responseBody;
             ClientIP = clientIP;
 
+            RequestHttpVersion = ExtractVersionFromFirstLine(RequestLineAndHeaders);
+            ResponseHttpVersion = ExtractVersionFromFirstLine(ResponseLineAndHeaders);
+
             RequestHeaders = StringToHeaders(RequestLineAndHeaders);
             ResponseHeaders = StringToHeaders(ResponseLineAndHeaders);
 
@@ -135,6 +142,8 @@ namespace XMAT.WebServiceCapture.Models
             RequestBody = model.RequestBody;
             ResponseBody = model.ResponseBody;
             ClientIP = model.ClientIP;
+            RequestHttpVersion = model.RequestHttpVersion;
+            ResponseHttpVersion = model.ResponseHttpVersion;
 
             RequestHeaders = model.RequestHeaders;
             ResponseHeaders = model.ResponseHeaders;
@@ -170,6 +179,25 @@ namespace XMAT.WebServiceCapture.Models
             return headers;
         }
 
+        private static string ExtractVersionFromFirstLine(string firstLineAndHeaders)
+        {
+            if (string.IsNullOrEmpty(firstLineAndHeaders))
+                return string.Empty;
+
+            string[] lines = firstLineAndHeaders.Split("\r\n");
+            if (lines.Length == 0)
+                return string.Empty;
+
+            string[] parts = lines[0].Split(' ');
+            foreach (string part in parts)
+            {
+                if (part.StartsWith("HTTP/", StringComparison.OrdinalIgnoreCase))
+                    return part;
+            }
+
+            return string.Empty;
+        }
+
         internal ProxyConnectionModel(IDataRecord dataRecord)
         {
             UpdateFromDataRecord(dataRecord);
@@ -198,7 +226,9 @@ namespace XMAT.WebServiceCapture.Models
                 requestBodyAsBase64,
                 ResponseLineAndHeaders,
                 responseBodyAsBase64,
-                ClientIP
+                ClientIP,
+                RequestHttpVersion,
+                ResponseHttpVersion
             );
         }
 
@@ -288,6 +318,18 @@ namespace XMAT.WebServiceCapture.Models
             if (!string.IsNullOrEmpty(clientIP))
             {
                 ClientIP = clientIP;
+            }
+
+            var requestHttpVersion = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestHttpVersion);
+            if (!string.IsNullOrEmpty(requestHttpVersion))
+            {
+                RequestHttpVersion = requestHttpVersion;
+            }
+
+            var responseHttpVersion = dataRecord.Str(WebServiceCaptureMethod.FieldKey_ResponseHttpVersion);
+            if (!string.IsNullOrEmpty(responseHttpVersion))
+            {
+                ResponseHttpVersion = responseHttpVersion;
             }
 
             RequestHeaders = StringToHeaders(RequestLineAndHeaders);

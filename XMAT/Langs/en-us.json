@@ -206,6 +206,7 @@
 	"WEB_SVC_SCRIPT_PROP_DESC_PATH": "The path requested on the server.",
 	"WEB_SVC_SCRIPT_PROP_DESC_STATUS": "Status code of the server response.",
 	"WEB_SVC_SCRIPT_PROP_DESC_STATUSDESC": "The text associated with the status code.",
+	"WEB_SVC_SCRIPT_PROP_DESC_ACTUAL_VERSION": "The actual HTTP protocol version negotiated with the server.",
 	"WEB_SVC_SCRIPT_PROP_DESC_PARAMS": "Parameters passed into the script.",
 	"WEB_SVC_SCRIPT_PROP_DESC_REQUEST": "The client HTTP(S) request.",
 	"WEB_SVC_SCRIPT_PROP_DESC_RESPONSE": "The server HTTP(S) response.",

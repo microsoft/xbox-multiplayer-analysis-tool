@@ -124,6 +124,7 @@
                 <DataGridTextColumn Header="STATUS" Binding="{Binding Status}"        Width="50"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
                 <DataGridTextColumn Header="METHOD" Binding="{Binding Method}"        Width="70"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
                 <DataGridTextColumn Header="SCHEME" Binding="{Binding Scheme}"        Width="70"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
+                <DataGridTextColumn Header="HTTP"   Binding="{Binding ResponseHttpVersion}" Width="70"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
                 <DataGridTextColumn Header="HOST"   Binding="{Binding Host}"          Width="200" HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
                 <DataGridTextColumn Header="PATH"   Binding="{Binding Path}"          Width="*"   HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
             </DataGrid.Columns>

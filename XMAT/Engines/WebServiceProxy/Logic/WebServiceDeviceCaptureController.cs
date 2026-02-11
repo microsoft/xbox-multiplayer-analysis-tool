@@ -410,7 +410,9 @@ namespace XMAT.WebServiceCapture
                 base64Body,
                 string.Empty,
                 string.Empty,
-                connectionEvent.ClientIP
+                connectionEvent.ClientIP,
+                connectionEvent.Request.Version,
+                string.Empty
             );
 
             PublicUtilities.SafeInvoke(() => HandleRowAdded(rowId));
@@ -469,7 +471,9 @@ namespace XMAT.WebServiceCapture
                 base64Body,
                 string.Empty,
                 string.Empty,
-                DeviceName
+                DeviceName,
+                requestEvent.Request.Version,
+                string.Empty
             );
 
             PublicUtilities.SafeInvoke(() => HandleRowAdded(rowId));
@@ -504,7 +508,8 @@ namespace XMAT.WebServiceCapture
                     new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp, ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)),
                     new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, responseEvent.Response.Status),
                     new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders, responseEvent.Response.FirstLineAndHeaders),
-                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body)
+                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body),
+                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseHttpVersion, responseEvent.Response.ActualVersion)
                 );
 
                 PublicUtilities.SafeInvoke(() => HandleRowUpdated(record.RowId));

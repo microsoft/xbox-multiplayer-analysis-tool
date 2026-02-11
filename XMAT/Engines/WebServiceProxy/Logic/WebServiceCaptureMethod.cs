@@ -38,6 +38,8 @@ namespace XMAT.WebServiceCapture
         public const string FieldKey_ResponseLineAndHeaders = @"ResponseLineAndHeaders";
         public const string FieldKey_ResponseBody = @"ResponseBody";
         public const string FieldKey_ClientIP = @"ClientIP";
+        public const string FieldKey_RequestHttpVersion = @"RequestHttpVersion";
+        public const string FieldKey_ResponseHttpVersion = @"ResponseHttpVersion";
 
         public ICaptureMethodParameters PreferencesModel { get; }
 
@@ -88,7 +90,9 @@ namespace XMAT.WebServiceCapture
                 new Field<string>(FieldKey_RequestBody),
                 new Field<string>(FieldKey_ResponseLineAndHeaders),
                 new Field<string>(FieldKey_ResponseBody),
-                new Field<string>(FieldKey_ClientIP)
+                new Field<string>(FieldKey_ClientIP),
+                new Field<string>(FieldKey_RequestHttpVersion),
+                new Field<string>(FieldKey_ResponseHttpVersion)
             );
         }
 

@@ -47,7 +47,11 @@ namespace XMAT.WebServiceCapture.Proxy
         private CancellationTokenSource _cancellationToken = null;
         private int _port = -1;
         private readonly AutoResetEvent _exitEvent = new(false);
-        private readonly HttpClient _httpClient = new(new HttpClientHandler() { UseProxy = false, Proxy = null, AllowAutoRedirect = false });
+        private readonly HttpClient _httpClient = new(new HttpClientHandler() { UseProxy = false, Proxy = null, AllowAutoRedirect = false })
+        {
+            DefaultRequestVersion = System.Net.HttpVersion.Version20,
+            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower
+        };
         private Thread _listenThread;
 
         // these need to be thread-safe
@@ -417,7 +421,9 @@ namespace XMAT.WebServiceCapture.Proxy
             var requestMessage = new HttpRequestMessage
             {
                 Method = new HttpMethod(clientRequest.Method),
-                RequestUri = uri
+                RequestUri = uri,
+                Version = System.Net.HttpVersion.Version20,
+                VersionPolicy = HttpVersionPolicy.RequestVersionOrLower
             };
 
             // build up the body
@@ -555,7 +561,8 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 Status = ((int)response.StatusCode).ToString(),
                 StatusDescription = response.ReasonPhrase,
-                Version = "HTTP/" + response.Version.ToString(),
+                ActualVersion = "HTTP/" + response.Version.ToString(),
+                Version = "HTTP/1.1",
             };
 
             // because we currently use HttpClient to get the real data, we will never have a chunked response
