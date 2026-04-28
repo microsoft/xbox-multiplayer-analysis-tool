@@ -1,11 +1,12 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using Microsoft.Data.Sqlite;
-using XMAT.SharedInterfaces;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using Microsoft.Data.Sqlite;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
@@ -23,7 +24,7 @@ namespace XMAT.DataAbstractionLayer
 
         internal SqLtDataEnumerable(
             IDictionary<string, IFieldDefinition> fieldDefs,
-            SqliteDataReader dataReader, 
+            SqliteDataReader dataReader,
             Predicate<IDataRecord> predicate)
         {
             _fieldDefs = fieldDefs;

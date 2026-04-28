@@ -50,6 +50,8 @@
             <MenuItem x:Name="EditMenu" HorizontalAlignment="Left" Header="_Edit">
                 <MenuItem x:Name="ViewClearCaptures" Command="{x:Static local:AppCommands.ClearAllCaptures}" />
                 <Separator />
+                <MenuItem x:Name="ToggleDarkMode" Header="_Dark Mode" IsCheckable="True" Click="ToggleDarkMode_Click"/>
+                <Separator />
                 <MenuItem x:Name="EditPreferences" Command="{x:Static local:AppCommands.Preferences}"/>
             </MenuItem>
             <MenuItem x:Name="AnalysisMenu" HorizontalAlignment="Left" Header="_Analysis">

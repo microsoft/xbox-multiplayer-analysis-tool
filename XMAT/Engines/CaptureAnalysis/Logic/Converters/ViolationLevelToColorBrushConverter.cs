@@ -1,11 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using CaptureAnalysisEngine;
 using System;
 using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Media;
+using CaptureAnalysisEngine;
 
 namespace XMAT.XboxLiveCaptureAnalysis
 {
@@ -23,11 +24,14 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 throw new ArgumentException("ViolationLevelToColorBrushConverter received a value that wasn't a ViolationLevel");
             }
 
-            switch(model)
+            switch (model)
             {
-                case ViolationLevel.Error: return new SolidColorBrush(Colors.Red);
-                case ViolationLevel.Warning: return new SolidColorBrush(Colors.Orange);
-                case ViolationLevel.Info: return new SolidColorBrush(Colors.Green);
+                case ViolationLevel.Error:
+                    return new SolidColorBrush(Colors.Red);
+                case ViolationLevel.Warning:
+                    return new SolidColorBrush(Colors.Orange);
+                case ViolationLevel.Info:
+                    return new SolidColorBrush(Colors.Green);
             }
 
             throw new ArgumentException("Unhandled ViolationLevel value");

@@ -1,5 +1,6 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 namespace XMAT.WebServiceCapture.Proxy
 {

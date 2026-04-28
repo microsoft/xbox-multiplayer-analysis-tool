@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.ObjectModel;
@@ -10,13 +11,13 @@ namespace XMAT.Scripting
     {
         public ScriptCollection(Type t)
         {
-            if(!t.IsEnum)
+            if (!t.IsEnum)
                 throw new ApplicationException("Expecting an Enum type");
 
             // add an empty ScriptModel for every event we have
             Array vals = Enum.GetValues(t);
 
-            foreach(var val in vals)
+            foreach (var val in vals)
             {
                 this.Add(new ScriptModel(val as Enum));
             }

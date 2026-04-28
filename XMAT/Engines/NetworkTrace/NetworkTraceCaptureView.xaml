@@ -69,7 +69,7 @@
             <Separator/>
             <Button x:Name="ClearCapturesButton" Command="{x:Static app:AppCommands.ClearAllCaptures}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" IsEnabled="{Binding CaptureController.HaveTraces}">Clear Captures</Button>
         </ToolBar>
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Background="White">
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Background="{DynamicResource PanelBackgroundBrush}">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock x:Name="FiltersText" FontWeight="Bold" Margin="20,0" Text="Filters"/>
                 <app:CheckBoxFilters x:Name="PidFilters" FilterDesc="PID" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.PidFilterList}"/>

@@ -1,13 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
-using System.Collections.Generic;
 using System.Collections.Concurrent;
-using System.Linq;
-using System.Threading.Tasks;
-using System.Text.RegularExpressions;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 
 namespace CaptureAnalysisEngine
 {
@@ -16,7 +17,7 @@ namespace CaptureAnalysisEngine
     {
         private Dictionary<String, LinkedList<Rule>> m_ruleDefines = new Dictionary<String, LinkedList<Rule>>();
         private Dictionary<String, LinkedList<Rule>> m_endpointRuleMap = new Dictionary<String, LinkedList<Rule>>();
-        private Dictionary<String,ConcurrentBag<RuleResult>> m_results = new Dictionary<string, ConcurrentBag<RuleResult>>();
+        private Dictionary<String, ConcurrentBag<RuleResult>> m_results = new Dictionary<string, ConcurrentBag<RuleResult>>();
         private String m_version = String.Empty;
         private String m_ruleFile = String.Empty;
 
@@ -77,13 +78,13 @@ namespace CaptureAnalysisEngine
             // Expand the wildcard (*) endpoint rules out to match the actual endpoints
             MapRules(data.m_servicesHistory.Keys);
 
-            if(!m_results.ContainsKey(console))
+            if (!m_results.ContainsKey(console))
             {
                 m_results.Add(console, new ConcurrentBag<RuleResult>());
             }
 
             // Now the rules can be run in parallel
-            Parallel.ForEach(GetAllRules(), rule => 
+            Parallel.ForEach(GetAllRules(), rule =>
             {
                 if (data.m_servicesHistory.ContainsKey(rule.Endpoint))
                 {
@@ -105,7 +106,7 @@ namespace CaptureAnalysisEngine
         public String AddRule(Rule rule)
         {
             ++m_counter;
-            if(rule.Name == "")
+            if (rule.Name == "")
             {
                 rule.Name = rule.RuleID + "_" + m_counter;
             }
@@ -122,11 +123,11 @@ namespace CaptureAnalysisEngine
 
         public Rule GetRule(String ruleId)
         {
-            foreach(var ruleType in m_ruleDefines.Values)
+            foreach (var ruleType in m_ruleDefines.Values)
             {
                 foreach (var rule in ruleType)
                 {
-                    if(ruleId == rule.Name)
+                    if (ruleId == rule.Name)
                     {
                         return rule;
                     }
@@ -234,7 +235,7 @@ namespace CaptureAnalysisEngine
                 resultLines.Add($". {deviceKey}");
                 resultLines.Add($". Rule Results: {m_results[deviceKey].Count}");
                 var deviceResults = m_results[deviceKey].ToList();
-                deviceResults.Sort((a, b) => (a.RuleName+a.Endpoint).CompareTo(b.RuleName+b.Endpoint));
+                deviceResults.Sort((a, b) => (a.RuleName + a.Endpoint).CompareTo(b.RuleName + b.Endpoint));
                 foreach (var ruleResult in deviceResults)
                 {
                     resultLines.Add($"... {ruleResult.RuleName}");

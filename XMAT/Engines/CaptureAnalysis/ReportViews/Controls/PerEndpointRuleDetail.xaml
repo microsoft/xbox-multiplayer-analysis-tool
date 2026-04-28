@@ -50,7 +50,7 @@
             ThrottledCallRuleTemplate="{StaticResource ThrottledCallRuleTemplate}"
             />
     </UserControl.Resources>
-    <Expander x:Name="EndpointRuleExpanderTemplate" IsExpanded="False" Background="Silver" >
+    <Expander x:Name="EndpointRuleExpanderTemplate" IsExpanded="False" Background="{DynamicResource ExpanderSubHeaderBrush}" >
         <Expander.Header>
             <StackPanel Orientation="Horizontal">
                 <TextBlock

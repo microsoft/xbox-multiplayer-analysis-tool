@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
@@ -12,7 +13,7 @@ using XMAT;
 namespace CaptureAnalysisEngine
 {
     [Rule]
-    public class BatchFrequencyRule : BaseRule<BatchFrequencyRule> 
+    public class BatchFrequencyRule : BaseRule<BatchFrequencyRule>
     {
         public static String TotalBatchCallsDataKey { get { return Localization.GetLocalizedString("LTA_BATCH_CALLS_DATA_TOTAL"); } }
         public static String AllowedTimeBetweenCallsDataKey { get { return Localization.GetLocalizedString("LTA_BATCH_CALLS_DATA_ALLOWED"); } }
@@ -57,7 +58,7 @@ namespace CaptureAnalysisEngine
 
         public override RuleResult Run(RulesEngine engine, IEnumerable<ServiceCallItem> items, ServiceCallStats stats)
         {
-            RuleResult result = InitializeResult(DisplayName,Description);
+            RuleResult result = InitializeResult(DisplayName, Description);
             //check invalid log versions (TODO: does this matter?)
             //if (items.Count(item => item.m_logVersion == Constants.Version1509) > 0)
             //{
@@ -71,7 +72,7 @@ namespace CaptureAnalysisEngine
             foreach (var pattern in m_MatchPatterns)
             {
                 Dictionary<ServiceCallItem, int> matchesFoundDict = new Dictionary<ServiceCallItem, int>();
-                
+
                 foreach (ServiceCallItem thisItem in items)
                 {
                     Match match = Regex.Match(thisItem.Uri, pattern.Key);
@@ -103,7 +104,7 @@ namespace CaptureAnalysisEngine
                 {
                     int startWindowIdx = 0;
                     List<ServiceCallItem> callsWithinWindow = new List<ServiceCallItem>();
-                    int totalXUIDsForWindow = 0; 
+                    int totalXUIDsForWindow = 0;
                     totalXUIDsForWindow += matchesFoundDict.Values.ElementAt(startWindowIdx);
                     callsWithinWindow.Add(matchesFoundDict.Keys.ElementAt(startWindowIdx));
                     for (int endWindowIdx = 1; endWindowIdx < matchesFoundDict.Count(); ++endWindowIdx)

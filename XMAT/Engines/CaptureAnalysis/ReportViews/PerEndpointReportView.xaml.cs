@@ -1,16 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using CaptureAnalysisEngine;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport;
-using XMAT.XboxLiveCaptureAnalysis.ReportViews.Controls;
+using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
+using XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport;
+using XMAT.XboxLiveCaptureAnalysis.ReportViews.Controls;
 
 namespace XMAT.XboxLiveCaptureAnalysis
 {

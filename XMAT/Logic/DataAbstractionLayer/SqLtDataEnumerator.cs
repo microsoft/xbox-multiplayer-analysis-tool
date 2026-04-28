@@ -1,10 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using XMAT.SharedInterfaces;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
@@ -26,7 +27,7 @@ namespace XMAT.DataAbstractionLayer
         public bool MoveNext()
         {
             _cachedDataRecord = null;
-            if(_dataReader != null)
+            if (_dataReader != null)
                 return _dataReader.GetEnumerator().MoveNext();
             return false;
         }
@@ -34,7 +35,7 @@ namespace XMAT.DataAbstractionLayer
         public void Reset()
         {
             _cachedDataRecord = null;
-            if(_dataReader != null)
+            if (_dataReader != null)
                 _dataReader.GetEnumerator().Reset();
         }
 
@@ -45,7 +46,7 @@ namespace XMAT.DataAbstractionLayer
 
         void IDisposable.Dispose()
         {
-            if(_dataReader != null)
+            if (_dataReader != null)
             {
                 _dataReader.Close();
                 _dataReader.Dispose();

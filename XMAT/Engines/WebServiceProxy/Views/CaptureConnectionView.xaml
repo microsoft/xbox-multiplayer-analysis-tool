@@ -14,7 +14,7 @@
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="booleanToVisibilityConverter" />
         <local:ProxyConnectionModelToBrushConverter x:Key="proxyConnectionModelToBrushConverter" />
-        <Style x:Key="CenterGridHeaderStyle" TargetType="DataGridColumnHeader">
+        <Style x:Key="CenterGridHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
         </Style>
     </UserControl.Resources>
@@ -29,6 +29,8 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="30"/>
             <RowDefinition Height="30"/>
+            <RowDefinition Height="120"/>
+            <RowDefinition Height="4"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
@@ -55,7 +57,7 @@
             <ToggleButton x:Name="StartButton" IsChecked="{Binding CaptureController.IsRunning}" Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}"
                           CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}" CommandTarget="{Binding ElementName=CaptureConnectionControl}">
                 <ToggleButton.Style>
-                    <Style TargetType="{x:Type ToggleButton}">
+                    <Style TargetType="{x:Type ToggleButton}" BasedOn="{StaticResource {x:Static ToolBar.ToggleButtonStyleKey}}">
                         <Setter Property="Content">
                             <Setter.Value>
                                 <StackPanel Orientation="Horizontal">
@@ -89,7 +91,7 @@
             </Grid>
         </ToolBar>
 
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Background="White">
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Background="{DynamicResource PanelBackgroundBrush}">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock x:Name="FiltersText" FontWeight="Bold" Margin="20,0" Text="Filters"/>
                 <app:CheckBoxFilters x:Name="StatusFilters" FilterDesc="Status" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.StatusFilterList}"/>
@@ -113,7 +115,15 @@
                 </TextBlock>
             </StackPanel>
         </StackPanel>
-        <DataGrid x:Name="ConnectionList" Grid.Row="2" Grid.RowSpan="3"
+
+        <!-- Timeline -->
+        <local:CaptureTimelineView x:Name="TimelineView" Grid.Row="2"
+                                   ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
+                                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"/>
+
+        <GridSplitter Grid.Row="3" Height="4" HorizontalAlignment="Stretch" VerticalAlignment="Center" ResizeDirection="Rows"/>
+
+        <DataGrid x:Name="ConnectionList" Grid.Row="4"
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   d:ItemsSource="{d:SampleData}" 
                   ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
@@ -145,7 +155,7 @@
 
         <GridSplitter Grid.Column="1" Grid.RowSpan="63" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
 
-        <TabControl Grid.Row="0" Grid.Column="2" Grid.RowSpan="3">
+        <TabControl Grid.Row="0" Grid.Column="2" Grid.RowSpan="5">
             <TabItem x:Name="ReqestResponseTab" Header="Request/Response">
                 <Grid>
                     <Grid.RowDefinitions>

@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
@@ -50,14 +51,14 @@ namespace CaptureAnalysisEngine
 
             m_totalCalls = items.Count();
             m_throttledCallsCount = items.Where(call => call.HttpStatusCode == 429).Count();
-            
+
             // We need to search over all of the calls to the endpoint
-            for(int i = 0; i < m_totalCalls;)
+            for (int i = 0; i < m_totalCalls;)
             {
                 var call = items.ElementAt(i);
 
                 // If its not a throttled call, move to the next call
-                if(call.HttpStatusCode != 429)
+                if (call.HttpStatusCode != 429)
                 {
                     ++i;
                     continue;
@@ -87,7 +88,7 @@ namespace CaptureAnalysisEngine
                 catch (Exception)
                 {
                 }
-                
+
                 // If there are 2 or more throttled calls in a row the title is not properly handling the response
                 while (++i < m_throttledCallsCount)
                 {
@@ -105,7 +106,7 @@ namespace CaptureAnalysisEngine
                 }
 
                 // One call is a warning as we expect that they back off after getting the 429 response
-                if(throttledCallSet.Count == 1)
+                if (throttledCallSet.Count == 1)
                 {
                     result.AddViolation(ViolationLevel.Warning, Localization.GetLocalizedString("LTA_THROTTLE_CALLS_VIOLATION_SINGLE") + throttleGuidline, throttledCall);
                 }
@@ -118,7 +119,7 @@ namespace CaptureAnalysisEngine
                 throttledCallSet.Clear();
             }
 
-             
+
             result.Results.Add(TotalCallsDataKey, TotalCalls);
             result.Results.Add(ThrottledCallsDataKey, ThrottledCallCount);
             result.Results.Add(PercentageDataKey, ((double)ThrottledCallCount) / TotalCalls);

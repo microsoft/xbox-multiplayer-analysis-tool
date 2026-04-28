@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.ComponentModel;
-using System.Diagnostics;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.NetworkTrace.Models
@@ -125,13 +125,23 @@ namespace XMAT.NetworkTrace.Models
             strVal = dataRecord.Str(@"MediaType");
             if (!string.IsNullOrEmpty(strVal))
             {
-                switch(strVal)
+                switch (strVal)
                 {
-                    case "ethernet": MediaType = NetworkMediaType.Ethernet; break;
-                    case "wireless": MediaType = NetworkMediaType.Wireless; break;
-                    case "tunnel": MediaType = NetworkMediaType.Tunnel; break;
-                    case "wifi": MediaType = NetworkMediaType.WiFi; break;
-                    default: MediaType = NetworkMediaType.Unknown; break;
+                    case "ethernet":
+                        MediaType = NetworkMediaType.Ethernet;
+                        break;
+                    case "wireless":
+                        MediaType = NetworkMediaType.Wireless;
+                        break;
+                    case "tunnel":
+                        MediaType = NetworkMediaType.Tunnel;
+                        break;
+                    case "wifi":
+                        MediaType = NetworkMediaType.WiFi;
+                        break;
+                    default:
+                        MediaType = NetworkMediaType.Unknown;
+                        break;
                 }
             }
 

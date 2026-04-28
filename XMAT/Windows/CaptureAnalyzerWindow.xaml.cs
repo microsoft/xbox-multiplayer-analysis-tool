@@ -1,9 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using XMAT.SharedInterfaces;
 using System.Windows;
-using System.Windows.Controls;
 
 namespace XMAT
 {

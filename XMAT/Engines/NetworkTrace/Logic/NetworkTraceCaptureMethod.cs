@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using XMAT.NetworkTrace.NTDE;
-using XMAT.SharedInterfaces;
 using System;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.NetworkTrace
 {

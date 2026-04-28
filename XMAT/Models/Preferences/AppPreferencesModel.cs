@@ -1,13 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using XMAT.SharedInterfaces;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Text.Json;
-using System.Threading.Tasks;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.Models
 {
@@ -35,6 +31,8 @@ namespace XMAT.Models
         public /*CaptureMethodParameters*/object NetworkAnalysisPreferences { get; set; }
 
         public string Language { get; set; } = "en-us"; // Default to en-us to support config files prior to loc support
+
+        public string Theme { get; set; } = "Light"; // "Light" or "Dark"
 
         public void Serialized()
         {
@@ -77,6 +75,7 @@ namespace XMAT.Models
                 }
 
                 Language = serializedObject.Language;
+                Theme = serializedObject.Theme ?? "Light";
             }
         }
     }

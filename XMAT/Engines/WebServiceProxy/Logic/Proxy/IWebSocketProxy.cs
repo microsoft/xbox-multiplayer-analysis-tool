@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
-using Windows.Networking.Sockets;
 
 namespace XMAT.WebServiceCapture.Proxy
 {

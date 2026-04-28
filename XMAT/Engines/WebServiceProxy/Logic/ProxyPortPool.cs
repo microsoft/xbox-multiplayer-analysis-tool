@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 
@@ -39,7 +40,7 @@ namespace XMAT.WebServiceCapture
             FirstPort = firstPort;
             LastPort = lastPort;
 
-            lock(_lockObj)
+            lock (_lockObj)
             {
                 FirstPort = Math.Max((UInt16)0, FirstPort);
                 LastPort = Math.Max(FirstPort, LastPort);

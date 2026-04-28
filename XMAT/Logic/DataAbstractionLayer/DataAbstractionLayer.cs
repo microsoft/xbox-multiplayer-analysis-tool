@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using XMAT.SharedInterfaces;
 
@@ -7,8 +8,8 @@ namespace XMAT.DataAbstractionLayer
 {
     public static class DataAbstractionLayer
     {
-        public static IDatabase Database 
-        { 
+        public static IDatabase Database
+        {
             get { return DataAbstractionLayerImpl.GetDatabase(); }
         }
 

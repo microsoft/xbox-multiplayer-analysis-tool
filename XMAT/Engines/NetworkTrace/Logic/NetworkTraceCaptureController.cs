@@ -1,10 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using XMAT.Models;
-using XMAT.NetworkTrace.Models;
-using XMAT.NetworkTrace.NTDE;
-using XMAT.SharedInterfaces;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -15,6 +12,10 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Controls;
 using System.Windows.Input;
+using XMAT.Models;
+using XMAT.NetworkTrace.Models;
+using XMAT.NetworkTrace.NTDE;
+using XMAT.SharedInterfaces;
 
 
 namespace XMAT.NetworkTrace
@@ -140,7 +141,7 @@ namespace XMAT.NetworkTrace
                 DeviceStatus = DeviceStatusEnum.Connecting;
                 await ConnectToDevice(device);
             }
-            else if(_deviceType == DeviceType.LocalPC)
+            else if (_deviceType == DeviceType.LocalPC)
             {
                 if (_networkTraceEngine == null)
                 {
@@ -213,11 +214,21 @@ namespace XMAT.NetworkTrace
             {
                 switch (element.GetString())
                 {
-                    case "start": startFlag = 1; break;
-                    case "end": endFlag = 1; break;
-                    case "fragment": fragFlag = 1; break;
-                    case "send": sendFlag = 1; break;
-                    case "receive": recvFlag = 1; break;
+                    case "start":
+                        startFlag = 1;
+                        break;
+                    case "end":
+                        endFlag = 1;
+                        break;
+                    case "fragment":
+                        fragFlag = 1;
+                        break;
+                    case "send":
+                        sendFlag = 1;
+                        break;
+                    case "receive":
+                        recvFlag = 1;
+                        break;
                 }
             }
 

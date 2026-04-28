@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
@@ -8,7 +9,6 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Xml.Linq;
 using XMAT.WebServiceCapture.Models;
@@ -56,7 +56,7 @@ namespace XMAT.WebServiceCapture
             Int64 id = Convert.ToInt64(frameId);
 
             // Read the client part of the frame (###_c.txt)
-            if(cFileStream != null)
+            if (cFileStream != null)
             {
                 using (MemoryStream cFileMemory = PublicUtilities.DecompressZipEntryToMemory(cFileStream))
                 {
@@ -79,7 +79,7 @@ namespace XMAT.WebServiceCapture
                             }
                             else
                             {
-                                if(Uri.TryCreate(firstLineSplit[1], UriKind.Absolute, out Uri uri))
+                                if (Uri.TryCreate(firstLineSplit[1], UriKind.Absolute, out Uri uri))
                                 {
                                     call = uri.LocalPath;
                                     scheme = uri.Scheme;
@@ -123,7 +123,7 @@ namespace XMAT.WebServiceCapture
             }
 
             // Read the server part of the frame(###_s.txt)
-            if(sFileStream != null)
+            if (sFileStream != null)
             {
                 using (MemoryStream sFileMemory = PublicUtilities.DecompressZipEntryToMemory(sFileStream))
                 {
@@ -158,7 +158,7 @@ namespace XMAT.WebServiceCapture
             }
 
             // Read the frame metadata (###_m.xml)
-            if(mFileStream != null)
+            if (mFileStream != null)
             {
                 using (var mFile = new StreamReader(mFileStream.Open()))
                 {
@@ -228,22 +228,22 @@ namespace XMAT.WebServiceCapture
                     // abort if a cancellation was requested by the caller
                     cancelToken.ThrowIfCancellationRequested();
 
-                    ZipArchiveEntry requestFileArchive  = null;
+                    ZipArchiveEntry requestFileArchive = null;
                     ZipArchiveEntry responseFileArchive = null;
-                    ZipArchiveEntry metaFileArchive     = null;
+                    ZipArchiveEntry metaFileArchive = null;
 
                     // Grab the individual files
-                    foreach(ZipArchiveEntry file in group.Files)
+                    foreach (ZipArchiveEntry file in group.Files)
                     {
-                        if(file.Name.EndsWith(EntryTypeMap[EntryType.Request]))
+                        if (file.Name.EndsWith(EntryTypeMap[EntryType.Request]))
                         {
                             requestFileArchive = file;
                         }
-                        else if(file.Name.EndsWith(EntryTypeMap[EntryType.Response]))
+                        else if (file.Name.EndsWith(EntryTypeMap[EntryType.Response]))
                         {
                             responseFileArchive = file;
                         }
-                        else if(file.Name.EndsWith(EntryTypeMap[EntryType.Meta]))
+                        else if (file.Name.EndsWith(EntryTypeMap[EntryType.Meta]))
                         {
                             metaFileArchive = file;
                         }
@@ -269,7 +269,7 @@ namespace XMAT.WebServiceCapture
             // always overwrite
             ZipArchive archive = new ZipArchive(File.Create(filename), ZipArchiveMode.Update);
 
-            foreach(var record in records)
+            foreach (var record in records)
             {
                 AddEntry(archive, EntryType.Request, record.RequestNumber, record.RequestLineAndHeaders, record.RequestBody);
 
@@ -279,7 +279,7 @@ namespace XMAT.WebServiceCapture
                 metaData.ClientDoneResponse = record.RequestTime + record.Duration;
                 AddMetaEntry(archive, record.RequestNumber, metaData);
 
-                if(!string.IsNullOrEmpty(record.ResponseLineAndHeaders))
+                if (!string.IsNullOrEmpty(record.ResponseLineAndHeaders))
                 {
                     AddEntry(archive, EntryType.Response, record.RequestNumber, record.ResponseLineAndHeaders, record.ResponseBody);
                 }
@@ -364,7 +364,7 @@ namespace XMAT.WebServiceCapture
 
                 sb.AppendLine();
                 sb.AppendLine($"  <SessionFlags>");
-                foreach(var sessionFlag in SessionFlags)
+                foreach (var sessionFlag in SessionFlags)
                 {
                     sb.AppendLine($"    <SessionFlag N=\"{sessionFlag.Key}\" V=\"{sessionFlag.Value}\" />");
                 }

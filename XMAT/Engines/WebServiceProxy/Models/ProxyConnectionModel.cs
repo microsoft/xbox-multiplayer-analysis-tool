@@ -1,13 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Diagnostics;
-using System.Linq;
-using System.Text;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.WebServiceCapture.Models
@@ -146,15 +143,15 @@ namespace XMAT.WebServiceCapture.Models
         {
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            if(!string.IsNullOrEmpty(firstLineAndHeaders))
+            if (!string.IsNullOrEmpty(firstLineAndHeaders))
             {
                 string[] lines = firstLineAndHeaders.Split("\r\n");
 
-                for(int i = 1; i < lines.Length; i++)
+                for (int i = 1; i < lines.Length; i++)
                 {
                     string line = lines[i];
                     string[] header = line.Split(':', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                    if(header.Length < 2)
+                    if (header.Length < 2)
                     {
                         // TODO: we have a bad header
                     }

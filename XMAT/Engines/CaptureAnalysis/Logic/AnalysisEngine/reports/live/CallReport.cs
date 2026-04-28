@@ -1,12 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using XMAT;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using XMAT;
 
 namespace CaptureAnalysisEngine
 {
@@ -14,7 +15,7 @@ namespace CaptureAnalysisEngine
     {
         internal CallReportDocument()
         {
-            CallEndpoints = new ();
+            CallEndpoints = new();
         }
 
         public override string ToJson()
@@ -108,7 +109,7 @@ namespace CaptureAnalysisEngine
 
                 host.Uri = callResult.Endpoint;
 
-                if(endpoints.ContainsKey(callResult.Endpoint))
+                if (endpoints.ContainsKey(callResult.Endpoint))
                 {
                     host.EndpointFunctionCall = endpoints[callResult.Endpoint].Item3;
                 }
@@ -120,8 +121,10 @@ namespace CaptureAnalysisEngine
                 double hostFirstCall = callList.Min(c => c.ReqTimeUTC) / (double)TimeSpan.TicksPerMillisecond;
                 double hostLastCall = callList.Max(c => c.ReqTimeUTC) / (double)TimeSpan.TicksPerMillisecond;
 
-                if (hostFirstCall < firstCall) firstCall = hostFirstCall;
-                if (hostLastCall > lastCall) lastCall = hostLastCall;
+                if (hostFirstCall < firstCall)
+                    firstCall = hostFirstCall;
+                if (hostLastCall > lastCall)
+                    lastCall = hostLastCall;
 
                 foreach (var call in callList)
                 {
@@ -136,7 +139,7 @@ namespace CaptureAnalysisEngine
                     }
                     else
                     {
-                        hostCall .EndpointFunctionCall = Localization.GetLocalizedString("LTA_REPORT_ENDPOINT_UNMAPPED");
+                        hostCall.EndpointFunctionCall = Localization.GetLocalizedString("LTA_REPORT_ENDPOINT_UNMAPPED");
                     }
 
                     hostCall.ReqBody = call.ReqBody;

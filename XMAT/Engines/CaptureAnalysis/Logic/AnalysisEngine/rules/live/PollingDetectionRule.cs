@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
@@ -17,7 +18,7 @@ namespace CaptureAnalysisEngine
 
         public static String DisplayName { get { return Localization.GetLocalizedString("LTA_POLL_CALLS_TITLE"); } }
         public static String Description { get { return Localization.GetLocalizedString("LTA_POLL_CALLS_DESC"); } }
-        
+
         public PollingDetectionRule() : base()
         {
         }
@@ -76,7 +77,8 @@ namespace CaptureAnalysisEngine
             public bool Contains(Sequence seq)
             {
                 // Can't contain something longer than yourself
-                if (seq.Length >= Length) return false;
+                if (seq.Length >= Length)
+                    return false;
 
                 for (int myIter = 0, otherIter = 0; myIter < m_seqCalls.Count - seq.m_seqCalls.Count + otherIter; ++myIter)
                 {
@@ -210,8 +212,9 @@ namespace CaptureAnalysisEngine
         public override RuleResult Run(RulesEngine engine, IEnumerable<ServiceCallItem> items, ServiceCallStats stats)
         {
             RuleResult result = InitializeResult(DisplayName, Description);
-            if (items.Count() == 0) { 
-                return result; 
+            if (items.Count() == 0)
+            {
+                return result;
             }
 
             //check invalid log versions (TODO: does this matter?)
@@ -228,8 +231,9 @@ namespace CaptureAnalysisEngine
             foreach (ServiceCallItem thisItem in nonShoulderTapItems)
             {
                 // Used to skip over already analyzed repeated calls.
-                if (allRepeats.Contains(thisItem)) { 
-                    continue; 
+                if (allRepeats.Contains(thisItem))
+                {
+                    continue;
                 }
 
                 // Discover all repeats to thisItem
@@ -237,12 +241,12 @@ namespace CaptureAnalysisEngine
                                 where ((item != thisItem) && (item.ReqBodyHash == thisItem.ReqBodyHash) && (item.Uri == thisItem.Uri))
                                 select item;
 
-                if (myRepeats.Count() > 1 )
+                if (myRepeats.Count() > 1)
                 {
                     var deltas = BuildDeltas(myRepeats.ToList());
                     sequences.AddRange(GenerateSequences(deltas, m_sameDeltaThresholdPercentage));
-                    
-                    allRepeats.AddRange(myRepeats); 
+
+                    allRepeats.AddRange(myRepeats);
                 }
             }
 

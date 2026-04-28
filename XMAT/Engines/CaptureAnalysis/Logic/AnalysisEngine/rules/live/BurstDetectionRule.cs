@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
@@ -55,7 +56,7 @@ namespace CaptureAnalysisEngine
                     result.AddViolation(ViolationLevel.Warning, description.ToString(), burst);
                 }
             }
-            
+
             if (double.IsInfinity(m_avgCallsPerSecond))
             {
                 result.Results.Add(AvgCallsPerSecDataKey, Localization.GetLocalizedString("LTA_BURST_CALLS_NOTAPPLICABLE"));

@@ -1,14 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
-using System.Drawing;
-using XMAT.SharedInterfaces;
-using XMAT.WebServiceCapture;
-using XMAT.NetworkTrace;
 using System.ComponentModel;
+using System.Drawing;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using XMAT.NetworkTrace;
+using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT.Models
 {
@@ -40,7 +41,7 @@ namespace XMAT.Models
         {
             get
             {
-                switch(CaptureType)
+                switch (CaptureType)
                 {
                     case CaptureType.WebProxy:
                         return Localization.GetLocalizedString("WEBCAP_CAPTURE_TYPE_PROXY");

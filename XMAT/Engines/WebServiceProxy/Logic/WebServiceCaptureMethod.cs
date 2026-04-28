@@ -1,13 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using XMAT.SharedInterfaces;
-using XMAT.WebServiceCapture.Models;
-using XMAT.WebServiceCapture.Proxy;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows;
+using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture.Models;
+using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.WebServiceCapture
 {
@@ -111,7 +112,7 @@ namespace XMAT.WebServiceCapture
             captureController.ClearAllCaptures();
 
             // ...then kick off another import
-            using(var bo = PublicUtilities.BlockingOperation())
+            using (var bo = PublicUtilities.BlockingOperation())
             {
                 await Task.Run(() => captureController.ImportFromFiddler(fromFilePath));
             }

@@ -19,7 +19,7 @@
                         <StackPanel Margin="20,0,0,20">
                             <TextBlock Text="{Binding Topic}" FontWeight="Bold" />
                             <Grid>
-                                <DataGrid ItemsSource="{Binding Values}" AutoGenerateColumns="False" GridLinesVisibility="None" AlternatingRowBackground="#F7F7F7" Background="White" HeadersVisibility="None">
+                                <DataGrid ItemsSource="{Binding Values}" AutoGenerateColumns="False" GridLinesVisibility="None" AlternatingRowBackground="{DynamicResource AltRowBackgroundBrush}" Background="{DynamicResource PanelBackgroundBrush}" HeadersVisibility="None">
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Binding="{Binding Name}" Width="200"/>
                                         <DataGridTextColumn Binding="{Binding Value}" MinWidth="80"/>

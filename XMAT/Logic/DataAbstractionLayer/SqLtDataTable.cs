@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using Microsoft.Data.Sqlite;
-using XMAT.SharedInterfaces;
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.IO;
 using System.Linq;
 using System.Text;
+using Microsoft.Data.Sqlite;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
@@ -30,7 +30,7 @@ namespace XMAT.DataAbstractionLayer
 
         public Int64 AddRow(params object[] fieldValueArgs)
         {
-            lock(_lockObj)
+            lock (_lockObj)
             {
                 Int64 lastRowId = -1;
 
@@ -64,7 +64,7 @@ namespace XMAT.DataAbstractionLayer
 
                 int rowsModified = 0;
 
-                if(_command.Connection.State == ConnectionState.Open)
+                if (_command.Connection.State == ConnectionState.Open)
                 {
                     rowsModified = _command.ExecuteNonQuery();
 
@@ -157,7 +157,7 @@ namespace XMAT.DataAbstractionLayer
 
         private IDataset GetSubset(params string[] fieldNames)
         {
-            lock(_lockObj)
+            lock (_lockObj)
             {
                 return new SqLtDataset(_connection, Name,
                     _fieldDefinitions.Where(
@@ -171,7 +171,7 @@ namespace XMAT.DataAbstractionLayer
 
         internal SqLtDataTable(
             SqliteConnection connection,
-            string name, 
+            string name,
             IEnumerable<IField> fields)
         {
             _name = name;
@@ -180,7 +180,7 @@ namespace XMAT.DataAbstractionLayer
             foreach (var field in fields)
             {
                 _fieldDefinitions.Add(
-                    field.Name, 
+                    field.Name,
                     FieldDefinition.CreateFromSchema(field.Name, field.ValueType, columnIndex));
                 columnIndex++;
             }
@@ -210,7 +210,7 @@ namespace XMAT.DataAbstractionLayer
         }
 
         private string _name;
-        private readonly Dictionary<string, IFieldDefinition> _fieldDefinitions = 
+        private readonly Dictionary<string, IFieldDefinition> _fieldDefinitions =
             new Dictionary<string, IFieldDefinition>();
         private SqliteConnection _connection;
         private SqliteCommand _command;

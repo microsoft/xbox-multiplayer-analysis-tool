@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
@@ -7,7 +8,8 @@ using System.Text.Json;
 
 namespace CaptureAnalysisEngine
 {
-    public class RuleAttribute : Attribute {}
+    [AttributeUsage(AttributeTargets.Class)]
+    public class RuleAttribute : Attribute { }
 
     public abstract class Rule
     {
@@ -18,7 +20,7 @@ namespace CaptureAnalysisEngine
         public String Name { get; set; }
 
         // Endpoint the rule will be analyzing
-        public String Endpoint { get; set;  }
+        public String Endpoint { get; set; }
 
         // Base constructor that ensures a RuleID will exist.
         protected Rule()

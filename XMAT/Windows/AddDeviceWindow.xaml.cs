@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using System.Threading.Tasks;
 using System.Net;
 using System.Windows;
 using System.Windows.Controls;

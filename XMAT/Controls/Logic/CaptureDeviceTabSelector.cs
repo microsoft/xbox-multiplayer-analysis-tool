@@ -1,11 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using XMAT.Models;
-using XMAT.SharedInterfaces;
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using XMAT.Models;
+using XMAT.SharedInterfaces;
 
 namespace XMAT
 {
@@ -17,7 +18,7 @@ namespace XMAT
         public override DataTemplate SelectTemplate(object item, DependencyObject container)
         {
             var context = item as CaptureDeviceContextModel;
-            switch(context.CaptureType)
+            switch (context.CaptureType)
             {
                 case CaptureType.WebProxy:
                     return WebProxyTemplate;

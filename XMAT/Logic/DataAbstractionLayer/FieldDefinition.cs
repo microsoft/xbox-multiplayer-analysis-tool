@@ -1,9 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using XMAT.SharedInterfaces;
 using System;
 using System.Text;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
@@ -16,8 +17,12 @@ namespace XMAT.DataAbstractionLayer
             {
                 switch (c)
                 {
-                    case '\'': literal.Append('\'').Append('\''); break;
-                    case '\"': literal.Append('\"').Append('\"'); break;
+                    case '\'':
+                        literal.Append('\'').Append('\'');
+                        break;
+                    case '\"':
+                        literal.Append('\"').Append('\"');
+                        break;
                     //case '\0': literal.Append('\\').Append('0'); break;
                     //case '\a': literal.Append('\\').Append('a'); break;
                     //case '\b': literal.Append('\\').Append('b'); break;
@@ -49,7 +54,7 @@ namespace XMAT.DataAbstractionLayer
 
         internal string FieldValueAsString(object value)
         {
-            if(value == null)
+            if (value == null)
                 return "''";
 
             var escapedValue = EscapeText(value.ToString());
@@ -102,15 +107,15 @@ namespace XMAT.DataAbstractionLayer
 
         internal string ValueTypeAsString()
         {
-            switch(ValueType)
+            switch (ValueType)
             {
-                case FieldValueType.Integer: 
+                case FieldValueType.Integer:
                     return @"INTEGER";
 
-                case FieldValueType.String: 
+                case FieldValueType.String:
                     return @"TEXT";
 
-                default: 
+                default:
                     throw new InvalidOperationException();
             }
         }

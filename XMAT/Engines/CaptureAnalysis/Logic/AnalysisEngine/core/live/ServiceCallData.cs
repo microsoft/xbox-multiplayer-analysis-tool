@@ -1,16 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace CaptureAnalysisEngine
 {
     public class ServiceCallData
-    {   
+    {
         public class DataTelemetry
         {
             // How many calls were processed by LTA
@@ -108,7 +109,7 @@ namespace CaptureAnalysisEngine
                 var requestBody = eventCall.ReqBody;
 
                 // If there's nothing in the request body, then there was an error with the event and we can't parse it.
-                if(string.IsNullOrEmpty(requestBody))
+                if (string.IsNullOrEmpty(requestBody))
                 {
                     continue;
                 }
@@ -199,17 +200,17 @@ namespace CaptureAnalysisEngine
             // Event Name starts with a string in the form of {Publisher}_{TitleId}
             Regex eventNameMatch = new Regex("[a-zA-z]{4}_[a-zA-Z0-9]{8}");
 
-            foreach(var eventCall in events)
+            foreach (var eventCall in events)
             {
                 var requestBody = eventCall.ReqBody;
 
                 var eventArray = requestBody.Split(Environment.NewLine.ToCharArray());
 
-                foreach(var eventLine in eventArray)
+                foreach (var eventLine in eventArray)
                 {
                     var fields = eventLine.Split('|');
 
-                    if(fields.Length < 12)
+                    if (fields.Length < 12)
                     {
                         // This event is not valid as it is missing fields
                         continue;
@@ -218,7 +219,7 @@ namespace CaptureAnalysisEngine
                     // The name field is in the form of {Publisher}_{TitleId}.{EventName}
                     var eventNameParts = fields[1].Split('.');
 
-                    if(eventNameParts.Length > 1 && eventNameMatch.IsMatch(eventNameParts[0]))
+                    if (eventNameParts.Length > 1 && eventNameMatch.IsMatch(eventNameParts[0]))
                     {
                         ServiceCallItem splitEvent = eventCall.Copy();
 
@@ -228,8 +229,8 @@ namespace CaptureAnalysisEngine
                         splitEvent.ReqBody = String.Empty;
                         splitEvent.Dimensions = CS1PartBC(fields);
                         splitEvent.IsInGameEvent = true;
-                        
-                        if(splitEvent.EventName.Contains("MultiplayerRoundStart") || splitEvent.EventName.Contains("MultiplayerRoundEnd"))
+
+                        if (splitEvent.EventName.Contains("MultiplayerRoundStart") || splitEvent.EventName.Contains("MultiplayerRoundEnd"))
                         {
                             splitEvent.PlayerSessionId = fields[15];
                             splitEvent.MultiplayerCorrelationId = fields[16];
@@ -245,7 +246,7 @@ namespace CaptureAnalysisEngine
         {
             string result = "";
 
-            for(int i = 1; i < fields.Length; ++i)
+            for (int i = 1; i < fields.Length; ++i)
             {
                 result += fields[i] + "|";
             }

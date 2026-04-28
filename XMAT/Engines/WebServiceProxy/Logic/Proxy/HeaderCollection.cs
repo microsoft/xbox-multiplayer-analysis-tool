@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections;
@@ -21,7 +22,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         public string GetHeaderValuesAsString(string key)
         {
-            if(_headers.TryGetValue(key, out var list))
+            if (_headers.TryGetValue(key, out var list))
                 return string.Join(';', list);
             else
                 return string.Empty;
@@ -29,7 +30,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         public IEnumerable<string> GetHeaderValuesAsList(string key)
         {
-            if(_headers.TryGetValue(key, out var list))
+            if (_headers.TryGetValue(key, out var list))
                 return list;
             else
                 return null;
@@ -37,12 +38,12 @@ namespace XMAT.WebServiceCapture.Proxy
 
         public void CopyTo(HttpHeaders headers)
         {
-            if(headers == null)
+            if (headers == null)
                 return;
 
             foreach (var kvp in _headers)
             {
-                if(!headers.TryAddWithoutValidation(kvp.Key, kvp.Value))
+                if (!headers.TryAddWithoutValidation(kvp.Key, kvp.Value))
                 {
                     PublicUtilities.AppLog(LogLevel.ERROR, $"(CopyTo) Failed to add request header [{kvp.Key}]:[{kvp.Value}]");
                 }
@@ -51,7 +52,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         public void CopyFrom(HttpHeaders headers)
         {
-            if(headers == null)
+            if (headers == null)
                 return;
 
             foreach (var kvp in headers)
@@ -64,12 +65,12 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             var sb = new StringBuilder();
 
-            foreach(var kvp in _headers)
+            foreach (var kvp in _headers)
             {
                 // there can be multiple cookie headers, do not combine them (breaks Outlook, at the very least)
-                if(kvp.Key.ToLower() == "set-cookie")
+                if (kvp.Key.ToLower() == "set-cookie")
                 {
-                    foreach(string val in kvp.Value)
+                    foreach (string val in kvp.Value)
                     {
                         sb.Append($"{kvp.Key}: {val}\r\n");
                     }

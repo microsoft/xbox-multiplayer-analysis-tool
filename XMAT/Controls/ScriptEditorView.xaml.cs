@@ -1,15 +1,16 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using Microsoft.CodeAnalysis;
-using Microsoft.Win32;
 using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using XMAT.Scripting;
 using System.Windows.Media;
+using Microsoft.CodeAnalysis;
+using Microsoft.Win32;
+using XMAT.Scripting;
 
 namespace XMAT
 {
@@ -26,7 +27,7 @@ namespace XMAT
             get { return (ScriptCollection)this.GetValue(ScriptCollectionProperty); }
             set { this.SetValue(ScriptCollectionProperty, value); }
         }
-        public static readonly DependencyProperty ScriptCollectionProperty = 
+        public static readonly DependencyProperty ScriptCollectionProperty =
             DependencyProperty.Register("ScriptCollection", typeof(ScriptCollection), typeof(ScriptEditorView));
 
         public ScriptTypeCollection ScriptTypeCollection
@@ -34,7 +35,7 @@ namespace XMAT
             get { return (ScriptTypeCollection)this.GetValue(ScriptTypeInfoProperty); }
             set { this.SetValue(ScriptTypeInfoProperty, value); }
         }
-        public static readonly DependencyProperty ScriptTypeInfoProperty = 
+        public static readonly DependencyProperty ScriptTypeInfoProperty =
             DependencyProperty.Register("ScriptTypeCollection", typeof(ScriptTypeCollection), typeof(ScriptEditorView));
 
         public int TabSize
@@ -42,7 +43,7 @@ namespace XMAT
             get { return (int)this.GetValue(TabSizeProperty); }
             set { this.SetValue(TabSizeProperty, value); }
         }
-        public static readonly DependencyProperty TabSizeProperty = 
+        public static readonly DependencyProperty TabSizeProperty =
             DependencyProperty.Register("TabSize", typeof(int), typeof(ScriptEditorView), new PropertyMetadata(4));
 
         public static string EnabledText
@@ -75,11 +76,11 @@ namespace XMAT
                 Filter = ScriptFilter
             };
 
-            if(openFileDialog.ShowDialog() == true && !string.IsNullOrEmpty(openFileDialog.FileName))
+            if (openFileDialog.ShowDialog() == true && !string.IsNullOrEmpty(openFileDialog.FileName))
             {
                 MessageBoxResult result = MessageBox.Show(Localization.GetLocalizedString("SCRIPT_OVERWRITE_MESSAGE"), Localization.GetLocalizedString("SCRIPT_OVERWRITE_TITLE"),
                                                           MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
-                if(result == MessageBoxResult.Yes)
+                if (result == MessageBoxResult.Yes)
                 {
                     string script = File.ReadAllText(openFileDialog.FileName);
                     sm.Filename = openFileDialog.FileName;
@@ -94,7 +95,7 @@ namespace XMAT
                 return;
 
             // if we don't already have a filename, get one, otherwise just overwrite the one we have
-            if(string.IsNullOrEmpty(sm.Filename))
+            if (string.IsNullOrEmpty(sm.Filename))
             {
                 var saveFileDialog = new SaveFileDialog
                 {
@@ -107,7 +108,7 @@ namespace XMAT
                 }
             }
 
-            if(!string.IsNullOrEmpty(sm.Filename))
+            if (!string.IsNullOrEmpty(sm.Filename))
                 File.WriteAllText(sm.Filename, sm.Script);
         }
 
@@ -117,7 +118,7 @@ namespace XMAT
                 return;
 
             MessageBoxResult result = MessageBox.Show(Localization.GetLocalizedString("SCRIPT_REVERT_MESSAGE"), Localization.GetLocalizedString("SCRIPT_REVERT_TITLE"), MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
-            if(result == MessageBoxResult.Yes)
+            if (result == MessageBoxResult.Yes)
             {
                 sm.Script = File.ReadAllText(sm.Filename);
             }
@@ -133,14 +134,14 @@ namespace XMAT
 
         private async void ValidateScript_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            if(ScriptEnabled.IsChecked.GetValueOrDefault())
+            if (ScriptEnabled.IsChecked.GetValueOrDefault())
             {
                 if (e.Parameter is not ScriptModel sm)
                     return;
 
                 await sm.CompileScriptAsync<WebServiceCaptureScriptParams>();
 
-                if(sm.CompilationStatus.Any(x => x.Severity == DiagnosticSeverity.Error))
+                if (sm.CompilationStatus.Any(x => x.Severity == DiagnosticSeverity.Error))
                 {
                     ScriptEnabled.IsChecked = false;
                     ScriptSuccess.Visibility = Visibility.Collapsed;
@@ -166,7 +167,7 @@ namespace XMAT
 
         private void ScriptErrorSelected_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            if(e.Parameter is not Diagnostic diag)
+            if (e.Parameter is not Diagnostic diag)
                 return;
 
             FileLinePositionSpan lineSpan = diag.Location.GetLineSpan();
@@ -187,13 +188,13 @@ namespace XMAT
             // always set focus back to the editor, even if we bail out below
             ScriptEditor.Focus();
 
-            if(sender is not TreeViewItem tvi)
+            if (sender is not TreeViewItem tvi)
                 return;
 
-            if(!tvi.IsSelected)
+            if (!tvi.IsSelected)
                 return;
 
-            if(tvi.Tag is not ScriptTypeInfo sti)
+            if (tvi.Tag is not ScriptTypeInfo sti)
                 return;
 
             object parent;
@@ -203,12 +204,12 @@ namespace XMAT
             do
             {
                 parent = VisualTreeHelper.GetParent(child);
-                if(parent is TreeViewItem parentTvi)
+                if (parent is TreeViewItem parentTvi)
                 {
-                    if(parentTvi.Tag is ScriptTypeInfo parentSti)
+                    if (parentTvi.Tag is ScriptTypeInfo parentSti)
                         path = path.Insert(0, $"{parentSti.Name}.");
                 }
-                
+
                 child = parent as DependencyObject;
             } while (parent != null);
 
@@ -217,24 +218,24 @@ namespace XMAT
             // "base" parameter object is named "Params".  Bleech.
             // Overall, this + ScriptTypeCollection/ScriptTypeInfo should be rewritten
             // to better setup the parent/child relationship.
-            if(!path.StartsWith("Params."))
+            if (!path.StartsWith("Params."))
                 path = "Params." + path;
 
             ScriptEditor.SelectedText = path;
-            ScriptEditor.CaretIndex  += path.Length;
+            ScriptEditor.CaretIndex += path.Length;
         }
 
         private void ScriptEditor_PreviewKeyDown(object sender, KeyEventArgs e)
         {
-            if(e.Key == Key.Tab)
+            if (e.Key == Key.Tab)
             {
-                if(Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
+                if (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
                 {
-                    if(ScriptEditor.CaretIndex >= TabSize)
+                    if (ScriptEditor.CaretIndex >= TabSize)
                     {
                         int start = ScriptEditor.CaretIndex - TabSize;
                         string s = ScriptEditor.Text.Substring(start, TabSize);
-                        if(s == new string(' ', TabSize))
+                        if (s == new string(' ', TabSize))
                         {
                             ScriptEditor.Text = ScriptEditor.Text.Remove(start, TabSize);
                             ScriptEditor.CaretIndex = start;

@@ -1,14 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using XMAT;
 
@@ -320,12 +321,12 @@ namespace CaptureAnalysisEngine
                             ++start;
                         }
                     }
-                // For moving the start of the window forward looking for a new window
+                    // For moving the start of the window forward looking for a new window
                 } while (start != current);
             }
 
             // If at the the end of the list of calls we had a window of excessive calls , record it
-            if(current == callHistory.Count && current - start > maxNumAllowedCalls)
+            if (current == callHistory.Count && current - start > maxNumAllowedCalls)
             {
                 excessCalls.AddLast(callHistory.GetRange(start, current - start));
             }

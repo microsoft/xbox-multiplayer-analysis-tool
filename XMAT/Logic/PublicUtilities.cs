@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
@@ -115,9 +116,9 @@ namespace XMAT
             try
             {
                 var hostEntries = await Dns.GetHostAddressesAsync(hostname);
-                foreach(var addr in hostEntries)
+                foreach (var addr in hostEntries)
                 {
-                    if(addr.AddressFamily == AddressFamily.InterNetwork)
+                    if (addr.AddressFamily == AddressFamily.InterNetwork)
                     {
                         return addr;
                     }

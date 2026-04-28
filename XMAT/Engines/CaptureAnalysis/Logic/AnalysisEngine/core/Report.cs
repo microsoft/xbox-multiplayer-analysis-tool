@@ -1,11 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
 
 namespace CaptureAnalysisEngine
 {
+    [AttributeUsage(AttributeTargets.Class)]
     public class ReportAttribute : Attribute { }
 
     public abstract class ReportDocument

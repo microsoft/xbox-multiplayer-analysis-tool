@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -25,7 +26,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.Models
         internal AnalysisResultsModel()
         {
             ActiveProcessStep = ProcessStep.NotStarted;
-            Reports = new ();
+            Reports = new();
         }
 
         private ProcessStep _activeProcessStep;
@@ -44,7 +45,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.Models
 
         public string ActiveProcessStepDesc { get => ActiveProcessStep.ToString(); }
         public bool IsProcessing { get => ActiveProcessStep != ProcessStep.NotStarted && ActiveProcessStep != ProcessStep.Complete; }
-        public bool IsComplete {  get => ActiveProcessStep == ProcessStep.Complete; }
+        public bool IsComplete { get => ActiveProcessStep == ProcessStep.Complete; }
 
         public ObservableCollection<ReportViewModel> Reports { get; }
 

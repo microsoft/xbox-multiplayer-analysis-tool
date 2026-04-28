@@ -1,8 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using XMAT.Models;
 using System.Windows;
+using XMAT.Models;
 
 namespace XMAT
 {

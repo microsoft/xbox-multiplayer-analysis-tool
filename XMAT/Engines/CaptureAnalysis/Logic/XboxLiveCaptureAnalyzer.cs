@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
 using System.Collections.Generic;
@@ -167,7 +168,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
             {
                 return ECaptureAnalyzerResult.UnknownError;
             }
-            
+
         }
 
         public void Shutdown()

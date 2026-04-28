@@ -1,11 +1,12 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
-using Microsoft.Data.Sqlite;
-using XMAT.SharedInterfaces;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Data.Sqlite;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
@@ -56,7 +57,7 @@ namespace XMAT.DataAbstractionLayer
         }
 
         private string _name;
-        private readonly Dictionary<string, IFieldDefinition> _fieldDefinitions = 
+        private readonly Dictionary<string, IFieldDefinition> _fieldDefinitions =
             new Dictionary<string, IFieldDefinition>();
         private SqliteConnection _connection;
         private SqliteCommand _command;

@@ -1,11 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
 
 using System;
-using System.Text;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
+using System.Text;
 using XMAT;
 
 namespace CaptureAnalysisEngine
@@ -176,7 +177,7 @@ namespace CaptureAnalysisEngine
 
                     PublicUtilities.AppLog(LogLevel.INFO, "Analyzing " + frame.Uri);
                     // Filter calls with headers
-                    if (filterCallback!= null && !filterCallback(reqHeaders))
+                    if (filterCallback != null && !filterCallback(reqHeaders))
                     {
                         return null;
                     }
@@ -207,7 +208,7 @@ namespace CaptureAnalysisEngine
             }
 
             // Read the frame metadata (###_m.xml)
-            using(var mFile = new StreamReader(mFileStream.Open()))
+            using (var mFile = new StreamReader(mFileStream.Open()))
             {
                 string rawData = mFile.ReadToEnd();
                 var xmldata = System.Xml.Linq.XDocument.Parse(rawData);
@@ -220,10 +221,10 @@ namespace CaptureAnalysisEngine
                 frame.ElapsedCallTimeMs = (UInt64)(endTime - reqTime).TotalMilliseconds;
 
                 var sessionFlags = xmldata.Element("Session").Element("SessionFlags");
-                
-                foreach(var flag in sessionFlags.Descendants())
+
+                foreach (var flag in sessionFlags.Descendants())
                 {
-                    if((string)flag.Attribute("N") == "x-clientip")
+                    if ((string)flag.Attribute("N") == "x-clientip")
                     {
                         frame.ConsoleIP = (string)flag.Attribute("V");
                         frame.ConsoleIP = frame.ConsoleIP.Substring(frame.ConsoleIP.LastIndexOf(':') + 1);

@@ -16,7 +16,7 @@
         <CommandBinding Command="{x:Static local:ScriptCommands.ScriptErrorSelected}" Executed="ScriptErrorSelected_Executed"/>
     </UserControl.CommandBindings>
 
-    <StackPanel Orientation="Vertical" Background="White" DockPanel.Dock="Top">
+    <StackPanel Orientation="Vertical" Background="{DynamicResource PanelBackgroundBrush}" DockPanel.Dock="Top">
         <StackPanel Orientation="Horizontal">
             <Label x:Name="EventSelectorLabel" Target="{Binding ElementName=EventSelector}"/>
             <ComboBox x:Name="EventSelector" Width="200" SelectedIndex="0" IsSynchronizedWithCurrentItem="True" ItemsSource="{Binding ScriptCollection, ElementName=ScriptEditorViewControl}" DisplayMemberPath="DisplayName"/>
