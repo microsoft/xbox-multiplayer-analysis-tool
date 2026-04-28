@@ -2,9 +2,7 @@ name: XMAT Win64 Desktop Build
 
 on:
   push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read
