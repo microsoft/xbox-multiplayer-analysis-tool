@@ -12,7 +12,7 @@ namespace CaptureAnalysisEngine
     {
         internal CertWarningReportDocument()
         {
-            WarningResults = new ();
+            WarningResults = new();
         }
 
         public override string ToJson()

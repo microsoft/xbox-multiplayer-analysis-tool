@@ -18,3 +18,8 @@ or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any addi
 All contributions to this project must successfully pass all current build pipelines and tests.
 
 Any new functionality added, must include appropriate testing alongside the new functionality.
+
+# Coding Standards
+
+This project utilized the standard [C# coding conventions](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions).
+

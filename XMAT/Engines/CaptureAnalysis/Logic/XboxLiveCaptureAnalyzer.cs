@@ -167,7 +167,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
             {
                 return ECaptureAnalyzerResult.UnknownError;
             }
-            
+
         }
 
         public void Shutdown()

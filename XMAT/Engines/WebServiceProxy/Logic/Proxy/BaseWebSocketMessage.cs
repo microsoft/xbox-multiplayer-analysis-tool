@@ -1,10 +1,8 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using System;
 using System.ComponentModel;
-using System.ComponentModel.DataAnnotations;
-using System.Reflection.PortableExecutable;
 using System.Text;
 
 namespace XMAT.WebServiceCapture.Proxy

@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using Microsoft.Data.Sqlite;
-using XMAT.SharedInterfaces;
 using System;
 using System.Collections.Generic;
+using Microsoft.Data.Sqlite;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
@@ -92,7 +92,7 @@ namespace XMAT.DataAbstractionLayer
 
         private SqliteConnection _connection;
 
-        private readonly Dictionary<string, SqLtReadonlyDataTable> _dataTables = 
+        private readonly Dictionary<string, SqLtReadonlyDataTable> _dataTables =
             new Dictionary<string, SqLtReadonlyDataTable>();
     }
 }

@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using XMAT;
 
 namespace CaptureAnalysisEngine
 {
@@ -78,7 +78,7 @@ namespace CaptureAnalysisEngine
             //    result.AddViolation(ViolationLevel.Warning, "Data version does not support this rule. You need an updated Xbox Live SDK to support this rule");
             //    return result;
             //}
-            
+
             StringBuilder description = new StringBuilder();
 
             // Traverse through each pattern set found in rule parameter
@@ -88,7 +88,7 @@ namespace CaptureAnalysisEngine
 
                 int patternInstancesFound = 0;
                 int lowXUIDInstancesFound = 0;
-                
+
                 // This first section reports on violations which are from batch calls made with not enough XUIDs in the request body
                 foreach (ServiceCallItem thisItem in items)
                 {
@@ -129,7 +129,7 @@ namespace CaptureAnalysisEngine
             result.Results.Add(TotalBatchCallsDataKey, finalStats.Item1);
             result.Results.Add(MinUsersAllowedDataKey, m_minBatchXUIDsPerBatchCall);
             result.Results.Add(CallsBelowCountDataKey, finalStats.Item2);
-            result.Results.Add(PercentBelowCountDataKey,(double)(finalStats.Item2) / finalStats.Item1);
+            result.Results.Add(PercentBelowCountDataKey, (double)(finalStats.Item2) / finalStats.Item1);
 
             return result;
         }

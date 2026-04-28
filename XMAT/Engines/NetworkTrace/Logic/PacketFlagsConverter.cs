@@ -27,7 +27,7 @@ namespace XMAT.NetworkTrace
                 throw new ArgumentException("Parameter was not of type NetworkPacketFlags");
             }
 
-            if ((model & (NetworkPacketFlags) parameter) != 0)
+            if ((model & (NetworkPacketFlags)parameter) != 0)
             {
                 return "\u2713"; // check-mark
             }

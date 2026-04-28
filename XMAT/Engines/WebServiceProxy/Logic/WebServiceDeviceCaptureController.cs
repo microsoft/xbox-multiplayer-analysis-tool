@@ -1,22 +1,22 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT.Scripting;
-using XMAT.SharedInterfaces;
-using XMAT.WebServiceCapture.Models;
-using XMAT.WebServiceCapture.Proxy;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using XMAT.Scripting;
+using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture.Models;
+using XMAT.WebServiceCapture.Proxy;
 using static XboxClient.XboxClientConnection;
-using System.Net;
 
 namespace XMAT.WebServiceCapture
 {
@@ -95,7 +95,8 @@ namespace XMAT.WebServiceCapture
             EProxyEnabledCheckResult result = EProxyEnabledCheckResult.ConsoleUnreachable;
             if (_deviceType == DeviceType.XboxConsole)
             {
-                if (!GDKXHelper.IsGDKXInstalled(false)) { return EProxyEnabledCheckResult.DeviceIsXbox_NoGDKX; }
+                if (!GDKXHelper.IsGDKXInstalled(false))
+                { return EProxyEnabledCheckResult.DeviceIsXbox_NoGDKX; }
 
                 if (!string.IsNullOrEmpty(DeviceName))
                 {
@@ -111,7 +112,7 @@ namespace XMAT.WebServiceCapture
                 result = EProxyEnabledCheckResult.ProxyingGenericDevice;
             }
 
-               return result;
+            return result;
         }
 
         public WebServiceDeviceCaptureController(string deviceName, DeviceType deviceType, bool readOnly)
@@ -119,7 +120,7 @@ namespace XMAT.WebServiceCapture
             DeviceName = deviceName;
 
             _deviceType = deviceType;
-            _readOnly   = readOnly;
+            _readOnly = readOnly;
             _parameters = new();
 
             ProxyConnections = new ProxyConnectionsCollection();
@@ -136,7 +137,7 @@ namespace XMAT.WebServiceCapture
             CaptureMethod = WebServiceCaptureMethod.Method;
             _dataTable = (CaptureMethod as WebServiceCaptureMethod).WebProxyConnectionsTable;
 
-            if(!_readOnly)
+            if (!_readOnly)
             {
                 ProxyPortPool.Initialize(
                     (CaptureMethod.PreferencesModel as PreferencesModel).FirstPort,
@@ -150,10 +151,10 @@ namespace XMAT.WebServiceCapture
                 PromptToDisableOnClose = (CaptureMethod.PreferencesModel as PreferencesModel).PromptToDisableOnClose;
 
                 _webProxy = WebServiceProxy.CreateProxy();
-                _webProxy.ReceivedSslConnectionRequest  += WebProxy_ReceivedSslConnectionRequestAsync;
+                _webProxy.ReceivedSslConnectionRequest += WebProxy_ReceivedSslConnectionRequestAsync;
                 _webProxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
-                _webProxy.ReceivedWebRequest            += WebProxy_ReceivedWebRequestAsync;
-                _webProxy.ReceivedWebResponse           += WebProxy_ReceivedWebResponseAsync;
+                _webProxy.ReceivedWebRequest += WebProxy_ReceivedWebRequestAsync;
+                _webProxy.ReceivedWebResponse += WebProxy_ReceivedWebResponseAsync;
             }
         }
 
@@ -181,7 +182,7 @@ namespace XMAT.WebServiceCapture
         public void Close()
         {
             CancelExistingFiddlerImport();
-            if(!_readOnly)
+            if (!_readOnly)
             {
                 StopProxy();
                 ProxyPortPool.ReleasePort(Port);
@@ -191,7 +192,7 @@ namespace XMAT.WebServiceCapture
 
         public void LoadCaptures(IEnumerable<IDataset> tables)
         {
-            using(var bo = PublicUtilities.BlockingOperation())
+            using (var bo = PublicUtilities.BlockingOperation())
             {
                 if (tables != null && tables.FirstOrDefault() != null)
                 {
@@ -213,7 +214,7 @@ namespace XMAT.WebServiceCapture
             IDataTable dataTable,
             CancellationToken cancelToken)
         {
-            if(ProxyConnections == null)
+            if (ProxyConnections == null)
                 return;
 
             foreach (var fiddlerProxyConnectionModel in ProxyConnections)
@@ -238,7 +239,8 @@ namespace XMAT.WebServiceCapture
 
         internal async Task<bool> EnableProxyingXbox(string sourceAddress)
         {
-            if (!GDKXHelper.IsGDKXInstalled(true)) { return false; }
+            if (!GDKXHelper.IsGDKXInstalled(true))
+            { return false; }
 
             EProxyEnabledCheckResult proxyCheckResult = await IsProxyEnabled();
             if (proxyCheckResult == EProxyEnabledCheckResult.ProxyEnabled)
@@ -289,7 +291,8 @@ namespace XMAT.WebServiceCapture
                     return;
             }
 
-            if (!GDKXHelper.IsGDKXInstalled(true)) { return; }
+            if (!GDKXHelper.IsGDKXInstalled(true))
+            { return; }
 
             EProxyEnabledCheckResult proxyCheckResult = await IsProxyEnabled();
             if (proxyCheckResult != EProxyEnabledCheckResult.ProxyEnabled)
@@ -309,7 +312,7 @@ namespace XMAT.WebServiceCapture
                     }
 
                     // TODO: async this, it hangs the UI if the Xbox is not connected
-                    if (!await CaptureUtilities .DisableXboxProxyAsync(DeviceName))
+                    if (!await CaptureUtilities.DisableXboxProxyAsync(DeviceName))
                     {
                         MessageBox.Show(
                            Localization.GetLocalizedString("PROXY_ERROR_CONNECTION_DESC"),
@@ -498,7 +501,7 @@ namespace XMAT.WebServiceCapture
                 new FieldValue<long>(WebServiceCaptureMethod.FieldKey_ConnectionId, responseEvent.ConnectionID)
             ).FirstOrDefault();
 
-            if(record != null)
+            if (record != null)
             {
                 var base64Body = Convert.ToBase64String(responseEvent.Response.BodyBytes);
 

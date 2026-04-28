@@ -136,7 +136,8 @@ namespace XMAT.Tests
         public void BodyDecoding_HandlesNullBody()
         {
             byte[] body = null;
-            if (body == null) body = new byte[0];
+            if (body == null)
+                body = new byte[0];
             string result = Encoding.ASCII.GetString(body);
             Assert.Equal("", result);
         }
@@ -162,7 +163,8 @@ namespace XMAT.Tests
             do
             {
                 count = stream.Read(buffer, 0, buffer.Length);
-                if (count > 0) memory.Write(buffer, 0, count);
+                if (count > 0)
+                    memory.Write(buffer, 0, count);
             } while (count > 0);
             return memory.ToArray();
         }
@@ -186,7 +188,8 @@ namespace XMAT.Tests
             do
             {
                 count = stream.Read(buffer, 0, buffer.Length);
-                if (count > 0) memory.Write(buffer, 0, count);
+                if (count > 0)
+                    memory.Write(buffer, 0, count);
             } while (count > 0);
             return memory.ToArray();
         }

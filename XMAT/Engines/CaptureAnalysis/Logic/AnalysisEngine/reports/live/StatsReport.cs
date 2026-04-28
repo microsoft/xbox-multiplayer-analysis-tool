@@ -14,7 +14,7 @@ namespace CaptureAnalysisEngine
     {
         internal StatsReportDocument()
         {
-            StatsResults = new ();
+            StatsResults = new();
         }
 
         public override string ToJson()

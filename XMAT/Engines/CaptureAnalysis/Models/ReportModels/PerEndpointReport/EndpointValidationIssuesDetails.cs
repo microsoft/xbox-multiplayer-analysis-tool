@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using CaptureAnalysisEngine;
 using System;
 using System.Collections.Generic;
-using XMAT.XboxLiveCaptureAnalysis.ReportModels.RuleDataModels;
-using XMAT.XboxLiveCaptureAnalysis.Models;
+using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
+using XMAT.XboxLiveCaptureAnalysis.Models;
+using XMAT.XboxLiveCaptureAnalysis.ReportModels.RuleDataModels;
 
 namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
 {

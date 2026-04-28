@@ -14,10 +14,10 @@ namespace XMAT.WebServiceCapture
     {
         public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
         {
-            if(values == null || values[0] == null || values[1] == null)
+            if (values == null || values[0] == null || values[1] == null)
                 return string.Empty;
 
-            if(values[0] is not Dictionary<string,string> headers)
+            if (values[0] is not Dictionary<string, string> headers)
             {
                 throw new ArgumentException("BodyConverter first value is not a Dictionary<string,string>");
             }
@@ -27,9 +27,9 @@ namespace XMAT.WebServiceCapture
                 throw new ArgumentException("BodyConverter second value is not a byte[]");
             }
 
-            if(headers.TryGetValue("Content-Encoding", out string encoding))
+            if (headers.TryGetValue("Content-Encoding", out string encoding))
             {
-                switch(encoding.ToLower())
+                switch (encoding.ToLower())
                 {
                     case "gzip":
                         try
@@ -54,9 +54,9 @@ namespace XMAT.WebServiceCapture
                 }
             }
 
-            if(headers.TryGetValue("Content-Type", out string type))
+            if (headers.TryGetValue("Content-Type", out string type))
             {
-                if(type.Contains("json"))
+                if (type.Contains("json"))
                 {
                     var options = new JsonSerializerOptions()
                     {

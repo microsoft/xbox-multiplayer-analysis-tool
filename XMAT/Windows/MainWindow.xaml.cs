@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using Microsoft.Win32;
-using XMAT.Models;
-using XMAT.SharedInterfaces;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using Microsoft.Win32;
+using XMAT.Models;
+using XMAT.SharedInterfaces;
 
 namespace XMAT
 {
@@ -336,21 +336,21 @@ namespace XMAT
             switch (analyzerResult)
             {
                 case ECaptureAnalyzerResult.Success:
-                    {
-                        break;
-                    }
+                {
+                    break;
+                }
 
                 case ECaptureAnalyzerResult.NoSuitableData:
-                    {
-                        OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
-                        break;
-                    }
+                {
+                    OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
+                    break;
+                }
 
                 case ECaptureAnalyzerResult.UnknownError:
-                    {
-                        OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));
-                        break;
-                    }
+                {
+                    OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));
+                    break;
+                }
             }
 
             analysisRun.IsProcessing = false;

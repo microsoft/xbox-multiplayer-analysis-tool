@@ -2,14 +2,14 @@
 // Licensed under the MIT License.
 
 using System;
-using System.Text;
-using System.Net.WebSockets;
-using System.Threading;
 using System.Diagnostics;
-using System.Threading.Tasks;
-using System.Text.Json;
-using System.Net.Security;
 using System.Net;
+using System.Net.Security;
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 
 namespace XMAT.NetworkTrace.NTDE
@@ -57,9 +57,9 @@ namespace XMAT.NetworkTrace.NTDE
             _webSocket = new ClientWebSocket();
 
             IPAddress ipAddress = await PublicUtilities.ResolveIP4AddressAsync(_options.HostName);
-            if(ipAddress == null)
+            if (ipAddress == null)
             {
-                MessageBox.Show(Localization.GetLocalizedString("DNS_RESOLVE_ERROR_MESSAGE", _options.HostName), Localization.GetLocalizedString("DNS_RESOLVE_ERROR_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error) ;
+                MessageBox.Show(Localization.GetLocalizedString("DNS_RESOLVE_ERROR_MESSAGE", _options.HostName), Localization.GetLocalizedString("DNS_RESOLVE_ERROR_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
 
@@ -142,7 +142,7 @@ namespace XMAT.NetworkTrace.NTDE
 
                 } while (recordsReceived == recordsPerChunk);
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 PublicUtilities.AppLog(LogLevel.ERROR, $"Caught exception in GetAllEventsAsync: {ex.ToString()}");
                 throw new ApplicationException(Localization.GetLocalizedString(GetErrorString));

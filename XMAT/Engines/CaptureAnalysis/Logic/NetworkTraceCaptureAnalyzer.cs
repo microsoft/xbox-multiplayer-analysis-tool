@@ -2,18 +2,12 @@
 // Licensed under the MIT License.
 
 using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Net;
-using System.Text;
 using System.Threading.Tasks;
-using CaptureAnalysisEngine;
-using XMAT.SharedInterfaces;
 using XMAT.NetworkTrace;
-using System.Diagnostics;
 using XMAT.NetworkTrace.Models;
 using XMAT.NetworkTraceCaptureAnalysis.Models;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.NetworkTraceCaptureAnalysis
 {
@@ -225,7 +219,7 @@ namespace XMAT.NetworkTraceCaptureAnalysis
                 // Check for duplicate packets
                 packetCount = 0;
 
-                for(int i = 0; i < selectedItems.Length; i++)
+                for (int i = 0; i < selectedItems.Length; i++)
                 {
                     // Get the starting model
                     var startModel = selectedItems[i];

@@ -9,23 +9,23 @@ namespace XMAT
 {
     public enum WebServiceCaptureScriptableEventType
     {
-        [Display(Name="WEB_SVC_EVENT_TYPE_SSLCONN")]
+        [Display(Name = "WEB_SVC_EVENT_TYPE_SSLCONN")]
         [Description("WEB_SVC_EVENT_TYPE_SSLCONN_DESC")]
         [DefaultValue("WEB_SVC_EVENT_TYPE_SSLCONN_SCRIPT")]
         SslConnectionRequest,
 
-        [Display(Name="WEB_SVC_EVENT_TYPE_WEBREQ")]
+        [Display(Name = "WEB_SVC_EVENT_TYPE_WEBREQ")]
         [Description("WEB_SVC_EVENT_TYPE_WEBREQ_DESC")]
         [DefaultValue("WEB_SVC_EVENT_TYPE_WEBREQ_SCRIPT")]
         WebRequest,
 
-        [Display(Name="WEB_SVC_EVENT_TYPE_WEBRESP")]
+        [Display(Name = "WEB_SVC_EVENT_TYPE_WEBRESP")]
         [Description("WEB_SVC_EVENT_TYPE_WEBRESP_DESC")]
         [DefaultValue("WEB_SVC_EVENT_TYPE_WEBRESP_SCRIPT")]
         WebResponse,
     }
 
-    [Display(Name="Params")]
+    [Display(Name = "Params")]
     [Description("WEB_SVC_SCRIPT_PROP_DESC_PARAMS")]
     public class WebServiceCaptureScriptParams
     {
@@ -35,7 +35,7 @@ namespace XMAT
         }
 
         [Description("WEB_SVC_SCRIPT_PROP_DESC_REQUEST")]
-        public ClientRequest Request  { get; set; }
+        public ClientRequest Request { get; set; }
         [Description("WEB_SVC_SCRIPT_PROP_DESC_RESPONSE")]
         public ServerResponse Response { get; set; }
         [Description("WEB_SVC_SCRIPT_PROP_DESC_CONTINUE")]

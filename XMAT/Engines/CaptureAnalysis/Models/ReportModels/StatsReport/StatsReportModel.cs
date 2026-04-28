@@ -1,17 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.IO;
 using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
-using XMAT.XboxLiveCaptureAnalysis.ReportModels;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Resources;
 
 namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.StatsReport
 {

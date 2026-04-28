@@ -1,18 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT;
 using System;
 using System.IO;
-using System.Threading.Tasks;
-using System.Windows;
-using Microsoft.Win32;
-using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Windows.Input;
-using System.Reflection;
-using System.Net;
+using System.Windows;
+using Microsoft.Win32;
 
 public static class GDKXHelper
 {

@@ -1,15 +1,16 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using CaptureAnalysisEngine;
 using System;
 using System.Collections.Generic;
+using CaptureAnalysisEngine;
+using XMAT.SharedInterfaces;
 using XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport;
 using XMAT.XboxLiveCaptureAnalysis.ReportModels.StatsReport;
-using XMAT.SharedInterfaces;
 
 namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
 {
+#pragma warning disable IDE0065 // Using directives must be placed outside of a namespace declaration
     using ModelCreatorFunc = Func<
         // in as parameters
         ICaptureAppModel,
@@ -26,7 +27,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
             string sourceCaptureName,
             string analysisStorageDirectory,
             ReportDocument reportDocument)
-        { 
+        {
             if (ViewModelCreators.TryGetValue(
                 reportDocument.GetType(),
                 out ModelCreatorFunc creator))

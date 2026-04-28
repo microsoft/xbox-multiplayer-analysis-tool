@@ -37,7 +37,7 @@ namespace XMAT
             get { return (string)this.GetValue(FilterDescProperty); }
             set { this.SetValue(FilterDescProperty, value); }
         }
-        public static readonly DependencyProperty FilterDescProperty = 
+        public static readonly DependencyProperty FilterDescProperty =
             DependencyProperty.Register("FilterDesc", typeof(string), typeof(CheckBoxFilters), new PropertyMetadata(string.Empty));
 
         public bool IsFilterEnabled
@@ -45,7 +45,7 @@ namespace XMAT
             get { return (bool)this.GetValue(IsFilterEnabledProperty); }
             set { this.SetValue(IsFilterEnabledProperty, value); }
         }
-        public static readonly DependencyProperty IsFilterEnabledProperty = 
+        public static readonly DependencyProperty IsFilterEnabledProperty =
             DependencyProperty.Register("IsFilterEnabled", typeof(bool), typeof(CheckBoxFilters), new PropertyMetadata(false));
 
         public IEnumerable ItemsSource
@@ -69,9 +69,9 @@ namespace XMAT
             try
             {
                 var items = FilterList.Items.Cast<CheckedListItem>();
-                foreach(var item in items)
+                foreach (var item in items)
                 {
-                    if(item.Text == AllNone)
+                    if (item.Text == AllNone)
                         continue;
 
                     item.IsChecked = value;
@@ -88,17 +88,17 @@ namespace XMAT
 
         private void FilterCheckBox_Checked(object sender, RoutedEventArgs e)
         {
-            if(_ignoreIsCheckedEvent)
+            if (_ignoreIsCheckedEvent)
                 return;
 
             CheckedListItem checkedItem = (sender as CheckBox).Tag as CheckedListItem;
 
-            if(checkedItem.Text == AllNone && !_allNoneProcessing) // If All/None, (un)check everything
+            if (checkedItem.Text == AllNone && !_allNoneProcessing) // If All/None, (un)check everything
             {
                 SetAllItems(checkedItem.IsChecked);
             }
 
-            if(!_allNoneProcessing)
+            if (!_allNoneProcessing)
             {
                 RaiseFiltersChangedEvent();
             }
@@ -106,23 +106,23 @@ namespace XMAT
 
         private void FilterCheckBox_Unchecked(object sender, RoutedEventArgs e)
         {
-            if(_ignoreIsCheckedEvent)
+            if (_ignoreIsCheckedEvent)
                 return;
 
             CheckedListItem checkedItem = (sender as CheckBox).Tag as CheckedListItem;
 
-            if(checkedItem.Text == AllNone && !_allNoneProcessing) // If All/None, (un)check everything
+            if (checkedItem.Text == AllNone && !_allNoneProcessing) // If All/None, (un)check everything
             {
                 SetAllItems(checkedItem.IsChecked);
             }
-            else if(checkedItem.Text != AllNone) // if a regular item, uncheck All/None
+            else if (checkedItem.Text != AllNone) // if a regular item, uncheck All/None
             {
                 _allNoneProcessing = true;
                 (FilterList.Items[AllNoneIndex] as CheckedListItem).IsChecked = false;
                 _allNoneProcessing = false;
             }
 
-            if(!_allNoneProcessing)
+            if (!_allNoneProcessing)
             {
                 RaiseFiltersChangedEvent();
             }

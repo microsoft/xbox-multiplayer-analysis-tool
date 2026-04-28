@@ -47,7 +47,7 @@ namespace XMAT.WebServiceCapture.Proxy
             string final;
 
             final = FirstLineAndHeaders;
-            if(BodyBytes != null && BodyBytes.Length > 0)
+            if (BodyBytes != null && BodyBytes.Length > 0)
             {
                 final += Encoding.ASCII.GetString(BodyBytes);
             }
@@ -64,7 +64,7 @@ namespace XMAT.WebServiceCapture.Proxy
         }
     }
 
-    [Display(Name="Request")]
+    [Display(Name = "Request")]
     public class ClientRequest : BaseRequestResponse
     {
         [Description("WEB_SVC_SCRIPT_PROP_DESC_SCHEME")]
@@ -80,7 +80,7 @@ namespace XMAT.WebServiceCapture.Proxy
         public override string FirstLineAndHeaders { get => RefreshFirstLineAndHeaders($"{Method} {Path} {Version}"); }
     }
 
-    [Display(Name="Response")]
+    [Display(Name = "Response")]
     public class ServerResponse : BaseRequestResponse
     {
         [Description("WEB_SVC_SCRIPT_PROP_DESC_STATUS")]

@@ -14,7 +14,7 @@ namespace XMAT
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
             var color = (System.Drawing.Color)value;
-            if(value == null)
+            if (value == null)
                 throw new InvalidOperationException("Value must be a Color");
             return new SolidColorBrush(System.Windows.Media.Color.FromRgb(color.R, color.G, color.B));
         }

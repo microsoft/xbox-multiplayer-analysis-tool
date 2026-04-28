@@ -2,12 +2,12 @@
 // Licensed under the MIT License.
 
 using System;
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Threading.Tasks;
-using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
+using Microsoft.CodeAnalysis.Scripting;
 
 namespace XMAT.Scripting
 {
@@ -21,13 +21,13 @@ namespace XMAT.Scripting
             {
                 Diagnostic[] finalArray = Array.Empty<Diagnostic>();
 
-                if(!string.IsNullOrEmpty(script))
+                if (!string.IsNullOrEmpty(script))
                 {
                     // TODO: what other imports?  and/or can we add this via script?
                     Script<T> s = CSharpScript.Create<T>(script, ScriptOptions.Default.WithImports("System.Text.Json")
                                                                                       .WithReferences(typeof(JsonDocument).Assembly), typeof(ScriptGlobals<T>));
                     ImmutableArray<Diagnostic> diag = s.Compile();
-                    if(diag != null && diag.Length > 0)
+                    if (diag != null && diag.Length > 0)
                     {
                         finalArray = new Diagnostic[diag.Length];
                         diag.CopyTo(finalArray);
@@ -44,7 +44,7 @@ namespace XMAT.Scripting
         public async Task<T> RunScriptAsync<T>(T input) where T : class
         {
             // if we didn't call Compile above, just bail out
-            if(_script == null)
+            if (_script == null)
                 return null;
 
             // run the script and return the params we passed in...

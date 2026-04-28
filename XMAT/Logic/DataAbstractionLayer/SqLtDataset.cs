@@ -1,13 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using Microsoft.Data.Sqlite;
-using XMAT.SharedInterfaces;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Text;
+using Microsoft.Data.Sqlite;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
@@ -47,7 +46,7 @@ namespace XMAT.DataAbstractionLayer
 
             _commandInterface.CommandText = _commandBuilder.ToString();
 
-            if(_commandInterface.Connection.State == System.Data.ConnectionState.Open)
+            if (_commandInterface.Connection.State == System.Data.ConnectionState.Open)
             {
                 dataReader = _commandInterface.ExecuteReader();
             }
@@ -73,8 +72,8 @@ namespace XMAT.DataAbstractionLayer
         }
 
         internal SqLtDataset(
-            SqliteConnection connection, 
-            string sourceTableName, 
+            SqliteConnection connection,
+            string sourceTableName,
             IDictionary<string, IFieldDefinition> fieldsToInclude)
         {
             _sourceTableName = sourceTableName;

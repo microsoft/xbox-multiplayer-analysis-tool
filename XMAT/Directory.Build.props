@@ -3,5 +3,9 @@
     <Version>0.3.0.0</Version>
     <FileVersion>0.3.0.0</FileVersion>
     <InformationalVersion>0.3.0.0</InformationalVersion>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 </Project>

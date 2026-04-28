@@ -2,15 +2,14 @@
 // Licensed under the MIT License.
 
 using System;
+using System.Threading.Tasks;
 using System.Windows;
 using XMAT.Models;
+using XMAT.NetworkTrace;
+using XMAT.NetworkTraceCaptureAnalysis;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
-using XMAT.NetworkTrace;
 using XMAT.XboxLiveCaptureAnalysis;
-using System.Threading.Tasks;
-using XMAT.NetworkTraceCaptureAnalysis;
-using XMAT.NetworkTraceCaptureAnalysis.Models;
 
 namespace XMAT
 {
@@ -38,16 +37,16 @@ namespace XMAT
         {
             _unhandledLog.InitLog("unhandled.log", LogLevel.DEBUG);
 
-            AppDomain.CurrentDomain.UnhandledException += (s,e) =>
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {
                 PublicUtilities.CollectLogs();
                 UnhandledExceptionHandler(e.ExceptionObject as Exception);
 
                 MessageBox.Show(Localization.GetLocalizedString("UNHANDLED_EXCEPTION_HANDLER_MESSAGE", e.ExceptionObject), Localization.GetLocalizedString("UNHANDLED_EXCEPTION_HANDLER_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
             };
-            Dispatcher.UnhandledException         += (s,e) => { UnhandledExceptionHandler(e.Exception); };
-            Current.DispatcherUnhandledException  += (s,e) => { UnhandledExceptionHandler(e.Exception); };
-            TaskScheduler.UnobservedTaskException += (s,e) => { UnhandledExceptionHandler(e.Exception); };
+            Dispatcher.UnhandledException += (s, e) => { UnhandledExceptionHandler(e.Exception); };
+            Current.DispatcherUnhandledException += (s, e) => { UnhandledExceptionHandler(e.Exception); };
+            TaskScheduler.UnobservedTaskException += (s, e) => { UnhandledExceptionHandler(e.Exception); };
         }
 
         private void InitializeDataLayer()
@@ -114,7 +113,7 @@ namespace XMAT
 
         private void ShutdownExceptionHandlers()
         {
-            if(_unhandledLog != null)
+            if (_unhandledLog != null)
             {
                 _unhandledLog.CloseLog();
             }

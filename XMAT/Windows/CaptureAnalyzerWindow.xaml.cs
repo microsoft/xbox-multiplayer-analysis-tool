@@ -1,9 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT.SharedInterfaces;
 using System.Windows;
-using System.Windows.Controls;
 
 namespace XMAT
 {

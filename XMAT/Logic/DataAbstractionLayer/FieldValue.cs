@@ -2,8 +2,8 @@
 // Licensed under the MIT License.
 
 using System;
-using XMAT.SharedInterfaces;
 using Microsoft.Data.Sqlite;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {

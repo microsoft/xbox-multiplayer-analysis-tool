@@ -2,10 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
-using System.ComponentModel;
 using System.Runtime.InteropServices;
-using System.Threading.Tasks;
-using System.Windows;
 using static WinInetConnectionOption;
 
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
@@ -94,7 +91,7 @@ static class WinInetFuncs
 
 namespace XMAT.WebServiceCapture
 {
-    
+
 
     class InternetProxy
     {

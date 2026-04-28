@@ -14,13 +14,13 @@ namespace XMAT.Scripting
     {
         public ScriptTypeCollection(Type[] types)
         {
-            if(types != null)
+            if (types != null)
                 GetClassInfo(types);
         }
 
         private void GetClassInfo(Type[] types)
         {
-            foreach(Type t in types)
+            foreach (Type t in types)
             {
                 var desc = Attribute.GetCustomAttribute(t, typeof(DescriptionAttribute)) as DescriptionAttribute;
                 var name = Attribute.GetCustomAttribute(t, typeof(DisplayAttribute)) as DisplayAttribute;
@@ -35,7 +35,7 @@ namespace XMAT.Scripting
 
                 var props = t.GetProperties();
 
-                foreach(PropertyInfo pi in props)
+                foreach (PropertyInfo pi in props)
                 {
                     var propDesc = pi.GetCustomAttributes(typeof(DescriptionAttribute)).FirstOrDefault() as DescriptionAttribute;
                     var tiProp = new ScriptTypeInfo

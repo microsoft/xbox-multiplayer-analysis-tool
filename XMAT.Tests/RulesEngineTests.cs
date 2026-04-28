@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using CaptureAnalysisEngine;
 using System.Text.Json;
+using CaptureAnalysisEngine;
 
 namespace XMAT.Tests
 {

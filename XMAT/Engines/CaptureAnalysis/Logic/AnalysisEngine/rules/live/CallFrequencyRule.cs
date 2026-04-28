@@ -60,7 +60,7 @@ namespace CaptureAnalysisEngine
             foreach (var limits in m_rateLimits)
             {
                 // Filter the full list of service calls to those which apply to this set of limits
-                List<ServiceCallItem> applicableCalls = items.Where(serviceCall => 
+                List<ServiceCallItem> applicableCalls = items.Where(serviceCall =>
                 {
                     foreach (var subpath in limits.m_applicableSubpaths)
                     {

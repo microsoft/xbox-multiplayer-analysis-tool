@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT.Models;
 using System.Windows;
+using XMAT.Models;
 
 namespace XMAT
 {

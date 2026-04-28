@@ -2,14 +2,11 @@
 // Licensed under the MIT License.
 
 using System;
-using System.Text;
-using System.Net.WebSockets;
-using System.Runtime.InteropServices;
-using System.Threading;
 using System.Diagnostics;
-using System.Threading.Tasks;
-using System.Text.Json;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
 using Microsoft.Diagnostics.Tracing;
 
 namespace XMAT.NetworkTrace.NTDE
@@ -215,7 +212,7 @@ namespace XMAT.NetworkTrace.NTDE
 
                 netsh.WaitForExit();
 
-                if(netsh.ExitCode != 0)
+                if (netsh.ExitCode != 0)
                 {
                     if (sto.Contains(RunAsAdminMarker))
                     {

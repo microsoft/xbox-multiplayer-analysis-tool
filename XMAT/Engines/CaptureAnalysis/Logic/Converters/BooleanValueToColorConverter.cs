@@ -3,9 +3,7 @@
 
 using System;
 using System.Globalization;
-using System.Windows;
 using System.Windows.Data;
-using XMAT.NetworkTraceCaptureAnalysis.Models;
 
 namespace XMAT.NetworkTraceCaptureAnalysis
 {

@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Collections.Generic;
 using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
 using XMAT.XboxLiveCaptureAnalysis.Models;
-using System.Collections.Generic;
 
 namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
 {
@@ -29,7 +29,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
         private void InitializeFrom(EndpointReportData endpointReportData)
         {
             EndpointName = endpointReportData.UriService;
-            BatchFrequencyIssueCount  = new(BatchFrequencyRule.DisplayName);
+            BatchFrequencyIssueCount = new(BatchFrequencyRule.DisplayName);
             BurstDetectionIssueCount = new(BurstDetectionRule.DisplayName);
             CallFrequencyIssueCount = new(CallFrequencyRule.DisplayName);
             PollingDetectionIssueCount = new(PollingDetectionRule.DisplayName);

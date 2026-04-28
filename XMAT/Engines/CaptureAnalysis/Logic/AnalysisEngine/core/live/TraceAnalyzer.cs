@@ -2,12 +2,12 @@
 // Licensed under the MIT License.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
-using System.Text.Json;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
-using System.Collections.Concurrent;
 
 namespace CaptureAnalysisEngine
 {
@@ -30,9 +30,9 @@ namespace CaptureAnalysisEngine
 
         public bool DoesDataContainEndpoint(ServiceCallData serviceCallData, string endpoint)
         {
-            foreach(var console in serviceCallData.m_perConsoleData.Values)
+            foreach (var console in serviceCallData.m_perConsoleData.Values)
             {
-                if(console.m_servicesHistory.ContainsKey(endpoint))
+                if (console.m_servicesHistory.ContainsKey(endpoint))
                 {
                     return true;
                 }
@@ -164,7 +164,7 @@ namespace CaptureAnalysisEngine
 
         public Dictionary<string, IEnumerable<ReportDocument>> Run(RulesEngine rulesEngine, ServiceCallData serviceCallData, string reportOutputDirectory)
         {
-            Dictionary<string, IEnumerable<ReportDocument>> perConsoleReports = new ();
+            Dictionary<string, IEnumerable<ReportDocument>> perConsoleReports = new();
             foreach (var console in serviceCallData.m_perConsoleData)
             {
                 if (console.Value.m_servicesHistory.Count == 0)
@@ -185,7 +185,7 @@ namespace CaptureAnalysisEngine
 
         public IEnumerable<ReportDocument> RunReports(IEnumerable<RuleResult> results, ServiceCallData serviceCallData, string reportOutputDirectory)
         {
-            ConcurrentBag<ReportDocument> documents = new ();
+            ConcurrentBag<ReportDocument> documents = new();
             Parallel.ForEach(
                 m_reports,
                 report =>
@@ -223,7 +223,7 @@ namespace CaptureAnalysisEngine
             }
 
             serviceCallData.m_endpointToService = m_converter.GetServices();
-            
+
         }
 
         // TODO: needed?
@@ -250,8 +250,8 @@ namespace CaptureAnalysisEngine
         //}
 
         private List<Report> m_reports = new List<Report>();
-        private List<Rule> m_rules = new ();
-        private UriToMethodConverter m_converter = new ();
-        private readonly Dictionary<string, Type> m_ruleTypeCache = new ();
+        private List<Rule> m_rules = new();
+        private UriToMethodConverter m_converter = new();
+        private readonly Dictionary<string, Type> m_ruleTypeCache = new();
     }
 }

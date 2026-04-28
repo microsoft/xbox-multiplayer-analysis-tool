@@ -6,6 +6,7 @@ using System.Collections.Generic;
 
 namespace CaptureAnalysisEngine
 {
+    [AttributeUsage(AttributeTargets.Class)]
     public class ReportAttribute : Attribute { }
 
     public abstract class ReportDocument

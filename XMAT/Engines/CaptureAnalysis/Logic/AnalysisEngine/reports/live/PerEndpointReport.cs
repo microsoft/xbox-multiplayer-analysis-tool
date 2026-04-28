@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using XMAT;
 
 namespace CaptureAnalysisEngine
 {
@@ -69,12 +69,12 @@ namespace CaptureAnalysisEngine
 
         internal EndpointReportData()
         {
-            RuleReportData = new ();
+            RuleReportData = new();
         }
 
         public string UriService;
         public string EndpointFunctionCall;
-        public ReportMetadata Metadata = new ();
+        public ReportMetadata Metadata = new();
         public List<RuleReportData> RuleReportData { get; }
     }
 
@@ -86,7 +86,7 @@ namespace CaptureAnalysisEngine
 
         internal PerEndpointReportDocument()
         {
-            EndpointReportData = new ();
+            EndpointReportData = new();
         }
 
         public override string ToJson()
@@ -153,7 +153,7 @@ namespace CaptureAnalysisEngine
 
         public EndpointReportData ReportEndpoint(
             IEnumerable<IGrouping<String, RuleResult>> ruleGroups,
-            KeyValuePair<String, Tuple<String,String,String>> endpoint)
+            KeyValuePair<String, Tuple<String, String, String>> endpoint)
         {
             var endpointList = GetEndpointResults(ruleGroups, endpoint.Key);
 
@@ -167,7 +167,7 @@ namespace CaptureAnalysisEngine
             endpointReportData.UriService = endpoint.Key;
             endpointReportData.EndpointFunctionCall = endpoint.Value.Item3;
 
-            foreach(var rule in endpointList)
+            foreach (var rule in endpointList)
             {
                 var ruleReportData = ReportRule(rule);
                 if (ruleReportData != null)
@@ -214,7 +214,7 @@ namespace CaptureAnalysisEngine
             {
                 RuleViolationData ruleViolationData = new();
 
-                switch(violation.m_level)
+                switch (violation.m_level)
                 {
                     case ViolationLevel.Error:
                         ruleViolationData.Level = Localization.GetLocalizedString("LTA_VIOLATION_LEVEL_ERROR");
@@ -281,7 +281,7 @@ namespace CaptureAnalysisEngine
             int warningCounts = 0;
             int errorCounts = 0;
 
-            foreach(var result in endpointResults)
+            foreach (var result in endpointResults)
             {
                 warningCounts += result.Warnings;
                 errorCounts += result.Errors;

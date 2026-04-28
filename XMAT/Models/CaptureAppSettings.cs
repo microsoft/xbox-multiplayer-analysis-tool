@@ -20,7 +20,7 @@ namespace XMAT.Models
 
                 CaptureDevices = new();
 
-                foreach(var deviceContext in model.CaptureDeviceContexts)
+                foreach (var deviceContext in model.CaptureDeviceContexts)
                 {
                     // note: we will not remember "unknown"/readonly devices since those probably
                     // came from some sort of import...
@@ -48,7 +48,7 @@ namespace XMAT.Models
                 foreach (var captureDevice in CaptureDevices)
                 {
                     ICaptureDeviceContext deviceContext = model.AddDeviceContext(
-                        captureDevice.DeviceType, 
+                        captureDevice.DeviceType,
                         captureDevice.DeviceName,
                         captureDevice.CaptureType,
                         false,

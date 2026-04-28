@@ -1,20 +1,18 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using Microsoft.AspNetCore.Connections;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipelines;
-using System.Linq;
 using System.Net.Http;
 using System.Net.Security;
-using System.Net.WebSockets;
 using System.Security.Authentication;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Connections;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -296,7 +294,8 @@ namespace XMAT.WebServiceCapture.Proxy
                     int bytesRead = await stream.ReadAsync(buffer, totalRead, buffer.Length - totalRead, ct).ConfigureAwait(false);
                     if (bytesRead == 0)
                     {
-                        if (totalRead == 0) return null;
+                        if (totalRead == 0)
+                            return null;
                         break;
                     }
                     totalRead += bytesRead;
@@ -315,10 +314,12 @@ namespace XMAT.WebServiceCapture.Proxy
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.Log(connectionID, LogLevel.WARN, $"Exception reading request: {ex.Message}");
-                if (totalRead == 0) return null;
+                if (totalRead == 0)
+                    return null;
             }
 
-            if (totalRead == 0) return null;
+            if (totalRead == 0)
+                return null;
 
             // Parse headers and body
             int headerEnd = FindHeaderEnd(buffer, totalRead);
@@ -332,7 +333,8 @@ namespace XMAT.WebServiceCapture.Proxy
             string[] lines = headerSection.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
 
             var request = ParseRequestLines(connectionID, lines);
-            if (request == null) return null;
+            if (request == null)
+                return null;
 
             // Extract body if present
             int bodyStart = headerEnd + 4; // skip \r\n\r\n
@@ -350,7 +352,8 @@ namespace XMAT.WebServiceCapture.Proxy
                     while (bodyLength < contentLength && !ct.IsCancellationRequested)
                     {
                         int read = await stream.ReadAsync(buffer, bodyStart + bodyLength, contentLength - bodyLength, ct).ConfigureAwait(false);
-                        if (read == 0) break;
+                        if (read == 0)
+                            break;
                         bodyLength += read;
                     }
                 }
@@ -388,7 +391,8 @@ namespace XMAT.WebServiceCapture.Proxy
             for (int i = 1; i < lines.Length; i++)
             {
                 string[] header = lines[i].Split(':', 2, StringSplitOptions.TrimEntries);
-                if (header.Length < 2) continue;
+                if (header.Length < 2)
+                    continue;
 
                 string name = header[0];
                 string value = header[1];

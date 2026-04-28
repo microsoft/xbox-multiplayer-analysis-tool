@@ -8,7 +8,6 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using System.Threading.Tasks;
 using XMAT.SharedInterfaces;
 
@@ -116,7 +115,7 @@ namespace XMAT.Models
             foreach (var record in devicesDataset.DataRecords)
             {
                 var device = AppModel.AddDeviceContext(
-                    (DeviceType)record.Int(@"DeviceType"), 
+                    (DeviceType)record.Int(@"DeviceType"),
                     record.Str(@"DeviceName"),
                     (CaptureType)record.Int(@"CaptureType"),
                     true,
@@ -157,19 +156,19 @@ namespace XMAT.Models
                 // create a new tab with an "Unknown" device and WebServiceCaptureControl capture method
                 // that will be read-only and imports this data...
                 case ImportType.Fiddler:
-                    {
-                        captureDevice = AppModel.AddDeviceContext(
-                            DeviceType.Unknown,
-                            $"{importType} - {Path.GetFileName(fromFilePath)}",
-                            CaptureType.WebProxy,
-                            true,
-                            // NOTE: since this is a READONLY
-                            // capture, we do not need parameters maybe?
-                            null
-                        );
-                        await (captureDevice.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ImportFromFiddlerAsync(fromFilePath, captureDevice);
-                    }
-                    break;
+                {
+                    captureDevice = AppModel.AddDeviceContext(
+                        DeviceType.Unknown,
+                        $"{importType} - {Path.GetFileName(fromFilePath)}",
+                        CaptureType.WebProxy,
+                        true,
+                        // NOTE: since this is a READONLY
+                        // capture, we do not need parameters maybe?
+                        null
+                    );
+                    await (captureDevice.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ImportFromFiddlerAsync(fromFilePath, captureDevice);
+                }
+                break;
             }
 
             if (captureDevice != null)
@@ -180,7 +179,7 @@ namespace XMAT.Models
 
         internal void ExportDataCaptures(ExportType exportType, string toFilePath)
         {
-            switch(exportType)
+            switch (exportType)
             {
                 case ExportType.Fiddler:
                     (SelectedDeviceContext.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ExportToFiddler(toFilePath);
@@ -211,7 +210,7 @@ namespace XMAT.Models
                     serializedParameters);
                 _captureDeviceContexts.Add(newCaptureDeviceModel);
 
-                if(!readOnly)
+                if (!readOnly)
                 {
                     AppModel.CaptureDevicesTable.AddRow(
                         (Int64)deviceType,
@@ -227,7 +226,7 @@ namespace XMAT.Models
         internal ICaptureDeviceContext GetDeviceContext(DeviceType deviceType, string deviceName, CaptureType captureType, bool readOnly)
         {
             return (from cc in _captureDeviceContexts
-                    where 
+                    where
                     cc.DeviceType == deviceType &&
                     cc.DeviceName == deviceName &&
                     cc.CaptureType == captureType &&

@@ -17,17 +17,17 @@ namespace CaptureAnalysisEngine
                 LoadMap(mapFile);
             }
         }
-        
+
         public void LoadMap(StreamReader mapFile)
         {
-            while(mapFile.EndOfStream == false)
+            while (mapFile.EndOfStream == false)
             {
                 String line = mapFile.ReadLine();
 
                 var columns = Utils.GetCSVValues(line);
 
                 // Not a value row if there arent 4 columns
-                if(columns.Length != 4)
+                if (columns.Length != 4)
                 {
                     continue;
                 }
@@ -44,7 +44,7 @@ namespace CaptureAnalysisEngine
                 {
                     var uriSplit = uri.Split(new char[] { ' ' });
 
-                    if(uriSplit[0] == "GET")
+                    if (uriSplit[0] == "GET")
                     {
                         m_getMethods.Add(ConvertUriToRegex(uriSplit[1]), methodTuple);
                     }
@@ -80,7 +80,7 @@ namespace CaptureAnalysisEngine
 
         public Tuple<String, String, String> GetService(String service)
         {
-            if(m_services.ContainsKey(service))
+            if (m_services.ContainsKey(service))
             {
                 return m_services[service];
             }
@@ -97,11 +97,11 @@ namespace CaptureAnalysisEngine
             return FindMatch(get ? m_getMethods : m_nonGetMethods, uri);
         }
 
-        private Tuple<String, String, String> FindMatch(Dictionary<Regex, Tuple<String,String, String>> map, String match)
+        private Tuple<String, String, String> FindMatch(Dictionary<Regex, Tuple<String, String, String>> map, String match)
         {
-            foreach(var value in map)
+            foreach (var value in map)
             {
-                if(value.Key.IsMatch(match))
+                if (value.Key.IsMatch(match))
                 {
                     return value.Value;
                 }

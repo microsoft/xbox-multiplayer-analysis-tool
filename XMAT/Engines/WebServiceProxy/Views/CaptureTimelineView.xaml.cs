@@ -82,7 +82,8 @@ namespace XMAT.WebServiceCapture
 
         private void RedrawTimeline()
         {
-            if (TimelineCanvas == null || TimeAxisCanvas == null) return;
+            if (TimelineCanvas == null || TimeAxisCanvas == null)
+                return;
 
             TimelineCanvas.Children.Clear();
             TimeAxisCanvas.Children.Clear();
@@ -97,7 +98,8 @@ namespace XMAT.WebServiceCapture
             }
 
             var valid = items.Where(i => i.RequestTime != DateTime.MinValue).ToList();
-            if (valid.Count == 0) return;
+            if (valid.Count == 0)
+                return;
 
             var firstTime = valid.Min(i => i.RequestTime);
             var lastEnd = valid.Max(i => i.RequestTime + i.Duration);
@@ -230,8 +232,10 @@ namespace XMAT.WebServiceCapture
 
                 var tick = new Line
                 {
-                    X1 = x, Y1 = 14,
-                    X2 = x, Y2 = 20,
+                    X1 = x,
+                    Y1 = 14,
+                    X2 = x,
+                    Y2 = 20,
                     Stroke = fgBrush,
                     StrokeThickness = 1,
                 };
@@ -262,7 +266,8 @@ namespace XMAT.WebServiceCapture
             double[] nice = { 1, 2, 5, 10, 20, 50, 100, 200, 500,
                               1000, 2000, 5000, 10000, 30000, 60000 };
             foreach (var n in nice)
-                if (n >= raw) return n;
+                if (n >= raw)
+                    return n;
             return raw;
         }
 
@@ -280,8 +285,8 @@ namespace XMAT.WebServiceCapture
                 >= 200 and < 300 => Color.FromRgb(0x4C, 0xAF, 0x50),
                 >= 300 and < 400 => Color.FromRgb(0x21, 0x96, 0xF3),
                 >= 400 and < 500 => Color.FromRgb(0xFF, 0x98, 0x00),
-                >= 500           => Color.FromRgb(0xF4, 0x43, 0x36),
-                _                => Color.FromRgb(0x68, 0x68, 0x68),
+                >= 500 => Color.FromRgb(0xF4, 0x43, 0x36),
+                _ => Color.FromRgb(0x68, 0x68, 0x68),
             };
         }
 

@@ -1,9 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT.NetworkTrace.NTDE;
-using XMAT.SharedInterfaces;
 using System;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.NetworkTrace
 {

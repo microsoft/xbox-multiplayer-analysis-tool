@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using CaptureAnalysisEngine;
-using XMAT.SharedInterfaces;
 using System;
 using System.IO;
 using System.Windows;
 using System.Windows.Resources;
+using CaptureAnalysisEngine;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
 {
@@ -39,7 +39,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
             var embeddedResourceUri = string.Format("pack://application:,,,/{0}", resourceName);
             Uri uri = new Uri(embeddedResourceUri, UriKind.Absolute);
             StreamResourceInfo info = Application.GetResourceStream(uri);
-            using(var resourceStream = info.Stream)
+            using (var resourceStream = info.Stream)
             {
                 using (var fileStream = File.Create(filepath))
                 {

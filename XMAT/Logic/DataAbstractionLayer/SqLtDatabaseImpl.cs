@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT.SharedInterfaces;
 using System;
 using System.Collections.Generic;
-using Microsoft.Data.Sqlite;
-using System.Text;
 using System.IO;
+using System.Text;
+using Microsoft.Data.Sqlite;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {

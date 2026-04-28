@@ -7,8 +7,8 @@ namespace XMAT.DataAbstractionLayer
 {
     public static class DataAbstractionLayer
     {
-        public static IDatabase Database 
-        { 
+        public static IDatabase Database
+        {
             get { return DataAbstractionLayerImpl.GetDatabase(); }
         }
 

@@ -11,11 +11,11 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using XMAT.SharedInterfaces;
-using XMAT.NetworkTrace;
-using XMAT.NetworkTrace.Models;
 using XMAT;
 using XMAT.Models;
+using XMAT.NetworkTrace;
+using XMAT.NetworkTrace.Models;
+using XMAT.SharedInterfaces;
 
 namespace NetworkTraceCaptureControls
 {
@@ -103,7 +103,7 @@ namespace NetworkTraceCaptureControls
                     ntdcc.Initialize();
                 }
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message, XMAT.Localization.GetLocalizedString("NETCAP_ERROR"));
                 await ntdcc.DisconnectFromDevice(captureDeviceContext);
@@ -189,7 +189,7 @@ namespace NetworkTraceCaptureControls
 
         private bool ItemIsChecked(IEnumerable list, string text)
         {
-            foreach(CheckedListItem item in list)
+            foreach (CheckedListItem item in list)
             {
                 if (item.Text == text)
                 {

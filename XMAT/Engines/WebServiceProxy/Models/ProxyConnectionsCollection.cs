@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using XMAT.SharedInterfaces;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using XMAT.SharedInterfaces;
 
 namespace XMAT.WebServiceCapture.Models
 {
