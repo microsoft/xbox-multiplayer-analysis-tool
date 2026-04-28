@@ -23,3 +23,8 @@ Any new functionality added, must include appropriate testing alongside the new 
 
 This project utilized the standard [C# coding conventions](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions).
 
+# Reviewing Changes
+
+Changes by external contributors require review by 2 Microsoft employees to be merged.
+
+Changes by internal contributors require review by 1 Microsoft employee (excluding author) to be merged.
