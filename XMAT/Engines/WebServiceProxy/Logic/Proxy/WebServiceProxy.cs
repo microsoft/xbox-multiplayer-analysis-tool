@@ -145,7 +145,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
             try
             {
-                _host.StopAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                // Run StopAsync on thread pool to avoid deadlocking the UI thread
+                Task.Run(async () =>
+                {
+                    await _host.StopAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                }).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {

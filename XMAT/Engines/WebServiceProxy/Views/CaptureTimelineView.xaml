@@ -5,8 +5,43 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:local="clr-namespace:XMAT.WebServiceCapture"
              mc:Ignorable="d" 
-             d:DesignHeight="450" d:DesignWidth="800">
+             d:DesignHeight="150" d:DesignWidth="800">
     <Grid>
-            
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header bar -->
+        <Border Grid.Row="0" Background="{DynamicResource PanelBackgroundBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                Padding="4,2">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Timeline" FontWeight="Bold" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                <RadioButton x:Name="WaterfallMode" Content="Waterfall" IsChecked="True"
+                             Margin="0,0,8,0" GroupName="TimelineMode"
+                             Checked="ViewMode_Changed"/>
+                <RadioButton x:Name="ByHostMode" Content="By Host"
+                             GroupName="TimelineMode"
+                             Checked="ViewMode_Changed"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Timeline scroll area -->
+        <ScrollViewer Grid.Row="1"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      Background="{DynamicResource PanelBackgroundBrush}">
+            <Grid x:Name="TimelineGrid">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="20"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Canvas x:Name="TimeAxisCanvas" Grid.Row="0" Height="20"
+                        Background="{DynamicResource PanelBackgroundBrush}"/>
+                <Canvas x:Name="TimelineCanvas" Grid.Row="1"
+                        Background="{DynamicResource PanelBackgroundBrush}"/>
+            </Grid>
+        </ScrollViewer>
     </Grid>
 </UserControl>

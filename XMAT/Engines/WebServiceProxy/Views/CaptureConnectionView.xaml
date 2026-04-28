@@ -29,6 +29,8 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="30"/>
             <RowDefinition Height="30"/>
+            <RowDefinition Height="120"/>
+            <RowDefinition Height="4"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
@@ -113,7 +115,15 @@
                 </TextBlock>
             </StackPanel>
         </StackPanel>
-        <DataGrid x:Name="ConnectionList" Grid.Row="2" Grid.RowSpan="3"
+
+        <!-- Timeline -->
+        <local:CaptureTimelineView x:Name="TimelineView" Grid.Row="2"
+                                   ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
+                                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"/>
+
+        <GridSplitter Grid.Row="3" Height="4" HorizontalAlignment="Stretch" VerticalAlignment="Center" ResizeDirection="Rows"/>
+
+        <DataGrid x:Name="ConnectionList" Grid.Row="4"
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   d:ItemsSource="{d:SampleData}" 
                   ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
@@ -145,7 +155,7 @@
 
         <GridSplitter Grid.Column="1" Grid.RowSpan="63" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
 
-        <TabControl Grid.Row="0" Grid.Column="2" Grid.RowSpan="3">
+        <TabControl Grid.Row="0" Grid.Column="2" Grid.RowSpan="5">
             <TabItem x:Name="ReqestResponseTab" Header="Request/Response">
                 <Grid>
                     <Grid.RowDefinitions>

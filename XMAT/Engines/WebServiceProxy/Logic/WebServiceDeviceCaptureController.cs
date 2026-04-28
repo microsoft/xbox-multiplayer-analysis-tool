@@ -279,6 +279,16 @@ namespace XMAT.WebServiceCapture
 
         internal async Task DisableProxying()
         {
+            switch (_deviceType)
+            {
+                case DeviceType.LocalPC:
+                    InternetProxy.Disable();
+                    return;
+
+                case DeviceType.GenericProxyDevice:
+                    return;
+            }
+
             if (!GDKXHelper.IsGDKXInstalled(true)) { return; }
 
             EProxyEnabledCheckResult proxyCheckResult = await IsProxyEnabled();
@@ -288,13 +298,6 @@ namespace XMAT.WebServiceCapture
             }
             switch (_deviceType)
             {
-                case DeviceType.LocalPC:
-                    InternetProxy.Disable();
-                    break;
-
-                case DeviceType.GenericProxyDevice:
-                    break;
-
                 case DeviceType.XboxConsole:
                     if (MessageBox.Show(
                         Localization.GetLocalizedString("PROXY_ERROR_RESTART_DESC"),
