@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 using System;
-using System.Net.Sockets;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -10,7 +9,7 @@ namespace XMAT.WebServiceCapture.Proxy
     {
         public DateTime Timestamp { get; set; }
         public int ConnectionID { get; set; }
-        public TcpClient TcpClient { get; set; }
+        public string RemoteEndPoint { get; set; }
         public bool AcceptConnection { get; set; }
     }
 

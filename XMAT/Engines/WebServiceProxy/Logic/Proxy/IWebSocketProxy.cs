@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 using System;
-using Windows.Networking.Sockets;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
