@@ -135,7 +135,7 @@ namespace XMAT.WebServiceCapture.Proxy
                         DateTimeOffset.UtcNow.AddYears(4));
                     cert.FriendlyName = AuthorityName;
 
-                    _rootCert = new X509Certificate2(
+                    _rootCert = X509CertificateLoader.LoadPkcs12(
                         cert.Export(X509ContentType.Pfx, CertPassword),
                         CertPassword,
                         X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet);
@@ -181,7 +181,7 @@ namespace XMAT.WebServiceCapture.Proxy
             X509Certificate2 certWithKey = cert.CopyWithPrivateKey(rsa);
             certWithKey.FriendlyName = hostname;
 
-            X509Certificate2 certWithExportableKey = new X509Certificate2(
+            X509Certificate2 certWithExportableKey = X509CertificateLoader.LoadPkcs12(
                 certWithKey.Export(X509ContentType.Pfx, CertPassword),
                 CertPassword,
                 X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet);

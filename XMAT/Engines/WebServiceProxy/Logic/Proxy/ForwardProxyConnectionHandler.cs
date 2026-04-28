@@ -139,7 +139,7 @@ namespace XMAT.WebServiceCapture.Proxy
             }
 
             _proxy.RaiseCompletedSslConnectionRequest(connectionID, connectRequest);
-            _logger.Log(connectionID, LogLevel.INFO, $"TLS established: {sslStream.SslProtocol}, cipher: {sslStream.CipherAlgorithm}");
+            _logger.Log(connectionID, LogLevel.INFO, $"TLS established: {sslStream.SslProtocol}, cipher suite: {sslStream.NegotiatedCipherSuite}");
 
             // Read the actual HTTP request from the TLS stream
             var innerRequest = await ReadHttpRequestAsync(connectionID, sslStream, ct).ConfigureAwait(false);

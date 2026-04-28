@@ -38,7 +38,7 @@ jobs:
     - name: Install .NET Core
       uses: actions/setup-dotnet@87b7050bc53ea08284295505d98d2aa94301e852 # v4.2.0
       with:
-        dotnet-version: 8.0.x
+        dotnet-version: 10.0.x
 
     # Restore the solution
     - name: Restore the application
@@ -55,6 +55,6 @@ jobs:
       uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
       with:
         name: XMAT_CI_Build_${{ env.Configuration }}
-        path: XMAT\bin\x64\${{ env.Configuration }}\net8.0-windows10.0.17763.0\win-x64\
+        path: XMAT\bin\x64\${{ env.Configuration }}\net10.0-windows10.0.17763.0\win-x64\
       env:
         Configuration: ${{ matrix.configuration }}
