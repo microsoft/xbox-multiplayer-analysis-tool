@@ -48,13 +48,45 @@ jobs:
       env:
         Configuration: ${{ matrix.configuration }}
 
-    # Run tests
-    - name: Run Tests
-      run: dotnet test $env:Solution_Name -c $env:Configuration --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+    # Run tests with code coverage
+    - name: Run Tests with Coverage
+      run: >-
+        dotnet test $env:Solution_Name
+        -c $env:Configuration
+        --no-build
+        --verbosity normal
+        --logger "trx;LogFileName=test-results.trx"
+        --collect:"XPlat Code Coverage"
+        --results-directory ./TestResults
       env:
         Configuration: ${{ matrix.configuration }}
 
-    # Upload artifact (Debug)
+    # Generate coverage report
+    - name: Install ReportGenerator
+      run: dotnet tool install --global dotnet-reportgenerator-globaltool
+
+    - name: Generate Coverage Report
+      run: >-
+        reportgenerator
+        "-reports:TestResults/**/coverage.cobertura.xml"
+        "-targetdir:TestResults/CoverageReport"
+        "-reporttypes:HtmlInline_AzurePipelines;Cobertura;MarkdownSummaryGithub"
+      
+    - name: Post Coverage Summary
+      if: always()
+      run: |
+        if (Test-Path "TestResults/CoverageReport/SummaryGithub.md") {
+          Get-Content "TestResults/CoverageReport/SummaryGithub.md" >> $env:GITHUB_STEP_SUMMARY
+        }
+
+    - name: Upload Coverage Report
+      if: always()
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      with:
+        name: CoverageReport_${{ matrix.configuration }}
+        path: TestResults/CoverageReport/
+
+    # Upload build artifact
     - name: Upload Artifacts
       uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
       with:
