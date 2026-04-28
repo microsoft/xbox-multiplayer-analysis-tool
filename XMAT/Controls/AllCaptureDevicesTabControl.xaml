@@ -39,6 +39,8 @@
                     x:Name="CaptureDevicesTabs">
             <TabControl.Resources>
                 <Style x:Key="CaptureDeviceTabControlStyle" TargetType="{x:Type local:TabControlEx}">
+                    <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
                     <Setter Property="Template">
                         <Setter.Value>
                             <ControlTemplate TargetType="{x:Type TabControl}">

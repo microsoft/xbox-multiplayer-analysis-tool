@@ -11,7 +11,7 @@
         <local:BodyConverter x:Key="BodyConverter"/>
         <local:JsonConverter x:Key="JsonConverter"/>
     </UserControl.Resources>
-    <DockPanel Background="White">
+    <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
         <TextBlock DockPanel.Dock="Top" Height="24" FontWeight="Bold" Margin="10,0,0,0" VerticalAlignment="Center" Text="{Binding Title, FallbackValue=Request}"/>
         <TabControl x:Name="RequestTabs">
             <TabItem x:Name="HeadersTab" Header="Headers">

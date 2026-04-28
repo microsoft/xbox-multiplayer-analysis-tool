@@ -36,6 +36,8 @@ namespace XMAT.Models
 
         public string Language { get; set; } = "en-us"; // Default to en-us to support config files prior to loc support
 
+        public string Theme { get; set; } = "Light"; // "Light" or "Dark"
+
         public void Serialized()
         {
             if (WebProxyCapturePreferences != null)
@@ -77,6 +79,7 @@ namespace XMAT.Models
                 }
 
                 Language = serializedObject.Language;
+                Theme = serializedObject.Theme ?? "Light";
             }
         }
     }

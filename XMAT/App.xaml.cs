@@ -26,6 +26,8 @@ namespace XMAT
             // must be first
             Localization.LoadLanguage(CaptureAppModel.AppModel.PreferencesModel.Language);
 
+            ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
+
             InitializeExceptionHandlers();
             InitializeDataLayer();
             InitializeCaptureMethods();

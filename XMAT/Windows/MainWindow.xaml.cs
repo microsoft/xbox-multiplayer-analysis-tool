@@ -28,6 +28,9 @@ namespace XMAT
         {
             CaptureAppSettings.Deserialize(CaptureAppModel.AppModel);
 
+            // Apply theme after preferences are deserialized
+            ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
+
             InitializeComponent();
 
             // LOC
@@ -48,6 +51,9 @@ namespace XMAT
             ViewGDKXInfo.Header = Localization.GetLocalizedString("GDKX_INFO");
             ActionsMenu.Header = Localization.GetLocalizedString("ACTIONS_MENU");
             ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
+
+            // Sync dark mode checkbox with saved preference
+            ToggleDarkMode.IsChecked = CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark";
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -370,6 +376,14 @@ namespace XMAT
         private void ExportRootCert_Executed(object sender, ExecutedRoutedEventArgs e)
         {
             XMAT.WebServiceCapture.Proxy.WebServiceProxy.CertManager.ExportRootCertificate(PublicUtilities.DesktopDirectoryPath);
+        }
+
+        private void ToggleDarkMode_Click(object sender, RoutedEventArgs e)
+        {
+            string theme = ToggleDarkMode.IsChecked ? "Dark" : "Light";
+            ThemeManager.ApplyTheme(theme);
+            CaptureAppModel.AppModel.PreferencesModel.Theme = theme;
+            CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
         }
     }
 }
