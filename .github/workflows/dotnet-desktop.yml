@@ -50,6 +50,12 @@ jobs:
       env:
         Configuration: ${{ matrix.configuration }}
 
+    # Run tests
+    - name: Run Tests
+      run: dotnet test $env:Solution_Name -c $env:Configuration --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+      env:
+        Configuration: ${{ matrix.configuration }}
+
     # Upload artifact (Debug)
     - name: Upload Artifacts
       uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0

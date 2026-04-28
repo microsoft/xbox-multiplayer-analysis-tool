@@ -5,6 +5,8 @@ VisualStudioVersion = 16.0.30711.63
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "XboxMultiplayerAnalysisTool", "XMAT\XboxMultiplayerAnalysisTool.csproj", "{C17734A9-93B2-483D-BDFD-C16827232E14}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "XMAT.Tests", "XMAT.Tests\XMAT.Tests.csproj", "{B2E5A3A1-7C8D-4E6F-9A1B-3D4E5F6A7B8C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -15,6 +17,10 @@ Global
 		{C17734A9-93B2-483D-BDFD-C16827232E14}.Debug|x64.Build.0 = Debug|x64
 		{C17734A9-93B2-483D-BDFD-C16827232E14}.Release|x64.ActiveCfg = Release|x64
 		{C17734A9-93B2-483D-BDFD-C16827232E14}.Release|x64.Build.0 = Release|x64
+		{B2E5A3A1-7C8D-4E6F-9A1B-3D4E5F6A7B8C}.Debug|x64.ActiveCfg = Debug|x64
+		{B2E5A3A1-7C8D-4E6F-9A1B-3D4E5F6A7B8C}.Debug|x64.Build.0 = Debug|x64
+		{B2E5A3A1-7C8D-4E6F-9A1B-3D4E5F6A7B8C}.Release|x64.ActiveCfg = Release|x64
+		{B2E5A3A1-7C8D-4E6F-9A1B-3D4E5F6A7B8C}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
