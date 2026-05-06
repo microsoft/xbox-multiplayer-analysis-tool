@@ -52,6 +52,22 @@ namespace XMAT.NetworkTraceCaptureAnalysis
 
             return protocolNum.ToString();
         }
+        
+        public void BlockUrl(string url)
+        {
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                NetworkTrace.NetworkUrlBlocker.Instance.BlockUrl(url);
+            }
+        }
+
+        public void UnblockUrl(string url)
+        {
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                NetworkTrace.NetworkUrlBlocker.Instance.UnblockUrl(url);
+            }
+        }
 
         public async Task<ECaptureAnalyzerResult> RunAsync(ICaptureAnalysisRun analysisRun, IDeviceCaptureController captureController)
         {
@@ -65,6 +81,18 @@ namespace XMAT.NetworkTraceCaptureAnalysis
             var selectedItems = new NetworkTracePacketDataModel[controller.FilteredItems.Count];
 
             controller.FilteredItems.CopyTo(selectedItems, 0);
+
+            // Filter out packets to blocked URLs
+            var filteredItems = selectedItems.Where(packet =>
+                !NetworkTrace.NetworkUrlBlocker.Instance.IsUrlBlocked(packet.DestinationIpv4Address)).ToArray();
+
+            if (filteredItems.Length < selectedItems.Length)
+            {
+                PublicUtilities.AppLog(LogLevel.INFO, $"Blocked {selectedItems.Length - filteredItems.Length} packets to blocked URLs");
+            }
+
+            // Use filteredItems instead of selectedItems for the rest of the analysis
+            selectedItems = filteredItems;
 
             await Task.Run(() =>
             {
