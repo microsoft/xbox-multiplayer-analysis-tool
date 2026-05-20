@@ -81,6 +81,7 @@ namespace XMAT.WebServiceCapture
 
         public ScriptCollection Scripts { get; set; }
         public ScriptTypeCollection ScriptTypes { get; set; }
+        public BlockListModel BlockList { get; set; }
 
         private const int LoadedCapturesPageBreakSize = 100;
 
@@ -131,6 +132,7 @@ namespace XMAT.WebServiceCapture
             MethodFilterList = new ObservableCollection<CheckedListItem>();
             Scripts = new ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
             ScriptTypes = new ScriptTypeCollection(new Type[] { typeof(WebServiceCaptureScriptParams), typeof(ClientRequest), typeof(ServerResponse), typeof(HeaderCollection) });
+            BlockList = new BlockListModel();
         }
 
         public void Initialize()
@@ -381,6 +383,24 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        private bool IsRequestBlocked(ClientRequest request)
+        {
+            if (BlockList == null || request == null)
+                return false;
+
+            // For CONNECT (SSL) requests, Host is typically empty and the Path is "host:port".
+            string host = request.Host;
+            string path = request.Path;
+            if (string.IsNullOrEmpty(host) && !string.IsNullOrEmpty(path))
+            {
+                int colon = path.IndexOf(':');
+                host = colon > 0 ? path.Substring(0, colon) : path;
+                path = null;
+            }
+
+            return BlockList.IsBlocked(host, path);
+        }
+
         private async void WebProxy_ReceivedSslConnectionRequestAsync(object sender, SslConnectionRequestEventArgs connectionEvent)
         {
             try
@@ -393,6 +413,13 @@ namespace XMAT.WebServiceCapture
             catch (Exception e)
             {
                 PublicUtilities.AppLog(LogLevel.ERROR, $"SSL connection script error {e}");
+            }
+
+            if (connectionEvent.AcceptConnection && IsRequestBlocked(connectionEvent.Request))
+            {
+                PublicUtilities.AppLog(LogLevel.INFO,
+                    $"Blocked SSL CONNECT to '{connectionEvent.Request.Host ?? connectionEvent.Request.Path}' (BlockList)");
+                connectionEvent.AcceptConnection = false;
             }
 
             string base64Body = string.Empty;
@@ -452,6 +479,13 @@ namespace XMAT.WebServiceCapture
             catch (Exception e)
             {
                 PublicUtilities.AppLog(LogLevel.ERROR, $"WebRequest script error {e}");
+            }
+
+            if (requestEvent.AcceptRequest && IsRequestBlocked(requestEvent.Request))
+            {
+                PublicUtilities.AppLog(LogLevel.INFO,
+                    $"Blocked {requestEvent.Request.Method} {requestEvent.Request.Host}{requestEvent.Request.Path} (BlockList)");
+                requestEvent.AcceptRequest = false;
             }
 
             string base64Body = string.Empty;
