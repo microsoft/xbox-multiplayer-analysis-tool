@@ -74,6 +74,9 @@
     <Page Update="Engines\WebServiceProxy\Views\CaptureConnectionView.xaml">
       <XamlRuntime>$(DefaultXamlRuntime)</XamlRuntime>
     </Page>
+    <Page Update="Engines\WebServiceProxy\Views\BlockListView.xaml">
+      <XamlRuntime>$(DefaultXamlRuntime)</XamlRuntime>
+    </Page>
     <Page Update="Engines\WebServiceProxy\Views\CaptureControlView.xaml">
       <XamlRuntime>$(DefaultXamlRuntime)</XamlRuntime>
     </Page>
