@@ -43,8 +43,10 @@ namespace XMAT.WebServiceCapture.Models
 
         public void Remove(string pattern)
         {
-            if (pattern == null)
+            if (string.IsNullOrWhiteSpace(pattern))
                 return;
+
+            pattern = pattern.Trim();
 
             lock (_lockObj)
             {
