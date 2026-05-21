@@ -388,14 +388,24 @@ namespace XMAT.WebServiceCapture
             if (BlockList == null || request == null)
                 return false;
 
-            // For CONNECT (SSL) requests, Host is typically empty and the Path is "host:port".
             string host = request.Host;
             string path = request.Path;
+
             if (string.IsNullOrEmpty(host) && !string.IsNullOrEmpty(path))
             {
-                int colon = path.IndexOf(':');
-                host = colon > 0 ? path.Substring(0, colon) : path;
-                path = null;
+                // Check if this is an absolute-form URI (e.g., GET http://example.com/path HTTP/1.1)
+                if (Uri.TryCreate(path, UriKind.Absolute, out Uri absoluteUri))
+                {
+                    host = absoluteUri.Host;
+                    path = absoluteUri.PathAndQuery;
+                }
+                // Otherwise, assume CONNECT request where Path is "host:port"
+                else
+                {
+                    int colon = path.IndexOf(':');
+                    host = colon > 0 ? path.Substring(0, colon) : path;
+                    path = null;
+                }
             }
 
             return BlockList.IsBlocked(host, path);
