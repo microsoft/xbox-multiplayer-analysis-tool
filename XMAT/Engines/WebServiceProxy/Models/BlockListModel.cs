@@ -96,9 +96,8 @@ namespace XMAT.WebServiceCapture.Models
                     patterns[i] = BlockedUrls[i];
             }
 
-            foreach (var pattern in patterns)
+            foreach (var regex in patterns.Select(GetRegex))
             {
-                Regex regex = GetRegex(pattern);
                 if (candidates.Where(candidate => regex.IsMatch(candidate)).Any())
                     return true;
             }
