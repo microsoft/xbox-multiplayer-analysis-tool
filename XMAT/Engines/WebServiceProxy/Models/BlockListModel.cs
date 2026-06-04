@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace XMAT.WebServiceCapture.Models
@@ -31,11 +32,9 @@ namespace XMAT.WebServiceCapture.Models
 
             lock (_lockObj)
             {
-                foreach (var existing in BlockedUrls)
-                {
-                    if (string.Equals(existing, pattern, StringComparison.OrdinalIgnoreCase))
-                        return false;
-                }
+                if (BlockedUrls.Any(existing => string.Equals(existing, pattern, StringComparison.OrdinalIgnoreCase)))
+                    return false;
+
                 BlockedUrls.Add(pattern);
                 return true;
             }
