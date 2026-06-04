@@ -1,0 +1,53 @@
+<UserControl x:Class="XMAT.WebServiceCapture.BlockListView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:local="clr-namespace:XMAT.WebServiceCapture"
+             mc:Ignorable="d"
+             x:Name="BlockListViewControl"
+             d:DesignHeight="450" d:DesignWidth="600">
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" TextWrapping="Wrap" Margin="0,0,0,8">
+            <Run Text="Enter URLs to block below. You can use * as a wildcard. Examples:"/>
+            <LineBreak/>
+            <Run Text="example.com" FontFamily="Consolas"/><Run Text=" - Blocks traffic to example.com"/>
+            <LineBreak/>
+            <Run Text="*.example.com" FontFamily="Consolas"/><Run Text=" - Blocks traffic to all subdomains of example.com"/>
+            <LineBreak/>
+            <Run Text="192.168.1.*" FontFamily="Consolas"/><Run Text=" - Blocks traffic to all IPs starting with 192.168.1"/>
+        </TextBlock>
+
+        <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="NewBlockTextBox" Grid.Column="0" VerticalAlignment="Center"
+                     Padding="3" KeyDown="NewBlockTextBox_KeyDown"/>
+            <Button x:Name="AddUrlBlockButton" Grid.Column="1" Margin="6,0,0,0" Padding="8,3"
+                    Content="Add URL Block" Click="AddUrlBlock_Click"/>
+        </Grid>
+
+        <TextBlock Grid.Row="2" Text="Blocked URLs:" FontWeight="Bold" Margin="0,4,0,4"/>
+
+        <ListBox x:Name="BlockedUrlList" Grid.Row="3"
+                 SelectionMode="Extended"
+                 ItemsSource="{Binding BlockList.BlockedUrls, ElementName=BlockListViewControl}"/>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <Button x:Name="RemoveSelectedButton" Content="Remove Selected" Padding="8,3" Margin="0,0,6,0"
+                    Click="RemoveSelected_Click"/>
+            <Button x:Name="ClearAllButton" Content="Clear All" Padding="8,3"
+                    Click="ClearAll_Click"/>
+        </StackPanel>
+    </Grid>
+</UserControl>
