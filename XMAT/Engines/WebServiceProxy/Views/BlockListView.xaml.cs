@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -62,12 +63,9 @@ namespace XMAT.WebServiceCapture
             {
                 selectedItems.Add(item);
             }
-            foreach (var item in selectedItems)
+            foreach (var s in selectedItems.OfType<string>())
             {
-                if (item is string s)
-                {
-                    BlockList.Remove(s);
-                }
+                BlockList.Remove(s);
             }
         }
 
