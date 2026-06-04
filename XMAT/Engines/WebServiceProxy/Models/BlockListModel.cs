@@ -99,11 +99,8 @@ namespace XMAT.WebServiceCapture.Models
             foreach (var pattern in patterns)
             {
                 Regex regex = GetRegex(pattern);
-                foreach (var candidate in candidates)
-                {
-                    if (regex.IsMatch(candidate))
-                        return true;
-                }
+                if (candidates.Where(candidate => regex.IsMatch(candidate)).Any())
+                    return true;
             }
 
             return false;
