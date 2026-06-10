@@ -100,7 +100,7 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             lock (_rootLock)
             {
-                if (_rootCert != null && _rootCert.NotAfter > DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
+if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
                     return true;
 
                 var certs = _rootStore.Certificates.Find(
