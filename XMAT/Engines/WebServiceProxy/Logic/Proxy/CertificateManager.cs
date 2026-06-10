@@ -187,6 +187,10 @@ namespace XMAT.WebServiceCapture.Proxy
             // the root cert expires before host certs.
             DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddYears(HostCertValidityYears);
             DateTimeOffset issuerNotAfter = _rootCert.NotAfter;
+
+            if (issuerNotAfter <= DateTimeOffset.UtcNow)
+                throw new InvalidOperationException("Root certificate has expired and cannot be used to issue host certificates.");
+
             if (notAfter > issuerNotAfter)
             {
                 notAfter = issuerNotAfter;
