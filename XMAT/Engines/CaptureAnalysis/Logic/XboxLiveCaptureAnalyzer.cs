@@ -29,7 +29,13 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 throw new ArgumentException("Path segments after the first must be relative.", nameof(remainingSegments));
             }
 
-            return Path.Combine(new[] { firstSegment }.Concat(remainingSegments).ToArray());
+            var combinedPath = firstSegment;
+            foreach (var segment in remainingSegments)
+            {
+                combinedPath = Path.Combine(combinedPath, segment);
+            }
+
+            return combinedPath;
         }
 
         private ICaptureAppModel _captureAppModel;
