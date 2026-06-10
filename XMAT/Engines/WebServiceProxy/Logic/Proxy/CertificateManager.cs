@@ -22,6 +22,9 @@ namespace XMAT.WebServiceCapture.Proxy
         private readonly string CertFileNameFiddlerPem = "FiddlerRoot.pem";
         private readonly string CertPassword = string.Empty;
 
+        private const int RootCertValidityYears = 4;
+        private const int HostCertValidityYears = 3;
+
         private readonly X509Store _rootStore;
         private readonly X509Store _myStore;
 
@@ -97,7 +100,7 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             lock (_rootLock)
             {
-                if (_rootCert != null)
+                if (_rootCert != null && _rootCert.NotAfter > DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
                     return true;
 
                 var certs = _rootStore.Certificates.Find(
@@ -105,8 +108,15 @@ namespace XMAT.WebServiceCapture.Proxy
                     $"CN={AuthorityName}, O={IssuerName}", false);
                 if (certs.Count > 0)
                 {
-                    _rootCert = certs[0];
-                    return true;
+                    // If the existing root cert doesn't have enough validity remaining
+                    // to issue host certs, remove it and create a new one.
+                    if (certs[0].NotAfter > DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
+                    {
+                        _rootCert = certs[0];
+                        return true;
+                    }
+
+                    _rootStore.RemoveRange(certs);
                 }
 
                 try
@@ -133,7 +143,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
                     var cert = req.CreateSelfSigned(
                         DateTimeOffset.UtcNow.AddYears(-1),
-                        DateTimeOffset.UtcNow.AddYears(4));
+                        DateTimeOffset.UtcNow.AddYears(RootCertValidityYears));
                     cert.FriendlyName = AuthorityName;
 
                     _rootCert = X509CertificateLoader.LoadPkcs12(
@@ -173,10 +183,19 @@ namespace XMAT.WebServiceCapture.Proxy
 
             byte[] serial = RandomNumberGenerator.GetBytes(20);
 
+            // Safety net: clamp notAfter to never exceed the issuer cert's NotAfter in case
+            // the root cert expires before host certs.
+            DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddYears(HostCertValidityYears);
+            DateTimeOffset issuerNotAfter = _rootCert.NotAfter;
+            if (notAfter > issuerNotAfter)
+            {
+                notAfter = issuerNotAfter;
+            }
+
             X509Certificate2 cert = req.Create(
                 _rootCert,
                 DateTimeOffset.UtcNow.AddYears(-1),
-                DateTimeOffset.UtcNow.AddYears(3),
+                notAfter,
                 serial);
 
             X509Certificate2 certWithKey = cert.CopyWithPrivateKey(rsa);
