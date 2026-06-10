@@ -19,8 +19,8 @@ namespace XMAT.XboxLiveCaptureAnalysis
 {
     public class XboxLiveCaptureAnalyzer : ICaptureAnalyzer
     {
-        private const string ApiMapFilePath = @"data/XboxLiveTraceAnalyzer.APIMap.csv";
-        private const string RulesFilePath = @"data/XboxLiveTraceAnalyzer.Rules.json";
+        private static string ApiMapFilePath => Path.Combine(PublicUtilities.InstallDirectoryPath, "data", "XboxLiveTraceAnalyzer.APIMap.csv");
+        private static string RulesFilePath => Path.Combine(PublicUtilities.InstallDirectoryPath, "data", "XboxLiveTraceAnalyzer.Rules.json");
 
         private ICaptureAppModel _captureAppModel;
         private TraceAnalyzer _traceAnalyzer;
