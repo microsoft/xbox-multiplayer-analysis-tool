@@ -108,11 +108,18 @@ namespace XMAT.WebServiceCapture.Proxy
                     $"CN={AuthorityName}, O={IssuerName}", false);
                 if (certs.Count > 0)
                 {
+                    X509Certificate2 mostValidCert = certs[0];
+                    for (int i = 1; i < certs.Count; i++)
+                    {
+                        if (certs[i].NotAfter > mostValidCert.NotAfter)
+                            mostValidCert = certs[i];
+                    }
+
                     // If the existing root cert doesn't have enough validity remaining
                     // to issue host certs, remove it and create a new one.
-                    if (certs[0].NotAfter > DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
+                    if (mostValidCert.NotAfter > DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
                     {
-                        _rootCert = certs[0];
+                        _rootCert = mostValidCert;
                         return true;
                     }
 
