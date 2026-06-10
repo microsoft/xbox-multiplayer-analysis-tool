@@ -27,7 +27,13 @@ namespace XMAT
                 return;
             }
 
-            string strPathToLang = Path.Combine(AppContext.BaseDirectory, "langs", strSafeLangCode + ".json");
+            string strLangsDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "langs"));
+            string strPathToLang = Path.GetFullPath(Path.Combine(strLangsDirectory, strSafeLangCode + ".json"));
+            string strLangsDirectoryWithSeparator = strLangsDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!strPathToLang.StartsWith(strLangsDirectoryWithSeparator, StringComparison.Ordinal))
+            {
+                return;
+            }
 
             if (File.Exists(strPathToLang))
             {
