@@ -16,7 +16,18 @@ namespace XMAT
         public static void LoadLanguage(string strLangCode)
         {
             // TODO_PHIFARQ: Error handling, we could just do nothing and let the XAML defined defaults display
-            string strPathToLang = Path.Combine(AppContext.BaseDirectory, "langs", strLangCode + ".json");
+            if (String.IsNullOrWhiteSpace(strLangCode))
+            {
+                return;
+            }
+
+            string strSafeLangCode = Path.GetFileName(strLangCode);
+            if (!String.Equals(strSafeLangCode, strLangCode, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            string strPathToLang = Path.Combine(AppContext.BaseDirectory, "langs", strSafeLangCode + ".json");
 
             if (File.Exists(strPathToLang))
             {
