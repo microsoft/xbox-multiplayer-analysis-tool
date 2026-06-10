@@ -11,6 +11,8 @@ namespace XMAT.Tests
 {
     public class CertificateManagerTests
     {
+        private static readonly TimeSpan CertificateExpirationTolerance = TimeSpan.FromMinutes(1);
+
         [Fact]
         public void CreateRootCertificate_ReturnsTrue_WhenCachedRootCertCanIssueHostCertificates()
         {
@@ -36,7 +38,7 @@ namespace XMAT.Tests
             DateTime hostNotAfterUtc = hostCert.NotAfter.ToUniversalTime();
 
             Assert.True(hostNotAfterUtc <= rootNotAfterUtc);
-            Assert.True(rootNotAfterUtc - hostNotAfterUtc < TimeSpan.FromMinutes(1));
+            Assert.True(rootNotAfterUtc - hostNotAfterUtc < CertificateExpirationTolerance);
         }
 
         private static X509Certificate2 CreateTestRootCertificate(DateTimeOffset notAfter)
