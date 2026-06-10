@@ -19,8 +19,24 @@ namespace XMAT.XboxLiveCaptureAnalysis
 {
     public class XboxLiveCaptureAnalyzer : ICaptureAnalyzer
     {
-        private const string ApiMapFilePath = @"data/XboxLiveTraceAnalyzer.APIMap.csv";
-        private const string RulesFilePath = @"data/XboxLiveTraceAnalyzer.Rules.json";
+        private static string ApiMapFilePath => CombineWithRelativeSegmentsOnly(PublicUtilities.InstallDirectoryPath, "data", "XboxLiveTraceAnalyzer.APIMap.csv");
+        private static string RulesFilePath => CombineWithRelativeSegmentsOnly(PublicUtilities.InstallDirectoryPath, "data", "XboxLiveTraceAnalyzer.Rules.json");
+
+        private static string CombineWithRelativeSegmentsOnly(string firstSegment, params string[] remainingSegments)
+        {
+            if (remainingSegments.Where(Path.IsPathRooted).Any())
+            {
+                throw new ArgumentException("Path segments after the first must be relative.", nameof(remainingSegments));
+            }
+
+            var combinedPath = firstSegment;
+            foreach (var segment in remainingSegments)
+            {
+                combinedPath = Path.Combine(combinedPath, segment);
+            }
+
+            return combinedPath;
+        }
 
         private ICaptureAppModel _captureAppModel;
         private TraceAnalyzer _traceAnalyzer;

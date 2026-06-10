@@ -44,6 +44,14 @@ namespace XMAT
             }
         }
 
+        public static string InstallDirectoryPath
+        {
+            get
+            {
+                return AppContext.BaseDirectory;
+            }
+        }
+
         public static string StorageDirectoryPath
         {
             get
