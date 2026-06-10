@@ -24,12 +24,9 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         private static string CombineWithRelativeSegmentsOnly(string firstSegment, params string[] remainingSegments)
         {
-            foreach (var segment in remainingSegments)
+            if (remainingSegments.Where(Path.IsPathRooted).Any())
             {
-                if (Path.IsPathRooted(segment))
-                {
-                    throw new ArgumentException("Path segments after the first must be relative.", nameof(remainingSegments));
-                }
+                throw new ArgumentException("Path segments after the first must be relative.", nameof(remainingSegments));
             }
 
             return Path.Combine(new[] { firstSegment }.Concat(remainingSegments).ToArray());
