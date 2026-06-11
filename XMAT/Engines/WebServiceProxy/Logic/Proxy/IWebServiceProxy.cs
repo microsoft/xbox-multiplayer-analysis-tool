@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -18,6 +19,8 @@ namespace XMAT.WebServiceCapture.Proxy
         event EventHandler ProxyStopped;
 
         bool IsProxyEnabled { get; }
+
+        BypassListModel BypassList { get; set; }
 
         void StartProxy(WebServiceProxyOptions options);
 
