@@ -9,6 +9,7 @@ using System.IO;
 using System.IO.Pipelines;
 using System.Net.Http;
 using System.Net.Security;
+using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Text;
 using System.Threading;
@@ -117,9 +118,19 @@ namespace XMAT.WebServiceCapture.Proxy
             await clientStream.WriteAsync(responseBytes, ct).ConfigureAwait(false);
             await clientStream.FlushAsync(ct).ConfigureAwait(false);
 
+            var hostname = GetHostFromPath(connectRequest.Path);
+            int port = GetPortFromPath(connectRequest.Path);
+
+            // If the host is on the bypass list, tunnel raw bytes without TLS interception
+            if (_proxy.BypassList != null && _proxy.BypassList.IsBypassed(hostname))
+            {
+                _logger.Log(connectionID, LogLevel.INFO, $"Bypassing TLS interception for {hostname}:{port}");
+                await TunnelConnectionAsync(connectionID, clientStream, hostname, port, ct).ConfigureAwait(false);
+                return;
+            }
+
             // Perform TLS handshake with dynamic certificate
             var sslStream = new SslStream(clientStream, leaveInnerStreamOpen: true);
-            var hostname = GetHostFromPath(connectRequest.Path);
             var certificate = _certManager.GetCertificateForHost(hostname);
 
             try
@@ -449,6 +460,56 @@ namespace XMAT.WebServiceCapture.Proxy
             if (path.Contains(':'))
                 return path.Split(':')[0];
             return path;
+        }
+
+        private static int GetPortFromPath(string path)
+        {
+            if (path.Contains(':'))
+            {
+                string portStr = path.Split(':')[1];
+                if (int.TryParse(portStr, out int port))
+                    return port;
+            }
+            return 443;
+        }
+
+        private async Task TunnelConnectionAsync(int connectionID, Stream clientStream, string hostname, int port, CancellationToken ct)
+        {
+            using var tcpClient = new TcpClient();
+            try
+            {
+                await tcpClient.ConnectAsync(hostname, port, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.Log(connectionID, LogLevel.ERROR, $"Failed to connect to {hostname}:{port} for bypass tunnel: {ex.Message}");
+                return;
+            }
+
+            using var serverStream = tcpClient.GetStream();
+
+            var clientToServer = RelayAsync(clientStream, serverStream, ct);
+            var serverToClient = RelayAsync(serverStream, clientStream, ct);
+
+            await Task.WhenAny(clientToServer, serverToClient).ConfigureAwait(false);
+        }
+
+        private static async Task RelayAsync(Stream from, Stream to, CancellationToken ct)
+        {
+            byte[] buffer = new byte[8192];
+            try
+            {
+                int bytesRead;
+                while ((bytesRead = await from.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                {
+                    await to.WriteAsync(buffer.AsMemory(0, bytesRead), ct).ConfigureAwait(false);
+                    await to.FlushAsync(ct).ConfigureAwait(false);
+                }
+            }
+            catch (Exception)
+            {
+                // Connection closed or cancelled — expected during tunnel teardown
+            }
         }
 
         private static bool IsContentHeader(string headerKey)

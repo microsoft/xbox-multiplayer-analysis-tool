@@ -222,6 +222,9 @@
             <TabItem x:Name="BlockListTab" Header="Block List">
                 <local:BlockListView BlockList="{Binding CaptureController.BlockList}"/>
             </TabItem>
+            <TabItem x:Name="BypassListTab" Header="Bypass List">
+                <local:BypassListView BypassList="{Binding CaptureController.BypassList}"/>
+            </TabItem>
         </TabControl>
     </Grid>
 </UserControl>
