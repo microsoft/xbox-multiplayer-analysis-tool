@@ -118,13 +118,14 @@ namespace XMAT.WebServiceCapture.Proxy
             await clientStream.WriteAsync(responseBytes, ct).ConfigureAwait(false);
             await clientStream.FlushAsync(ct).ConfigureAwait(false);
 
-            var hostname = GetHostFromPath(connectRequest.Path);
-            int port = GetPortFromPath(connectRequest.Path);
+            string hostname = connectRequest.Host ?? GetHostFromPath(connectRequest.Path);
+            int port = connectRequest.Port > 0 ? connectRequest.Port : GetPortFromPath(connectRequest.Path);
 
             // If the host is on the bypass list, tunnel raw bytes without TLS interception
             if (_proxy.BypassList != null && _proxy.BypassList.IsBypassed(hostname))
             {
                 _logger.Log(connectionID, LogLevel.INFO, $"Bypassing TLS interception for {hostname}:{port}");
+                _proxy.RaiseCompletedSslConnectionRequest(connectionID, connectRequest);
                 await TunnelConnectionAsync(connectionID, clientStream, hostname, port, ct).ConfigureAwait(false);
                 return;
             }
