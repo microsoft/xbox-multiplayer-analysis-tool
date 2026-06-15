@@ -500,7 +500,21 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 await tcpClient.ConnectAsync(hostname, port, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (SocketException ex)
+            {
+                _logger.Log(connectionID, LogLevel.ERROR, $"Failed to connect to {hostname}:{port} for bypass tunnel: {ex.Message}");
+                return;
+            }
+            catch (IOException ex)
+            {
+                _logger.Log(connectionID, LogLevel.ERROR, $"Failed to connect to {hostname}:{port} for bypass tunnel: {ex.Message}");
+                return;
+            }
+            catch (AuthenticationException ex)
             {
                 _logger.Log(connectionID, LogLevel.ERROR, $"Failed to connect to {hostname}:{port} for bypass tunnel: {ex.Message}");
                 return;
