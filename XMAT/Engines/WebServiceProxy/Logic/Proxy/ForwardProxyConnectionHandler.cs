@@ -540,7 +540,15 @@ namespace XMAT.WebServiceCapture.Proxy
                     await to.FlushAsync(ct).ConfigureAwait(false);
                 }
             }
-            catch (Exception)
+            catch (OperationCanceledException)
+            {
+                // Connection closed or cancelled — expected during tunnel teardown
+            }
+            catch (IOException)
+            {
+                // Connection closed or cancelled — expected during tunnel teardown
+            }
+            catch (ObjectDisposedException)
             {
                 // Connection closed or cancelled — expected during tunnel teardown
             }
