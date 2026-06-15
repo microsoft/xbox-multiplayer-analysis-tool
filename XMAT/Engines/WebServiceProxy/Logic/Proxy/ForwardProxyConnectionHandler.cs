@@ -458,16 +458,35 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private static string GetHostFromPath(string path)
         {
-            if (path.Contains(':'))
-                return path.Split(':')[0];
+            if (path.StartsWith('['))
+            {
+                int closingBracket = path.IndexOf(']');
+                if (closingBracket >= 0)
+                    return path[..(closingBracket + 1)];
+            }
+            int colon = path.IndexOf(':');
+            if (colon >= 0)
+                return path[..colon];
             return path;
         }
 
         private static int GetPortFromPath(string path)
         {
-            if (path.Contains(':'))
+            if (path.StartsWith('['))
             {
-                string portStr = path.Split(':')[1];
+                int colonAfterBracket = path.IndexOf("]:");
+                if (colonAfterBracket >= 0)
+                {
+                    string portStr = path[(colonAfterBracket + 2)..];
+                    if (int.TryParse(portStr, out int port))
+                        return port;
+                }
+                return 443;
+            }
+            int colon = path.IndexOf(':');
+            if (colon >= 0)
+            {
+                string portStr = path[(colon + 1)..];
                 if (int.TryParse(portStr, out int port))
                     return port;
             }
