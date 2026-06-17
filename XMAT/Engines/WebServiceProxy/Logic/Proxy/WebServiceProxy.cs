@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -43,6 +44,14 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private int _availableConnectionId;
         private int _availableRequestId;
+
+        internal BypassListModel BypassList { get; set; }
+
+        BypassListModel IWebServiceProxy.BypassList
+        {
+            get => BypassList;
+            set => BypassList = value;
+        }
 
         internal static bool Initialize(string certPath)
         {

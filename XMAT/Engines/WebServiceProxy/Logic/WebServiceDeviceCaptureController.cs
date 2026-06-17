@@ -82,6 +82,7 @@ namespace XMAT.WebServiceCapture
         public ScriptCollection Scripts { get; set; }
         public ScriptTypeCollection ScriptTypes { get; set; }
         public BlockListModel BlockList { get; set; }
+        public BypassListModel BypassList { get; set; }
 
         private const int LoadedCapturesPageBreakSize = 100;
 
@@ -133,6 +134,7 @@ namespace XMAT.WebServiceCapture
             Scripts = new ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
             ScriptTypes = new ScriptTypeCollection(new Type[] { typeof(WebServiceCaptureScriptParams), typeof(ClientRequest), typeof(ServerResponse), typeof(HeaderCollection) });
             BlockList = new BlockListModel();
+            BypassList = new BypassListModel();
         }
 
         public void Initialize()
@@ -154,6 +156,7 @@ namespace XMAT.WebServiceCapture
                 PromptToDisableOnClose = (CaptureMethod.PreferencesModel as PreferencesModel).PromptToDisableOnClose;
 
                 _webProxy = WebServiceProxy.CreateProxy();
+                _webProxy.BypassList = BypassList;
                 _webProxy.ReceivedSslConnectionRequest += WebProxy_ReceivedSslConnectionRequestAsync;
                 _webProxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
                 _webProxy.ReceivedWebRequest += WebProxy_ReceivedWebRequestAsync;
