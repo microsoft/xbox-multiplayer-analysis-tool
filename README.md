@@ -152,6 +152,10 @@ will dynamically update. Toggling between “ALL/NONE” allows for including or
 values in the connections list. Status codes that are equal to or above 400 are color coded (to red) as they
 indicate an error condition.
 
+WebSocket messages are displayed in the **WebSockets** tab for the active proxy capture. The message
+timeline can be filtered by direction and message type, and selected payloads can be inspected as text,
+JSON, or hexadecimal bytes.
+
 ![](./ReadmeImages/10.png)
 _Screenshot of filtering also by status to further prune connections._
 
@@ -400,7 +404,7 @@ _Workaround: Be sure to double check that your console device is ready to reboot
 **Potential Future Improvements:**
 
 - Keep alive handling needs further improvement.
-- Web sockets are not supported yet.
+- WebSocket traffic is forwarded transparently and exposed through proxy lifecycle/message events. A dedicated WebSocket capture UI and persistence are not yet implemented.
 - Root certificate(s) and analysis output(s) are not stored in a user specified location.
 - Additional Localization
 

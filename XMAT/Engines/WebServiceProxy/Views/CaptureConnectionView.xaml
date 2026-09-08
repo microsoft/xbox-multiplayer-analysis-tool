@@ -216,6 +216,11 @@
                     </Grid>
                 </Grid>
             </TabItem>
+            <TabItem x:Name="WebSocketMessagesTab" Header="WebSockets">
+                <local:WebSocketMessagesView
+                    ItemsSource="{Binding CaptureController.WebSocketMessages}"
+                    SelectedItem="{Binding CaptureController.SelectedWebSocketMessage, Mode=TwoWay}"/>
+            </TabItem>
             <TabItem x:Name="ScriptEditorTab" Header="Script Editor">
                 <app:ScriptEditorView ScriptCollection="{Binding CaptureController.Scripts}" ScriptTypeCollection="{Binding CaptureController.ScriptTypes}" TabSize="4"/>
             </TabItem>

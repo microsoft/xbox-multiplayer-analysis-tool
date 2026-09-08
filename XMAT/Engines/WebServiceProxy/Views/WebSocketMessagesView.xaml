@@ -1,0 +1,110 @@
+<UserControl x:Class="XMAT.WebServiceCapture.WebSocketMessagesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:local="clr-namespace:XMAT.WebServiceCapture"
+             x:Name="Root"
+             mc:Ignorable="d"
+             d:DesignHeight="600" d:DesignWidth="800">
+    <UserControl.Resources>
+        <local:JsonConverter x:Key="JsonConverter"/>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="30"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal"
+                    Background="{DynamicResource PanelBackgroundBrush}">
+            <TextBlock Text="Direction" FontWeight="Bold" Margin="8,0,4,0"
+                       VerticalAlignment="Center"/>
+            <ComboBox x:Name="DirectionFilter" Width="130" Margin="0,3,12,3"
+                      SelectionChanged="Filter_Changed">
+                <ComboBoxItem Content="All" IsSelected="True"/>
+                <ComboBoxItem Content="Client → Server"/>
+                <ComboBoxItem Content="Server → Client"/>
+            </ComboBox>
+            <TextBlock Text="Type" FontWeight="Bold" Margin="0,0,4,0"
+                       VerticalAlignment="Center"/>
+            <ComboBox x:Name="MessageTypeFilter" Width="90" Margin="0,3,0,3"
+                      SelectionChanged="Filter_Changed">
+                <ComboBoxItem Content="All" IsSelected="True"/>
+                <ComboBoxItem Content="Text"/>
+                <ComboBoxItem Content="Binary"/>
+            </ComboBox>
+        </StackPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*"/>
+                <ColumnDefinition Width="4"/>
+                <ColumnDefinition Width="3*"/>
+            </Grid.ColumnDefinitions>
+
+            <DataGrid x:Name="MessagesGrid" Grid.Column="0"
+                      ItemsSource="{Binding ItemsSource, ElementName=Root}"
+                      SelectedItem="{Binding SelectedItem, ElementName=Root, Mode=TwoWay}"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True"
+                      GridLinesVisibility="None"
+                      SelectionMode="Single">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="TIME" Binding="{Binding Timestamp, StringFormat=HH:mm:ss.fff}" Width="95"/>
+                    <DataGridTextColumn Header="#" Binding="{Binding RequestNumber}" Width="45"/>
+                    <DataGridTextColumn Header="CONNECTION" Binding="{Binding ConnectionID}" Width="85"/>
+                    <DataGridTextColumn Header="DIRECTION" Binding="{Binding Direction}" Width="120"/>
+                    <DataGridTextColumn Header="TYPE" Binding="{Binding MessageType}" Width="65"/>
+                    <DataGridTextColumn Header="BYTES" Binding="{Binding PayloadLength}" Width="55"/>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
+                          ResizeDirection="Columns"/>
+
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0"
+                           Text="{Binding SelectedItem.PayloadNotice, ElementName=MessagesGrid}"
+                           Foreground="DarkOrange"
+                           TextWrapping="Wrap"
+                           Margin="6"/>
+                <TabControl Grid.Row="1">
+                    <TabItem Header="Text">
+                        <TextBox Text="{Binding SelectedItem.PayloadText, ElementName=MessagesGrid, Mode=OneWay}"
+                                 IsReadOnly="True" TextWrapping="Wrap"
+                                 FontFamily="Consolas"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"/>
+                    </TabItem>
+                    <TabItem Header="JSON">
+                        <TreeView ItemsSource="{Binding SelectedItem.PayloadText, ElementName=MessagesGrid, Converter={StaticResource JsonConverter}}">
+                            <TreeView.ItemTemplate>
+                                <HierarchicalDataTemplate DataType="{x:Type local:JsonTreeViewItem}"
+                                                          ItemsSource="{Binding JsonTreeViewItems}">
+                                    <TextBlock Text="{Binding PropertyDescriptor}"/>
+                                </HierarchicalDataTemplate>
+                            </TreeView.ItemTemplate>
+                            <TreeView.ItemContainerStyle>
+                                <Style TargetType="{x:Type TreeViewItem}">
+                                    <Setter Property="IsExpanded" Value="{Binding AutoExpandJson}"/>
+                                </Style>
+                            </TreeView.ItemContainerStyle>
+                        </TreeView>
+                    </TabItem>
+                    <TabItem Header="Hex">
+                        <TextBox Text="{Binding SelectedItem.PayloadHex, ElementName=MessagesGrid, Mode=OneWay}"
+                                 IsReadOnly="True" TextWrapping="Wrap"
+                                 FontFamily="Consolas"
+                                 VerticalScrollBarVisibility="Auto"/>
+                    </TabItem>
+                </TabControl>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

@@ -15,6 +15,9 @@ namespace XMAT.WebServiceCapture.Proxy
         event EventHandler<ConnectionFailureEventArgs> FailedSslConnectionRequest;
         event EventHandler<HttpRequestEventArgs> ReceivedWebRequest;
         event EventHandler<HttpResponseEventArgs> ReceivedWebResponse;
+        event EventHandler<WebSocketOpenedEventArgs> WebSocketOpened;
+        event EventHandler<WebSocketMessageEventArgs> WebSocketMessage;
+        event EventHandler<WebSocketClosedEventArgs> WebSocketClosed;
         event EventHandler<ConnectionClosedEventArgs> ConnectionClosed;
         event EventHandler ProxyStopped;
 
