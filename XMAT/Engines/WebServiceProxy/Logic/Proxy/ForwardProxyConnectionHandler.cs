@@ -7,8 +7,8 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipelines;
+using System.Net;
 using System.Net.Http;
-using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Text;
@@ -20,19 +20,22 @@ namespace XMAT.WebServiceCapture.Proxy
 {
     internal class ForwardProxyConnectionHandler : ConnectionHandler
     {
-        private readonly CertificateManager _certManager;
         private readonly HttpClient _httpClient;
+        private readonly InterceptedHttpHost _interceptedHost;
+        private readonly InterceptedTunnelRegistry _interceptedTunnels;
         private readonly Logger _logger;
         private readonly WebServiceProxy _proxy;
 
         public ForwardProxyConnectionHandler(
-            CertificateManager certManager,
             HttpClient httpClient,
+            InterceptedHttpHost interceptedHost,
+            InterceptedTunnelRegistry interceptedTunnels,
             Logger logger,
             WebServiceProxy proxy)
         {
-            _certManager = certManager;
             _httpClient = httpClient;
+            _interceptedHost = interceptedHost;
+            _interceptedTunnels = interceptedTunnels;
             _logger = logger;
             _proxy = proxy;
         }
@@ -106,7 +109,6 @@ namespace XMAT.WebServiceCapture.Proxy
             };
             response.Headers["FiddlerGateway"] = "Direct";
             response.Headers["StartTime"] = DateTime.Now.ToString("HH:mm:ss.fff");
-            response.Headers["Connection"] = "close";
 
             if (!_proxy.RaiseReceivedWebResponse(connectionID, connectRequest, response))
             {
@@ -130,42 +132,14 @@ namespace XMAT.WebServiceCapture.Proxy
                 return;
             }
 
-            // Perform TLS handshake with dynamic certificate
-            var sslStream = new SslStream(clientStream, leaveInnerStreamOpen: true);
-            var certificate = _certManager.GetCertificateForHost(hostname);
-
-            try
-            {
-                await sslStream.AuthenticateAsServerAsync(
-                    certificate,
-                    clientCertificateRequired: false,
-                    enabledSslProtocols: SslProtocols.None,
-                    checkCertificateRevocation: true).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.Log(connectionID, LogLevel.FATAL, $"TLS authentication failed: {ex}");
-                _proxy.RaiseFailedSslConnectionRequest(connectionID, ex);
-                return;
-            }
-
-            _proxy.RaiseCompletedSslConnectionRequest(connectionID, connectRequest);
-            _logger.Log(connectionID, LogLevel.INFO, $"TLS established: {sslStream.SslProtocol}, cipher suite: {sslStream.NegotiatedCipherSuite}");
-
-            // Read the actual HTTP request from the TLS stream
-            var innerRequest = await ReadHttpRequestAsync(connectionID, sslStream, ct).ConfigureAwait(false);
-            if (innerRequest == null)
-            {
-                _logger.Log(connectionID, LogLevel.ERROR, "Failed reading request from TLS stream");
-                return;
-            }
-
-            innerRequest.Scheme = "https";
-            innerRequest.Host = hostname;
-            if (connectRequest.Port > 0)
-                innerRequest.Port = connectRequest.Port;
-
-            await HandleHttpRequestAsync(connectionID, sslStream, innerRequest, ct).ConfigureAwait(false);
+            // Keep this listener protocol-agnostic after CONNECT. Raw TLS bytes
+            // are handed to the private Kestrel host, which negotiates HTTP/1.1
+            // or HTTP/2 and invokes the shared capture application per request.
+            await TunnelInterceptedConnectionAsync(
+                connectionID,
+                clientStream,
+                connectRequest,
+                ct).ConfigureAwait(false);
         }
 
         private async Task HandleHttpRequestAsync(int connectionID, Stream clientStream, ClientRequest request, CancellationToken ct)
@@ -410,7 +384,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 string name = header[0];
                 string value = header[1];
 
-                if (IsContentHeader(name))
+                if (ProxyHeaderUtilities.IsContentHeader(name))
                     request.ContentHeaders[name] = value;
                 else
                     request.Headers[name] = value;
@@ -528,6 +502,69 @@ namespace XMAT.WebServiceCapture.Proxy
             await Task.WhenAny(clientToServer, serverToClient).ConfigureAwait(false);
         }
 
+        private async Task TunnelInterceptedConnectionAsync(
+            int connectionID,
+            Stream clientStream,
+            ClientRequest connectRequest,
+            CancellationToken ct)
+        {
+            using var tcpClient = new TcpClient();
+            int localPort = 0;
+            bool registered = false;
+
+            try
+            {
+                await tcpClient.ConnectAsync(
+                    IPAddress.Loopback,
+                    _interceptedHost.Port,
+                    ct).ConfigureAwait(false);
+
+                // Kestrel exposes this ephemeral port as RemotePort, allowing its
+                // request delegate and certificate selector to recover the
+                // original XMAT connection without modifying encrypted bytes.
+                localPort = ((IPEndPoint)tcpClient.Client.LocalEndPoint).Port;
+                registered = _interceptedTunnels.TryRegister(
+                    localPort,
+                    new InterceptedTunnelContext(connectionID, connectRequest));
+                if (!registered)
+                    throw new InvalidOperationException(
+                        $"An intercepted tunnel is already registered for port {localPort}.");
+
+                using NetworkStream serverStream = tcpClient.GetStream();
+                using var relayCancellation =
+                    CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var clientToServer = RelayAsync(
+                    clientStream,
+                    serverStream,
+                    relayCancellation.Token);
+                var serverToClient = RelayAsync(
+                    serverStream,
+                    clientStream,
+                    relayCancellation.Token);
+
+                // Once either direction closes, cancel and drain both pumps
+                // before removing the correlation entry or disposing the socket.
+                await Task.WhenAny(clientToServer, serverToClient).ConfigureAwait(false);
+                relayCancellation.Cancel();
+                await Task.WhenAll(clientToServer, serverToClient).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                ex is SocketException or IOException or AuthenticationException or
+                InvalidOperationException)
+            {
+                _logger.Log(
+                    connectionID,
+                    LogLevel.ERROR,
+                    $"Failed opening intercepted TLS tunnel: {ex.Message}");
+                _proxy.RaiseFailedSslConnectionRequest(connectionID, ex);
+            }
+            finally
+            {
+                if (registered)
+                    _interceptedTunnels.Remove(localPort);
+            }
+        }
+
         private static async Task RelayAsync(Stream from, Stream to, CancellationToken ct)
         {
             byte[] buffer = new byte[8192];
@@ -554,18 +591,6 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
-        private static bool IsContentHeader(string headerKey)
-        {
-            var lowercase = headerKey.ToLower();
-            return lowercase switch
-            {
-                "allow" or "content-disposition" or "content-encoding" or
-                "content-language" or "content-length" or "content-location" or
-                "content-md5" or "content-range" or "content-type" or
-                "expires" or "last-modified" => true,
-                _ => false
-            };
-        }
     }
 
     /// <summary>

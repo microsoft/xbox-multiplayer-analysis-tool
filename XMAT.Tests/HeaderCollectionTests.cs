@@ -76,5 +76,19 @@ namespace XMAT.Tests
 
             Assert.Equal(2, count);
         }
+
+        [Fact]
+        public void Add_PreservesRepeatedHeaderValues()
+        {
+            var headers = new HeaderCollection();
+
+            headers.Add("Warning", "199 first");
+            headers.Add("Warning", "299 second");
+
+            Assert.Equal(["199 first", "299 second"], headers.GetHeaderValuesAsList("Warning"));
+            Assert.Equal(
+                "Warning: 199 first\r\nWarning: 299 second\r\n",
+                headers.ToString());
+        }
     }
 }
