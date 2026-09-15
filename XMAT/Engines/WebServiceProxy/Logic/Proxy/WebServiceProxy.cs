@@ -31,6 +31,9 @@ namespace XMAT.WebServiceCapture.Proxy
         public event EventHandler<ConnectionFailureEventArgs> FailedSslConnectionRequest;
         public event EventHandler<HttpRequestEventArgs> ReceivedWebRequest;
         public event EventHandler<HttpResponseEventArgs> ReceivedWebResponse;
+        public event EventHandler<WebSocketOpenedEventArgs> WebSocketOpened;
+        public event EventHandler<WebSocketMessageEventArgs> WebSocketMessage;
+        public event EventHandler<WebSocketClosedEventArgs> WebSocketClosed;
         public event EventHandler<ConnectionClosedEventArgs> ConnectionClosed;
         public event EventHandler ProxyStopped;
 
@@ -325,6 +328,21 @@ namespace XMAT.WebServiceCapture.Proxy
                     ConnectionID = connectionID,
                     Timestamp = DateTime.Now
                 });
+        }
+
+        internal void RaiseWebSocketOpened(WebSocketOpenedEventArgs args)
+        {
+            WebSocketOpened?.Invoke(this, args);
+        }
+
+        internal void RaiseWebSocketMessage(WebSocketMessageEventArgs args)
+        {
+            WebSocketMessage?.Invoke(this, args);
+        }
+
+        internal void RaiseWebSocketClosed(WebSocketClosedEventArgs args)
+        {
+            WebSocketClosed?.Invoke(this, args);
         }
     }
 }

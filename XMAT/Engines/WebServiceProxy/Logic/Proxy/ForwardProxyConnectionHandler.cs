@@ -172,8 +172,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 uri = ub.Uri;
             }
 
-            string websocketUpgrade = request.Headers["Upgrade"];
-            if (!string.IsNullOrEmpty(websocketUpgrade))
+            if (WebSocketProxy.IsWebSocketUpgrade(request))
             {
                 await HandleWebSocketAsync(connectionID, uri, clientStream, request, ct).ConfigureAwait(false);
             }
@@ -240,7 +239,17 @@ namespace XMAT.WebServiceCapture.Proxy
         private async Task HandleWebSocketAsync(int connectionID, Uri uri, Stream clientStream, ClientRequest clientRequest, CancellationToken ct)
         {
             var wsProxy = new WebSocketProxy();
-            await wsProxy.StartWebSocketProxy(uri, clientStream, clientRequest, _logger, ct);
+            wsProxy.WebSocketOpened += (_, args) => _proxy.RaiseWebSocketOpened(args);
+            wsProxy.WebSocketMessage += (_, args) => _proxy.RaiseWebSocketMessage(args);
+            wsProxy.WebSocketClosed += (_, args) => _proxy.RaiseWebSocketClosed(args);
+
+            await wsProxy.StartWebSocketProxy(
+                connectionID,
+                uri,
+                clientStream,
+                clientRequest,
+                _logger,
+                ct).ConfigureAwait(false);
         }
 
         private async Task<ServerResponse> ParseServerResponseAsync(int connectionID, HttpResponseMessage response)

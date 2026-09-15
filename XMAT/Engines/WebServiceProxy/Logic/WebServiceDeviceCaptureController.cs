@@ -68,6 +68,7 @@ namespace XMAT.WebServiceCapture
         public ObservableCollection<CheckedListItem> StatusFilterList { get; set; }
         public ObservableCollection<CheckedListItem> HostFilterList { get; set; }
         public ObservableCollection<CheckedListItem> MethodFilterList { get; set; }
+        public WebSocketMessagesCollection WebSocketMessages { get; }
         public string DeviceName { get; }
         public ProxyConnectionModel SelectedConnectionModel
         {
@@ -83,10 +84,20 @@ namespace XMAT.WebServiceCapture
         public ScriptTypeCollection ScriptTypes { get; set; }
         public BlockListModel BlockList { get; set; }
         public BypassListModel BypassList { get; set; }
+        public WebSocketMessageModel SelectedWebSocketMessage
+        {
+            get => _selectedWebSocketMessage;
+            set
+            {
+                _selectedWebSocketMessage = value;
+                RaisePropertyChange();
+            }
+        }
 
         private const int LoadedCapturesPageBreakSize = 100;
 
         private ProxyConnectionModel _selectedConnectionModel;
+        private WebSocketMessageModel _selectedWebSocketMessage;
         private readonly DeviceType _deviceType;
         private readonly bool _readOnly;
         private IWebServiceProxy _webProxy;
@@ -131,6 +142,7 @@ namespace XMAT.WebServiceCapture
             StatusFilterList = new ObservableCollection<CheckedListItem>();
             HostFilterList = new ObservableCollection<CheckedListItem>();
             MethodFilterList = new ObservableCollection<CheckedListItem>();
+            WebSocketMessages = new WebSocketMessagesCollection();
             Scripts = new ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
             ScriptTypes = new ScriptTypeCollection(new Type[] { typeof(WebServiceCaptureScriptParams), typeof(ClientRequest), typeof(ServerResponse), typeof(HeaderCollection) });
             BlockList = new BlockListModel();
@@ -161,6 +173,7 @@ namespace XMAT.WebServiceCapture
                 _webProxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
                 _webProxy.ReceivedWebRequest += WebProxy_ReceivedWebRequestAsync;
                 _webProxy.ReceivedWebResponse += WebProxy_ReceivedWebResponseAsync;
+                _webProxy.WebSocketMessage += WebProxy_WebSocketMessage;
             }
         }
 
@@ -565,9 +578,21 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        private void WebProxy_WebSocketMessage(object sender, WebSocketMessageEventArgs messageEvent)
+        {
+            PublicUtilities.SafeInvoke(() =>
+            {
+                var message = new WebSocketMessageModel(messageEvent);
+                WebSocketMessages.AddMessage(message);
+                SelectedWebSocketMessage = message;
+            });
+        }
+
         public void ClearAllCaptures()
         {
             ProxyConnections.RemoveAll();
+            WebSocketMessages.Clear();
+            SelectedWebSocketMessage = null;
             _dataTable.RemoveRowsWhere(
                 new FieldValue<string>(
                     WebServiceCaptureMethod.FieldKey_DeviceName,
