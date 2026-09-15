@@ -17,6 +17,7 @@ namespace XMAT.WebServiceCapture.Proxy
         public int RequestNumber;
         [Description("WEB_SVC_SCRIPT_PROP_DESC_VERSION")]
         public string Version { get; set; }
+        public int? StreamId { get; set; }
         [Description("WEB_SVC_SCRIPT_PROP_DESC_HEADERS")]
         public HeaderCollection Headers { get; internal set; }
         [Description("WEB_SVC_SCRIPT_PROP_DESC_CONTENTHEADERS")]

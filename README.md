@@ -13,6 +13,8 @@ traffic from both a PC and Xbox development console. It incorporates features to
 network requests and responses in real-time, decrypt and view SSL traffic, modify traffic on the fly, and
 analyze Xbox services and network traffic for problems.
 
+The web proxy supports HTTP/1.1 and HTTP/2 over TLS using ALPN negotiation, with automatic HTTP/1.1 fallback.
+
 ## Basic Environment Requirements & Dependencies
 
 |  |Web Proxy | Low Level Network Capture| Notes |

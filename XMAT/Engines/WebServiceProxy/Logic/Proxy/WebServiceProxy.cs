@@ -5,6 +5,7 @@
 using System;
 using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
@@ -39,6 +40,9 @@ namespace XMAT.WebServiceCapture.Proxy
         private static bool _isInitialized = false;
         private static readonly CertificateManager _certManager = new(false);
         private IHost _host;
+        private InterceptedHttpHost _interceptedHost;
+        private readonly InterceptedTunnelRegistry _interceptedTunnels = new();
+        private HttpClient _httpClient;
         private CancellationTokenSource _cts;
         private int _port = -1;
 
@@ -95,13 +99,26 @@ namespace XMAT.WebServiceCapture.Proxy
             _port = options.Port;
             _cts = new CancellationTokenSource();
 
-            var httpClient = new HttpClient(new HttpClientHandler()
+            _httpClient = new HttpClient(new HttpClientHandler()
             {
                 UseProxy = false,
                 Proxy = null,
                 AllowAutoRedirect = false,
                 ServerCertificateCustomValidationCallback = (_, _, _, _) => true
             });
+
+            // The public listener handles forward-proxy CONNECT requests. The
+            // private listener terminates the tunneled TLS and lets Kestrel
+            // decode either HTTP/1.1 or HTTP/2 after ALPN negotiation.
+            var interceptedApplication = new InterceptedProxyApplication(
+                this,
+                _httpClient,
+                _interceptedTunnels,
+                _logger);
+            _interceptedHost = new InterceptedHttpHost(
+                SelectInterceptedCertificate,
+                interceptedApplication.InvokeAsync);
+            _interceptedHost.StartAsync(_cts.Token).GetAwaiter().GetResult();
 
             var builder = Host.CreateDefaultBuilder();
             builder.ConfigureWebHostDefaults(webBuilder =>
@@ -116,9 +133,11 @@ namespace XMAT.WebServiceCapture.Proxy
                 webBuilder.ConfigureServices(services =>
                 {
                     services.AddSingleton(_certManager);
-                    services.AddSingleton(httpClient);
+                    services.AddSingleton(_httpClient);
                     services.AddSingleton(_logger);
                     services.AddSingleton(this);
+                    services.AddSingleton(_interceptedHost);
+                    services.AddSingleton(_interceptedTunnels);
                     services.AddSingleton<ForwardProxyConnectionHandler>();
                 });
                 webBuilder.Configure(app => { });
@@ -145,28 +164,64 @@ namespace XMAT.WebServiceCapture.Proxy
             });
         }
 
+        private X509Certificate2 SelectInterceptedCertificate(
+            int remotePort,
+            string hostName)
+        {
+            _interceptedTunnels.TryGet(remotePort, out var tunnel);
+            if (tunnel != null &&
+                tunnel.TryMarkTlsCompleted())
+            {
+                RaiseCompletedSslConnectionRequest(
+                    tunnel.ConnectionId,
+                    tunnel.ConnectRequest);
+            }
+
+            // Prefer SNI, but CONNECT still supplies the destination for clients
+            // that omit SNI, such as some IP-literal or legacy callers.
+            string certificateHost = !string.IsNullOrWhiteSpace(hostName)
+                ? hostName
+                : tunnel?.ConnectRequest.Host ?? "localhost";
+            return _certManager.GetCertificateForHost(certificateHost);
+        }
+
         public void StopProxy()
         {
-            if (_host == null)
+            if (_host == null && _interceptedHost == null)
                 return;
 
             _cts?.Cancel();
 
-            try
+            if (_host != null)
             {
-                // Run StopAsync on thread pool to avoid deadlocking the UI thread
-                Task.Run(async () =>
+                try
                 {
-                    await _host.StopAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-                }).GetAwaiter().GetResult();
-            }
-            catch (Exception ex)
-            {
-                _logger.Log(0, LogLevel.ERROR, $"Error stopping proxy: {ex.Message}");
+                    // Run StopAsync on thread pool to avoid deadlocking the UI thread
+                    Task.Run(async () =>
+                    {
+                        await _host.StopAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                    }).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    _logger.Log(0, LogLevel.ERROR, $"Error stopping proxy: {ex.Message}");
+                }
+
+                _host.Dispose();
+                _host = null;
             }
 
-            _host.Dispose();
-            _host = null;
+            if (_interceptedHost != null)
+            {
+                Task.Run(async () =>
+                {
+                    await _interceptedHost.DisposeAsync().ConfigureAwait(false);
+                }).GetAwaiter().GetResult();
+                _interceptedHost = null;
+            }
+
+            _httpClient?.Dispose();
+            _httpClient = null;
 
             ProxyStopped?.Invoke(this, EventArgs.Empty);
             _logger.CloseLog();

@@ -64,6 +64,9 @@ namespace XMAT
 
         internal void Log(int id, LogLevel level, string value)
         {
+            if (_lines == null)
+                return;
+
             _lines.Add($"{DateTime.Now:HH:mm:ss.fff} [{level}] ({id:D4}) {value.Substring(0, Math.Min(value.Length, MaxLoggingCharacters))}");
         }
 

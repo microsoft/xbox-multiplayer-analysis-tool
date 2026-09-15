@@ -36,6 +36,18 @@ namespace XMAT.WebServiceCapture.Proxy
                 return null;
         }
 
+        public void Add(string key, string value)
+        {
+            if (_headers.TryGetValue(key, out var existing))
+            {
+                var values = new List<string>(existing) { value };
+                _headers[key] = values;
+                return;
+            }
+
+            _headers[key] = new List<string> { value };
+        }
+
         public void CopyTo(HttpHeaders headers)
         {
             if (headers == null)
@@ -67,18 +79,9 @@ namespace XMAT.WebServiceCapture.Proxy
 
             foreach (var kvp in _headers)
             {
-                // there can be multiple cookie headers, do not combine them (breaks Outlook, at the very least)
-                if (kvp.Key.ToLower() == "set-cookie")
+                foreach (string value in kvp.Value)
                 {
-                    foreach (string val in kvp.Value)
-                    {
-                        sb.Append($"{kvp.Key}: {val}\r\n");
-                    }
-                }
-                else
-                {
-                    string val = string.Join(';', kvp.Value);
-                    sb.Append($"{kvp.Key}: {val}\r\n");
+                    sb.Append($"{kvp.Key}: {value}\r\n");
                 }
             }
             return sb.ToString();
