@@ -109,14 +109,11 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 var rulesEngine = new RulesEngine(isInternal);
                 var serviceCallData = new ServiceCallData(allEndpoints);
 
-                // TODO: the service call items need to derive from the data table, not from
-                // the view model and also need to be snapshot before the process takes place
-                // since the table can change whilst the processing is on-going
+                // TODO: snapshot the records before processing since a live capture table
+                // can change while analysis is running
                 SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.ConvertingProxyConnectionsToServiceCallItems);
                 List<ServiceCallItem> serviceCallItems =
-                    GetServiceCallItemsForProxyConnections(
-                        WebServiceCaptureMethod.TableName,
-                        controller.DeviceName);
+                    GetServiceCallItemsForProxyConnections(controller);
 
                 SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.CreatingServiceDataFromCallItems);
                 serviceCallData.CreateFromServiceCallItems(serviceCallItems);
@@ -198,18 +195,11 @@ namespace XMAT.XboxLiveCaptureAnalysis
         }
 
         private List<ServiceCallItem> GetServiceCallItemsForProxyConnections(
-            string tableName, string deviceName)
+            WebServiceDeviceCaptureController controller)
         {
             List<ServiceCallItem> items = new();
 
-            IDatabase activeDB = _captureAppModel.ActiveDatabase;
-            IDataTable connectionsTable = activeDB.TableByName(tableName);
-            IEnumerable<IDataRecord> records = connectionsTable.Dataset.DataRecordsWhen(
-                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName,
-                deviceName)
-                );
-
-            foreach (IDataRecord record in records)
+            foreach (IDataRecord record in controller.GetCaptureRecords())
             {
                 ServiceCallItem item = ProxyConnectionModelToServiceCallItem(record);
                 if (item != null)

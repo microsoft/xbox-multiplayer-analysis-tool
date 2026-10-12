@@ -102,6 +102,7 @@ namespace XMAT.WebServiceCapture
         private readonly bool _readOnly;
         private IWebServiceProxy _webProxy;
         private IDataTable _dataTable;
+        private IDataset _loadedCaptureDataset;
         private readonly object _lockObj = new object();
 
         public async Task<EProxyEnabledCheckResult> IsProxyEnabled()
@@ -213,19 +214,34 @@ namespace XMAT.WebServiceCapture
         {
             using (var bo = PublicUtilities.BlockingOperation())
             {
-                if (tables != null && tables.FirstOrDefault() != null)
-                {
-                    IEnumerable<IDataRecord> records = tables.First().DataRecordsWhen(
-                        new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName,
-                        DeviceName)
-                        );
+                LoadCaptureDataset(tables?.FirstOrDefault());
+            }
+        }
 
-                    foreach (IDataRecord record in records)
-                    {
-                        ProxyConnections.AddFromDataRecord(record, true);
-                    }
+        internal void LoadCaptureDataset(IDataset dataset)
+        {
+            _loadedCaptureDataset = dataset;
+            if (_loadedCaptureDataset != null)
+            {
+                foreach (IDataRecord record in GetCaptureRecords())
+                {
+                    ProxyConnections.AddFromDataRecord(record, true);
                 }
             }
+        }
+
+        internal IEnumerable<IDataRecord> GetCaptureRecords()
+        {
+            var dataset = _loadedCaptureDataset ?? _dataTable?.Dataset;
+            if (dataset == null)
+            {
+                return Enumerable.Empty<IDataRecord>();
+            }
+
+            return dataset.DataRecordsWhen(
+                new FieldValue<string>(
+                    WebServiceCaptureMethod.FieldKey_DeviceName,
+                    DeviceName));
         }
 
         internal void ImportCapturesToTable(
@@ -598,6 +614,7 @@ namespace XMAT.WebServiceCapture
                     WebServiceCaptureMethod.FieldKey_DeviceName,
                     DeviceName)
                 );
+            _loadedCaptureDataset = null;
             _webProxy?.Reset();
         }
 
