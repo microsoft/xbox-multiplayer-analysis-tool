@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Threading.Tasks;
 
 namespace XMAT.SharedInterfaces
 {
-    public interface IDeviceCaptureController
+    public interface IDeviceCaptureController : INotifyPropertyChanged
     {
         bool IsRunning { get; }
 
@@ -24,6 +25,6 @@ namespace XMAT.SharedInterfaces
         void LoadCaptures(IEnumerable<IDataset> tables);
         void ClearAllCaptures();
         Task<bool> CanCloseAsync();
-        void Close();
+        Task CloseAsync();
     }
 }

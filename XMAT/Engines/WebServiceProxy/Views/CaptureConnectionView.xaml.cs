@@ -14,6 +14,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using Microsoft.CodeAnalysis;
+using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 
@@ -52,6 +53,7 @@ namespace XMAT.WebServiceCapture
             DisableButton.Content = Localization.GetLocalizedString("WEBCAP_DISABLE");
             CheckButton.Content = Localization.GetLocalizedString("WEBCAP_CHECK");
             AnalyzeButton.Content = Localization.GetLocalizedString("WEBCAP_ANALYZE");
+            AnalyzeButton.ToolTip = Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
             ClearButton.Content = Localization.GetLocalizedString("WEBCAP_CLEAR");
             AutoScrollButton.Content = Localization.GetLocalizedString("WEBCAP_AUTOSCROLL");
             FiltersText.Text = Localization.GetLocalizedString("GENERIC_FILTERS");
@@ -181,20 +183,37 @@ namespace XMAT.WebServiceCapture
 
         private async void EnableDevice_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
+            if (this.DataContext is not ICaptureDeviceContext captureDeviceContext ||
+                captureDeviceContext.CaptureController is not WebServiceDeviceCaptureController wsdcc ||
+                !wsdcc.CanBeginTransition)
+            {
+                return;
+            }
+
+            if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(out var operationLease))
+            {
+                return;
+            }
+
+            using var operationLeaseScope = operationLease;
+            if (!wsdcc.CanBeginTransition)
+            {
+                return;
+            }
+
+            using var transitionLease = wsdcc.BeginTransition();
             switch (captureDeviceContext.DeviceType)
             {
                 case DeviceType.LocalPC:
                 {
                     wsdcc.EnableProxyingPC();
-                    wsdcc.StartProxy(false);
+                    await wsdcc.StartProxyAsync(false);
                     break;
                 }
 
                 case DeviceType.GenericProxyDevice:
                 {
-                    wsdcc.StartProxy(true);
+                    await wsdcc.StartProxyAsync(true);
                     break;
                 }
 
@@ -262,7 +281,7 @@ namespace XMAT.WebServiceCapture
 
                         if (bWasEnabled)
                         {
-                            wsdcc.StartProxy(false);
+                            await wsdcc.StartProxyAsync(false);
                         }
                     }
                     // TODO: if we 've gotten this far, then that means we
@@ -279,10 +298,19 @@ namespace XMAT.WebServiceCapture
 
         private async void DisableDevice_Executed(object sender, ExecutedRoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanStopCaptures)
+            {
+                return;
+            }
+
             var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
             var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
+            if (wsdcc.IsTransitioning)
+            {
+                return;
+            }
             await wsdcc.DisableProxying();
-            wsdcc.StopProxy();
+            await wsdcc.StopProxyAsync();
         }
 
         private async void CheckDevice_Executed(object sender, ExecutedRoutedEventArgs e)
@@ -319,27 +347,47 @@ namespace XMAT.WebServiceCapture
 
         private async void StartStopCapture_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var stop = e.Parameter as bool?;
+            var start = e.Parameter as bool?;
             var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
             var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
 
-            if (captureDeviceContext?.DeviceType == DeviceType.XboxConsole)
+            if (start.GetValueOrDefault())
             {
-                if (!GDKXHelper.IsGDKXInstalled(true))
-                { return; }
-            }
-
-            if (stop.GetValueOrDefault())
-            {
-                if (captureDeviceContext?.DeviceType == DeviceType.LocalPC)
+                if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
+                    out var operationLease))
                 {
-                    wsdcc.EnableProxyingPC();
+                    return;
                 }
-                wsdcc.StartProxy(captureDeviceContext?.DeviceType == DeviceType.GenericProxyDevice);
+
+                using (operationLease)
+                {
+                    if (wsdcc.IsRunning || wsdcc.IsTransitioning)
+                    {
+                        return;
+                    }
+
+                    if (captureDeviceContext?.DeviceType == DeviceType.XboxConsole &&
+                        !GDKXHelper.IsGDKXInstalled(true))
+                    {
+                        return;
+                    }
+
+                    if (captureDeviceContext?.DeviceType == DeviceType.LocalPC)
+                    {
+                        wsdcc.EnableProxyingPC();
+                    }
+                    await wsdcc.StartProxyAsync(
+                        captureDeviceContext?.DeviceType == DeviceType.GenericProxyDevice);
+                }
             }
             else
             {
-                wsdcc.StopProxy();
+                if (!CaptureAppModel.AppModel.CanStopCaptures)
+                {
+                    return;
+                }
+
+                await wsdcc.StopProxyAsync();
                 if (captureDeviceContext?.DeviceType == DeviceType.LocalPC)
                 {
                     await wsdcc.DisableProxying();
@@ -352,7 +400,12 @@ namespace XMAT.WebServiceCapture
             var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
             if (captureDeviceContext != null)
             {
-                e.CanExecute = !captureDeviceContext.IsReadOnly;
+                var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
+                e.CanExecute = !captureDeviceContext.IsReadOnly &&
+                    !wsdcc.IsTransitioning &&
+                    (wsdcc.IsRunning
+                        ? CaptureAppModel.AppModel.CanStopCaptures
+                        : CaptureAppModel.AppModel.CanModifyCaptureData);
             }
         }
 
@@ -361,7 +414,9 @@ namespace XMAT.WebServiceCapture
             var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
             if (captureDeviceContext != null &&
                 captureDeviceContext.DeviceType == DeviceType.XboxConsole &&
-                !captureDeviceContext.IsReadOnly)
+                !captureDeviceContext.IsReadOnly &&
+                !captureDeviceContext.CaptureController.IsRunning &&
+                CaptureAppModel.AppModel.CanModifyCaptureData)
             {
                 e.CanExecute = true;
             }
@@ -376,7 +431,9 @@ namespace XMAT.WebServiceCapture
             var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
             if (captureDeviceContext != null &&
                 captureDeviceContext.DeviceType == DeviceType.XboxConsole &&
-                !captureDeviceContext.IsReadOnly)
+                !captureDeviceContext.IsReadOnly &&
+                captureDeviceContext.CaptureController.IsRunning &&
+                CaptureAppModel.AppModel.CanStopCaptures)
             {
                 e.CanExecute = true;
             }

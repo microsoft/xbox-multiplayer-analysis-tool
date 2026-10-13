@@ -54,7 +54,7 @@
         Visibility="{Binding Path=IsEnabled, RelativeSource={RelativeSource Self}, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}}">Check Xbox Proxy Status</Button>
             <Separator Visibility="{Binding Path=IsEnabled, ElementName=DisableButton, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}}"/>
 
-            <ToggleButton x:Name="StartButton" IsChecked="{Binding CaptureController.IsRunning}" Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}"
+            <ToggleButton x:Name="StartButton" IsChecked="{Binding CaptureController.IsRunning, Mode=OneWay}" Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}"
                           CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}" CommandTarget="{Binding ElementName=CaptureConnectionControl}">
                 <ToggleButton.Style>
                     <Style TargetType="{x:Type ToggleButton}" BasedOn="{StaticResource {x:Static ToolBar.ToggleButtonStyleKey}}">
@@ -82,7 +82,10 @@
                 </ToggleButton.Style>
             </ToggleButton>
             <Separator/>
-            <Button x:Name="AnalyzeButton" Command="{x:Static app:AppCommands.AnalyzeCaptures}" CommandTarget="{Binding ElementName=CaptureConnectionControl}">Analyze Capture</Button>
+            <Button x:Name="AnalyzeButton"
+                    Command="{x:Static app:AppCommands.AnalyzeCaptures}"
+                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    ToolTipService.ShowOnDisabled="True">Analyze Capture</Button>
             <Separator/>
             <Button x:Name="ClearButton" Command="{x:Static app:AppCommands.ClearAllCaptures}" CommandTarget="{Binding ElementName=CaptureConnectionControl}">Clear Capture</Button>
             <Separator/>

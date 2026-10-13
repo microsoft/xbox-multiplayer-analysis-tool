@@ -13,6 +13,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
 using XMAT.Scripting;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
@@ -51,10 +52,40 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        public bool IsRunning { get => _isRunning; set { _isRunning = value; RaisePropertyChange(); } }
+        public bool IsRunning
+        {
+            get => _isRunning;
+            set
+            {
+                if (_isRunning == value)
+                {
+                    return;
+                }
+
+                _isRunning = value;
+                RaisePropertyChange();
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+        public bool IsTransitioning
+        {
+            get => _isTransitioning;
+            internal set
+            {
+                if (_isTransitioning == value)
+                {
+                    return;
+                }
+
+                _isTransitioning = value;
+                RaisePropertyChange();
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
         public UInt16 Port { get => _parameters.Port; set { _parameters.Port = value; RaisePropertyChange(); } }
         public bool PromptToDisableOnClose { get => _parameters.PromptToDisableOnClose; set { _parameters.PromptToDisableOnClose = value; RaisePropertyChange(); } }
         public bool IsPortValid { get => Port > 0; }
+        internal bool CanBeginTransition => !IsRunning && !IsTransitioning;
 
         // NOTE: this is an 'object' because the parameters are
         // serialized/deserialized and the Json serializer
@@ -104,6 +135,8 @@ namespace XMAT.WebServiceCapture
         private IDataTable _dataTable;
         private IDataset _loadedCaptureDataset;
         private readonly object _lockObj = new object();
+        private readonly AsyncOperationTracker _captureCallbacks = new();
+        private bool _isTransitioning;
 
         public async Task<EProxyEnabledCheckResult> IsProxyEnabled()
         {
@@ -195,16 +228,20 @@ namespace XMAT.WebServiceCapture
                 {
                     await DisableProxying();
                 }
+                else
+                {
+                    return false;
+                }
             }
             return true;
         }
 
-        public void Close()
+        public async Task CloseAsync()
         {
             CancelExistingFiddlerImport();
             if (!_readOnly)
             {
-                StopProxy();
+                await StopProxyAsync();
                 ProxyPortPool.ReleasePort(Port);
             }
             ClearAllCaptures();
@@ -370,7 +407,7 @@ namespace XMAT.WebServiceCapture
             MessageBox.Show(Localization.GetLocalizedString("GENERIC_DEVICE_PROXY_INFO_MESSAGE", arrIPAddrs.First().ToString(), Port, PublicUtilities.StorageDirectoryPath), Localization.GetLocalizedString("GENERIC_DEVICE_PROXY_INFO_CAPTION"), MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
-        internal void StartProxy(bool bShowProxyInformation)
+        internal async Task StartProxyAsync(bool bShowProxyInformation)
         {
             var options = new WebServiceProxyOptions
             {
@@ -378,7 +415,19 @@ namespace XMAT.WebServiceCapture
                 Port = Port
             };
 
-            _webProxy.StartProxy(options);
+            _captureCallbacks.StartAccepting();
+            try
+            {
+                _webProxy.StartProxy(options);
+            }
+            catch
+            {
+                var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
+                _webProxy.StopProxy();
+                await callbacksDrained;
+                throw;
+            }
+
             IsRunning = true;
 
             if (bShowProxyInformation)
@@ -387,16 +436,33 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        internal void StopProxy()
+        internal async Task StopProxyAsync()
         {
+            var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
             _webProxy.StopProxy();
+            await callbacksDrained;
             IsRunning = false;
         }
 
-        private void HandleRowAdded(Int64 rowId)
+        internal IDisposable BeginTransition()
+        {
+            if (!CanBeginTransition)
+            {
+                throw new InvalidOperationException("The proxy cannot begin another transition.");
+            }
+
+            IsTransitioning = true;
+            return new TransitionLease(this);
+        }
+
+        private IDataRecord DataRecordFromRow(Int64 rowId)
         {
             var records = _dataTable.Dataset.DataRecordsFrom(rowId, 1);
-            var record = records.FirstOrDefault();
+            return records.FirstOrDefault();
+        }
+
+        private void HandleRowAdded(IDataRecord record)
+        {
             if (record != null && record.Str(WebServiceCaptureMethod.FieldKey_DeviceName).Equals(
                 DeviceName))
             {
@@ -404,10 +470,8 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private void HandleRowUpdated(Int64 rowId)
+        private void HandleRowUpdated(IDataRecord record)
         {
-            var records = _dataTable.Dataset.DataRecordsFrom(rowId, 1);
-            var record = records.FirstOrDefault();
             if (record != null && record.Str(WebServiceCaptureMethod.FieldKey_DeviceName).Equals(
                 DeviceName))
             {
@@ -445,6 +509,12 @@ namespace XMAT.WebServiceCapture
 
         private async void WebProxy_ReceivedSslConnectionRequestAsync(object sender, SslConnectionRequestEventArgs connectionEvent)
         {
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return;
+            }
+
+            using var callbackLeaseScope = callbackLease;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
@@ -489,11 +559,18 @@ namespace XMAT.WebServiceCapture
                 connectionEvent.ClientIP
             );
 
-            PublicUtilities.SafeInvoke(() => HandleRowAdded(rowId));
+            var addedRecord = DataRecordFromRow(rowId);
+            PublicUtilities.SafeInvoke(() => HandleRowAdded(addedRecord));
         }
 
         private void WebProxy_CompletedSslConnectionRequest(object sender, SslConnectionCompletionEventArgs completionEvent)
         {
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return;
+            }
+
+            using var callbackLeaseScope = callbackLease;
             var record = _dataTable.Dataset.DataRecordsWhen(
                 new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName),
                 new FieldValue<long>(WebServiceCaptureMethod.FieldKey_RequestNumber, completionEvent.Request.RequestNumber),
@@ -506,11 +583,18 @@ namespace XMAT.WebServiceCapture
                 new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, @"200")
             );
 
-            PublicUtilities.SafeInvoke(() => HandleRowUpdated(record.RowId));
+            var updatedRecord = DataRecordFromRow(record.RowId);
+            PublicUtilities.SafeInvoke(() => HandleRowUpdated(updatedRecord));
         }
 
         private async void WebProxy_ReceivedWebRequestAsync(object sender, HttpRequestEventArgs requestEvent)
         {
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return;
+            }
+
+            using var callbackLeaseScope = callbackLease;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
@@ -555,11 +639,18 @@ namespace XMAT.WebServiceCapture
                 DeviceName
             );
 
-            PublicUtilities.SafeInvoke(() => HandleRowAdded(rowId));
+            var addedRecord = DataRecordFromRow(rowId);
+            PublicUtilities.SafeInvoke(() => HandleRowAdded(addedRecord));
         }
 
         private async void WebProxy_ReceivedWebResponseAsync(object sender, HttpResponseEventArgs responseEvent)
         {
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return;
+            }
+
+            using var callbackLeaseScope = callbackLease;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
@@ -590,12 +681,19 @@ namespace XMAT.WebServiceCapture
                     new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body)
                 );
 
-                PublicUtilities.SafeInvoke(() => HandleRowUpdated(record.RowId));
+                var updatedRecord = DataRecordFromRow(record.RowId);
+                PublicUtilities.SafeInvoke(() => HandleRowUpdated(updatedRecord));
             }
         }
 
         private void WebProxy_WebSocketMessage(object sender, WebSocketMessageEventArgs messageEvent)
         {
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return;
+            }
+
+            using var callbackLeaseScope = callbackLease;
             PublicUtilities.SafeInvoke(() =>
             {
                 var message = new WebSocketMessageModel(messageEvent);
@@ -686,6 +784,26 @@ namespace XMAT.WebServiceCapture
         private CancellationTokenSource _fiddlerAsyncImportCancelTokenSource;
         private bool _isRunning;
         private ControllerParameters _parameters;
+
+        private sealed class TransitionLease : IDisposable
+        {
+            private WebServiceDeviceCaptureController _owner;
+
+            internal TransitionLease(WebServiceDeviceCaptureController owner)
+            {
+                _owner = owner;
+            }
+
+            public void Dispose()
+            {
+                var owner = _owner;
+                _owner = null;
+                if (owner != null)
+                {
+                    owner.IsTransitioning = false;
+                }
+            }
+        }
 
         public event PropertyChangedEventHandler PropertyChanged;
         public void RaisePropertyChange([CallerMemberName] string name = null)

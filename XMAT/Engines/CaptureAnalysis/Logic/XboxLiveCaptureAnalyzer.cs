@@ -109,8 +109,8 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 var rulesEngine = new RulesEngine(isInternal);
                 var serviceCallData = new ServiceCallData(allEndpoints);
 
-                // TODO: snapshot the records before processing since a live capture table
-                // can change while analysis is running
+                // The application holds an analysis lease while converting these records,
+                // so writable capture data remains quiescent without a second full copy.
                 SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.ConvertingProxyConnectionsToServiceCallItems);
                 List<ServiceCallItem> serviceCallItems =
                     GetServiceCallItemsForProxyConnections(controller);

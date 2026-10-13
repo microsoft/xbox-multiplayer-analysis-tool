@@ -13,6 +13,7 @@
 	"ACTIONS_MENU": "Actions",
 	"EXPORT_ROOT_CERT": "Export Root Certificate to Desktop",
 	"VIEW_ANALYZE_CAPTURES": "Analyze Captures",
+	"ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP": "Stop all captures before analyzing.",
 	"HELP_MENU": "Help",
 	"COLLECT_LOGS": "Collect Logs",
 	"GDKX_INFO": "View GDK Extensions for Xbox details",
@@ -46,6 +47,8 @@
 
 	"CAPTURE_ANALYSIS_TITLE": "Capture Analysis Results",
 	"CAPTURE_DEVICES_TAB_READONLY": " [Read Only]",
+	"CAPTURE_CLOSE_ERROR_TITLE": "Unable to Close Capture",
+	"CAPTURE_CLOSE_ERROR_MESSAGE": "The capture could not be closed: {0}",
 
 	"UNHANDLED_EXCEPTION_HANDLER_MESSAGE": "Unhandled exception, logs placed on desktop: {0}",
 	"UNHANDLED_EXCEPTION_HANDLER_TITLE": "Unhandled Exception!",

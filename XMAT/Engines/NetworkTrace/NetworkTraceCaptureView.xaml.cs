@@ -31,6 +31,7 @@ namespace NetworkTraceCaptureControls
             InitializeComponent();
 
             AnalyzeCaptureButton.Content = XMAT.Localization.GetLocalizedString("NETCAP_ANALYZE");
+            AnalyzeCaptureButton.ToolTip = XMAT.Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
             ClearCapturesButton.Content = XMAT.Localization.GetLocalizedString("NETCAP_CLEAR");
             PacketRawTextTab.Header = XMAT.Localization.GetLocalizedString("NETCAP_PACKET_DATA");
             FiltersText.Text = XMAT.Localization.GetLocalizedString("GENERIC_FILTERS");
@@ -70,8 +71,25 @@ namespace NetworkTraceCaptureControls
 
         private async void StartStopCapture_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            var ntdcc = captureDeviceContext.CaptureController as NetworkTraceCaptureController;
+            if (this.DataContext is not ICaptureDeviceContext captureDeviceContext ||
+                captureDeviceContext.CaptureController is not NetworkTraceCaptureController ntdcc)
+            {
+                return;
+            }
+
+            IDisposable operationLease = null;
+            if (ntdcc.IsCapturing)
+            {
+                if (!CaptureAppModel.AppModel.CanStopCaptures)
+                {
+                    return;
+                }
+            }
+            else if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
+                out operationLease))
+            {
+                return;
+            }
 
             try
             {
@@ -81,8 +99,16 @@ namespace NetworkTraceCaptureControls
                 }
                 else
                 {
-                    ntdcc.ClearAllCaptures();
-                    await ntdcc.StartCapture(captureDeviceContext);
+                    using (operationLease)
+                    {
+                        if (ntdcc.IsCapturing)
+                        {
+                            return;
+                        }
+
+                        ntdcc.ClearAllCaptures();
+                        await ntdcc.StartCapture(captureDeviceContext);
+                    }
                 }
             }
             catch (UnauthorizedAccessException)
@@ -126,11 +152,15 @@ namespace NetworkTraceCaptureControls
                 }
                 else if (ntdcc.IsCapturing)
                 {
-                    e.CanExecute = (ntdcc.DeviceStatus == DeviceStatusEnum.Tracing);
+                    e.CanExecute =
+                        CaptureAppModel.AppModel.CanStopCaptures &&
+                        ntdcc.DeviceStatus == DeviceStatusEnum.Tracing;
                 }
                 else
                 {
-                    e.CanExecute = (ntdcc.DeviceStatus == DeviceStatusEnum.Idle);
+                    e.CanExecute =
+                        CaptureAppModel.AppModel.CanModifyCaptureData &&
+                        ntdcc.DeviceStatus == DeviceStatusEnum.Idle;
                 }
             }
         }

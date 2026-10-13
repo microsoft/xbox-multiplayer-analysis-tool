@@ -28,6 +28,32 @@ namespace XMAT.Tests
             Assert.Equal(2, dataset.FilteredReadCount);
         }
 
+        [Fact]
+        public void BeginTransition_TracksAndReleasesTransitionState()
+        {
+            var controller = new WebServiceDeviceCaptureController(
+                "Test device",
+                DeviceType.Unknown,
+                true);
+
+            Assert.True(controller.CanBeginTransition);
+
+            using (controller.BeginTransition())
+            {
+                Assert.True(controller.IsTransitioning);
+                Assert.False(controller.CanBeginTransition);
+                Assert.Throws<InvalidOperationException>(() => controller.BeginTransition());
+            }
+
+            Assert.False(controller.IsTransitioning);
+            Assert.True(controller.CanBeginTransition);
+
+            controller.IsRunning = true;
+
+            Assert.False(controller.CanBeginTransition);
+            Assert.Throws<InvalidOperationException>(() => controller.BeginTransition());
+        }
+
         private static IDataRecord CreateAnalyzableRecord(string deviceName)
         {
             var requestTime = DateTime.UtcNow;

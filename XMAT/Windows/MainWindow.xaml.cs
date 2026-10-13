@@ -47,6 +47,7 @@ namespace XMAT
             EditPreferences.Header = Localization.GetLocalizedString("EDIT_PREFERENCES");
             AnalysisMenu.Header = Localization.GetLocalizedString("ANALYSIS_MENU");
             ViewAnalyzeCaptures.Header = Localization.GetLocalizedString("VIEW_ANALYZE_CAPTURES");
+            ViewAnalyzeCaptures.ToolTip = Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
             HelpMenu.Header = Localization.GetLocalizedString("HELP_MENU");
             CollectLogs.Header = Localization.GetLocalizedString("COLLECT_LOGS");
             ViewGDKXInfo.Header = Localization.GetLocalizedString("GDKX_INFO");
@@ -80,16 +81,49 @@ namespace XMAT
                 };
         }
 
-        private void AllCaptureDevicesPanel_TabClosed(object sender, RoutedEventArgs e)
+        private async void AllCaptureDevicesPanel_TabClosed(object sender, RoutedEventArgs e)
         {
             var args = (e as TabClosedRoutedEventArgs);
-            HandleCloseDeviceTab(args.CaptureDeviceContext);
+            if (args?.CaptureDeviceContext == null)
+            {
+                return;
+            }
+
+            await HandleCloseDeviceTabAsync(args.CaptureDeviceContext);
         }
 
-        private void HandleCloseDeviceTab(ICaptureDeviceContext captureDevice)
+        private async Task HandleCloseDeviceTabAsync(ICaptureDeviceContext captureDevice)
         {
-            CaptureAppModel.AppModel.RemoveDeviceContext(captureDevice);
-            CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+            if (captureDevice?.CaptureController == null ||
+                !CaptureAppModel.AppModel.TryBeginCaptureDataOperation(out var operationLease))
+            {
+                return;
+            }
+
+            using (operationLease)
+            {
+                try
+                {
+                    if (!await captureDevice.CaptureController.CanCloseAsync())
+                    {
+                        return;
+                    }
+
+                    await CaptureAppModel.AppModel.RemoveDeviceContextAsync(captureDevice);
+                    CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+                }
+                catch (Exception ex)
+                {
+                    PublicUtilities.AppLog(
+                        LogLevel.ERROR,
+                        $"Failed to close capture '{captureDevice.DeviceName}': {ex}");
+                    MessageBox.Show(
+                        Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_MESSAGE", ex.Message),
+                        Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_TITLE"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
+            }
         }
 
         private void CaptureErrorsPanel_TabAdded(object sender, RoutedEventArgs e)
@@ -105,6 +139,11 @@ namespace XMAT
 
         private void New_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             AddDeviceWindow deviceSelector = new()
             {
                 Owner = Application.Current.MainWindow
@@ -149,6 +188,11 @@ namespace XMAT
 
         private void Open_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             string filename = string.Empty;
             if (e is ExecutedRoutedEventArgs args)
                 filename = args.Parameter as string;
@@ -176,6 +220,11 @@ namespace XMAT
 
         private void Save_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             var saveFileDialog = new SaveFileDialog
             {
                 Filter = XMATFilter
@@ -189,6 +238,11 @@ namespace XMAT
 
         private async void Import_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanBeginCaptureDataOperation)
+            {
+                return;
+            }
+
             string filename = string.Empty;
             if (e is ExecutedRoutedEventArgs args)
                 filename = args.Parameter as string;
@@ -208,14 +262,29 @@ namespace XMAT
 
             if (!string.IsNullOrEmpty(filename))
             {
-                // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
-                // setup the filter above and call export with the appropriate type
-                await CaptureAppModel.AppModel.ImportDataCapturesAsync(ImportType.Fiddler, filename);
+                if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
+                    out var operationLease,
+                    true))
+                {
+                    return;
+                }
+
+                using (operationLease)
+                {
+                    // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
+                    // setup the filter above and call export with the appropriate type
+                    await CaptureAppModel.AppModel.ImportDataCapturesAsync(ImportType.Fiddler, filename);
+                }
             }
         }
 
         private void Export_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             var saveFileDialog = new SaveFileDialog
             {
                 Filter = FiddlerFilter
@@ -267,23 +336,45 @@ namespace XMAT
         private void ClearAllCaptures_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
             e.CanExecute = CaptureAppModel.AppModel.SelectedDeviceContext != null &&
-                          !CaptureAppModel.AppModel.SelectedDeviceContext.IsReadOnly;
+                          !CaptureAppModel.AppModel.SelectedDeviceContext.IsReadOnly &&
+                          CaptureAppModel.AppModel.CanModifyCaptureData;
         }
 
         private void ClearAllCaptures_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController.ClearAllCaptures();
         }
 
         private void AnalyzeCaptures_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            e.CanExecute = CaptureAppModel.AppModel.SelectedDeviceContext != null;
+            e.CanExecute = CaptureAppModel.AppModel.CanAnalyzeCaptures;
+        }
+
+        private void CaptureDataCommand_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureAppModel.AppModel.CanModifyCaptureData;
+        }
+
+        private void Import_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureAppModel.AppModel.CanBeginCaptureDataOperation;
         }
 
         private async void AnalyzeCaptures_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanAnalyzeCaptures)
+            {
+                return;
+            }
+
+            var captureDeviceContext = CaptureAppModel.AppModel.SelectedDeviceContext;
             var list = from ca in CaptureAppModel.AppModel.CaptureAnalyzers
-                       where ca.SupportedCaptureMethod == CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController.CaptureMethod
+                       where ca.SupportedCaptureMethod == captureDeviceContext.CaptureController.CaptureMethod
                        select ca;
 
             if (list.Any())
@@ -304,12 +395,20 @@ namespace XMAT
             {
                 ICaptureAnalyzer selected = list.Where(x => x.IsSelected).First();
 
-                var analysisRun = CaptureAppModel.AppModel.AddAnalysisRun(selected);
-                CaptureErrorsPanel.AddedAnalysis(analysisRun);
-                await HandleAnalyzerChosen(
-                    analysisRun,
-                    selected,
-                    CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController);
+                if (!CaptureAppModel.AppModel.TryBeginAnalysis(out var analysisLease))
+                {
+                    return;
+                }
+
+                using (analysisLease)
+                {
+                    var analysisRun = CaptureAppModel.AppModel.AddAnalysisRun(selected);
+                    CaptureErrorsPanel.AddedAnalysis(analysisRun);
+                    await HandleAnalyzerChosen(
+                        analysisRun,
+                        selected,
+                        captureDeviceContext.CaptureController);
+                }
             }
         }
 
@@ -319,46 +418,56 @@ namespace XMAT
             IDeviceCaptureController captureController)
         {
             analysisRun.IsProcessing = true;
-            ECaptureAnalyzerResult analyzerResult = await captureAnalyzer.RunAsync(analysisRun, captureController);
-
-            void OnError(string strErrorMsg)
+            try
             {
-                // remove entry
-                CaptureAppModel.AppModel.RemoveAnalysisRun(analysisRun);
+                ECaptureAnalyzerResult analyzerResult = await captureAnalyzer.RunAsync(analysisRun, captureController);
 
-                // show error msg
-                MessageBox.Show(
-                    strErrorMsg,
-                    Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_TITLE"),
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
+                void OnError(string strErrorMsg)
+                {
+                    // remove entry
+                    CaptureAppModel.AppModel.RemoveAnalysisRun(analysisRun);
+
+                    // show error msg
+                    MessageBox.Show(
+                        strErrorMsg,
+                        Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_TITLE"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
+
+                switch (analyzerResult)
+                {
+                    case ECaptureAnalyzerResult.Success:
+                    {
+                        break;
+                    }
+
+                    case ECaptureAnalyzerResult.NoSuitableData:
+                    {
+                        OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
+                        break;
+                    }
+
+                    case ECaptureAnalyzerResult.UnknownError:
+                    {
+                        OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));
+                        break;
+                    }
+                }
             }
-
-            switch (analyzerResult)
+            finally
             {
-                case ECaptureAnalyzerResult.Success:
-                {
-                    break;
-                }
-
-                case ECaptureAnalyzerResult.NoSuitableData:
-                {
-                    OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
-                    break;
-                }
-
-                case ECaptureAnalyzerResult.UnknownError:
-                {
-                    OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));
-                    break;
-                }
+                analysisRun.IsProcessing = false;
             }
-
-            analysisRun.IsProcessing = false;
         }
 
         private void Window_Drop(object sender, DragEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 var files = e.Data.GetData(DataFormats.FileDrop) as string[];

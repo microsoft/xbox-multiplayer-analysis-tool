@@ -5,11 +5,15 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Threading;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.Models
@@ -32,7 +36,21 @@ namespace XMAT.Models
         public IReadonlyDatabase LoadedDatabase { get; internal set; }
 
         public ObservableCollection<ICaptureDeviceContext> CaptureDeviceContexts { get => _captureDeviceContexts; }
-        public ICaptureDeviceContext SelectedDeviceContext { get => _selectedDeviceContext; set { _selectedDeviceContext = value; RaisePropertyChange(); } }
+        public ICaptureDeviceContext SelectedDeviceContext
+        {
+            get => _selectedDeviceContext;
+            set
+            {
+                if (_selectedDeviceContext == value)
+                {
+                    return;
+                }
+
+                _selectedDeviceContext = value;
+                RaisePropertyChange();
+                InvalidateCommands();
+            }
+        }
         public ObservableCollection<ICaptureAnalysisRun> AnalysisRuns { get => _analysisRuns; }
 
         public ICaptureAnalysisRun AnalysisRunById(int id)
@@ -53,15 +71,77 @@ namespace XMAT.Models
         internal IDataTable CaptureDevicesTable { get; set; }
         internal IList<ICaptureAnalyzer> CaptureAnalyzers { get => _captureAnalyzers; }
         internal AppPreferencesModel PreferencesModel { get; set; }
+        internal bool IsAnalysisRunning
+        {
+            get
+            {
+                lock (_analysisStateLock)
+                {
+                    return _isAnalysisRunning;
+                }
+            }
+        }
+        internal bool IsCaptureDataOperationRunning
+        {
+            get
+            {
+                lock (_analysisStateLock)
+                {
+                    return _isCaptureDataOperationRunning;
+                }
+            }
+        }
+        internal bool IsAnyCaptureRunning
+        {
+            get
+            {
+                lock (_analysisStateLock)
+                {
+                    return _runningCaptureControllers.Count != 0;
+                }
+            }
+        }
+        internal bool CanAnalyzeCaptures =>
+            SelectedDeviceContext != null &&
+            !IsAnyCaptureRunning &&
+            !IsAnalysisRunning &&
+            !IsCaptureDataOperationRunning;
+        internal bool CanModifyCaptureData =>
+            !IsAnalysisRunning &&
+            !IsCaptureDataOperationRunning;
+        internal bool CanBeginCaptureDataOperation =>
+            CanModifyCaptureData &&
+            !IsAnyCaptureRunning;
+        internal bool CanStopCaptures => !IsAnalysisRunning;
 
         private readonly ObservableCollection<ICaptureDeviceContext> _captureDeviceContexts = new();
         private ICaptureDeviceContext _selectedDeviceContext = null;
         private readonly List<ICaptureAnalyzer> _captureAnalyzers = new();
         private readonly ObservableCollection<ICaptureAnalysisRun> _analysisRuns = new();
+        private readonly object _analysisStateLock = new();
+        private readonly Dictionary<ICaptureDeviceContext, IDeviceCaptureController>
+            _trackedContextControllers = new();
+        private readonly HashSet<IDeviceCaptureController> _trackedCaptureControllers = new();
+        private readonly HashSet<IDeviceCaptureController> _runningCaptureControllers = new();
+        private readonly Dispatcher _dispatcher;
+        private bool _isAnalysisRunning;
+        private bool _isCaptureDataOperationRunning;
 
-        public CaptureAppModel()
+        public CaptureAppModel() :
+            this(Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher)
         {
+        }
+
+        internal CaptureAppModel(Dispatcher dispatcher)
+        {
+            _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
             PreferencesModel = new();
+            _captureDeviceContexts.CollectionChanged += CaptureDeviceContexts_CollectionChanged;
+
+            foreach (var context in _captureDeviceContexts)
+            {
+                TrackCaptureDeviceContext(context);
+            }
         }
 
         public ICaptureDeviceContext SelectCaptureDeviceContext(string deviceContextName)
@@ -73,6 +153,306 @@ namespace XMAT.Models
                 SelectedDeviceContext = context;
             }
             return context;
+        }
+
+        internal bool TryBeginAnalysis(out IDisposable analysisLease)
+        {
+            lock (_analysisStateLock)
+            {
+                if (_selectedDeviceContext == null ||
+                    _isAnalysisRunning ||
+                    _isCaptureDataOperationRunning ||
+                    _runningCaptureControllers.Count != 0)
+                {
+                    analysisLease = null;
+                    return false;
+                }
+
+                _isAnalysisRunning = true;
+            }
+
+            RaisePropertyChange(nameof(IsAnalysisRunning));
+            InvalidateCommands();
+            analysisLease = new AnalysisLease(this);
+            return true;
+        }
+
+        internal bool TryBeginCaptureDataOperation(
+            out IDisposable operationLease,
+            bool requireAllCapturesStopped = false)
+        {
+            lock (_analysisStateLock)
+            {
+                if (_isAnalysisRunning ||
+                    _isCaptureDataOperationRunning ||
+                    (requireAllCapturesStopped && _runningCaptureControllers.Count != 0))
+                {
+                    operationLease = null;
+                    return false;
+                }
+
+                _isCaptureDataOperationRunning = true;
+            }
+
+            RaisePropertyChange(nameof(IsCaptureDataOperationRunning));
+            InvalidateCommands();
+            operationLease = new CaptureDataOperationLease(this);
+            return true;
+        }
+
+        private void CaptureDeviceContexts_CollectionChanged(
+            object sender,
+            NotifyCollectionChangedEventArgs e)
+        {
+            if (e.Action == NotifyCollectionChangedAction.Reset)
+            {
+                ICaptureDeviceContext[] trackedContexts;
+                lock (_analysisStateLock)
+                {
+                    trackedContexts = _trackedContextControllers.Keys.ToArray();
+                }
+
+                foreach (var context in trackedContexts)
+                {
+                    UntrackCaptureDeviceContext(context);
+                }
+
+                foreach (var context in _captureDeviceContexts)
+                {
+                    TrackCaptureDeviceContext(context);
+                }
+            }
+            else
+            {
+                if (e.OldItems != null)
+                {
+                    foreach (ICaptureDeviceContext context in e.OldItems)
+                    {
+                        UntrackCaptureDeviceContext(context);
+                    }
+                }
+
+                if (e.NewItems != null)
+                {
+                    foreach (ICaptureDeviceContext context in e.NewItems)
+                    {
+                        TrackCaptureDeviceContext(context);
+                    }
+                }
+            }
+
+            InvalidateCommands();
+        }
+
+        private void TrackCaptureDeviceContext(ICaptureDeviceContext context)
+        {
+            if (context == null)
+            {
+                return;
+            }
+
+            lock (_analysisStateLock)
+            {
+                if (_trackedContextControllers.ContainsKey(context))
+                {
+                    return;
+                }
+
+                _trackedContextControllers[context] = context.CaptureController;
+            }
+
+            PropertyChangedEventManager.AddHandler(
+                context,
+                CaptureDeviceContext_PropertyChanged,
+                nameof(ICaptureDeviceContext.CaptureController));
+            TrackCaptureController(context.CaptureController);
+        }
+
+        private void UntrackCaptureDeviceContext(ICaptureDeviceContext context)
+        {
+            if (context == null)
+            {
+                return;
+            }
+
+            IDeviceCaptureController controller;
+            lock (_analysisStateLock)
+            {
+                if (!_trackedContextControllers.TryGetValue(context, out controller))
+                {
+                    return;
+                }
+
+                _trackedContextControllers.Remove(context);
+            }
+
+            PropertyChangedEventManager.RemoveHandler(
+                context,
+                CaptureDeviceContext_PropertyChanged,
+                nameof(ICaptureDeviceContext.CaptureController));
+            UntrackCaptureController(controller);
+        }
+
+        private void CaptureDeviceContext_PropertyChanged(
+            object sender,
+            PropertyChangedEventArgs e)
+        {
+            if (sender is not ICaptureDeviceContext context ||
+                (!string.IsNullOrEmpty(e.PropertyName) &&
+                 e.PropertyName != nameof(ICaptureDeviceContext.CaptureController)))
+            {
+                return;
+            }
+
+            IDeviceCaptureController previousController;
+            var currentController = context.CaptureController;
+            lock (_analysisStateLock)
+            {
+                if (!_trackedContextControllers.TryGetValue(context, out previousController) ||
+                    previousController == currentController)
+                {
+                    return;
+                }
+
+                _trackedContextControllers[context] = currentController;
+            }
+
+            UntrackCaptureController(previousController);
+            TrackCaptureController(currentController);
+            InvalidateCommands();
+        }
+
+        private void TrackCaptureController(IDeviceCaptureController controller)
+        {
+            if (controller == null)
+            {
+                return;
+            }
+
+            lock (_analysisStateLock)
+            {
+                if (!_trackedCaptureControllers.Add(controller))
+                {
+                    return;
+                }
+            }
+
+            PropertyChangedEventManager.AddHandler(
+                controller,
+                CaptureController_PropertyChanged,
+                nameof(IDeviceCaptureController.IsRunning));
+
+            lock (_analysisStateLock)
+            {
+                if (controller.IsRunning)
+                {
+                    _runningCaptureControllers.Add(controller);
+                }
+                else
+                {
+                    _runningCaptureControllers.Remove(controller);
+                }
+            }
+        }
+
+        private void UntrackCaptureController(IDeviceCaptureController controller)
+        {
+            if (controller == null)
+            {
+                return;
+            }
+
+            PropertyChangedEventManager.RemoveHandler(
+                controller,
+                CaptureController_PropertyChanged,
+                nameof(IDeviceCaptureController.IsRunning));
+
+            lock (_analysisStateLock)
+            {
+                _trackedCaptureControllers.Remove(controller);
+                _runningCaptureControllers.Remove(controller);
+            }
+        }
+
+        private void CaptureController_PropertyChanged(
+            object sender,
+            PropertyChangedEventArgs e)
+        {
+            if (sender is not IDeviceCaptureController controller ||
+                (!string.IsNullOrEmpty(e.PropertyName) &&
+                 e.PropertyName != nameof(IDeviceCaptureController.IsRunning)))
+            {
+                return;
+            }
+
+            lock (_analysisStateLock)
+            {
+                if (!_trackedCaptureControllers.Contains(controller))
+                {
+                    return;
+                }
+
+                if (controller.IsRunning)
+                {
+                    _runningCaptureControllers.Add(controller);
+                }
+                else
+                {
+                    _runningCaptureControllers.Remove(controller);
+                }
+            }
+
+            InvalidateCommands();
+        }
+
+        private void InvalidateCommands()
+        {
+            if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
+
+            if (!_dispatcher.CheckAccess())
+            {
+                _dispatcher.BeginInvoke(
+                    DispatcherPriority.Background,
+                    new Action(CommandManager.InvalidateRequerySuggested));
+                return;
+            }
+
+            CommandManager.InvalidateRequerySuggested();
+        }
+
+        private void EndAnalysis()
+        {
+            lock (_analysisStateLock)
+            {
+                if (!_isAnalysisRunning)
+                {
+                    return;
+                }
+
+                _isAnalysisRunning = false;
+            }
+
+            RaisePropertyChange(nameof(IsAnalysisRunning));
+            InvalidateCommands();
+        }
+
+        private void EndCaptureDataOperation()
+        {
+            lock (_analysisStateLock)
+            {
+                if (!_isCaptureDataOperationRunning)
+                {
+                    return;
+                }
+
+                _isCaptureDataOperationRunning = false;
+            }
+
+            RaisePropertyChange(nameof(IsCaptureDataOperationRunning));
+            InvalidateCommands();
         }
 
         internal void InitializeDatabase()
@@ -218,6 +598,8 @@ namespace XMAT.Models
                         deviceName,
                         (Int64)captureType);
                 }
+
+                InvalidateCommands();
             }
 
             newCaptureDeviceModel.CaptureController.ClearAllCaptures();
@@ -236,16 +618,18 @@ namespace XMAT.Models
             ).FirstOrDefault();
         }
 
-        internal void RemoveDeviceContext(ICaptureDeviceContext captureDeviceContext)
+        internal async Task RemoveDeviceContextAsync(ICaptureDeviceContext captureDeviceContext)
         {
+            await captureDeviceContext.CaptureController.CloseAsync();
+
             // remove device from the devices table
             AppModel.CaptureDevicesTable.RemoveRowsWhere(
                 new FieldValue<Int64>(@"DeviceType", (Int64)captureDeviceContext.DeviceType),
                 new FieldValue<string>(@"DeviceName", captureDeviceContext.DeviceName)
             );
 
-            captureDeviceContext.CaptureController.Close();
             _captureDeviceContexts.Remove(captureDeviceContext);
+            InvalidateCommands();
         }
 
         internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer)
@@ -271,6 +655,40 @@ namespace XMAT.Models
         public void RaisePropertyChange([CallerMemberName] string name = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        }
+
+        private sealed class AnalysisLease : IDisposable
+        {
+            private CaptureAppModel _owner;
+
+            internal AnalysisLease(CaptureAppModel owner)
+            {
+                _owner = owner;
+            }
+
+            public void Dispose()
+            {
+                var owner = _owner;
+                _owner = null;
+                owner?.EndAnalysis();
+            }
+        }
+
+        private sealed class CaptureDataOperationLease : IDisposable
+        {
+            private CaptureAppModel _owner;
+
+            internal CaptureDataOperationLease(CaptureAppModel owner)
+            {
+                _owner = owner;
+            }
+
+            public void Dispose()
+            {
+                var owner = _owner;
+                _owner = null;
+                owner?.EndCaptureDataOperation();
+            }
         }
     }
 }
