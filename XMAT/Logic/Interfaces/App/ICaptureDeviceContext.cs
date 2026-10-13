@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System.ComponentModel;
 using System.Drawing;
 
 namespace XMAT.SharedInterfaces
@@ -21,7 +20,7 @@ namespace XMAT.SharedInterfaces
         NetworkTrace = 1
     }
 
-    public interface ICaptureDeviceContext : INotifyPropertyChanged
+    public interface ICaptureDeviceContext
     {
         DeviceType DeviceType { get; }
 
@@ -35,6 +34,6 @@ namespace XMAT.SharedInterfaces
 
         Color DeviceColor { get; set; }
 
-        IDeviceCaptureController CaptureController { get; set; }
+        IDeviceCaptureController CaptureController { get; }
     }
 }

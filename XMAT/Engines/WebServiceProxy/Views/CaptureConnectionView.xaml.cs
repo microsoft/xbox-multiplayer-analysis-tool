@@ -202,97 +202,104 @@ namespace XMAT.WebServiceCapture
             }
 
             using var transitionLease = wsdcc.BeginTransition();
-            switch (captureDeviceContext.DeviceType)
+            try
             {
-                case DeviceType.LocalPC:
+                switch (captureDeviceContext.DeviceType)
                 {
-                    wsdcc.EnableProxyingPC();
-                    await wsdcc.StartProxyAsync(false);
-                    break;
-                }
-
-                case DeviceType.GenericProxyDevice:
-                {
-                    await wsdcc.StartProxyAsync(true);
-                    break;
-                }
-
-                case DeviceType.XboxConsole:
-                {
-                    string proxyHostIpAddress = "";
-                    bool shouldEnableProxy = false;
-
-                    IPAddress destinationAddress = await PublicUtilities.ResolveIP4AddressAsync(wsdcc.DeviceName);
-                    if (destinationAddress == null)
+                    case DeviceType.LocalPC:
                     {
-                        MessageBox.Show(Localization.GetLocalizedString("DNS_RESOLVE_ERROR_MESSAGE", wsdcc.DeviceName), Localization.GetLocalizedString("DNS_RESOLVE_ERROR_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
-                        return;
-                    }
-
-                    IEnumerable<IPAddress> sourceAddresses = PublicUtilities.GetMyIp4Addresses();
-
-                    if (sourceAddresses.Count() == 0)
-                    {
-                        // TODO: show a message box saying that we have no valid
-                        // source address
+                        wsdcc.EnableProxyingPC();
+                        await wsdcc.StartProxyAsync(false);
                         break;
                     }
-                    else if (sourceAddresses.Count() == 1)
-                    {
-                        proxyHostIpAddress = sourceAddresses.First().ToString();
-                        shouldEnableProxy = true;
-                    }
-                    else
-                    {
-                        // find the first source address from which we can ping
-                        // the console device's IP address directly
 
-                        var sourceAddressModels = new List<PingableSourceAddressModel>();
-                        foreach (var sourceAddress in sourceAddresses)
+                    case DeviceType.GenericProxyDevice:
+                    {
+                        await wsdcc.StartProxyAsync(true);
+                        break;
+                    }
+
+                    case DeviceType.XboxConsole:
+                    {
+                        string proxyHostIpAddress = "";
+                        bool shouldEnableProxy = false;
+
+                        IPAddress destinationAddress = await PublicUtilities.ResolveIP4AddressAsync(wsdcc.DeviceName);
+                        if (destinationAddress == null)
                         {
-                            sourceAddressModels.Add(
-                                new PingableSourceAddressModel(
-                                    sourceAddress,
-                                    destinationAddress,
-                                    sourceAddressModels.Count == 0));
+                            MessageBox.Show(Localization.GetLocalizedString("DNS_RESOLVE_ERROR_MESSAGE", wsdcc.DeviceName), Localization.GetLocalizedString("DNS_RESOLVE_ERROR_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+                            return;
                         }
 
-                        var selectorWindow = new SourceAddressWindow
-                        {
-                            Owner = Application.Current.MainWindow,
-                            DataContext = sourceAddressModels
-                        };
+                        IEnumerable<IPAddress> sourceAddresses = PublicUtilities.GetMyIp4Addresses();
 
-                        // show the list of available source addresses
-                        var confirmed = selectorWindow.ShowDialog() ?? false;
-
-                        if (confirmed)
+                        if (sourceAddresses.Count() == 0)
                         {
-                            // TODO: do we need to explicitly set the source address on
-                            // the proxy engine itself?
-                            proxyHostIpAddress = selectorWindow.SelectedSourceAddress.SourceAddress.ToString();
+                            // TODO: show a message box saying that we have no valid
+                            // source address
+                            break;
+                        }
+                        else if (sourceAddresses.Count() == 1)
+                        {
+                            proxyHostIpAddress = sourceAddresses.First().ToString();
                             shouldEnableProxy = true;
                         }
-                    }
-
-                    if (shouldEnableProxy)
-                    {
-                        bool bWasEnabled = await wsdcc.EnableProxyingXbox(proxyHostIpAddress);
-
-                        if (bWasEnabled)
+                        else
                         {
-                            await wsdcc.StartProxyAsync(false);
-                        }
-                    }
-                    // TODO: if we 've gotten this far, then that means we
-                    // were not able to find a suitable source address to use
-                    // and we should message the user
-                    break;
-                }
+                            // find the first source address from which we can ping
+                            // the console device's IP address directly
 
-                default:
-                    throw new NotImplementedException(
-                $"Device type of {captureDeviceContext.DeviceType} for {captureDeviceContext.DeviceName} is not supported.");
+                            var sourceAddressModels = new List<PingableSourceAddressModel>();
+                            foreach (var sourceAddress in sourceAddresses)
+                            {
+                                sourceAddressModels.Add(
+                                    new PingableSourceAddressModel(
+                                        sourceAddress,
+                                        destinationAddress,
+                                        sourceAddressModels.Count == 0));
+                            }
+
+                            var selectorWindow = new SourceAddressWindow
+                            {
+                                Owner = Application.Current.MainWindow,
+                                DataContext = sourceAddressModels
+                            };
+
+                            // show the list of available source addresses
+                            var confirmed = selectorWindow.ShowDialog() ?? false;
+
+                            if (confirmed)
+                            {
+                                // TODO: do we need to explicitly set the source address on
+                                // the proxy engine itself?
+                                proxyHostIpAddress = selectorWindow.SelectedSourceAddress.SourceAddress.ToString();
+                                shouldEnableProxy = true;
+                            }
+                        }
+
+                        if (shouldEnableProxy)
+                        {
+                            bool bWasEnabled = await wsdcc.EnableProxyingXbox(proxyHostIpAddress);
+
+                            if (bWasEnabled)
+                            {
+                                await wsdcc.StartProxyAsync(false);
+                            }
+                        }
+                        // TODO: if we 've gotten this far, then that means we
+                        // were not able to find a suitable source address to use
+                        // and we should message the user
+                        break;
+                    }
+
+                    default:
+                        throw new NotImplementedException(
+                    $"Device type of {captureDeviceContext.DeviceType} for {captureDeviceContext.DeviceName} is not supported.");
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowProxyOperationError(ex);
             }
         }
 
@@ -309,8 +316,15 @@ namespace XMAT.WebServiceCapture
             {
                 return;
             }
-            await wsdcc.DisableProxying();
-            await wsdcc.StopProxyAsync();
+            try
+            {
+                await wsdcc.DisableProxying();
+                await wsdcc.StopProxyAsync();
+            }
+            catch (Exception ex)
+            {
+                ShowProxyOperationError(ex);
+            }
         }
 
         private async void CheckDevice_Executed(object sender, ExecutedRoutedEventArgs e)
@@ -351,48 +365,65 @@ namespace XMAT.WebServiceCapture
             var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
             var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
 
-            if (start.GetValueOrDefault())
+            try
             {
-                if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
-                    out var operationLease))
+                if (start.GetValueOrDefault())
                 {
-                    return;
+                    if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
+                        out var operationLease))
+                    {
+                        return;
+                    }
+
+                    using (operationLease)
+                    {
+                        if (wsdcc.IsRunning || wsdcc.IsTransitioning)
+                        {
+                            return;
+                        }
+
+                        if (captureDeviceContext?.DeviceType == DeviceType.XboxConsole &&
+                            !GDKXHelper.IsGDKXInstalled(true))
+                        {
+                            return;
+                        }
+
+                        if (captureDeviceContext?.DeviceType == DeviceType.LocalPC)
+                        {
+                            wsdcc.EnableProxyingPC();
+                        }
+                        await wsdcc.StartProxyAsync(
+                            captureDeviceContext?.DeviceType == DeviceType.GenericProxyDevice);
+                    }
                 }
-
-                using (operationLease)
+                else
                 {
-                    if (wsdcc.IsRunning || wsdcc.IsTransitioning)
+                    if (!CaptureAppModel.AppModel.CanStopCaptures)
                     {
                         return;
                     }
 
-                    if (captureDeviceContext?.DeviceType == DeviceType.XboxConsole &&
-                        !GDKXHelper.IsGDKXInstalled(true))
-                    {
-                        return;
-                    }
-
+                    await wsdcc.StopProxyAsync();
                     if (captureDeviceContext?.DeviceType == DeviceType.LocalPC)
                     {
-                        wsdcc.EnableProxyingPC();
+                        await wsdcc.DisableProxying();
                     }
-                    await wsdcc.StartProxyAsync(
-                        captureDeviceContext?.DeviceType == DeviceType.GenericProxyDevice);
                 }
             }
-            else
+            catch (Exception ex)
             {
-                if (!CaptureAppModel.AppModel.CanStopCaptures)
-                {
-                    return;
-                }
-
-                await wsdcc.StopProxyAsync();
-                if (captureDeviceContext?.DeviceType == DeviceType.LocalPC)
-                {
-                    await wsdcc.DisableProxying();
-                }
+                ShowProxyOperationError(ex);
             }
+        }
+
+        private static void ShowProxyOperationError(Exception ex)
+        {
+            PublicUtilities.AppLog(LogLevel.ERROR, $"Web proxy operation failed: {ex}");
+            MessageBox.Show(
+                ex.Message,
+                Localization.GetLocalizedString("PROXY_CAPTURE_ERROR_TITLE"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
 
         private void StartStopCapture_CanExecute(object sender, CanExecuteRoutedEventArgs e)

@@ -24,6 +24,12 @@ namespace XMAT.WebServiceCapture
 {
     public class WebServiceDeviceCaptureController : INotifyPropertyChanged, IDeviceCaptureController
     {
+        private enum CaptureDataSource
+        {
+            ActiveTable,
+            LoadedDataset
+        }
+
         class ControllerParameters : ICaptureMethodParameters
         {
             public UInt16 Port { get; set; }
@@ -126,6 +132,8 @@ namespace XMAT.WebServiceCapture
         }
 
         private const int LoadedCapturesPageBreakSize = 100;
+        private static readonly TimeSpan CaptureCallbackDrainTimeout =
+            TimeSpan.FromSeconds(10);
 
         private ProxyConnectionModel _selectedConnectionModel;
         private WebSocketMessageModel _selectedWebSocketMessage;
@@ -134,8 +142,10 @@ namespace XMAT.WebServiceCapture
         private IWebServiceProxy _webProxy;
         private IDataTable _dataTable;
         private IDataset _loadedCaptureDataset;
+        private CaptureDataSource _captureDataSource = CaptureDataSource.ActiveTable;
         private readonly object _lockObj = new object();
         private readonly AsyncOperationTracker _captureCallbacks = new();
+        private CancellationTokenSource _captureCallbackCancellationTokenSource;
         private bool _isTransitioning;
 
         public async Task<EProxyEnabledCheckResult> IsProxyEnabled()
@@ -257,6 +267,8 @@ namespace XMAT.WebServiceCapture
 
         internal void LoadCaptureDataset(IDataset dataset)
         {
+            ClearCaptureViewModels();
+            _captureDataSource = CaptureDataSource.LoadedDataset;
             _loadedCaptureDataset = dataset;
             if (_loadedCaptureDataset != null)
             {
@@ -269,7 +281,9 @@ namespace XMAT.WebServiceCapture
 
         internal IEnumerable<IDataRecord> GetCaptureRecords()
         {
-            var dataset = _loadedCaptureDataset ?? _dataTable?.Dataset;
+            var dataset = _captureDataSource == CaptureDataSource.LoadedDataset
+                ? _loadedCaptureDataset
+                : _dataTable?.Dataset;
             if (dataset == null)
             {
                 return Enumerable.Empty<IDataRecord>();
@@ -286,6 +300,8 @@ namespace XMAT.WebServiceCapture
             IDataTable dataTable,
             CancellationToken cancelToken)
         {
+            PrepareForActiveCaptureData();
+
             if (ProxyConnections == null)
                 return;
 
@@ -416,6 +432,8 @@ namespace XMAT.WebServiceCapture
             };
 
             _captureCallbacks.StartAccepting();
+            _captureCallbackCancellationTokenSource?.Dispose();
+            _captureCallbackCancellationTokenSource = new CancellationTokenSource();
             try
             {
                 _webProxy.StartProxy(options);
@@ -423,8 +441,10 @@ namespace XMAT.WebServiceCapture
             catch
             {
                 var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
+                _captureCallbackCancellationTokenSource.Cancel();
                 _webProxy.StopProxy();
-                await callbacksDrained;
+                await WaitForCaptureCallbacksAsync(callbacksDrained);
+                DisposeCaptureCallbackCancellation();
                 throw;
             }
 
@@ -439,9 +459,34 @@ namespace XMAT.WebServiceCapture
         internal async Task StopProxyAsync()
         {
             var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
+            _captureCallbackCancellationTokenSource?.Cancel();
             _webProxy.StopProxy();
-            await callbacksDrained;
+            await WaitForCaptureCallbacksAsync(callbacksDrained);
+            DisposeCaptureCallbackCancellation();
             IsRunning = false;
+        }
+
+        private async Task WaitForCaptureCallbacksAsync(Task callbacksDrained)
+        {
+            try
+            {
+                await callbacksDrained.WaitAsync(CaptureCallbackDrainTimeout);
+            }
+            catch (TimeoutException ex)
+            {
+                var timeoutSeconds = (int)CaptureCallbackDrainTimeout.TotalSeconds;
+                throw new TimeoutException(
+                    Localization.GetLocalizedString(
+                        "PROXY_CAPTURE_CALLBACK_TIMEOUT",
+                        timeoutSeconds),
+                    ex);
+            }
+        }
+
+        private void DisposeCaptureCallbackCancellation()
+        {
+            _captureCallbackCancellationTokenSource?.Dispose();
+            _captureCallbackCancellationTokenSource = null;
         }
 
         internal IDisposable BeginTransition()
@@ -515,12 +560,22 @@ namespace XMAT.WebServiceCapture
             }
 
             using var callbackLeaseScope = callbackLease;
+            var cancellationToken =
+                _captureCallbackCancellationTokenSource?.Token ??
+                CancellationToken.None;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
                 var sp = new WebServiceCaptureScriptParams() { Request = connectionEvent.Request, Response = null };
-                await Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest].RunScriptAsync(sp);
+                await Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest].RunScriptAsync(
+                    sp,
+                    cancellationToken);
                 connectionEvent.AcceptConnection = sp.Continue;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                connectionEvent.AcceptConnection = false;
+                return;
             }
             catch (Exception e)
             {
@@ -532,6 +587,12 @@ namespace XMAT.WebServiceCapture
                 PublicUtilities.AppLog(LogLevel.INFO,
                     $"Blocked SSL CONNECT to '{connectionEvent.Request.Host ?? connectionEvent.Request.Path}' (BlockList)");
                 connectionEvent.AcceptConnection = false;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                connectionEvent.AcceptConnection = false;
+                return;
             }
 
             string base64Body = string.Empty;
@@ -595,12 +656,22 @@ namespace XMAT.WebServiceCapture
             }
 
             using var callbackLeaseScope = callbackLease;
+            var cancellationToken =
+                _captureCallbackCancellationTokenSource?.Token ??
+                CancellationToken.None;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
                 var sp = new WebServiceCaptureScriptParams() { Request = requestEvent.Request, Response = null };
-                await Scripts[WebServiceCaptureScriptableEventType.WebRequest].RunScriptAsync(sp);
+                await Scripts[WebServiceCaptureScriptableEventType.WebRequest].RunScriptAsync(
+                    sp,
+                    cancellationToken);
                 requestEvent.AcceptRequest = sp.Continue;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                requestEvent.AcceptRequest = false;
+                return;
             }
             catch (Exception e)
             {
@@ -612,6 +683,12 @@ namespace XMAT.WebServiceCapture
                 PublicUtilities.AppLog(LogLevel.INFO,
                     $"Blocked {requestEvent.Request.Method} {requestEvent.Request.Host}{requestEvent.Request.Path} (BlockList)");
                 requestEvent.AcceptRequest = false;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                requestEvent.AcceptRequest = false;
+                return;
             }
 
             string base64Body = string.Empty;
@@ -651,16 +728,32 @@ namespace XMAT.WebServiceCapture
             }
 
             using var callbackLeaseScope = callbackLease;
+            var cancellationToken =
+                _captureCallbackCancellationTokenSource?.Token ??
+                CancellationToken.None;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
                 var sp = new WebServiceCaptureScriptParams() { Request = responseEvent.Request, Response = responseEvent.Response };
-                await Scripts[WebServiceCaptureScriptableEventType.WebResponse].RunScriptAsync(sp);
+                await Scripts[WebServiceCaptureScriptableEventType.WebResponse].RunScriptAsync(
+                    sp,
+                    cancellationToken);
                 responseEvent.SendResponse = sp.Continue;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                responseEvent.SendResponse = false;
+                return;
             }
             catch (Exception e)
             {
                 PublicUtilities.AppLog(LogLevel.ERROR, $"WebResponse script error {e}");
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                responseEvent.SendResponse = false;
+                return;
             }
 
             var record = _dataTable.Dataset.DataRecordsWhen(
@@ -704,16 +797,30 @@ namespace XMAT.WebServiceCapture
 
         public void ClearAllCaptures()
         {
+            ClearCaptureViewModels();
+            if (_captureDataSource == CaptureDataSource.ActiveTable)
+            {
+                _dataTable?.RemoveRowsWhere(
+                    new FieldValue<string>(
+                        WebServiceCaptureMethod.FieldKey_DeviceName,
+                        DeviceName)
+                    );
+            }
+            _loadedCaptureDataset = null;
+            _webProxy?.Reset();
+        }
+
+        internal void PrepareForActiveCaptureData()
+        {
+            _captureDataSource = CaptureDataSource.ActiveTable;
+            _loadedCaptureDataset = null;
+        }
+
+        private void ClearCaptureViewModels()
+        {
             ProxyConnections.RemoveAll();
             WebSocketMessages.Clear();
             SelectedWebSocketMessage = null;
-            _dataTable.RemoveRowsWhere(
-                new FieldValue<string>(
-                    WebServiceCaptureMethod.FieldKey_DeviceName,
-                    DeviceName)
-                );
-            _loadedCaptureDataset = null;
-            _webProxy?.Reset();
         }
 
         public void ImportFromFiddler(string fromFilePath)

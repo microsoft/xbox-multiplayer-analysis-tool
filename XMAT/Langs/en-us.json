@@ -231,6 +231,8 @@
 	"PROXY_ERROR_DISABLE_PROMPT2": " before closing?",
 	"PROXY_ERROR_DISABLE_PROMPT3": "*Disabling the proxy will reboot the Xbox",
 	"PROXY_ERROR_DISABLE_ALWAYS": "Always prompt when closing",
+	"PROXY_CAPTURE_CALLBACK_TIMEOUT": "Capture callbacks did not stop within {0} seconds. Analysis remains disabled until they finish.",
+	"PROXY_CAPTURE_ERROR_TITLE": "Web Proxy Error",
 
 	"WEBCAP_CHECK": "Check Proxy Status",
 	"PROXY_CHECK_STATUS_TITLE": "Proxy Status",

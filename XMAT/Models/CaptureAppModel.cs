@@ -119,8 +119,6 @@ namespace XMAT.Models
         private readonly List<ICaptureAnalyzer> _captureAnalyzers = new();
         private readonly ObservableCollection<ICaptureAnalysisRun> _analysisRuns = new();
         private readonly object _analysisStateLock = new();
-        private readonly Dictionary<ICaptureDeviceContext, IDeviceCaptureController>
-            _trackedContextControllers = new();
         private readonly HashSet<IDeviceCaptureController> _trackedCaptureControllers = new();
         private readonly HashSet<IDeviceCaptureController> _runningCaptureControllers = new();
         private readonly Dispatcher _dispatcher;
@@ -140,7 +138,7 @@ namespace XMAT.Models
 
             foreach (var context in _captureDeviceContexts)
             {
-                TrackCaptureDeviceContext(context);
+                TrackCaptureController(context.CaptureController);
             }
         }
 
@@ -206,20 +204,20 @@ namespace XMAT.Models
         {
             if (e.Action == NotifyCollectionChangedAction.Reset)
             {
-                ICaptureDeviceContext[] trackedContexts;
+                IDeviceCaptureController[] trackedControllers;
                 lock (_analysisStateLock)
                 {
-                    trackedContexts = _trackedContextControllers.Keys.ToArray();
+                    trackedControllers = _trackedCaptureControllers.ToArray();
                 }
 
-                foreach (var context in trackedContexts)
+                foreach (var controller in trackedControllers)
                 {
-                    UntrackCaptureDeviceContext(context);
+                    UntrackCaptureController(controller);
                 }
 
                 foreach (var context in _captureDeviceContexts)
                 {
-                    TrackCaptureDeviceContext(context);
+                    TrackCaptureController(context.CaptureController);
                 }
             }
             else
@@ -228,7 +226,7 @@ namespace XMAT.Models
                 {
                     foreach (ICaptureDeviceContext context in e.OldItems)
                     {
-                        UntrackCaptureDeviceContext(context);
+                        UntrackCaptureController(context.CaptureController);
                     }
                 }
 
@@ -236,89 +234,11 @@ namespace XMAT.Models
                 {
                     foreach (ICaptureDeviceContext context in e.NewItems)
                     {
-                        TrackCaptureDeviceContext(context);
+                        TrackCaptureController(context.CaptureController);
                     }
                 }
             }
 
-            InvalidateCommands();
-        }
-
-        private void TrackCaptureDeviceContext(ICaptureDeviceContext context)
-        {
-            if (context == null)
-            {
-                return;
-            }
-
-            lock (_analysisStateLock)
-            {
-                if (_trackedContextControllers.ContainsKey(context))
-                {
-                    return;
-                }
-
-                _trackedContextControllers[context] = context.CaptureController;
-            }
-
-            PropertyChangedEventManager.AddHandler(
-                context,
-                CaptureDeviceContext_PropertyChanged,
-                nameof(ICaptureDeviceContext.CaptureController));
-            TrackCaptureController(context.CaptureController);
-        }
-
-        private void UntrackCaptureDeviceContext(ICaptureDeviceContext context)
-        {
-            if (context == null)
-            {
-                return;
-            }
-
-            IDeviceCaptureController controller;
-            lock (_analysisStateLock)
-            {
-                if (!_trackedContextControllers.TryGetValue(context, out controller))
-                {
-                    return;
-                }
-
-                _trackedContextControllers.Remove(context);
-            }
-
-            PropertyChangedEventManager.RemoveHandler(
-                context,
-                CaptureDeviceContext_PropertyChanged,
-                nameof(ICaptureDeviceContext.CaptureController));
-            UntrackCaptureController(controller);
-        }
-
-        private void CaptureDeviceContext_PropertyChanged(
-            object sender,
-            PropertyChangedEventArgs e)
-        {
-            if (sender is not ICaptureDeviceContext context ||
-                (!string.IsNullOrEmpty(e.PropertyName) &&
-                 e.PropertyName != nameof(ICaptureDeviceContext.CaptureController)))
-            {
-                return;
-            }
-
-            IDeviceCaptureController previousController;
-            var currentController = context.CaptureController;
-            lock (_analysisStateLock)
-            {
-                if (!_trackedContextControllers.TryGetValue(context, out previousController) ||
-                    previousController == currentController)
-                {
-                    return;
-                }
-
-                _trackedContextControllers[context] = currentController;
-            }
-
-            UntrackCaptureController(previousController);
-            TrackCaptureController(currentController);
             InvalidateCommands();
         }
 
@@ -602,7 +522,6 @@ namespace XMAT.Models
                 InvalidateCommands();
             }
 
-            newCaptureDeviceModel.CaptureController.ClearAllCaptures();
             return newCaptureDeviceModel;
         }
 
@@ -622,11 +541,15 @@ namespace XMAT.Models
         {
             await captureDeviceContext.CaptureController.CloseAsync();
 
-            // remove device from the devices table
-            AppModel.CaptureDevicesTable.RemoveRowsWhere(
-                new FieldValue<Int64>(@"DeviceType", (Int64)captureDeviceContext.DeviceType),
-                new FieldValue<string>(@"DeviceName", captureDeviceContext.DeviceName)
-            );
+            if (!captureDeviceContext.IsReadOnly)
+            {
+                // remove device from the devices table
+                CaptureDevicesTable.RemoveRowsWhere(
+                    new FieldValue<Int64>(@"DeviceType", (Int64)captureDeviceContext.DeviceType),
+                    new FieldValue<string>(@"DeviceName", captureDeviceContext.DeviceName),
+                    new FieldValue<Int64>(@"CaptureType", (Int64)captureDeviceContext.CaptureType)
+                );
+            }
 
             _captureDeviceContexts.Remove(captureDeviceContext);
             InvalidateCommands();

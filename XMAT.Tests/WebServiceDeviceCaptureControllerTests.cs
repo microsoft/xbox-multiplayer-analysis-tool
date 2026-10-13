@@ -54,6 +54,23 @@ namespace XMAT.Tests
             Assert.Throws<InvalidOperationException>(() => controller.BeginTransition());
         }
 
+        [Fact]
+        public void ClearAllCaptures_DoesNotUseActiveTableForLoadedDataset()
+        {
+            const string deviceName = "Saved Capture";
+            var dataset = new TestDataset(CreateAnalyzableRecord(deviceName));
+            var controller = new WebServiceDeviceCaptureController(
+                deviceName,
+                DeviceType.Unknown,
+                true);
+            controller.LoadCaptureDataset(dataset);
+
+            controller.ClearAllCaptures();
+
+            Assert.Empty(controller.ProxyConnections);
+            Assert.Empty(controller.GetCaptureRecords());
+        }
+
         private static IDataRecord CreateAnalyzableRecord(string deviceName)
         {
             var requestTime = DateTime.UtcNow;

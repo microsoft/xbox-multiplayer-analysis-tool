@@ -131,32 +131,6 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void CaptureControllerReplacement_UntracksOldAndTracksNewController()
-        {
-            var model = new CaptureAppModel();
-            var context = new TestCaptureDeviceContext(false);
-            var originalController = context.TestController;
-            model.CaptureDeviceContexts.Add(context);
-
-            originalController.SetIsRunning(true);
-
-            Assert.True(model.IsAnyCaptureRunning);
-
-            var replacementController = context.ReplaceController(false);
-
-            Assert.False(model.IsAnyCaptureRunning);
-
-            originalController.SetIsRunning(false);
-            originalController.SetIsRunning(true);
-
-            Assert.False(model.IsAnyCaptureRunning);
-
-            replacementController.SetIsRunning(true);
-
-            Assert.True(model.IsAnyCaptureRunning);
-        }
-
-        [Fact]
         public void BackgroundRunningStateChange_InvalidatesCommandsOnCapturedDispatcher()
         {
             Exception dispatcherException = null;
@@ -242,6 +216,50 @@ namespace XMAT.Tests
             Assert.Null(dispatcherException);
         }
 
+        [Fact]
+        public async Task RemoveDeviceContextAsync_DoesNotDeleteReadOnlyDeviceRegistration()
+        {
+            var model = new CaptureAppModel();
+            var captureDevicesTable = new TestDataTable();
+            var context = new TestCaptureDeviceContext(false)
+            {
+                IsReadOnly = true
+            };
+            model.CaptureDevicesTable = captureDevicesTable;
+            model.CaptureDeviceContexts.Add(context);
+
+            await model.RemoveDeviceContextAsync(context);
+
+            Assert.Equal(0, captureDevicesTable.RemoveCallCount);
+            Assert.Empty(model.CaptureDeviceContexts);
+            Assert.True(context.TestController.CloseCalled);
+        }
+
+        [Fact]
+        public async Task RemoveDeviceContextAsync_DeletesOnlyMatchingCaptureRegistration()
+        {
+            var model = new CaptureAppModel();
+            var captureDevicesTable = new TestDataTable();
+            var context = new TestCaptureDeviceContext(false);
+            model.CaptureDevicesTable = captureDevicesTable;
+            model.CaptureDeviceContexts.Add(context);
+
+            await model.RemoveDeviceContextAsync(context);
+
+            var filters = Assert.Single(captureDevicesTable.RemovedFilters);
+            Assert.Equal(3, filters.Length);
+            Assert.Contains(filters, filter =>
+                filter.Name == "DeviceType" &&
+                (long)filter.Value == (long)context.DeviceType);
+            Assert.Contains(filters, filter =>
+                filter.Name == "DeviceName" &&
+                (string)filter.Value == context.DeviceName);
+            Assert.Contains(filters, filter =>
+                filter.Name == "CaptureType" &&
+                (long)filter.Value == (long)context.CaptureType);
+            Assert.True(context.TestController.CloseCalled);
+        }
+
         private sealed class TestCaptureDeviceContext : ICaptureDeviceContext
         {
             public DeviceType DeviceType => DeviceType.LocalPC;
@@ -250,20 +268,7 @@ namespace XMAT.Tests
             public bool IsSelected { get; set; }
             public bool IsReadOnly { get; set; }
             public Color DeviceColor { get; set; }
-            public IDeviceCaptureController CaptureController
-            {
-                get => _captureController;
-                set
-                {
-                    _captureController = value;
-                    PropertyChanged?.Invoke(
-                        this,
-                        new PropertyChangedEventArgs(nameof(CaptureController)));
-                }
-            }
-            public event PropertyChangedEventHandler PropertyChanged;
-
-            private IDeviceCaptureController _captureController;
+            public IDeviceCaptureController CaptureController { get; private set; }
             internal TestCaptureController TestController =>
                 CaptureController as TestCaptureController;
 
@@ -277,12 +282,6 @@ namespace XMAT.Tests
                 (CaptureController as TestCaptureController).SetIsRunning(isRunning);
             }
 
-            internal TestCaptureController ReplaceController(bool isRunning)
-            {
-                var controller = new TestCaptureController(isRunning);
-                CaptureController = controller;
-                return controller;
-            }
         }
 
         private sealed class TestCaptureController : IDeviceCaptureController
@@ -291,6 +290,7 @@ namespace XMAT.Tests
             public ICaptureMethod CaptureMethod => null;
             public object Parameters => null;
             public event PropertyChangedEventHandler PropertyChanged;
+            public bool CloseCalled { get; private set; }
 
             internal TestCaptureController(bool isRunning)
             {
@@ -324,7 +324,51 @@ namespace XMAT.Tests
 
             public Task CloseAsync()
             {
+                CloseCalled = true;
                 return Task.CompletedTask;
+            }
+        }
+
+        private sealed class TestDataTable : IDataTable
+        {
+            public event Action<IDataTable, long> RowAdded
+            {
+                add { }
+                remove { }
+            }
+            public event Action<IDataTable, long> RowUpdated
+            {
+                add { }
+                remove { }
+            }
+            public event Action<IDataTable, long> RowsRemoved
+            {
+                add { }
+                remove { }
+            }
+
+            public string Name => "CaptureDevices";
+            public IDataset Dataset => null;
+            public int RemoveCallCount => RemovedFilters.Count;
+            public List<IFieldValue[]> RemovedFilters { get; } = new();
+
+            public IDataset Subset(params string[] fieldNames)
+            {
+                return null;
+            }
+
+            public long AddRow(params object[] fieldValueArgs)
+            {
+                return 0;
+            }
+
+            public void UpdateRow(long rowId, params IFieldValue[] fieldNamesAndValues)
+            {
+            }
+
+            public void RemoveRowsWhere(params IFieldValue[] fieldNamesAndValues)
+            {
+                RemovedFilters.Add(fieldNamesAndValues);
             }
         }
     }
