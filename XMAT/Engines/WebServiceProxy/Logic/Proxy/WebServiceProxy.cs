@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography.X509Certificates;
@@ -188,45 +190,115 @@ namespace XMAT.WebServiceCapture.Proxy
             return _certManager.GetCertificateForHost(certificateHost);
         }
 
-        public void StopProxy()
+        public async Task StopProxyAsync(
+            IProgress<WebProxyStopProgress> progress = null)
         {
             if (_host == null && _interceptedHost == null)
                 return;
 
+            var totalStopwatch = Stopwatch.StartNew();
+            List<Exception> disposalFailures = new();
             _cts?.Cancel();
 
             if (_host != null)
             {
+                var host = _host;
+                var hostDisposed = false;
+                var phaseStopwatch = Stopwatch.StartNew();
+                progress?.Report(new WebProxyStopProgress(
+                    WebProxyStopPhase.StoppingPublicListener,
+                    totalStopwatch.Elapsed));
                 try
                 {
-                    // Run StopAsync on thread pool to avoid deadlocking the UI thread
-                    Task.Run(async () =>
-                    {
-                        await _host.StopAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-                    }).GetAwaiter().GetResult();
+                    await ProxyHostShutdown.StopAndDisposeAsync(
+                        host,
+                        TimeSpan.FromSeconds(5));
+                    hostDisposed = true;
+                }
+                catch (ProxyHostDisposalException ex)
+                {
+                    disposalFailures.Add(ex);
+                    _logger.Log(
+                        0,
+                        LogLevel.ERROR,
+                        $"Error disposing proxy host: {ex}");
                 }
                 catch (Exception ex)
                 {
+                    hostDisposed = true;
                     _logger.Log(0, LogLevel.ERROR, $"Error stopping proxy: {ex.Message}");
                 }
-
-                _host.Dispose();
-                _host = null;
+                finally
+                {
+                    if (hostDisposed)
+                    {
+                        _host = null;
+                    }
+                    _logger.Log(
+                        0,
+                        LogLevel.INFO,
+                        $"Public proxy host stopped in {phaseStopwatch.Elapsed}.");
+                }
             }
 
             if (_interceptedHost != null)
             {
-                Task.Run(async () =>
+                var interceptedHostDisposed = false;
+                var phaseStopwatch = Stopwatch.StartNew();
+                progress?.Report(new WebProxyStopProgress(
+                    WebProxyStopPhase.StoppingInterceptedListener,
+                    totalStopwatch.Elapsed));
+                try
                 {
-                    await _interceptedHost.DisposeAsync().ConfigureAwait(false);
-                }).GetAwaiter().GetResult();
-                _interceptedHost = null;
+                    await _interceptedHost.DisposeAsync();
+                    interceptedHostDisposed = true;
+                }
+                catch (ProxyHostDisposalException ex)
+                {
+                    disposalFailures.Add(ex);
+                    _logger.Log(
+                        0,
+                        LogLevel.ERROR,
+                        $"Error disposing intercepted proxy: {ex}");
+                }
+                catch (Exception ex)
+                {
+                    interceptedHostDisposed = true;
+                    _logger.Log(
+                        0,
+                        LogLevel.ERROR,
+                        $"Error stopping intercepted proxy: {ex.Message}");
+                }
+                finally
+                {
+                    if (interceptedHostDisposed)
+                    {
+                        _interceptedHost = null;
+                    }
+                    _logger.Log(
+                        0,
+                        LogLevel.INFO,
+                        $"Intercepted proxy host stopped in {phaseStopwatch.Elapsed}.");
+                }
+            }
+
+            if (disposalFailures.Count != 0)
+            {
+                throw new AggregateException(
+                    "One or more proxy hosts could not be disposed.",
+                    disposalFailures);
             }
 
             _httpClient?.Dispose();
             _httpClient = null;
+            _cts?.Dispose();
+            _cts = null;
 
             ProxyStopped?.Invoke(this, EventArgs.Empty);
+            _logger.Log(
+                0,
+                LogLevel.INFO,
+                $"Proxy hosts stopped in {totalStopwatch.Elapsed}.");
             _logger.CloseLog();
         }
 

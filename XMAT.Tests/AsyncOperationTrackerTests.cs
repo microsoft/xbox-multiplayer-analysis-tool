@@ -11,7 +11,9 @@ namespace XMAT.Tests
         {
             var tracker = new AsyncOperationTracker();
             tracker.StartAccepting();
+            Assert.Equal(0, tracker.ActiveOperationCount);
             Assert.True(tracker.TryBegin(out var operationLease));
+            Assert.Equal(1, tracker.ActiveOperationCount);
 
             var drained = tracker.StopAcceptingAndWaitAsync();
 
@@ -21,6 +23,7 @@ namespace XMAT.Tests
 
             operationLease.Dispose();
             await drained;
+            Assert.Equal(0, tracker.ActiveOperationCount);
         }
 
         [Fact]

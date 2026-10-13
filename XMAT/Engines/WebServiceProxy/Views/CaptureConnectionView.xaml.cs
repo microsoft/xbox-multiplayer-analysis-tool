@@ -7,8 +7,10 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -25,6 +27,8 @@ namespace XMAT.WebServiceCapture
     /// </summary>
     public partial class CaptureConnectionView : UserControl
     {
+        private static readonly TimeSpan StopDialogDelay =
+            TimeSpan.FromMilliseconds(500);
         private bool _notAtBottom;
 
         public bool AutoScroll
@@ -316,14 +320,25 @@ namespace XMAT.WebServiceCapture
             {
                 return;
             }
-            try
+
+            if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
+                    out var operationLease))
             {
-                await wsdcc.DisableProxying();
-                await wsdcc.StopProxyAsync();
+                return;
             }
-            catch (Exception ex)
+
+            using (operationLease)
+            using (wsdcc.BeginStopTransition())
             {
-                ShowProxyOperationError(ex);
+                try
+                {
+                    await wsdcc.DisableProxying();
+                    await wsdcc.StopProxyAsync();
+                }
+                catch (Exception ex)
+                {
+                    ShowProxyOperationError(ex);
+                }
             }
         }
 
@@ -403,10 +418,18 @@ namespace XMAT.WebServiceCapture
                         return;
                     }
 
-                    await wsdcc.StopProxyAsync();
-                    if (captureDeviceContext?.DeviceType == DeviceType.LocalPC)
+                    if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
+                            out var operationLease))
                     {
-                        await wsdcc.DisableProxying();
+                        return;
+                    }
+
+                    using (operationLease)
+                    using (wsdcc.BeginStopTransition())
+                    {
+                        await StopCaptureWithStatusAsync(
+                            captureDeviceContext,
+                            wsdcc);
                     }
                 }
             }
@@ -414,6 +437,59 @@ namespace XMAT.WebServiceCapture
             {
                 ShowProxyOperationError(ex);
             }
+        }
+
+        private static async Task StopCaptureWithStatusAsync(
+            ICaptureDeviceContext captureDeviceContext,
+            WebServiceDeviceCaptureController controller)
+        {
+            var stopStopwatch = Stopwatch.StartNew();
+            var progressModel = new WebProxyStopProgressModel();
+            var progress = new Progress<WebProxyStopProgress>(
+                progressModel.Update);
+
+            var stopTask = StopCaptureCoreAsync(
+                captureDeviceContext,
+                controller,
+                progress,
+                stopStopwatch);
+
+            var shouldShowProgress =
+                await WebProxyStopProgressWindow.ShouldShowAsync(
+                    stopTask,
+                    StopDialogDelay);
+            if (shouldShowProgress && !stopTask.IsCompleted)
+            {
+                var progressWindow = new WebProxyStopProgressWindow(
+                    stopTask,
+                    progressModel)
+                {
+                    Owner = Application.Current.MainWindow
+                };
+                progressWindow.ShowDialog();
+            }
+
+            await stopTask;
+        }
+
+        private static async Task StopCaptureCoreAsync(
+            ICaptureDeviceContext captureDeviceContext,
+            WebServiceDeviceCaptureController controller,
+            IProgress<WebProxyStopProgress> progress,
+            Stopwatch stopStopwatch)
+        {
+            await controller.StopProxyAsync(progress);
+            if (captureDeviceContext.DeviceType == DeviceType.LocalPC)
+            {
+                progress.Report(new WebProxyStopProgress(
+                    WebProxyStopPhase.DisablingSystemProxy,
+                    stopStopwatch.Elapsed));
+                await controller.DisableProxying();
+            }
+
+            progress.Report(new WebProxyStopProgress(
+                WebProxyStopPhase.Complete,
+                stopStopwatch.Elapsed));
         }
 
         private static void ShowProxyOperationError(Exception ex)
@@ -464,6 +540,7 @@ namespace XMAT.WebServiceCapture
                 captureDeviceContext.DeviceType == DeviceType.XboxConsole &&
                 !captureDeviceContext.IsReadOnly &&
                 captureDeviceContext.CaptureController.IsRunning &&
+                !(captureDeviceContext.CaptureController as WebServiceDeviceCaptureController).IsTransitioning &&
                 CaptureAppModel.AppModel.CanStopCaptures)
             {
                 e.CanExecute = true;

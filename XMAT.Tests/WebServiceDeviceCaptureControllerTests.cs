@@ -52,6 +52,18 @@ namespace XMAT.Tests
 
             Assert.False(controller.CanBeginTransition);
             Assert.Throws<InvalidOperationException>(() => controller.BeginTransition());
+            Assert.True(controller.CanBeginStopTransition);
+
+            using (controller.BeginStopTransition())
+            {
+                Assert.True(controller.IsTransitioning);
+                Assert.False(controller.CanBeginStopTransition);
+                Assert.Throws<InvalidOperationException>(
+                    () => controller.BeginStopTransition());
+            }
+
+            Assert.False(controller.IsTransitioning);
+            Assert.True(controller.CanBeginStopTransition);
         }
 
         [Fact]

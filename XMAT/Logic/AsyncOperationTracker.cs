@@ -9,6 +9,17 @@ namespace XMAT
 {
     internal sealed class AsyncOperationTracker
     {
+        internal int ActiveOperationCount
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _activeOperationCount;
+                }
+            }
+        }
+
         internal void StartAccepting()
         {
             lock (_syncRoot)
