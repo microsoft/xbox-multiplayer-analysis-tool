@@ -20,8 +20,10 @@ namespace XMAT
     {
         private const string XMATCaptureFileExtension = "xmatcap";
         private const string FiddlerFileExtension = "saz";
+        private const string NetTraceFileExtension = "etl";
         private readonly string XMATFilter = $"{PublicUtilities.AppName} files (*.{XMATCaptureFileExtension})|*.{XMATCaptureFileExtension}";
         private readonly string FiddlerFilter = $"Fiddler SAZ files (*.{FiddlerFileExtension})|*.{FiddlerFileExtension}";
+        private readonly string NetTraceFilter = $"Network trace files (*.{NetTraceFileExtension})|*.{NetTraceFileExtension}";
 
         private Cursor _originalCursor;
 
@@ -197,7 +199,7 @@ namespace XMAT
             {
                 var openFileDialog = new OpenFileDialog
                 {
-                    Filter = FiddlerFilter
+                    Filter = $"{FiddlerFilter}|{NetTraceFilter}"
                 };
 
                 if (openFileDialog.ShowDialog() == true)
@@ -208,9 +210,10 @@ namespace XMAT
 
             if (!string.IsNullOrEmpty(filename))
             {
-                // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
-                // setup the filter above and call export with the appropriate type
-                await CaptureAppModel.AppModel.ImportDataCapturesAsync(ImportType.Fiddler, filename);
+                var importType = filename.EndsWith($".{NetTraceFileExtension}", StringComparison.OrdinalIgnoreCase)
+                    ? ImportType.NetTrace
+                    : ImportType.Fiddler;
+                await CaptureAppModel.AppModel.ImportDataCapturesAsync(importType, filename);
             }
         }
 
@@ -366,7 +369,8 @@ namespace XMAT
                 {
                     foreach (string file in files)
                     {
-                        if (file.EndsWith($".{FiddlerFileExtension}"))
+                        if (file.EndsWith($".{FiddlerFileExtension}", StringComparison.OrdinalIgnoreCase) ||
+                            file.EndsWith($".{NetTraceFileExtension}", StringComparison.OrdinalIgnoreCase))
                             AppCommands.Import.Execute(file, this);
                         else if (file.EndsWith($".{XMATCaptureFileExtension}"))
                             ApplicationCommands.Open.Execute(file, this);
