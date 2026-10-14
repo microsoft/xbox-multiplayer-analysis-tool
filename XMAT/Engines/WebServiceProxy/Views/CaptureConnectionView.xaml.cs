@@ -187,8 +187,7 @@ namespace XMAT.WebServiceCapture
 
         private async void EnableDevice_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            if (this.DataContext is not ICaptureDeviceContext captureDeviceContext ||
-                captureDeviceContext.CaptureController is not WebServiceDeviceCaptureController wsdcc ||
+            if (!TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc) ||
                 !wsdcc.CanBeginTransition)
             {
                 return;
@@ -301,7 +300,7 @@ namespace XMAT.WebServiceCapture
                     $"Device type of {captureDeviceContext.DeviceType} for {captureDeviceContext.DeviceName} is not supported.");
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 ShowProxyOperationError(ex);
             }
@@ -314,9 +313,8 @@ namespace XMAT.WebServiceCapture
                 return;
             }
 
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
-            if (wsdcc.IsTransitioning)
+            if (!TryGetCaptureContext(DataContext, out _, out var wsdcc) ||
+                !wsdcc.CanBeginStopTransition)
             {
                 return;
             }
@@ -328,14 +326,19 @@ namespace XMAT.WebServiceCapture
             }
 
             using (operationLease)
-            using (wsdcc.BeginStopTransition())
             {
+                if (!wsdcc.CanBeginStopTransition)
+                {
+                    return;
+                }
+
+                using var transitionLease = wsdcc.BeginStopTransition();
                 try
                 {
                     await wsdcc.DisableProxying();
                     await wsdcc.StopProxyAsync();
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
                 {
                     ShowProxyOperationError(ex);
                 }
@@ -344,8 +347,10 @@ namespace XMAT.WebServiceCapture
 
         private async void CheckDevice_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
+            if (!TryGetCaptureContext(DataContext, out _, out var wsdcc))
+            {
+                return;
+            }
 
             if (!GDKXHelper.IsGDKXInstalled(true))
             { return; }
@@ -376,9 +381,12 @@ namespace XMAT.WebServiceCapture
 
         private async void StartStopCapture_Executed(object sender, ExecutedRoutedEventArgs e)
         {
+            if (!TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc))
+            {
+                return;
+            }
+
             var start = e.Parameter as bool?;
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
 
             try
             {
@@ -397,18 +405,18 @@ namespace XMAT.WebServiceCapture
                             return;
                         }
 
-                        if (captureDeviceContext?.DeviceType == DeviceType.XboxConsole &&
+                        if (captureDeviceContext.DeviceType == DeviceType.XboxConsole &&
                             !GDKXHelper.IsGDKXInstalled(true))
                         {
                             return;
                         }
 
-                        if (captureDeviceContext?.DeviceType == DeviceType.LocalPC)
+                        if (captureDeviceContext.DeviceType == DeviceType.LocalPC)
                         {
                             wsdcc.EnableProxyingPC();
                         }
                         await wsdcc.StartProxyAsync(
-                            captureDeviceContext?.DeviceType == DeviceType.GenericProxyDevice);
+                            captureDeviceContext.DeviceType == DeviceType.GenericProxyDevice);
                     }
                 }
                 else
@@ -425,15 +433,20 @@ namespace XMAT.WebServiceCapture
                     }
 
                     using (operationLease)
-                    using (wsdcc.BeginStopTransition())
                     {
+                        if (!wsdcc.CanBeginStopTransition)
+                        {
+                            return;
+                        }
+
+                        using var transitionLease = wsdcc.BeginStopTransition();
                         await StopCaptureWithStatusAsync(
                             captureDeviceContext,
                             wsdcc);
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 ShowProxyOperationError(ex);
             }
@@ -504,10 +517,9 @@ namespace XMAT.WebServiceCapture
 
         private void StartStopCapture_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            if (captureDeviceContext != null)
+            e.CanExecute = false;
+            if (TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc))
             {
-                var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
                 e.CanExecute = !captureDeviceContext.IsReadOnly &&
                     !wsdcc.IsTransitioning &&
                     (wsdcc.IsRunning
@@ -518,37 +530,40 @@ namespace XMAT.WebServiceCapture
 
         private void Enable_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            if (captureDeviceContext != null &&
+            e.CanExecute =
+                TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc) &&
                 captureDeviceContext.DeviceType == DeviceType.XboxConsole &&
                 !captureDeviceContext.IsReadOnly &&
-                !captureDeviceContext.CaptureController.IsRunning &&
-                CaptureAppModel.AppModel.CanModifyCaptureData)
-            {
-                e.CanExecute = true;
-            }
-            else
-            {
-                e.CanExecute = false;
-            }
+                wsdcc.CanBeginTransition &&
+                CaptureAppModel.AppModel.CanModifyCaptureData;
         }
 
         private void Disable_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            if (captureDeviceContext != null &&
+            e.CanExecute =
+                TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc) &&
                 captureDeviceContext.DeviceType == DeviceType.XboxConsole &&
                 !captureDeviceContext.IsReadOnly &&
-                captureDeviceContext.CaptureController.IsRunning &&
-                !(captureDeviceContext.CaptureController as WebServiceDeviceCaptureController).IsTransitioning &&
-                CaptureAppModel.AppModel.CanStopCaptures)
+                wsdcc.CanBeginStopTransition &&
+                CaptureAppModel.AppModel.CanStopCaptures;
+        }
+
+        internal static bool TryGetCaptureContext(
+            object dataContext,
+            out ICaptureDeviceContext captureDeviceContext,
+            out WebServiceDeviceCaptureController captureController)
+        {
+            if (dataContext is ICaptureDeviceContext context &&
+                context.CaptureController is WebServiceDeviceCaptureController controller)
             {
-                e.CanExecute = true;
+                captureDeviceContext = context;
+                captureController = controller;
+                return true;
             }
-            else
-            {
-                e.CanExecute = false;
-            }
+
+            captureDeviceContext = null;
+            captureController = null;
+            return false;
         }
 
         private void ConnectionList_ScrollChanged(object sender, ScrollChangedEventArgs e)

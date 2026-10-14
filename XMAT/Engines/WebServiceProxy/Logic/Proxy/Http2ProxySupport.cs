@@ -505,7 +505,7 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 throw;
             }
-            catch
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 hostDisposed = true;
                 throw;

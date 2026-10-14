@@ -37,7 +37,7 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 await host.StopAsync(timeout).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 stopException = ex;
             }
@@ -46,7 +46,7 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 host.Dispose();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 disposeException = ex;
             }

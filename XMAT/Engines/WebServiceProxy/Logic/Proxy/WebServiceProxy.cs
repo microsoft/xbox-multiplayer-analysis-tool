@@ -215,7 +215,7 @@ namespace XMAT.WebServiceCapture.Proxy
                         TimeSpan.FromSeconds(5));
                     hostDisposed = true;
                 }
-                catch (ProxyHostDisposalException ex)
+                catch (ProxyHostDisposalException ex) when (!ExceptionUtilities.IsFatal(ex))
                 {
                     disposalFailures.Add(ex);
                     _logger.Log(
@@ -223,7 +223,7 @@ namespace XMAT.WebServiceCapture.Proxy
                         LogLevel.ERROR,
                         $"Error disposing proxy host: {ex}");
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
                 {
                     hostDisposed = true;
                     _logger.Log(0, LogLevel.ERROR, $"Error stopping proxy: {ex.Message}");
@@ -253,7 +253,7 @@ namespace XMAT.WebServiceCapture.Proxy
                     await _interceptedHost.DisposeAsync();
                     interceptedHostDisposed = true;
                 }
-                catch (ProxyHostDisposalException ex)
+                catch (ProxyHostDisposalException ex) when (!ExceptionUtilities.IsFatal(ex))
                 {
                     disposalFailures.Add(ex);
                     _logger.Log(
@@ -261,7 +261,7 @@ namespace XMAT.WebServiceCapture.Proxy
                         LogLevel.ERROR,
                         $"Error disposing intercepted proxy: {ex}");
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
                 {
                     interceptedHostDisposed = true;
                     _logger.Log(

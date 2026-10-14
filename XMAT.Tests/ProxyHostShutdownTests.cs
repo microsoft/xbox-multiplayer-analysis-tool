@@ -58,6 +58,100 @@ namespace XMAT.Tests
             Assert.True(host.DisposeCalled);
         }
 
+        [Fact]
+        public async Task StopAndDisposeAsync_PreservesOperationalStopFailures()
+        {
+            var exceptions = new Exception[]
+            {
+                new TimeoutException("Stop timed out"),
+                new OperationCanceledException("Stop was canceled"),
+                new IOException("Transport failed"),
+                new AggregateException(new InvalidOperationException("Service failed"))
+            };
+
+            foreach (var expectedException in exceptions)
+            {
+                var host = new TestHost { StopException = expectedException };
+
+                var exception = await Assert.ThrowsAnyAsync<Exception>(
+                    () => ProxyHostShutdown.StopAndDisposeAsync(
+                        host,
+                        TimeSpan.FromSeconds(1)));
+
+                Assert.Same(expectedException, exception);
+                Assert.True(host.StopCalled);
+                Assert.True(host.DisposeCalled);
+            }
+        }
+
+        [Fact]
+        public async Task StopAndDisposeAsync_DoesNotCatchFatalStopFailures()
+        {
+            var exceptions = new Exception[]
+            {
+                new OutOfMemoryException("Test failure"),
+                new AccessViolationException("Test failure"),
+                new InvalidProgramException("Test failure"),
+                new AggregateException(new OutOfMemoryException("Test failure")),
+                new InvalidOperationException(
+                    "Wrapped failure",
+                    new OutOfMemoryException("Test failure"))
+            };
+
+            foreach (var expectedException in exceptions)
+            {
+                var host = new TestHost { StopException = expectedException };
+
+                var exception = await Assert.ThrowsAnyAsync<Exception>(
+                    () => ProxyHostShutdown.StopAndDisposeAsync(
+                        host,
+                        TimeSpan.FromSeconds(1)));
+
+                Assert.Same(expectedException, exception);
+                Assert.True(host.StopCalled);
+                Assert.False(host.DisposeCalled);
+            }
+        }
+
+        [Fact]
+        public async Task StopAndDisposeAsync_DoesNotWrapFatalDisposalFailure()
+        {
+            var expectedException = new OutOfMemoryException("Test failure");
+            var host = new TestHost { DisposeException = expectedException };
+
+            var exception = await Assert.ThrowsAsync<OutOfMemoryException>(
+                () => ProxyHostShutdown.StopAndDisposeAsync(
+                    host,
+                    TimeSpan.FromSeconds(1)));
+
+            Assert.Same(expectedException, exception);
+            Assert.True(host.StopCalled);
+            Assert.True(host.DisposeCalled);
+        }
+
+        [Fact]
+        public async Task StopAndDisposeAsync_PreservesBothOperationalFailures()
+        {
+            var stopException = new TimeoutException("Stop timed out");
+            var disposeException = new InvalidOperationException("Dispose failed");
+            var host = new TestHost
+            {
+                StopException = stopException,
+                DisposeException = disposeException
+            };
+
+            var exception = await Assert.ThrowsAsync<ProxyHostDisposalException>(
+                () => ProxyHostShutdown.StopAndDisposeAsync(
+                    host,
+                    TimeSpan.FromSeconds(1)));
+
+            var aggregateException = Assert.IsType<AggregateException>(
+                exception.InnerException);
+            Assert.Equal(2, aggregateException.InnerExceptions.Count);
+            Assert.Same(stopException, aggregateException.InnerExceptions[0]);
+            Assert.Same(disposeException, aggregateException.InnerExceptions[1]);
+        }
+
         private sealed class TestHost : IHost
         {
             public IServiceProvider Services => null;

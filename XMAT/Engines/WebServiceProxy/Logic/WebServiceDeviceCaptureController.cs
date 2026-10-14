@@ -494,7 +494,7 @@ namespace XMAT.WebServiceCapture
             {
                 await _webProxy.StopProxyAsync(progress);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 proxyStopException = ex;
             }
