@@ -17,6 +17,7 @@ using XMAT.Models;
 using XMAT.NetworkTrace;
 using XMAT.NetworkTrace.Models;
 using XMAT.SharedInterfaces;
+using XMAT.Telemetry;
 
 namespace NetworkTraceCaptureControls
 {
@@ -185,7 +186,24 @@ namespace NetworkTraceCaptureControls
 
         private void OnFiltersChanged(object sender, RoutedEventArgs e)
         {
+            if (IsLoaded && IsVisible && e is FilterChangedEventArgs { IsUserInteraction: true })
+            {
+                var feature = e.Source == PidFilters ? TelemetryFeature.FilterProcess
+                    : e.Source == TidFilters ? TelemetryFeature.FilterThread
+                    : e.Source == SourceIpFilters ? TelemetryFeature.FilterSourceAddress
+                    : e.Source == DestIpFilters ? TelemetryFeature.FilterDestinationAddress
+                    : TelemetryFeature.FilterProtocol;
+                XmatTelemetryService.Current.Use(feature);
+            }
             UpdateFilteredData();
+        }
+
+        private void PacketList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (IsLoaded && IsVisible && e.Source == PacketList && PacketList.SelectedItem != null)
+            {
+                XmatTelemetryService.Current.Use(TelemetryFeature.PacketData);
+            }
         }
 
         private bool ItemIsChecked(IEnumerable list, string text)

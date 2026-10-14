@@ -11,6 +11,7 @@ using System.Windows.Media;
 using Microsoft.CodeAnalysis;
 using Microsoft.Win32;
 using XMAT.Scripting;
+using XMAT.Telemetry;
 
 namespace XMAT
 {
@@ -82,9 +83,11 @@ namespace XMAT
                                                           MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
                 if (result == MessageBoxResult.Yes)
                 {
+                    using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.LoadScript, TelemetryFeature.ScriptLoad);
                     string script = File.ReadAllText(openFileDialog.FileName);
                     sm.Filename = openFileDialog.FileName;
                     sm.Script = script;
+                    operation.Complete();
                 }
             }
         }
@@ -109,7 +112,11 @@ namespace XMAT
             }
 
             if (!string.IsNullOrEmpty(sm.Filename))
+            {
+                using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.SaveScript, TelemetryFeature.ScriptSave);
                 File.WriteAllText(sm.Filename, sm.Script);
+                operation.Complete();
+            }
         }
 
         private void RevertScript_Executed(object sender, ExecutedRoutedEventArgs e)
@@ -121,6 +128,7 @@ namespace XMAT
             if (result == MessageBoxResult.Yes)
             {
                 sm.Script = File.ReadAllText(sm.Filename);
+                XmatTelemetryService.Current.Interact(TelemetryFeature.ScriptRevert, TelemetryInteraction.Reverted);
             }
         }
 

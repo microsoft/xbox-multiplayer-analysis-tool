@@ -20,6 +20,8 @@ jobs:
 
     env:
       Solution_Name: XboxMultiplayerAnalysisTool.sln
+      EnableTelemetry: 'false'
+      TelemetryApproved: 'false'
 
     steps:
     - name: Harden Runner
@@ -44,7 +46,7 @@ jobs:
       
     # Build
     - name: Build XMAT
-      run: dotnet build $env:Solution_Name -c $env:Configuration --no-restore
+      run: dotnet build $env:Solution_Name -c $env:Configuration --no-restore -p:EnableTelemetry=false -p:TelemetryApproved=false
       env:
         Configuration: ${{ matrix.configuration }}
 

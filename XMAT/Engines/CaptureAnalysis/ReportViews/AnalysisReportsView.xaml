@@ -34,6 +34,7 @@
         VerticalAlignment="Stretch">
         <TabControl
             x:Name="ReportTabs"
+            SelectionChanged="ReportTabs_SelectionChanged"
             TabStripPlacement="Left"
             IsSynchronizedWithCurrentItem="True"
             HorizontalAlignment="Stretch"

@@ -74,7 +74,7 @@
                            Foreground="DarkOrange"
                            TextWrapping="Wrap"
                            Margin="6"/>
-                <TabControl Grid.Row="1">
+                <TabControl x:Name="PayloadTabs" Grid.Row="1" SelectionChanged="PayloadTabs_SelectionChanged">
                     <TabItem Header="Text">
                         <TextBox Text="{Binding SelectedItem.PayloadText, ElementName=MessagesGrid, Mode=OneWay}"
                                  IsReadOnly="True" TextWrapping="Wrap"

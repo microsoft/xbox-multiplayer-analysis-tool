@@ -8,6 +8,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using XMAT.Telemetry;
 
 namespace XMAT.WebServiceCapture
 {
@@ -102,6 +103,27 @@ namespace XMAT.WebServiceCapture
             HeadersTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_HEADERS");
             BodyTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_BODY");
             JsonTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_JSON");
+        }
+
+        internal void RecordInspection(bool hasSelection)
+        {
+            if (IsLoaded && IsVisible && hasSelection)
+            {
+                XmatTelemetryService.Current.Use(RequestTabs.SelectedIndex switch
+                {
+                    1 => TelemetryFeature.RequestBody,
+                    2 => TelemetryFeature.RequestJson,
+                    _ => TelemetryFeature.RequestHeaders
+                });
+            }
+        }
+
+        private void InspectionTab_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (e.Source == RequestTabs)
+            {
+                RecordInspection(!string.IsNullOrEmpty(FirstLineAndHeaders));
+            }
         }
     }
 }

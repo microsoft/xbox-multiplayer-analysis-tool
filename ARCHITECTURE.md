@@ -238,6 +238,37 @@ The data abstraction layer wraps SQLite via `Microsoft.Data.Sqlite`:
 
 ## Design Patterns
 
+### Product telemetry
+
+`XMAT\Logic\Telemetry` is part of the application assembly. `XmatTelemetryService` owns the per-launch
+session, fixed feature counters, explicit operation IDs, and build-derived export gate. Individual capture and
+analysis operations retain their own timing/context, including simultaneous runs and restored/loaded/imported
+origins. There is no user preference, settings store, installation ID, or offline event file.
+
+`OneCollectorTelemetryReporter` owns an isolated logging pipeline with an empty resource builder populated
+only by approved metadata. It suppresses ambient activity/baggage and scopes, rejects free-form exception
+payloads, and batches at most 256 queued records with batches of 64. Shutdown waits at most two seconds;
+unsent records remain memory-only and may be lost. SDK overflow/transmission/shutdown failures produce
+sanitized local trace diagnostics, not uploaded application logs.
+
+Metadata is read only for a validated enabled/approved build or an explicitly requested local sample run.
+The host machine ID and sandbox are
+explicit permitted identifiers; no fallback machine/installation ID is generated. Field names and event names
+are case-sensitive. Public SDK packages are referenced directly; no DevTools implementation is vendored.
+
+Lifecycle hooks reside in `App`/`MainWindow`; controller/result boundaries report real operations, and WPF
+interaction hooks report fixed view/filter/report categories. Programmatic filter initialization is excluded.
+Capture rows and script exceptions contribute counts only; their contents are never passed to the reporter.
+Collector registration, retention/access policy, and backend enrichment review are external release gates.
+
+An explicit `--telemetry-sample` launch in a non-exporting build instead selects
+`LocalTelemetrySampleReporter`. It uses the same event attribute mapping, a bounded 256-record channel,
+and a background UTF-8 JSON Lines writer, with no collector reporter/key or telemetry network export.
+This opt-in development run reads the permitted metadata and creates only the requested new output file;
+it creates no persisted telemetry preference or offline replay queue. Its normalized `name`/`time`/
+`resources`/`data` envelope is intentionally distinct from the OneCollector wire format.
+See [TELEMETRY.md](TELEMETRY.md) for exact fields, event semantics, and generation instructions.
+
 | Pattern | Usage |
 |---|---|
 | **MVVM** | WPF data binding with `INotifyPropertyChanged` models |
@@ -265,3 +296,5 @@ The data abstraction layer wraps SQLite via `Microsoft.Data.Sqlite`:
 | `Microsoft.CodeAnalysis.CSharp.Scripting` | 5.3.0 | Dynamic C# script compilation for traffic modification |
 | `JsonDocumentPath` | 1.0.3 | JSON path queries for document navigation |
 | `Microsoft.AspNetCore.App` | (framework) | Web server utilities |
+| `OpenTelemetry` | 1.15.3 | Isolated structured telemetry logging and bounded batching |
+| `OpenTelemetry.Exporter.OneCollector` | 1.15.1 | Approved Microsoft collector export |

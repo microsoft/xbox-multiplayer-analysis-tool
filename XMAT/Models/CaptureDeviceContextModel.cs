@@ -9,12 +9,14 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using XMAT.NetworkTrace;
 using XMAT.SharedInterfaces;
+using XMAT.Telemetry;
 using XMAT.WebServiceCapture;
 
 namespace XMAT.Models
 {
     internal class CaptureDeviceContextModel : ICaptureDeviceContext, INotifyPropertyChanged
     {
+        internal CaptureOrigin Origin { get; set; } = CaptureOrigin.User;
         private DeviceType _deviceType;
         private CaptureType _captureType;
         private string _deviceName;

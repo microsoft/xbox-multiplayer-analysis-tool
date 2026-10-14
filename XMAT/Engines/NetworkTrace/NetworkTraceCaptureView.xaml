@@ -83,7 +83,7 @@
                    HorizontalAlignment="Center" VerticalAlignment="Center"
                    Visibility="{Binding CaptureController.HaveNoTraces, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}"
                    Text="{Binding CaptureController.DeviceStatus, Mode=OneWay, Converter={StaticResource DeviceStatusConverter}}"/>
-        <DataGrid x:Name="PacketList" Grid.Row="2" Grid.RowSpan="3"
+        <DataGrid x:Name="PacketList" SelectionChanged="PacketList_SelectionChanged" Grid.Row="2" Grid.RowSpan="3"
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   Visibility="{Binding CaptureController.HaveTraces, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}"
                   ItemsSource="{Binding NetworkTracePackets, ElementName=NetworkTraceCaptureControl, Mode=OneWay}"

@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using XMAT.WebServiceCapture.Models;
+using XMAT.Telemetry;
 
 namespace XMAT.WebServiceCapture
 {
@@ -50,6 +51,7 @@ namespace XMAT.WebServiceCapture
             if (BlockList.Add(text))
             {
                 NewBlockTextBox.Clear();
+                XmatTelemetryService.Current.Interact(TelemetryFeature.BlockList, TelemetryInteraction.Added);
             }
         }
 
@@ -66,12 +68,17 @@ namespace XMAT.WebServiceCapture
             foreach (var s in selectedItems.OfType<string>())
             {
                 BlockList.Remove(s);
+                XmatTelemetryService.Current.Interact(TelemetryFeature.BlockList, TelemetryInteraction.Removed);
             }
         }
 
         private void ClearAll_Click(object sender, RoutedEventArgs e)
         {
             BlockList?.Clear();
+            if (BlockList != null)
+            {
+                XmatTelemetryService.Current.Interact(TelemetryFeature.BlockList, TelemetryInteraction.Cleared);
+            }
         }
     }
 }

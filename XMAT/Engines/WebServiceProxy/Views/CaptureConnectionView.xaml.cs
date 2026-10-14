@@ -162,8 +162,44 @@ namespace XMAT.WebServiceCapture
 
         private void OnFiltersChanged(object sender, RoutedEventArgs e)
         {
+            if (IsLoaded && IsVisible && e is FilterChangedEventArgs { IsUserInteraction: true })
+            {
+                var feature = e.Source == StatusFilters ? XMAT.Telemetry.TelemetryFeature.FilterStatus
+                    : e.Source == HostFilters ? XMAT.Telemetry.TelemetryFeature.FilterHost
+                    : XMAT.Telemetry.TelemetryFeature.FilterMethod;
+                XMAT.Telemetry.XmatTelemetryService.Current.Use(feature);
+            }
             // force all items to be re-filtered using the Filter delegate
             CollectionViewSource.GetDefaultView(ConnectionList.ItemsSource).Refresh();
+        }
+
+        private void FeatureTab_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!IsLoaded || !IsVisible || e.Source != sender || sender is not TabControl tabs)
+            {
+                return;
+            }
+            var feature = tabs.SelectedIndex switch
+            {
+                1 => XMAT.Telemetry.TelemetryFeature.WebSockets,
+                2 => XMAT.Telemetry.TelemetryFeature.Scripting,
+                3 => XMAT.Telemetry.TelemetryFeature.BlockList,
+                4 => XMAT.Telemetry.TelemetryFeature.BypassList,
+                _ => XMAT.Telemetry.TelemetryFeature.None
+            };
+            XMAT.Telemetry.XmatTelemetryService.Current.Use(feature);
+            if (tabs.SelectedIndex == 0)
+            {
+                RequestViewControl.RecordInspection(ConnectionList.SelectedItem != null);
+            }
+        }
+
+        private void ConnectionList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (e.Source == ConnectionList)
+            {
+                RequestViewControl.RecordInspection(ConnectionList.SelectedItem != null);
+            }
         }
 
         private void UpdateFilter(string text, ObservableCollection<CheckedListItem> list)

@@ -19,6 +19,9 @@
     <Deterministic>true</Deterministic>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <EnableTelemetry Condition="'$(EnableTelemetry)' == ''">false</EnableTelemetry>
+    <TelemetryApproved Condition="'$(TelemetryApproved)' == ''">false</TelemetryApproved>
+    <TelemetryBuildChannel Condition="'$(TelemetryBuildChannel)' == ''">Local</TelemetryBuildChannel>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -65,8 +68,24 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.3.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4022.49" />
+    <PackageReference Include="OpenTelemetry" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.OneCollector" Version="1.15.1" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
   </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="Xmat.Telemetry.Enabled" Value="$(EnableTelemetry)" />
+    <AssemblyMetadata Include="Xmat.Telemetry.Approved" Value="$(TelemetryApproved)" />
+    <AssemblyMetadata Include="Xmat.Telemetry.Channel" Value="$(TelemetryBuildChannel)" />
+    <AssemblyMetadata Include="Xmat.Telemetry.Key" Value="$(TelemetryInstrumentationKey)" Condition="'$(EnableTelemetry)' == 'true'" />
+  </ItemGroup>
+
+  <Target Name="ValidateTelemetryConfiguration" BeforeTargets="GenerateAssemblyInfo">
+    <Error Condition="'$(EnableTelemetry)' != 'true' and '$(EnableTelemetry)' != 'false'" Text="EnableTelemetry must be true or false." />
+    <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryApproved)' != 'true'" Text="Telemetry-enabled builds require TelemetryApproved=true after XMAT collector/privacy approval." />
+    <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryInstrumentationKey)' == ''" Text="Telemetry-enabled builds require an approved XMAT TelemetryInstrumentationKey." />
+    <Error Condition="'$(EnableTelemetry)' == 'true' and '$(TelemetryBuildChannel)' != 'Public' and '$(TelemetryBuildChannel)' != 'Internal' and '$(TelemetryBuildChannel)' != 'Test'" Text="Telemetry-enabled builds require TelemetryBuildChannel=Public, Internal, or Test." />
+  </Target>
 
   <ItemGroup>
     <Page Update="Engines\NetworkTrace\NetworkTraceCaptureView.xaml">

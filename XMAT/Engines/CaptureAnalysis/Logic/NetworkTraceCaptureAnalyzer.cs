@@ -55,6 +55,8 @@ namespace XMAT.NetworkTraceCaptureAnalysis
 
         public async Task<ECaptureAnalyzerResult> RunAsync(ICaptureAnalysisRun analysisRun, IDeviceCaptureController captureController)
         {
+            var telemetry = (analysisRun as XMAT.Models.AnalysisRunModel)?.TelemetryOperation;
+            telemetry?.MarkStage(XMAT.Telemetry.TelemetryStage.Validate);
             NetworkTraceCaptureController controller = captureController as NetworkTraceCaptureController;
 
             if (controller.FilteredItems == null)

@@ -11,6 +11,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using XMAT.SharedInterfaces;
+using XMAT.Telemetry;
 
 namespace XMAT.Models
 {
@@ -122,7 +123,8 @@ namespace XMAT.Models
                     true,
                     // NOTE: since this is a READONLY
                     // capture, we do not need parameters maybe?
-                    null
+                    null,
+                    CaptureOrigin.Loaded
                 );
 
                 if (device == null)
@@ -148,7 +150,7 @@ namespace XMAT.Models
             ActiveDatabase.SaveToFile(toFilePath);
         }
 
-        internal async Task ImportDataCapturesAsync(ImportType importType, string fromFilePath)
+        internal async Task<TelemetryOutcome> ImportDataCapturesAsync(ImportType importType, string fromFilePath)
         {
             ICaptureDeviceContext captureDevice = null;
 
@@ -165,7 +167,8 @@ namespace XMAT.Models
                         true,
                         // NOTE: since this is a READONLY
                         // capture, we do not need parameters maybe?
-                        null
+                        null,
+                        CaptureOrigin.Imported
                     );
                     await (captureDevice.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ImportFromFiddlerAsync(fromFilePath, captureDevice);
                 }
@@ -175,7 +178,11 @@ namespace XMAT.Models
             if (captureDevice != null)
             {
                 AppModel.SelectedDeviceContext = captureDevice;
+                return captureDevice.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController controller &&
+                    controller.LastImportCancelled ? TelemetryOutcome.Cancelled : TelemetryOutcome.Succeeded;
             }
+            System.Diagnostics.Trace.TraceWarning("XMAT import does not support this format.");
+            return TelemetryOutcome.Unsupported;
         }
 
         internal void ExportDataCaptures(ExportType exportType, string toFilePath)
@@ -193,7 +200,8 @@ namespace XMAT.Models
             string deviceName,
             CaptureType captureType,
             bool readOnly,
-            object serializedParameters)
+            object serializedParameters,
+            CaptureOrigin origin = CaptureOrigin.User)
         {
             var newCaptureDeviceModel = GetDeviceContext(
                 deviceType,
@@ -209,6 +217,7 @@ namespace XMAT.Models
                     captureType,
                     readOnly,
                     serializedParameters);
+                ((CaptureDeviceContextModel)newCaptureDeviceModel).Origin = origin;
                 _captureDeviceContexts.Add(newCaptureDeviceModel);
 
                 if (!readOnly)

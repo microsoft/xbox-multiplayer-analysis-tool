@@ -17,6 +17,7 @@ using XMAT.Scripting;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
+using XMAT.Telemetry;
 using static XboxClient.XboxClientConnection;
 
 namespace XMAT.WebServiceCapture
@@ -100,6 +101,8 @@ namespace XMAT.WebServiceCapture
         private WebSocketMessageModel _selectedWebSocketMessage;
         private readonly DeviceType _deviceType;
         private readonly bool _readOnly;
+        private TelemetryOperation _captureTelemetry;
+        internal bool LastImportCancelled { get; private set; }
         private IWebServiceProxy _webProxy;
         private IDataTable _dataTable;
         private readonly object _lockObj = new object();
@@ -245,10 +248,13 @@ namespace XMAT.WebServiceCapture
 
         internal void EnableProxyingPC()
         {
+            using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.EnableProxy,
+                TelemetryFeature.WebProxyCapture, XmatTelemetryService.ContextFor(this));
             switch (_deviceType)
             {
                 case DeviceType.LocalPC:
                     InternetProxy.Enable("127.0.0.1", Port);
+                    operation.Complete();
                     break;
 
                 default:
@@ -258,13 +264,19 @@ namespace XMAT.WebServiceCapture
 
         internal async Task<bool> EnableProxyingXbox(string sourceAddress)
         {
+            using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.EnableProxy,
+                TelemetryFeature.WebProxyCapture, XmatTelemetryService.ContextFor(this));
             if (!GDKXHelper.IsGDKXInstalled(true))
-            { return false; }
+            {
+                operation.Complete(TelemetryOutcome.Failed, TelemetryError.MissingGdk);
+                return false;
+            }
 
             EProxyEnabledCheckResult proxyCheckResult = await IsProxyEnabled();
             if (proxyCheckResult == EProxyEnabledCheckResult.ProxyEnabled)
             {
                 MessageBox.Show(Localization.GetLocalizedString("PROXY_ALREADY_ENABLED"));
+                operation.Complete(TelemetryOutcome.Failed, TelemetryError.AlreadyExists);
                 return false;
             }
 
@@ -277,6 +289,7 @@ namespace XMAT.WebServiceCapture
                         MessageBoxButton.OKCancel,
                         MessageBoxImage.Exclamation) != MessageBoxResult.OK)
                     {
+                        operation.Complete(TelemetryOutcome.Cancelled);
                         return false;
                     }
 
@@ -288,6 +301,8 @@ namespace XMAT.WebServiceCapture
                            Localization.GetLocalizedString("PROXY_ERROR_CONNECTION"),
                            MessageBoxButton.OK,
                            MessageBoxImage.Error);
+                        operation.Complete(TelemetryOutcome.Failed, TelemetryError.Network);
+                        return false;
                     }
                     break;
 
@@ -295,27 +310,36 @@ namespace XMAT.WebServiceCapture
                     throw new NotImplementedException(Localization.GetLocalizedString("PROXY_ERROR_DEVICE_TYPE_XBOX"));
             }
 
+            operation.Complete();
             return true;
         }
 
         internal async Task DisableProxying()
         {
+            using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.DisableProxy,
+                TelemetryFeature.WebProxyCapture, XmatTelemetryService.ContextFor(this));
             switch (_deviceType)
             {
                 case DeviceType.LocalPC:
                     InternetProxy.Disable();
+                    operation.Complete();
                     return;
 
                 case DeviceType.GenericProxyDevice:
+                    operation.Complete(TelemetryOutcome.Unsupported);
                     return;
             }
 
             if (!GDKXHelper.IsGDKXInstalled(true))
-            { return; }
+            {
+                operation.Complete(TelemetryOutcome.Failed, TelemetryError.MissingGdk);
+                return;
+            }
 
             EProxyEnabledCheckResult proxyCheckResult = await IsProxyEnabled();
             if (proxyCheckResult != EProxyEnabledCheckResult.ProxyEnabled)
             {
+                operation.Complete(TelemetryOutcome.Unsupported);
                 return;
             }
             switch (_deviceType)
@@ -327,6 +351,7 @@ namespace XMAT.WebServiceCapture
                         MessageBoxButton.OKCancel,
                         MessageBoxImage.Exclamation) != MessageBoxResult.OK)
                     {
+                        operation.Complete(TelemetryOutcome.Cancelled);
                         return;
                     }
 
@@ -338,6 +363,7 @@ namespace XMAT.WebServiceCapture
                            Localization.GetLocalizedString("PROXY_ERROR_CONNECTION"),
                            MessageBoxButton.OK,
                            MessageBoxImage.Error);
+                        operation.Complete(TelemetryOutcome.Failed, TelemetryError.Network);
                         return;
                     }
                     break;
@@ -345,6 +371,7 @@ namespace XMAT.WebServiceCapture
                 default:
                     throw new NotImplementedException($"Unimplemented device {DeviceName}");
             }
+            operation.Complete();
         }
 
         public void ShowGenericProxyDetails()
@@ -362,7 +389,18 @@ namespace XMAT.WebServiceCapture
                 Port = Port
             };
 
-            _webProxy.StartProxy(options);
+            _captureTelemetry ??= XmatTelemetryService.Current.Begin(TelemetryOperationKind.Capture,
+                TelemetryFeature.WebProxyCapture, XmatTelemetryService.ContextFor(this));
+            try
+            {
+                _webProxy.StartProxy(options);
+            }
+            catch (Exception ex)
+            {
+                _captureTelemetry.Fail(ex);
+                _captureTelemetry = null;
+                throw;
+            }
             IsRunning = true;
 
             if (bShowProxyInformation)
@@ -373,7 +411,20 @@ namespace XMAT.WebServiceCapture
 
         internal void StopProxy()
         {
-            _webProxy.StopProxy();
+            try
+            {
+                _webProxy.StopProxy();
+                _captureTelemetry?.Complete();
+            }
+            catch (Exception ex)
+            {
+                _captureTelemetry?.Fail(ex);
+                throw;
+            }
+            finally
+            {
+                _captureTelemetry = null;
+            }
             IsRunning = false;
         }
 
@@ -385,6 +436,7 @@ namespace XMAT.WebServiceCapture
                 DeviceName))
             {
                 ProxyConnections.AddFromDataRecord(record, false);
+                _captureTelemetry?.ItemReceived();
             }
         }
 
@@ -439,6 +491,7 @@ namespace XMAT.WebServiceCapture
             catch (Exception e)
             {
                 PublicUtilities.AppLog(LogLevel.ERROR, $"SSL connection script error {e}");
+                XmatTelemetryService.Current.ScriptFailure(TelemetryFeature.SslScript);
             }
 
             if (connectionEvent.AcceptConnection && IsRequestBlocked(connectionEvent.Request))
@@ -505,6 +558,7 @@ namespace XMAT.WebServiceCapture
             catch (Exception e)
             {
                 PublicUtilities.AppLog(LogLevel.ERROR, $"WebRequest script error {e}");
+                XmatTelemetryService.Current.ScriptFailure(TelemetryFeature.RequestScript);
             }
 
             if (requestEvent.AcceptRequest && IsRequestBlocked(requestEvent.Request))
@@ -554,6 +608,7 @@ namespace XMAT.WebServiceCapture
             catch (Exception e)
             {
                 PublicUtilities.AppLog(LogLevel.ERROR, $"WebResponse script error {e}");
+                XmatTelemetryService.Current.ScriptFailure(TelemetryFeature.ResponseScript);
             }
 
             var record = _dataTable.Dataset.DataRecordsWhen(
@@ -603,6 +658,7 @@ namespace XMAT.WebServiceCapture
 
         public void ImportFromFiddler(string fromFilePath)
         {
+            LastImportCancelled = false;
             using (var cancelTokenSource = new CancellationTokenSource())
             {
                 _fiddlerAsyncImportCancelTokenSource = cancelTokenSource;
@@ -631,8 +687,9 @@ namespace XMAT.WebServiceCapture
                 }
                 catch (OperationCanceledException)
                 {
-                    // we do not need to do anything...
+                    LastImportCancelled = true;
                 }
+
                 finally
                 {
                     lock (_lockObj)

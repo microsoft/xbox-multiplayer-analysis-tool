@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -10,6 +12,9 @@ using System.Windows.Input;
 using Microsoft.Win32;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
+using XMAT.Telemetry;
+using XMAT.WebServiceCapture;
+using XMAT.NetworkTrace;
 
 namespace XMAT
 {
@@ -59,6 +64,13 @@ namespace XMAT
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            XmatTelemetryService.Current.Ready();
+            XmatTelemetryService.Current.Use(CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark"
+                ? TelemetryFeature.DarkTheme : TelemetryFeature.LightTheme);
+            if (CaptureAppModel.AppModel.PreferencesModel.Language == "en-us")
+            {
+                XmatTelemetryService.Current.Use(TelemetryFeature.EnglishLanguage);
+            }
             _originalCursor = Cursor;
 
             DataContext = CaptureAppModel.AppModel;
@@ -105,6 +117,7 @@ namespace XMAT
 
         private void New_Executed(object sender, RoutedEventArgs e)
         {
+            using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.DeviceAdd);
             AddDeviceWindow deviceSelector = new()
             {
                 Owner = Application.Current.MainWindow
@@ -116,6 +129,7 @@ namespace XMAT
                 var context = CaptureAppModel.AppModel.GetDeviceContext(deviceSelector.SelectedDeviceType, deviceSelector.SelectedDeviceName, deviceSelector.SelectedCaptureType, false);
                 if (context != null)
                 {
+                    operation.Complete(TelemetryOutcome.Failed, TelemetryError.AlreadyExists);
                     MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
@@ -129,21 +143,25 @@ namespace XMAT
                         null);
                     CaptureAppModel.AppModel.SelectedDeviceContext = context;
                     CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+                    operation.Complete(context: XmatTelemetryService.ContextFor(context));
                 }
             }
             else
             {
                 if (deviceSelector.Result == AddDeviceWindow.AddDeviceResult.Failed_NoDefaultConsole)
                 {
+                    operation.Complete(TelemetryOutcome.Failed, TelemetryError.MissingDefaultConsole);
                     MessageBox.Show(Localization.GetLocalizedString("NO_DEFAULT_CONSOLE_MESSAGE"), Localization.GetLocalizedString("NO_DEFAULT_CONSOLE_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
                 else if (deviceSelector.Result == AddDeviceWindow.AddDeviceResult.Failed_NeedGDKX)
                 {
+                    operation.Complete(TelemetryOutcome.Failed, TelemetryError.MissingGdk);
                     // Show our message box here
                     GDKXHelper.IsGDKXInstalled(true);
                     return;
                 }
+                operation.Complete(TelemetryOutcome.Cancelled);
             }
         }
 
@@ -152,6 +170,7 @@ namespace XMAT
             string filename = string.Empty;
             if (e is ExecutedRoutedEventArgs args)
                 filename = args.Parameter as string;
+            var entryPoint = string.IsNullOrEmpty(filename) ? TelemetryEntryPoint.Menu : TelemetryEntryPoint.DragDrop;
 
             if (string.IsNullOrEmpty(filename))
             {
@@ -168,9 +187,14 @@ namespace XMAT
 
             if (!string.IsNullOrEmpty(filename))
             {
-                CaptureAppModel.AppModel.LoadDataCaptures(filename);
+                ExecuteFileOperation(TelemetryOperationKind.LoadCaptures, filename,
+                    () => CaptureAppModel.AppModel.LoadDataCaptures(filename), entryPoint);
                 if (CaptureAppModel.AppModel.CaptureDeviceContexts.Any())
                     CaptureAppModel.AppModel.SelectedDeviceContext = CaptureAppModel.AppModel.CaptureDeviceContexts.Last();
+            }
+            else
+            {
+                FileDialogCancelled(TelemetryOperationKind.LoadCaptures);
             }
         }
 
@@ -183,7 +207,12 @@ namespace XMAT
 
             if (saveFileDialog.ShowDialog() == true && !string.IsNullOrEmpty(saveFileDialog.FileName))
             {
-                CaptureAppModel.AppModel.SaveDataCaptures(saveFileDialog.FileName);
+                ExecuteFileOperation(TelemetryOperationKind.SaveCaptures, saveFileDialog.FileName,
+                    () => CaptureAppModel.AppModel.SaveDataCaptures(saveFileDialog.FileName));
+            }
+            else
+            {
+                FileDialogCancelled(TelemetryOperationKind.SaveCaptures);
             }
         }
 
@@ -192,6 +221,7 @@ namespace XMAT
             string filename = string.Empty;
             if (e is ExecutedRoutedEventArgs args)
                 filename = args.Parameter as string;
+            var entryPoint = string.IsNullOrEmpty(filename) ? TelemetryEntryPoint.Menu : TelemetryEntryPoint.DragDrop;
 
             if (string.IsNullOrEmpty(filename))
             {
@@ -210,7 +240,12 @@ namespace XMAT
             {
                 // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
                 // setup the filter above and call export with the appropriate type
-                await CaptureAppModel.AppModel.ImportDataCapturesAsync(ImportType.Fiddler, filename);
+                await ExecuteFileOperationAsync(TelemetryOperationKind.ImportSaz, filename,
+                    () => CaptureAppModel.AppModel.ImportDataCapturesAsync(ImportType.Fiddler, filename), entryPoint);
+            }
+            else
+            {
+                FileDialogCancelled(TelemetryOperationKind.ImportSaz);
             }
         }
 
@@ -225,7 +260,13 @@ namespace XMAT
             {
                 // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
                 // setup the filter above and call export with the appropriate type
-                CaptureAppModel.AppModel.ExportDataCaptures(ExportType.Fiddler, saveFileDialog.FileName);
+                ExecuteFileOperation(TelemetryOperationKind.ExportSaz, saveFileDialog.FileName,
+                    () => CaptureAppModel.AppModel.ExportDataCaptures(ExportType.Fiddler, saveFileDialog.FileName),
+                    supported: CaptureAppModel.AppModel.SelectedDeviceContext?.CaptureType == CaptureType.WebProxy);
+            }
+            else
+            {
+                FileDialogCancelled(TelemetryOperationKind.ExportSaz);
             }
         }
 
@@ -236,6 +277,7 @@ namespace XMAT
 
         private void Preferences_Executed(object sender, RoutedEventArgs e)
         {
+            XmatTelemetryService.Current.Use(TelemetryFeature.Preferences);
             var pw = new PreferencesWindow
             {
                 Owner = this,
@@ -246,16 +288,21 @@ namespace XMAT
 
         private void CollectLogs_Executed(object sender, RoutedEventArgs e)
         {
+            using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.CollectLogs, TelemetryFeature.DebugLogs);
             string strOutZipName = PublicUtilities.CollectLogs();
+            operation.Complete();
             MessageBox.Show(Localization.GetLocalizedString("LOGS_COLLECTED_MESSAGE", strOutZipName), Localization.GetLocalizedString("LOGS_COLLECTED_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void ViewGDKXInfo_Executed(object sender, RoutedEventArgs e)
         {
+            XmatTelemetryService.Current.Use(TelemetryFeature.GdkInfo);
             string strGDKXPath = GDKXHelper.GetGDKXPath(out string gdkxVersion);
 
             if (String.IsNullOrEmpty(strGDKXPath) || String.IsNullOrEmpty(gdkxVersion))
             {
+                XmatTelemetryService.Current.Track(new(TelemetryEventKind.Counter, TelemetryFeature.GdkInfo,
+                    Outcome: TelemetryOutcome.Failed, Error: TelemetryError.MissingGdk, Count: 1));
                 MessageBox.Show(Localization.GetLocalizedString("GDKX_NOT_FOUND"), Localization.GetLocalizedString("GDKX_DETAILS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
@@ -273,6 +320,7 @@ namespace XMAT
         private void ClearAllCaptures_Executed(object sender, RoutedEventArgs e)
         {
             CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController.ClearAllCaptures();
+            XmatTelemetryService.Current.Use(TelemetryFeature.ClearCaptures);
         }
 
         private void AnalyzeCaptures_CanExecute(object sender, CanExecuteRoutedEventArgs e)
@@ -318,8 +366,35 @@ namespace XMAT
             ICaptureAnalyzer captureAnalyzer,
             IDeviceCaptureController captureController)
         {
+            using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.Analysis,
+                captureController is WebServiceDeviceCaptureController ? TelemetryFeature.XboxLiveAnalysis : TelemetryFeature.NetworkTraceAnalysis,
+                XmatTelemetryService.ContextFor(captureController));
+            analysisRun.TelemetryOperation = operation;
             analysisRun.IsProcessing = true;
-            ECaptureAnalyzerResult analyzerResult = await captureAnalyzer.RunAsync(analysisRun, captureController);
+            ECaptureAnalyzerResult analyzerResult;
+            try
+            {
+                analyzerResult = await captureAnalyzer.RunAsync(analysisRun, captureController);
+                var count = captureController is WebServiceDeviceCaptureController web
+                    ? web.ProxyConnections.Count
+                    : (captureController as NetworkTraceCaptureController)?.FilteredItems?.Count ?? 0;
+                operation.Complete(analyzerResult switch
+                {
+                    ECaptureAnalyzerResult.Success => TelemetryOutcome.Succeeded,
+                    ECaptureAnalyzerResult.NoSuitableData => TelemetryOutcome.NoData,
+                    _ => TelemetryOutcome.Failed
+                }, analyzerResult == ECaptureAnalyzerResult.UnknownError ? TelemetryError.Unknown : TelemetryError.None, items: count);
+            }
+            catch (Exception ex)
+            {
+                operation.Fail(ex);
+                throw;
+            }
+            finally
+            {
+                analysisRun.IsProcessing = false;
+                analysisRun.TelemetryOperation = null;
+            }
 
             void OnError(string strErrorMsg)
             {
@@ -376,7 +451,9 @@ namespace XMAT
         }
         private void ExportRootCert_Executed(object sender, ExecutedRoutedEventArgs e)
         {
+            using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.ExportRootCertificate, TelemetryFeature.RootCertificate);
             XMAT.WebServiceCapture.Proxy.WebServiceProxy.CertManager.ExportRootCertificate(PublicUtilities.DesktopDirectoryPath);
+            operation.Complete();
         }
 
         private void ToggleDarkMode_Click(object sender, RoutedEventArgs e)
@@ -385,6 +462,70 @@ namespace XMAT
             ThemeManager.ApplyTheme(theme);
             CaptureAppModel.AppModel.PreferencesModel.Theme = theme;
             CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+            XmatTelemetryService.Current.Use(ToggleDarkMode.IsChecked ? TelemetryFeature.DarkTheme : TelemetryFeature.LightTheme);
+        }
+
+        private static void ExecuteFileOperation(TelemetryOperationKind kind, string path, Action action,
+            TelemetryEntryPoint entryPoint = TelemetryEntryPoint.Menu, bool supported = true)
+        {
+            using var operation = XmatTelemetryService.Current.Begin(kind, TelemetryFeature.CaptureFiles, entryPoint: entryPoint);
+            if (!supported)
+            {
+                Trace.TraceWarning("XMAT capture export does not support this capture method.");
+                operation.Complete(TelemetryOutcome.Unsupported);
+                return;
+            }
+            try
+            {
+                action();
+                operation.Complete(fileSize: FileSizeForTelemetry(path));
+            }
+            catch (Exception ex)
+            {
+                operation.Fail(ex);
+                throw;
+            }
+        }
+
+        private static async Task ExecuteFileOperationAsync(TelemetryOperationKind kind, string path,
+            Func<Task<TelemetryOutcome>> action, TelemetryEntryPoint entryPoint)
+        {
+            using var operation = XmatTelemetryService.Current.Begin(kind, TelemetryFeature.CaptureFiles,
+                new(CaptureType.WebProxy, DeviceType.Unknown, CaptureOrigin.Imported), entryPoint);
+            try
+            {
+                var outcome = await action();
+                operation.Complete(outcome, fileSize: FileSizeForTelemetry(path));
+            }
+            catch (Exception ex)
+            {
+                operation.Fail(ex);
+                throw;
+            }
+        }
+
+        private static long FileSizeForTelemetry(string path)
+        {
+            if (!XmatTelemetryService.Current.IsEnabled)
+            {
+                return -1;
+            }
+            try
+            {
+                return new FileInfo(path).Length;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Trace.TraceWarning("XMAT telemetry: FileSizeUnavailable");
+                return -1;
+            }
+        }
+
+        private static void FileDialogCancelled(TelemetryOperationKind kind)
+        {
+            XmatTelemetryService.Current.Use(TelemetryFeature.CaptureFiles);
+            XmatTelemetryService.Current.Track(new(TelemetryEventKind.Counter, TelemetryFeature.CaptureFiles,
+                Operation: kind, Outcome: TelemetryOutcome.Cancelled, Count: 1, EntryPoint: TelemetryEntryPoint.Menu));
         }
     }
 }

@@ -78,6 +78,11 @@ namespace XMAT.WebServiceCapture
         private void ViewMode_Changed(object sender, RoutedEventArgs e)
         {
             _isWaterfall = WaterfallMode.IsChecked == true;
+            if (IsLoaded && IsVisible)
+            {
+                XMAT.Telemetry.XmatTelemetryService.Current.Use(_isWaterfall
+                    ? XMAT.Telemetry.TelemetryFeature.TimelineWaterfall : XMAT.Telemetry.TelemetryFeature.TimelineByHost);
+            }
             RedrawTimeline();
         }
 
@@ -214,6 +219,7 @@ namespace XMAT.WebServiceCapture
             if (sender is FrameworkElement fe && fe.Tag is ProxyConnectionModel model)
             {
                 SelectedItem = model;
+                XMAT.Telemetry.XmatTelemetryService.Current.Use(XMAT.Telemetry.TelemetryFeature.TimelineSelection);
             }
         }
 

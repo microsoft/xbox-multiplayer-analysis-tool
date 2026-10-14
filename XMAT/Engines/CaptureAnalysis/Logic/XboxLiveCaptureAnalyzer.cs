@@ -84,6 +84,8 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         public async Task<ECaptureAnalyzerResult> RunAsync(ICaptureAnalysisRun analysisRun, IDeviceCaptureController captureController)
         {
+            var telemetry = (analysisRun as XMAT.Models.AnalysisRunModel)?.TelemetryOperation;
+            telemetry?.MarkStage(XMAT.Telemetry.TelemetryStage.Convert);
             var analysisResultsModel = new AnalysisResultsModel();
             analysisRun.AnalysisData = analysisResultsModel;
 
@@ -125,12 +127,14 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 _traceAnalyzer.RunUriConverterOnData(serviceCallData);
 
                 SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.RunningValidationRules);
+                telemetry?.MarkStage(XMAT.Telemetry.TelemetryStage.Validate);
                 perConsoleReports = _traceAnalyzer.Run(
                     rulesEngine,
                     serviceCallData,
                     analysisRunStorageDirectory);
 
                 SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.DumpingServiceCallData);
+                telemetry?.MarkStage(XMAT.Telemetry.TelemetryStage.GenerateReport);
                 rulesEngine.DumpServiceCallData(
                     Path.Combine(
                         analysisRunStorageDirectory,

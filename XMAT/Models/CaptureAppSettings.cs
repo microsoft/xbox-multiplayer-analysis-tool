@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using XMAT.SharedInterfaces;
+using XMAT.Telemetry;
 
 namespace XMAT.Models
 {
@@ -53,7 +54,8 @@ namespace XMAT.Models
                         captureDevice.DeviceName,
                         captureDevice.CaptureType,
                         false,
-                        captureDevice.Parameters);
+                        captureDevice.Parameters,
+                        CaptureOrigin.Restored);
                 }
             }
 

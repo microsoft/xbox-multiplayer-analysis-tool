@@ -16,6 +16,7 @@ using XMAT.Models;
 using XMAT.NetworkTrace.Models;
 using XMAT.NetworkTrace.NTDE;
 using XMAT.SharedInterfaces;
+using XMAT.Telemetry;
 
 
 namespace XMAT.NetworkTrace
@@ -51,6 +52,7 @@ namespace XMAT.NetworkTrace
         private IDataTable _dataTable;
         internal INetworkTraceEngine _networkTraceEngine;
         private bool _isRunning;
+        private TelemetryOperation _captureTelemetry;
 
         public event PropertyChangedEventHandler PropertyChanged;
         public void RaisePropertyChange([CallerMemberName] string name = null)
@@ -65,6 +67,15 @@ namespace XMAT.NetworkTrace
             set
             {
                 _status = value;
+                _captureTelemetry?.MarkStage(value switch
+                {
+                    DeviceStatusEnum.Connecting => TelemetryStage.Connect,
+                    DeviceStatusEnum.Starting => TelemetryStage.Start,
+                    DeviceStatusEnum.Stopping => TelemetryStage.Stop,
+                    DeviceStatusEnum.Downloading => TelemetryStage.Download,
+                    DeviceStatusEnum.Disconnecting => TelemetryStage.Disconnect,
+                    _ => TelemetryStage.None
+                });
                 RaisePropertyChange(nameof(DeviceStatus));
                 RaisePropertyChange(nameof(HaveTraces));
                 RaisePropertyChange(nameof(HaveNoTraces));
@@ -120,6 +131,8 @@ namespace XMAT.NetworkTrace
 
         public void Dispose()
         {
+            _captureTelemetry?.Complete(TelemetryOutcome.Cancelled);
+            _captureTelemetry = null;
         }
 
         private void HandleRowAdded(IDataTable table, Int64 rowId)
@@ -133,56 +146,80 @@ namespace XMAT.NetworkTrace
 
         internal async Task StartCapture(ICaptureDeviceContext device)
         {
-            IsCapturing = true;
-            CaptureAppModel.AppModel.StatusBarText1 = Localization.GetLocalizedString("NETCAP_STATUS_RUNNING");
+            _captureTelemetry = XmatTelemetryService.Current.Begin(TelemetryOperationKind.Capture,
+                TelemetryFeature.NetworkTraceCapture, XmatTelemetryService.ContextFor(device));
+            try
+            {
+                IsCapturing = true;
+                CaptureAppModel.AppModel.StatusBarText1 = Localization.GetLocalizedString("NETCAP_STATUS_RUNNING");
 
-            if (_deviceType == DeviceType.XboxConsole)
-            {
-                DeviceStatus = DeviceStatusEnum.Connecting;
-                await ConnectToDevice(device);
-            }
-            else if (_deviceType == DeviceType.LocalPC)
-            {
-                if (_networkTraceEngine == null)
+                if (_deviceType == DeviceType.XboxConsole)
                 {
-                    _networkTraceEngine = NetworkTraceEngine.CreateLocal();
-                    _networkTraceEngine.EventRecordAvailable += OnEventRecordAvailable;
+                    DeviceStatus = DeviceStatusEnum.Connecting;
+                    await ConnectToDevice(device);
                 }
+                else if (_deviceType == DeviceType.LocalPC)
+                {
+                    if (_networkTraceEngine == null)
+                    {
+                        _networkTraceEngine = NetworkTraceEngine.CreateLocal();
+                        _networkTraceEngine.EventRecordAvailable += OnEventRecordAvailable;
+                    }
+                }
+                else
+                {
+                    throw new ApplicationException("Unsupported DeviceType");
+                }
+
+                DeviceStatus = DeviceStatusEnum.Starting;
+
+                await _networkTraceEngine.StartPacketTraceAsync();
+
+                DeviceStatus = DeviceStatusEnum.Tracing;
+
+                CommandManager.InvalidateRequerySuggested();
             }
-            else
+            catch (Exception ex)
             {
-                throw new ApplicationException("Unsupported DeviceType");
+                _captureTelemetry.Fail(ex);
+                _captureTelemetry = null;
+                throw;
             }
-
-            DeviceStatus = DeviceStatusEnum.Starting;
-
-            await _networkTraceEngine.StartPacketTraceAsync();
-
-            DeviceStatus = DeviceStatusEnum.Tracing;
-
-            CommandManager.InvalidateRequerySuggested();
         }
 
         internal async Task StopCapture(ICaptureDeviceContext device)
         {
-            DeviceStatus = DeviceStatusEnum.Stopping;
-            await _networkTraceEngine.StopPacketTraceAsync();
-
-            DeviceStatus = DeviceStatusEnum.Downloading;
-            await _networkTraceEngine.GetAllEventsAsync();
-
-            _networkTraceEngine.EventRecordAvailable -= OnEventRecordAvailable;
-
-            if (_deviceType == DeviceType.XboxConsole)
+            try
             {
-                DeviceStatus = DeviceStatusEnum.Disconnecting;
-                await DisconnectFromDevice(device);
-            }
+                DeviceStatus = DeviceStatusEnum.Stopping;
+                await _networkTraceEngine.StopPacketTraceAsync();
 
-            DeviceStatus = DeviceStatusEnum.Idle;
-            IsCapturing = false;
-            CaptureAppModel.AppModel.StatusBarText1 = String.Empty;
-            CommandManager.InvalidateRequerySuggested();
+                DeviceStatus = DeviceStatusEnum.Downloading;
+                await _networkTraceEngine.GetAllEventsAsync();
+
+                _networkTraceEngine.EventRecordAvailable -= OnEventRecordAvailable;
+
+                if (_deviceType == DeviceType.XboxConsole)
+                {
+                    DeviceStatus = DeviceStatusEnum.Disconnecting;
+                    await DisconnectFromDevice(device);
+                }
+
+                DeviceStatus = DeviceStatusEnum.Idle;
+                IsCapturing = false;
+                CaptureAppModel.AppModel.StatusBarText1 = String.Empty;
+                CommandManager.InvalidateRequerySuggested();
+                _captureTelemetry?.Complete();
+            }
+            catch (Exception ex)
+            {
+                _captureTelemetry?.Fail(ex);
+                throw;
+            }
+            finally
+            {
+                _captureTelemetry = null;
+            }
         }
 
         internal async Task ConnectToDevice(ICaptureDeviceContext device)
@@ -245,6 +282,7 @@ namespace XMAT.NetworkTrace
                 recvFlag,
                 packetNode.GetProperty("data").GetString()
                 );
+            _captureTelemetry?.ItemReceived();
         }
 
         internal async Task DisconnectFromDevice(ICaptureDeviceContext device)

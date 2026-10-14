@@ -123,7 +123,7 @@
 
         <GridSplitter Grid.Row="3" Height="4" HorizontalAlignment="Stretch" VerticalAlignment="Center" ResizeDirection="Rows"/>
 
-        <DataGrid x:Name="ConnectionList" Grid.Row="4"
+        <DataGrid x:Name="ConnectionList" Grid.Row="4" SelectionChanged="ConnectionList_SelectionChanged"
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   d:ItemsSource="{d:SampleData}" 
                   ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
@@ -155,7 +155,7 @@
 
         <GridSplitter Grid.Column="1" Grid.RowSpan="63" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
 
-        <TabControl Grid.Row="0" Grid.Column="2" Grid.RowSpan="5">
+        <TabControl Grid.Row="0" Grid.Column="2" Grid.RowSpan="5" SelectionChanged="FeatureTab_SelectionChanged">
             <TabItem x:Name="ReqestResponseTab" Header="Request/Response">
                 <Grid>
                     <Grid.RowDefinitions>

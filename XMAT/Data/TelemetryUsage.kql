@@ -1,0 +1,95 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
+//
+// The destination owner must define XmatTelemetry using the approved ingestion mapping.
+// Required columns:
+// Timestamp:datetime, EventName:string, SessionId:string, DeviceId:string,
+// AppVersion:string, BuildChannel:string, Feature:string, Operation:string,
+// Outcome:string, DurationMs:long, Count:long, Stage:string, CaptureOrigin:string.
+// EventName is the short event name; DeviceId maps the permitted ext.device.localId.
+// These are dashboard templates, not ingestion/retention configuration.
+
+// Eligible launches by release; keep test and internal channels out of public metrics.
+XmatTelemetry
+| where BuildChannel == "Public" and EventName == "AppLaunched"
+| summarize Launches = count(), ActiveMachines = dcountif(DeviceId, isnotempty(DeviceId)),
+    MissingMachineId = countif(isempty(DeviceId)) by bin(Timestamp, 1d), AppVersion;
+
+// Feature adoption uses launched sessions as the denominator, not action count.
+let launches = XmatTelemetry
+    | where BuildChannel == "Public" and EventName == "AppLaunched"
+    | summarize Sessions = dcount(SessionId) by Day = bin(Timestamp, 1d), AppVersion;
+XmatTelemetry
+| where BuildChannel == "Public" and EventName == "FeatureUsed"
+| summarize FeatureSessions = dcount(SessionId) by Day = bin(Timestamp, 1d), AppVersion, Feature
+| join kind=inner launches on Day, AppVersion
+| extend AdoptionPercent = 100.0 * FeatureSessions / Sessions
+| project Day, AppVersion, Feature, FeatureSessions, Sessions, AdoptionPercent;
+
+// Operation outcomes and real completion latency, excluding dialog-cancellation counters.
+XmatTelemetry
+| where BuildChannel == "Public" and EventName == "OperationCompleted"
+| summarize Attempts = count(), Succeeded = countif(Outcome == "Succeeded"),
+    Failed = countif(Outcome == "Failed"), NoData = countif(Outcome == "NoData"),
+    Cancelled = countif(Outcome == "Cancelled"), Unsupported = countif(Outcome == "Unsupported"),
+    P50Ms = percentile(DurationMs, 50), P95Ms = percentile(DurationMs, 95)
+    by AppVersion, Operation, CaptureOrigin;
+
+// Capture and import-only analysis are separate session funnels.
+XmatTelemetry
+| where BuildChannel == "Public"
+| summarize Launched = countif(EventName == "AppLaunched"),
+    DeviceAdded = countif(EventName == "OperationCompleted" and Operation == "DeviceAdd" and Outcome == "Succeeded"),
+    CaptureWithData = countif(EventName == "CaptureFirstData"),
+    Imported = countif(EventName == "OperationCompleted" and Operation == "ImportSaz" and Outcome == "Succeeded"),
+    Analyzed = countif(EventName == "OperationCompleted" and Operation == "Analysis" and Outcome == "Succeeded"),
+    ReportViewed = countif(EventName == "FeatureUsed" and Feature in ("PerEndpointReport", "StatisticsReport", "NetworkReport"))
+    by SessionId, AppVersion
+| summarize Sessions = count(), SetupSessions = countif(DeviceAdded > 0),
+    CaptureSessions = countif(CaptureWithData > 0), ImportSessions = countif(Imported > 0),
+    AnalyzedCaptureSessions = countif(CaptureWithData > 0 and Analyzed > 0),
+    AnalyzedImportSessions = countif(Imported > 0 and Analyzed > 0),
+    ReportSessions = countif(ReportViewed > 0) by AppVersion;
+
+// First-observed/returning machines are not people or installations.
+let firstSeen = XmatTelemetry
+    | where BuildChannel == "Public" and EventName == "AppLaunched" and isnotempty(DeviceId)
+    | summarize FirstSeen = min(Timestamp) by DeviceId;
+XmatTelemetry
+| where BuildChannel == "Public" and EventName == "AppLaunched" and isnotempty(DeviceId)
+| join kind=inner firstSeen on DeviceId
+| summarize NewMachines = dcountif(DeviceId, startofday(Timestamp) == startofday(FirstSeen)),
+    ReturningMachines = dcountif(DeviceId, startofday(Timestamp) > startofday(FirstSeen))
+    by Day = bin(Timestamp, 1d);
+
+// Machine retention within the available, approved dataset; do not display raw IDs.
+let machineWeeks = XmatTelemetry
+    | where BuildChannel == "Public" and EventName == "AppLaunched" and isnotempty(DeviceId)
+    | summarize by DeviceId, Week = bin(Timestamp, 7d);
+machineWeeks
+| join kind=leftouter (machineWeeks | project DeviceId, NextWeek = Week - 7d) on DeviceId, $left.Week == $right.NextWeek
+| summarize ActiveMachines = dcount(DeviceId), RetainedMachines = dcountif(DeviceId, isnotnull(NextWeek)) by Week
+| extend RetentionPercent = 100.0 * RetainedMachines / ActiveMachines;
+
+// Observed failure rate only; absent AppClosed events do not prove crashes.
+XmatTelemetry
+| where BuildChannel == "Public"
+| summarize Launched = countif(EventName == "AppLaunched"),
+    ObservedFailure = countif(EventName == "UnhandledFailure") by SessionId, AppVersion
+| summarize LaunchedSessions = countif(Launched > 0),
+    SessionsWithObservedFailure = countif(Launched > 0 and ObservedFailure > 0) by AppVersion;
+
+// Rolling active machines and sessions per machine; query windows are not retention policy.
+XmatTelemetry
+| where BuildChannel == "Public" and EventName == "AppLaunched" and Timestamp >= ago(28d)
+| summarize MonthlyActiveMachines = dcountif(DeviceId, isnotempty(DeviceId)),
+    WeeklyActiveMachines = dcountif(DeviceId, isnotempty(DeviceId) and Timestamp >= ago(7d)),
+    IdentifiedSessions = countif(isnotempty(DeviceId))
+| extend SessionsPerMachine = todouble(IdentifiedSessions) / MonthlyActiveMachines;
+
+// Network acquisition and analyzer stage timing are separate from overall capture duration.
+XmatTelemetry
+| where BuildChannel == "Public" and EventName == "OperationStage"
+| summarize P50Ms = percentile(DurationMs, 50), P95Ms = percentile(DurationMs, 95)
+    by AppVersion, Operation, Stage;

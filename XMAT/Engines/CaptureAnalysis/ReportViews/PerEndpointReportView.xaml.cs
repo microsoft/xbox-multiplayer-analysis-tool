@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
+using XMAT.Telemetry;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport;
@@ -58,6 +59,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 if (model != null && model != controller.SelectedConnectionModel)
                 {
                     controller.SelectedConnectionModel = model;
+                    XmatTelemetryService.Current.Use(TelemetryFeature.ReportRequestNavigation);
                 }
             }
         }
@@ -70,6 +72,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         private ContentPresenter GetContentForEndpoint(string endpointName)
         {
+            XmatTelemetryService.Current.Use(TelemetryFeature.ReportDrillDown);
             int matchingEndpointIndex = 0;
             foreach (EndpointValidationDetails endpoint in EndpointStack.Items)
             {

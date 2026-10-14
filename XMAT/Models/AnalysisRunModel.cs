@@ -7,11 +7,13 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using XMAT.SharedInterfaces;
+using XMAT.Telemetry;
 
 namespace XMAT.Models
 {
     public class AnalysisRunModel : ICaptureAnalysisRun, INotifyPropertyChanged
     {
+        internal TelemetryOperation TelemetryOperation { get; set; }
         public Int64 Id { get; }
         public string Header { get; set; }
         public UserControl Content { get; set; }

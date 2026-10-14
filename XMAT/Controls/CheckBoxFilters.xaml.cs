@@ -9,6 +9,12 @@ using System.Windows.Controls;
 
 namespace XMAT
 {
+    internal sealed class FilterChangedEventArgs(bool isUserInteraction)
+        : RoutedEventArgs(CheckBoxFilters.FiltersChangedEvent)
+    {
+        internal bool IsUserInteraction { get; } = isUserInteraction;
+    }
+
     /// <summary>
     /// Interaction logic for CheckBoxFilters.xaml
     /// </summary>
@@ -28,9 +34,9 @@ namespace XMAT
             add { AddHandler(FiltersChangedEvent, value); }
             remove { RemoveHandler(FiltersChangedEvent, value); }
         }
-        void RaiseFiltersChangedEvent()
+        private void RaiseFiltersChangedEvent(object sender)
         {
-            RaiseEvent(new RoutedEventArgs(FiltersChangedEvent));
+            RaiseEvent(new FilterChangedEventArgs(sender is CheckBox { IsKeyboardFocused: true }));
         }
 
         public string FilterDesc
@@ -101,7 +107,7 @@ namespace XMAT
 
             if (!_allNoneProcessing)
             {
-                RaiseFiltersChangedEvent();
+                RaiseFiltersChangedEvent(sender);
             }
         }
 
@@ -125,18 +131,18 @@ namespace XMAT
 
             if (!_allNoneProcessing)
             {
-                RaiseFiltersChangedEvent();
+                RaiseFiltersChangedEvent(sender);
             }
         }
 
         private void EnableFilters_Checked(object sender, RoutedEventArgs e)
         {
-            RaiseFiltersChangedEvent();
+            RaiseFiltersChangedEvent(sender);
         }
 
         private void EnableFilters_Unchecked(object sender, RoutedEventArgs e)
         {
-            RaiseFiltersChangedEvent();
+            RaiseFiltersChangedEvent(sender);
         }
     }
 }

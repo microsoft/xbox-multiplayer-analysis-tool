@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Windows.Controls;
+using XMAT.Telemetry;
 
 namespace XMAT.NetworkTraceCaptureAnalysis
 {
@@ -17,6 +18,13 @@ namespace XMAT.NetworkTraceCaptureAnalysis
 
             NetAnalysisTitle.Text = Localization.GetLocalizedString("NETCAP_ANALYSIS_TITLE");
             TotalPacketsLabel.Text = Localization.GetLocalizedString("NETCAP_ANALYSIS_TOTAL");
+            Loaded += (_, _) =>
+            {
+                if (IsVisible)
+                {
+                    XmatTelemetryService.Current.Use(TelemetryFeature.NetworkReport);
+                }
+            };
         }
     }
 }

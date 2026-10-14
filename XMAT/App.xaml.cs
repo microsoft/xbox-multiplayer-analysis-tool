@@ -9,6 +9,7 @@ using XMAT.Models;
 using XMAT.NetworkTrace;
 using XMAT.NetworkTraceCaptureAnalysis;
 using XMAT.SharedInterfaces;
+using XMAT.Telemetry;
 using XMAT.WebServiceCapture;
 using XMAT.XboxLiveCaptureAnalysis;
 
@@ -29,6 +30,7 @@ namespace XMAT
             ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
 
             InitializeExceptionHandlers();
+            XmatTelemetryService.Initialize(e.Args);
             InitializeDataLayer();
             InitializeCaptureMethods();
             InitializeCaptureAnalyzers();
@@ -78,12 +80,15 @@ namespace XMAT
 
         private void InitializeCaptureAnalyzer(ICaptureAnalyzer analyzer)
         {
+            using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.AnalyzerInitialize);
             try
             {
                 CaptureAppModel.AppModel.AddCaptureAnalyzer(analyzer);
+                operation.Complete();
             }
             catch (Exception ex)
             {
+                operation.Fail(ex);
                 // some kind of application error message should be displayed
                 MessageBox.Show(
                     ex.Message,
@@ -122,14 +127,22 @@ namespace XMAT
 
         private void Application_Exit(object sender, ExitEventArgs e)
         {
-            ShutdownCaptureAnalyzers();
-            ShutdownCaptureMethods();
-            ShutdownDataLayer();
-            ShutdownExceptionHandlers();
+            try
+            {
+                ShutdownCaptureAnalyzers();
+                ShutdownCaptureMethods();
+                ShutdownDataLayer();
+                ShutdownExceptionHandlers();
+            }
+            finally
+            {
+                XmatTelemetryService.Current.Dispose();
+            }
         }
 
         private void UnhandledExceptionHandler(Exception e)
         {
+            XmatTelemetryService.Current.UnhandledFailure(e);
             _unhandledLog.Log(0, LogLevel.FATAL, $"Unhandled exception: {e}");
         }
     }

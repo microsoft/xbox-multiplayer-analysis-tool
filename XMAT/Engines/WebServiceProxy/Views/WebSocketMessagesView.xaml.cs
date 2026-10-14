@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using XMAT.WebServiceCapture.Models;
+using XMAT.Telemetry;
 
 namespace XMAT.WebServiceCapture
 {
@@ -27,7 +28,8 @@ namespace XMAT.WebServiceCapture
                 typeof(WebSocketMessagesView),
                 new FrameworkPropertyMetadata(
                     null,
-                    FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
+                    FrameworkPropertyMetadataOptions.BindsTwoWayByDefault,
+                    OnSelectedItemChanged));
 
         public ObservableCollection<WebSocketMessageModel> ItemsSource
         {
@@ -55,7 +57,42 @@ namespace XMAT.WebServiceCapture
 
         private void Filter_Changed(object sender, SelectionChangedEventArgs e)
         {
+            if (IsLoaded && IsVisible && sender is ComboBox { IsKeyboardFocusWithin: true })
+            {
+                XmatTelemetryService.Current.Use(sender == DirectionFilter
+                    ? TelemetryFeature.FilterWebSocketDirection : TelemetryFeature.FilterWebSocketType);
+            }
             ApplyFilter();
+        }
+
+        private static void OnSelectedItemChanged(DependencyObject owner, DependencyPropertyChangedEventArgs args)
+        {
+            var view = (WebSocketMessagesView)owner;
+            if (args.NewValue != null)
+            {
+                view.RecordPayloadView();
+            }
+        }
+
+        private void PayloadTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (e.Source == PayloadTabs)
+            {
+                RecordPayloadView();
+            }
+        }
+
+        private void RecordPayloadView()
+        {
+            if (IsLoaded && IsVisible && SelectedItem != null)
+            {
+                XmatTelemetryService.Current.Use(PayloadTabs.SelectedIndex switch
+                {
+                    1 => TelemetryFeature.WebSocketJson,
+                    2 => TelemetryFeature.WebSocketHex,
+                    _ => TelemetryFeature.WebSocketText
+                });
+            }
         }
 
         private void ApplyFilter()

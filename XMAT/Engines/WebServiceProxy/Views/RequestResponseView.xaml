@@ -13,7 +13,7 @@
     </UserControl.Resources>
     <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
         <TextBlock DockPanel.Dock="Top" Height="24" FontWeight="Bold" Margin="10,0,0,0" VerticalAlignment="Center" Text="{Binding Title, FallbackValue=Request}"/>
-        <TabControl x:Name="RequestTabs">
+        <TabControl SelectionChanged="InspectionTab_SelectionChanged" x:Name="RequestTabs">
             <TabItem x:Name="HeadersTab" Header="Headers">
                 <ScrollViewer>
                     <TextBox IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True" Text="{Binding FirstLineAndHeaders, Mode=OneWay}"/>

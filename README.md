@@ -15,6 +15,42 @@ analyze Xbox services and network traffic for problems.
 
 The web proxy supports HTTP/1.1 and HTTP/2 over TLS using ALPN negotiation, with automatic HTTP/1.1 fallback.
 
+## Product Telemetry
+
+Ordinary source, local, and CI builds do not transmit product telemetry. Explicitly approved telemetry-enabled
+releases collect usage automatically through Microsoft's OneCollector service. There is no per-user collection
+preference. Release maintainers must register a dedicated XMAT data source and approve its privacy, access,
+retention, and server-side enrichment policies before enabling export.
+
+Collected fields include application/OS version, build audience, random per-launch session and per-operation
+IDs, feature categories, operation outcomes, sanitized error categories, durations, and aggregate/count-size
+buckets. The **Windows machine ID** and **host Windows Xbox sandbox** are included when available.
+The machine ID is persistent and pseudonymous, not anonymous; it identifies a machine rather than a person or
+installation. The host sandbox is not necessarily the captured console's sandbox.
+
+Telemetry does **not** upload captured traffic, headers, bodies, packets, WebSocket messages, URLs, hostnames,
+console names, addresses, account information, scripts, file paths, exception messages, stack traces, or debug
+logs. Existing local captures and support bundles are separate and can contain sensitive traffic.
+Application-side filtering does not control collector-side IP enrichment; that remains a required release approval.
+
+| Events | Purpose |
+|---|---|
+| `AppLaunched`, `AppReady`, `AppClosed` | Eligible launches, startup and elapsed-session duration |
+| `OperationStarted`, `OperationCompleted`, `OperationStage` | Device setup, proxy configuration, captures, file operations, analysis, script compilation, report navigation, and support outcomes/latency |
+| `CaptureFirstData` | First captured item; distinguish an active listener from a capture containing data |
+| `FeatureUsed` | First use of a fixed feature category in a session |
+| `Counter` | Session feature action totals, aggregated script runtime failures, list/script configuration edits, and file-dialog cancellations |
+| `SessionSummary` | Elapsed session time and peak concurrent capture operations |
+| `UnhandledFailure` | Deduplicated observed failures with fixed error categories, never exception contents |
+
+Delivery is best-effort, uses a bounded in-memory exporter queue, and never persists an offline event queue.
+Missing exit events do not prove crashes, and statistics exclude non-exporting/offline launches. Hidden reports
+are not counted as viewed. Statistics report timing measures WebView2 navigation, not proof that every graph's
+JavaScript rendered successfully. See [CONTRIBUTING.md](CONTRIBUTING.md) for build/validation controls.
+See [TELEMETRY.md](TELEMETRY.md) for the complete event schema and local-only sample generation from
+the running app using `--telemetry-sample`. This explicit development mode writes a new JSON Lines
+file without a collector key or telemetry network export.
+
 ## Basic Environment Requirements & Dependencies
 
 |  |Web Proxy | Low Level Network Capture| Notes |

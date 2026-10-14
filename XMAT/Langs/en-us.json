@@ -16,6 +16,8 @@
 	"HELP_MENU": "Help",
 	"COLLECT_LOGS": "Collect Logs",
 	"GDKX_INFO": "View GDK Extensions for Xbox details",
+	"TELEMETRY_SAMPLE_FAILED_TITLE": "Telemetry sample capture failed",
+	"TELEMETRY_SAMPLE_FAILED_MESSAGE": "No telemetry samples are being recorded and no collector export was started. Use a non-exporting build with --telemetry-sample followed by a fully qualified path to a new file in an existing writable directory. Existing files are not overwritten.",
 
 	"PROXY_ROOT_CERT_WARNING_TITLE": "Root Certificate Information",
 	"PROXY_ROOT_CERT_WARNING_MESSAGE": "You will see a pop-up message asking you to install and trust our Root Certificate.\n\nThis will only occur once and is essential in order for the tool to be able to decrypt HTTPS traffic transmitted to and from services.",
