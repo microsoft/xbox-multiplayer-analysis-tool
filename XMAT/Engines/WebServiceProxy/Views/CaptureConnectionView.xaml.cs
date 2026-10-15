@@ -7,13 +7,16 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using Microsoft.CodeAnalysis;
+using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 
@@ -24,6 +27,8 @@ namespace XMAT.WebServiceCapture
     /// </summary>
     public partial class CaptureConnectionView : UserControl
     {
+        private static readonly TimeSpan StopDialogDelay =
+            TimeSpan.FromMilliseconds(500);
         private bool _notAtBottom;
 
         public bool AutoScroll
@@ -52,6 +57,7 @@ namespace XMAT.WebServiceCapture
             DisableButton.Content = Localization.GetLocalizedString("WEBCAP_DISABLE");
             CheckButton.Content = Localization.GetLocalizedString("WEBCAP_CHECK");
             AnalyzeButton.Content = Localization.GetLocalizedString("WEBCAP_ANALYZE");
+            AnalyzeButton.ToolTip = Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
             ClearButton.Content = Localization.GetLocalizedString("WEBCAP_CLEAR");
             AutoScrollButton.Content = Localization.GetLocalizedString("WEBCAP_AUTOSCROLL");
             FiltersText.Text = Localization.GetLocalizedString("GENERIC_FILTERS");
@@ -181,114 +187,170 @@ namespace XMAT.WebServiceCapture
 
         private async void EnableDevice_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
-            switch (captureDeviceContext.DeviceType)
+            if (!TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc) ||
+                !wsdcc.CanBeginTransition)
             {
-                case DeviceType.LocalPC:
-                {
-                    wsdcc.EnableProxyingPC();
-                    wsdcc.StartProxy(false);
-                    break;
-                }
+                return;
+            }
 
-                case DeviceType.GenericProxyDevice:
-                {
-                    wsdcc.StartProxy(true);
-                    break;
-                }
+            if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(out var operationLease))
+            {
+                return;
+            }
 
-                case DeviceType.XboxConsole:
-                {
-                    string proxyHostIpAddress = "";
-                    bool shouldEnableProxy = false;
+            using var operationLeaseScope = operationLease;
+            if (!wsdcc.CanBeginTransition)
+            {
+                return;
+            }
 
-                    IPAddress destinationAddress = await PublicUtilities.ResolveIP4AddressAsync(wsdcc.DeviceName);
-                    if (destinationAddress == null)
+            using var transitionLease = wsdcc.BeginTransition();
+            try
+            {
+                switch (captureDeviceContext.DeviceType)
+                {
+                    case DeviceType.LocalPC:
                     {
-                        MessageBox.Show(Localization.GetLocalizedString("DNS_RESOLVE_ERROR_MESSAGE", wsdcc.DeviceName), Localization.GetLocalizedString("DNS_RESOLVE_ERROR_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
-                        return;
-                    }
-
-                    IEnumerable<IPAddress> sourceAddresses = PublicUtilities.GetMyIp4Addresses();
-
-                    if (sourceAddresses.Count() == 0)
-                    {
-                        // TODO: show a message box saying that we have no valid
-                        // source address
+                        wsdcc.EnableProxyingPC();
+                        await wsdcc.StartProxyAsync(false);
                         break;
                     }
-                    else if (sourceAddresses.Count() == 1)
-                    {
-                        proxyHostIpAddress = sourceAddresses.First().ToString();
-                        shouldEnableProxy = true;
-                    }
-                    else
-                    {
-                        // find the first source address from which we can ping
-                        // the console device's IP address directly
 
-                        var sourceAddressModels = new List<PingableSourceAddressModel>();
-                        foreach (var sourceAddress in sourceAddresses)
+                    case DeviceType.GenericProxyDevice:
+                    {
+                        await wsdcc.StartProxyAsync(true);
+                        break;
+                    }
+
+                    case DeviceType.XboxConsole:
+                    {
+                        string proxyHostIpAddress = "";
+                        bool shouldEnableProxy = false;
+
+                        IPAddress destinationAddress = await PublicUtilities.ResolveIP4AddressAsync(wsdcc.DeviceName);
+                        if (destinationAddress == null)
                         {
-                            sourceAddressModels.Add(
-                                new PingableSourceAddressModel(
-                                    sourceAddress,
-                                    destinationAddress,
-                                    sourceAddressModels.Count == 0));
+                            MessageBox.Show(Localization.GetLocalizedString("DNS_RESOLVE_ERROR_MESSAGE", wsdcc.DeviceName), Localization.GetLocalizedString("DNS_RESOLVE_ERROR_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+                            return;
                         }
 
-                        var selectorWindow = new SourceAddressWindow
-                        {
-                            Owner = Application.Current.MainWindow,
-                            DataContext = sourceAddressModels
-                        };
+                        IEnumerable<IPAddress> sourceAddresses = PublicUtilities.GetMyIp4Addresses();
 
-                        // show the list of available source addresses
-                        var confirmed = selectorWindow.ShowDialog() ?? false;
-
-                        if (confirmed)
+                        if (sourceAddresses.Count() == 0)
                         {
-                            // TODO: do we need to explicitly set the source address on
-                            // the proxy engine itself?
-                            proxyHostIpAddress = selectorWindow.SelectedSourceAddress.SourceAddress.ToString();
+                            // TODO: show a message box saying that we have no valid
+                            // source address
+                            break;
+                        }
+                        else if (sourceAddresses.Count() == 1)
+                        {
+                            proxyHostIpAddress = sourceAddresses.First().ToString();
                             shouldEnableProxy = true;
                         }
-                    }
-
-                    if (shouldEnableProxy)
-                    {
-                        bool bWasEnabled = await wsdcc.EnableProxyingXbox(proxyHostIpAddress);
-
-                        if (bWasEnabled)
+                        else
                         {
-                            wsdcc.StartProxy(false);
-                        }
-                    }
-                    // TODO: if we 've gotten this far, then that means we
-                    // were not able to find a suitable source address to use
-                    // and we should message the user
-                    break;
-                }
+                            // find the first source address from which we can ping
+                            // the console device's IP address directly
 
-                default:
-                    throw new NotImplementedException(
-                $"Device type of {captureDeviceContext.DeviceType} for {captureDeviceContext.DeviceName} is not supported.");
+                            var sourceAddressModels = new List<PingableSourceAddressModel>();
+                            foreach (var sourceAddress in sourceAddresses)
+                            {
+                                sourceAddressModels.Add(
+                                    new PingableSourceAddressModel(
+                                        sourceAddress,
+                                        destinationAddress,
+                                        sourceAddressModels.Count == 0));
+                            }
+
+                            var selectorWindow = new SourceAddressWindow
+                            {
+                                Owner = Application.Current.MainWindow,
+                                DataContext = sourceAddressModels
+                            };
+
+                            // show the list of available source addresses
+                            var confirmed = selectorWindow.ShowDialog() ?? false;
+
+                            if (confirmed)
+                            {
+                                // TODO: do we need to explicitly set the source address on
+                                // the proxy engine itself?
+                                proxyHostIpAddress = selectorWindow.SelectedSourceAddress.SourceAddress.ToString();
+                                shouldEnableProxy = true;
+                            }
+                        }
+
+                        if (shouldEnableProxy)
+                        {
+                            bool bWasEnabled = await wsdcc.EnableProxyingXbox(proxyHostIpAddress);
+
+                            if (bWasEnabled)
+                            {
+                                await wsdcc.StartProxyAsync(false);
+                            }
+                        }
+                        // TODO: if we 've gotten this far, then that means we
+                        // were not able to find a suitable source address to use
+                        // and we should message the user
+                        break;
+                    }
+
+                    default:
+                        throw new NotImplementedException(
+                    $"Device type of {captureDeviceContext.DeviceType} for {captureDeviceContext.DeviceName} is not supported.");
+                }
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                ShowProxyOperationError(ex);
             }
         }
 
         private async void DisableDevice_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
-            await wsdcc.DisableProxying();
-            wsdcc.StopProxy();
+            if (!CaptureAppModel.AppModel.CanStopCaptures)
+            {
+                return;
+            }
+
+            if (!TryGetCaptureContext(DataContext, out _, out var wsdcc) ||
+                !wsdcc.CanBeginStopTransition)
+            {
+                return;
+            }
+
+            if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
+                    out var operationLease))
+            {
+                return;
+            }
+
+            using (operationLease)
+            {
+                if (!wsdcc.CanBeginStopTransition)
+                {
+                    return;
+                }
+
+                using var transitionLease = wsdcc.BeginStopTransition();
+                try
+                {
+                    await wsdcc.DisableProxying();
+                    await wsdcc.StopProxyAsync();
+                }
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                {
+                    ShowProxyOperationError(ex);
+                }
+            }
         }
 
         private async void CheckDevice_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
+            if (!TryGetCaptureContext(DataContext, out _, out var wsdcc))
+            {
+                return;
+            }
 
             if (!GDKXHelper.IsGDKXInstalled(true))
             { return; }
@@ -319,71 +381,189 @@ namespace XMAT.WebServiceCapture
 
         private async void StartStopCapture_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var stop = e.Parameter as bool?;
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            var wsdcc = captureDeviceContext.CaptureController as WebServiceDeviceCaptureController;
-
-            if (captureDeviceContext?.DeviceType == DeviceType.XboxConsole)
+            if (!TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc))
             {
-                if (!GDKXHelper.IsGDKXInstalled(true))
-                { return; }
+                return;
             }
 
-            if (stop.GetValueOrDefault())
+            var start = e.Parameter as bool?;
+
+            try
             {
-                if (captureDeviceContext?.DeviceType == DeviceType.LocalPC)
+                if (start.GetValueOrDefault())
                 {
-                    wsdcc.EnableProxyingPC();
+                    if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
+                        out var operationLease))
+                    {
+                        return;
+                    }
+
+                    using (operationLease)
+                    {
+                        if (wsdcc.IsRunning || wsdcc.IsTransitioning)
+                        {
+                            return;
+                        }
+
+                        if (captureDeviceContext.DeviceType == DeviceType.XboxConsole &&
+                            !GDKXHelper.IsGDKXInstalled(true))
+                        {
+                            return;
+                        }
+
+                        if (captureDeviceContext.DeviceType == DeviceType.LocalPC)
+                        {
+                            wsdcc.EnableProxyingPC();
+                        }
+                        await wsdcc.StartProxyAsync(
+                            captureDeviceContext.DeviceType == DeviceType.GenericProxyDevice);
+                    }
                 }
-                wsdcc.StartProxy(captureDeviceContext?.DeviceType == DeviceType.GenericProxyDevice);
+                else
+                {
+                    if (!CaptureAppModel.AppModel.CanStopCaptures)
+                    {
+                        return;
+                    }
+
+                    if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
+                            out var operationLease))
+                    {
+                        return;
+                    }
+
+                    using (operationLease)
+                    {
+                        if (!wsdcc.CanBeginStopTransition)
+                        {
+                            return;
+                        }
+
+                        using var transitionLease = wsdcc.BeginStopTransition();
+                        await StopCaptureWithStatusAsync(
+                            captureDeviceContext,
+                            wsdcc);
+                    }
+                }
             }
-            else
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                wsdcc.StopProxy();
-                if (captureDeviceContext?.DeviceType == DeviceType.LocalPC)
-                {
-                    await wsdcc.DisableProxying();
-                }
+                ShowProxyOperationError(ex);
             }
+        }
+
+        private static async Task StopCaptureWithStatusAsync(
+            ICaptureDeviceContext captureDeviceContext,
+            WebServiceDeviceCaptureController controller)
+        {
+            var stopStopwatch = Stopwatch.StartNew();
+            var progressModel = new WebProxyStopProgressModel();
+            var progress = new Progress<WebProxyStopProgress>(
+                progressModel.Update);
+
+            var stopTask = StopCaptureCoreAsync(
+                captureDeviceContext,
+                controller,
+                progress,
+                stopStopwatch);
+
+            var shouldShowProgress =
+                await WebProxyStopProgressWindow.ShouldShowAsync(
+                    stopTask,
+                    StopDialogDelay);
+            if (shouldShowProgress && !stopTask.IsCompleted)
+            {
+                var progressWindow = new WebProxyStopProgressWindow(
+                    stopTask,
+                    progressModel)
+                {
+                    Owner = Application.Current.MainWindow
+                };
+                progressWindow.ShowDialog();
+            }
+
+            await stopTask;
+        }
+
+        private static async Task StopCaptureCoreAsync(
+            ICaptureDeviceContext captureDeviceContext,
+            WebServiceDeviceCaptureController controller,
+            IProgress<WebProxyStopProgress> progress,
+            Stopwatch stopStopwatch)
+        {
+            await controller.StopProxyAsync(progress);
+            if (captureDeviceContext.DeviceType == DeviceType.LocalPC)
+            {
+                progress.Report(new WebProxyStopProgress(
+                    WebProxyStopPhase.DisablingSystemProxy,
+                    stopStopwatch.Elapsed));
+                await controller.DisableProxying();
+            }
+
+            progress.Report(new WebProxyStopProgress(
+                WebProxyStopPhase.Complete,
+                stopStopwatch.Elapsed));
+        }
+
+        private static void ShowProxyOperationError(Exception ex)
+        {
+            PublicUtilities.AppLog(LogLevel.ERROR, $"Web proxy operation failed: {ex}");
+            MessageBox.Show(
+                ex.Message,
+                Localization.GetLocalizedString("PROXY_CAPTURE_ERROR_TITLE"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
 
         private void StartStopCapture_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            if (captureDeviceContext != null)
+            e.CanExecute = false;
+            if (TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc))
             {
-                e.CanExecute = !captureDeviceContext.IsReadOnly;
+                e.CanExecute = !captureDeviceContext.IsReadOnly &&
+                    !wsdcc.IsTransitioning &&
+                    (wsdcc.IsRunning
+                        ? CaptureAppModel.AppModel.CanStopCaptures
+                        : CaptureAppModel.AppModel.CanModifyCaptureData);
             }
         }
 
         private void Enable_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            if (captureDeviceContext != null &&
+            e.CanExecute =
+                TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc) &&
                 captureDeviceContext.DeviceType == DeviceType.XboxConsole &&
-                !captureDeviceContext.IsReadOnly)
-            {
-                e.CanExecute = true;
-            }
-            else
-            {
-                e.CanExecute = false;
-            }
+                !captureDeviceContext.IsReadOnly &&
+                wsdcc.CanBeginTransition &&
+                CaptureAppModel.AppModel.CanModifyCaptureData;
         }
 
         private void Disable_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            if (captureDeviceContext != null &&
+            e.CanExecute =
+                TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc) &&
                 captureDeviceContext.DeviceType == DeviceType.XboxConsole &&
-                !captureDeviceContext.IsReadOnly)
+                !captureDeviceContext.IsReadOnly &&
+                wsdcc.CanBeginStopTransition &&
+                CaptureAppModel.AppModel.CanStopCaptures;
+        }
+
+        internal static bool TryGetCaptureContext(
+            object dataContext,
+            out ICaptureDeviceContext captureDeviceContext,
+            out WebServiceDeviceCaptureController captureController)
+        {
+            if (dataContext is ICaptureDeviceContext context &&
+                context.CaptureController is WebServiceDeviceCaptureController controller)
             {
-                e.CanExecute = true;
+                captureDeviceContext = context;
+                captureController = controller;
+                return true;
             }
-            else
-            {
-                e.CanExecute = false;
-            }
+
+            captureDeviceContext = null;
+            captureController = null;
+            return false;
         }
 
         private void ConnectionList_ScrollChanged(object sender, ScrollChangedEventArgs e)

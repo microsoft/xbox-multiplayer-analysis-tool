@@ -8,6 +8,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 
@@ -49,10 +50,12 @@ namespace XMAT.Scripting
                            .GetCustomAttribute<T>();
         }
 
-        public Task<T> RunScriptAsync<T>(T input) where T : class
+        public Task<T> RunScriptAsync<T>(
+            T input,
+            CancellationToken cancellationToken = default) where T : class
         {
             if (IsEnabled)
-                return _host.RunScriptAsync(input);
+                return _host.RunScriptAsync(input, cancellationToken);
             else
                 return Task.FromResult(input);
         }

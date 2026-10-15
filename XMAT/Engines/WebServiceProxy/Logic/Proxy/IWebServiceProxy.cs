@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Threading.Tasks;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture.Proxy
@@ -27,7 +28,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         void StartProxy(WebServiceProxyOptions options);
 
-        void StopProxy();
+        Task StopProxyAsync(IProgress<WebProxyStopProgress> progress = null);
 
         void Reset();
     }

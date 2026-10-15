@@ -109,6 +109,7 @@ namespace XMAT.WebServiceCapture
             // destroy existing captures for that controller and cancel an existing import
             // and wait until that is done...
             captureController.CancelExistingFiddlerImport();
+            captureController.PrepareForActiveCaptureData();
             captureController.ClearAllCaptures();
 
             // ...then kick off another import

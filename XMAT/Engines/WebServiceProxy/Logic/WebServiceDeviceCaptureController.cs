@@ -6,13 +6,17 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
+using System.Windows.Threading;
 using XMAT.Scripting;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
@@ -23,6 +27,12 @@ namespace XMAT.WebServiceCapture
 {
     public class WebServiceDeviceCaptureController : INotifyPropertyChanged, IDeviceCaptureController
     {
+        private enum CaptureDataSource
+        {
+            ActiveTable,
+            LoadedDataset
+        }
+
         class ControllerParameters : ICaptureMethodParameters
         {
             public UInt16 Port { get; set; }
@@ -51,10 +61,41 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        public bool IsRunning { get => _isRunning; set { _isRunning = value; RaisePropertyChange(); } }
+        public bool IsRunning
+        {
+            get => _isRunning;
+            set
+            {
+                if (_isRunning == value)
+                {
+                    return;
+                }
+
+                _isRunning = value;
+                RaisePropertyChange();
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+        public bool IsTransitioning
+        {
+            get => _isTransitioning;
+            internal set
+            {
+                if (_isTransitioning == value)
+                {
+                    return;
+                }
+
+                _isTransitioning = value;
+                RaisePropertyChange();
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
         public UInt16 Port { get => _parameters.Port; set { _parameters.Port = value; RaisePropertyChange(); } }
         public bool PromptToDisableOnClose { get => _parameters.PromptToDisableOnClose; set { _parameters.PromptToDisableOnClose = value; RaisePropertyChange(); } }
         public bool IsPortValid { get => Port > 0; }
+        internal bool CanBeginTransition => !IsRunning && !IsTransitioning;
+        internal bool CanBeginStopTransition => IsRunning && !IsTransitioning;
 
         // NOTE: this is an 'object' because the parameters are
         // serialized/deserialized and the Json serializer
@@ -95,6 +136,11 @@ namespace XMAT.WebServiceCapture
         }
 
         private const int LoadedCapturesPageBreakSize = 100;
+        private const int UiUpdateBatchSize = 50;
+        private static readonly TimeSpan CaptureCallbackDrainTimeout =
+            TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan ProgressUpdateInterval =
+            TimeSpan.FromMilliseconds(100);
 
         private ProxyConnectionModel _selectedConnectionModel;
         private WebSocketMessageModel _selectedWebSocketMessage;
@@ -102,7 +148,13 @@ namespace XMAT.WebServiceCapture
         private readonly bool _readOnly;
         private IWebServiceProxy _webProxy;
         private IDataTable _dataTable;
+        private IDataset _loadedCaptureDataset;
+        private CaptureDataSource _captureDataSource = CaptureDataSource.ActiveTable;
         private readonly object _lockObj = new object();
+        private readonly AsyncOperationTracker _captureCallbacks = new();
+        private readonly BatchedDispatcherQueue _uiUpdateQueue;
+        private CancellationTokenSource _captureCallbackCancellationTokenSource;
+        private bool _isTransitioning;
 
         public async Task<EProxyEnabledCheckResult> IsProxyEnabled()
         {
@@ -147,6 +199,12 @@ namespace XMAT.WebServiceCapture
             ScriptTypes = new ScriptTypeCollection(new Type[] { typeof(WebServiceCaptureScriptParams), typeof(ClientRequest), typeof(ServerResponse), typeof(HeaderCollection) });
             BlockList = new BlockListModel();
             BypassList = new BypassListModel();
+            _uiUpdateQueue = new BatchedDispatcherQueue(
+                Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher,
+                UiUpdateBatchSize,
+                ex => PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"Capture UI update failed: {ex}"));
         }
 
         public void Initialize()
@@ -194,16 +252,20 @@ namespace XMAT.WebServiceCapture
                 {
                     await DisableProxying();
                 }
+                else
+                {
+                    return false;
+                }
             }
             return true;
         }
 
-        public void Close()
+        public async Task CloseAsync()
         {
             CancelExistingFiddlerImport();
             if (!_readOnly)
             {
-                StopProxy();
+                await StopProxyAsync();
                 ProxyPortPool.ReleasePort(Port);
             }
             ClearAllCaptures();
@@ -213,19 +275,38 @@ namespace XMAT.WebServiceCapture
         {
             using (var bo = PublicUtilities.BlockingOperation())
             {
-                if (tables != null && tables.FirstOrDefault() != null)
-                {
-                    IEnumerable<IDataRecord> records = tables.First().DataRecordsWhen(
-                        new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName,
-                        DeviceName)
-                        );
+                LoadCaptureDataset(tables?.FirstOrDefault());
+            }
+        }
 
-                    foreach (IDataRecord record in records)
-                    {
-                        ProxyConnections.AddFromDataRecord(record, true);
-                    }
+        internal void LoadCaptureDataset(IDataset dataset)
+        {
+            ClearCaptureViewModels();
+            _captureDataSource = CaptureDataSource.LoadedDataset;
+            _loadedCaptureDataset = dataset;
+            if (_loadedCaptureDataset != null)
+            {
+                foreach (IDataRecord record in GetCaptureRecords())
+                {
+                    ProxyConnections.AddFromDataRecord(record, true);
                 }
             }
+        }
+
+        internal IEnumerable<IDataRecord> GetCaptureRecords()
+        {
+            var dataset = _captureDataSource == CaptureDataSource.LoadedDataset
+                ? _loadedCaptureDataset
+                : _dataTable?.Dataset;
+            if (dataset == null)
+            {
+                return Enumerable.Empty<IDataRecord>();
+            }
+
+            return dataset.DataRecordsWhen(
+                new FieldValue<string>(
+                    WebServiceCaptureMethod.FieldKey_DeviceName,
+                    DeviceName));
         }
 
         internal void ImportCapturesToTable(
@@ -233,6 +314,8 @@ namespace XMAT.WebServiceCapture
             IDataTable dataTable,
             CancellationToken cancelToken)
         {
+            PrepareForActiveCaptureData();
+
             if (ProxyConnections == null)
                 return;
 
@@ -354,7 +437,7 @@ namespace XMAT.WebServiceCapture
             MessageBox.Show(Localization.GetLocalizedString("GENERIC_DEVICE_PROXY_INFO_MESSAGE", arrIPAddrs.First().ToString(), Port, PublicUtilities.StorageDirectoryPath), Localization.GetLocalizedString("GENERIC_DEVICE_PROXY_INFO_CAPTION"), MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
-        internal void StartProxy(bool bShowProxyInformation)
+        internal async Task StartProxyAsync(bool bShowProxyInformation)
         {
             var options = new WebServiceProxyOptions
             {
@@ -362,7 +445,36 @@ namespace XMAT.WebServiceCapture
                 Port = Port
             };
 
-            _webProxy.StartProxy(options);
+            _captureCallbacks.StartAccepting();
+            try
+            {
+                _uiUpdateQueue.StartAccepting();
+            }
+            catch
+            {
+                await _captureCallbacks.StopAcceptingAndWaitAsync();
+                throw;
+            }
+            _captureCallbackCancellationTokenSource?.Dispose();
+            _captureCallbackCancellationTokenSource = new CancellationTokenSource();
+            try
+            {
+                _webProxy.StartProxy(options);
+            }
+            catch
+            {
+                var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
+                _captureCallbackCancellationTokenSource.Cancel();
+                await _webProxy.StopProxyAsync();
+                await WaitForCaptureCallbacksAsync(
+                    callbacksDrained,
+                    null,
+                    Stopwatch.StartNew());
+                await _uiUpdateQueue.CompleteAndDrainAsync();
+                DisposeCaptureCallbackCancellation();
+                throw;
+            }
+
             IsRunning = true;
 
             if (bShowProxyInformation)
@@ -371,16 +483,160 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        internal void StopProxy()
+        internal async Task StopProxyAsync(
+            IProgress<WebProxyStopProgress> progress = null)
         {
-            _webProxy.StopProxy();
+            var stopStopwatch = Stopwatch.StartNew();
+            var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
+            _captureCallbackCancellationTokenSource?.Cancel();
+            Exception proxyStopException = null;
+            try
+            {
+                await _webProxy.StopProxyAsync(progress);
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                proxyStopException = ex;
+            }
+
+            await WaitForCaptureCallbacksAsync(
+                callbacksDrained,
+                progress,
+                stopStopwatch);
+
+            var uiDrainStopwatch = Stopwatch.StartNew();
+            var uiUpdatesDrained = _uiUpdateQueue.CompleteAndDrainAsync();
+            await WaitForUiUpdatesAsync(
+                uiUpdatesDrained,
+                progress,
+                stopStopwatch);
+            PublicUtilities.AppLog(
+                LogLevel.INFO,
+                $"Capture UI updates drained in {uiDrainStopwatch.Elapsed}.");
+
+            DisposeCaptureCallbackCancellation();
+            if (proxyStopException != null)
+            {
+                ExceptionDispatchInfo.Capture(proxyStopException).Throw();
+            }
+
             IsRunning = false;
+            PublicUtilities.AppLog(
+                LogLevel.INFO,
+                $"Web proxy capture stopped in {stopStopwatch.Elapsed}.");
         }
 
-        private void HandleRowAdded(Int64 rowId)
+        private async Task WaitForCaptureCallbacksAsync(
+            Task callbacksDrained,
+            IProgress<WebProxyStopProgress> progress,
+            Stopwatch stopStopwatch)
+        {
+            var callbackStopwatch = Stopwatch.StartNew();
+            var timeoutTask = Task.Delay(CaptureCallbackDrainTimeout);
+            try
+            {
+                while (!callbacksDrained.IsCompleted)
+                {
+                    progress?.Report(new WebProxyStopProgress(
+                        WebProxyStopPhase.WaitingForCallbacks,
+                        stopStopwatch.Elapsed,
+                        _captureCallbacks.ActiveOperationCount,
+                        _uiUpdateQueue.PendingCount));
+
+                    var completed = await Task.WhenAny(
+                        callbacksDrained,
+                        timeoutTask,
+                        Task.Delay(ProgressUpdateInterval));
+                    if (completed == timeoutTask)
+                    {
+                        throw new TimeoutException();
+                    }
+                }
+
+                await callbacksDrained;
+                progress?.Report(new WebProxyStopProgress(
+                    WebProxyStopPhase.WaitingForCallbacks,
+                    stopStopwatch.Elapsed,
+                    0,
+                    _uiUpdateQueue.PendingCount));
+                PublicUtilities.AppLog(
+                    LogLevel.INFO,
+                    $"Capture callbacks drained in {callbackStopwatch.Elapsed}.");
+            }
+            catch (TimeoutException ex)
+            {
+                var timeoutSeconds = (int)CaptureCallbackDrainTimeout.TotalSeconds;
+                throw new TimeoutException(
+                    Localization.GetLocalizedString(
+                        "PROXY_CAPTURE_CALLBACK_TIMEOUT",
+                        timeoutSeconds),
+                    ex);
+            }
+        }
+
+        private async Task WaitForUiUpdatesAsync(
+            Task uiUpdatesDrained,
+            IProgress<WebProxyStopProgress> progress,
+            Stopwatch stopStopwatch)
+        {
+            while (!uiUpdatesDrained.IsCompleted)
+            {
+                progress?.Report(new WebProxyStopProgress(
+                    WebProxyStopPhase.DrainingUiUpdates,
+                    stopStopwatch.Elapsed,
+                    0,
+                    _uiUpdateQueue.PendingCount));
+
+                await Task.WhenAny(
+                    uiUpdatesDrained,
+                    Task.Delay(ProgressUpdateInterval));
+            }
+
+            await uiUpdatesDrained;
+            progress?.Report(new WebProxyStopProgress(
+                WebProxyStopPhase.DrainingUiUpdates,
+                stopStopwatch.Elapsed,
+                0,
+                0));
+        }
+
+        private void DisposeCaptureCallbackCancellation()
+        {
+            _captureCallbackCancellationTokenSource?.Dispose();
+            _captureCallbackCancellationTokenSource = null;
+        }
+
+        internal IDisposable BeginTransition()
+        {
+            if (!CanBeginTransition)
+            {
+                throw new InvalidOperationException("The proxy cannot begin another transition.");
+            }
+
+            IsTransitioning = true;
+            return new TransitionLease(this);
+        }
+
+        internal IDisposable BeginStopTransition()
+        {
+            if (!CanBeginStopTransition)
+            {
+                throw new InvalidOperationException(
+                    "The proxy cannot begin a stop transition.");
+            }
+
+            IsTransitioning = true;
+            return new TransitionLease(this);
+        }
+
+        private IDataRecord DataRecordFromRow(Int64 rowId)
         {
             var records = _dataTable.Dataset.DataRecordsFrom(rowId, 1);
-            var record = records.FirstOrDefault();
+            return records.FirstOrDefault();
+        }
+
+        private void HandleRowAdded(IDataRecord record)
+        {
             if (record != null && record.Str(WebServiceCaptureMethod.FieldKey_DeviceName).Equals(
                 DeviceName))
             {
@@ -388,10 +644,8 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private void HandleRowUpdated(Int64 rowId)
+        private void HandleRowUpdated(IDataRecord record)
         {
-            var records = _dataTable.Dataset.DataRecordsFrom(rowId, 1);
-            var record = records.FirstOrDefault();
             if (record != null && record.Str(WebServiceCaptureMethod.FieldKey_DeviceName).Equals(
                 DeviceName))
             {
@@ -429,12 +683,28 @@ namespace XMAT.WebServiceCapture
 
         private async void WebProxy_ReceivedSslConnectionRequestAsync(object sender, SslConnectionRequestEventArgs connectionEvent)
         {
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return;
+            }
+
+            using var callbackLeaseScope = callbackLease;
+            var cancellationToken =
+                _captureCallbackCancellationTokenSource?.Token ??
+                CancellationToken.None;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
                 var sp = new WebServiceCaptureScriptParams() { Request = connectionEvent.Request, Response = null };
-                await Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest].RunScriptAsync(sp);
+                await Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest].RunScriptAsync(
+                    sp,
+                    cancellationToken);
                 connectionEvent.AcceptConnection = sp.Continue;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                connectionEvent.AcceptConnection = false;
+                return;
             }
             catch (Exception e)
             {
@@ -446,6 +716,12 @@ namespace XMAT.WebServiceCapture
                 PublicUtilities.AppLog(LogLevel.INFO,
                     $"Blocked SSL CONNECT to '{connectionEvent.Request.Host ?? connectionEvent.Request.Path}' (BlockList)");
                 connectionEvent.AcceptConnection = false;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                connectionEvent.AcceptConnection = false;
+                return;
             }
 
             string base64Body = string.Empty;
@@ -473,11 +749,18 @@ namespace XMAT.WebServiceCapture
                 connectionEvent.ClientIP
             );
 
-            PublicUtilities.SafeInvoke(() => HandleRowAdded(rowId));
+            var addedRecord = DataRecordFromRow(rowId);
+            _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
         }
 
         private void WebProxy_CompletedSslConnectionRequest(object sender, SslConnectionCompletionEventArgs completionEvent)
         {
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return;
+            }
+
+            using var callbackLeaseScope = callbackLease;
             var record = _dataTable.Dataset.DataRecordsWhen(
                 new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName),
                 new FieldValue<long>(WebServiceCaptureMethod.FieldKey_RequestNumber, completionEvent.Request.RequestNumber),
@@ -490,17 +773,34 @@ namespace XMAT.WebServiceCapture
                 new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, @"200")
             );
 
-            PublicUtilities.SafeInvoke(() => HandleRowUpdated(record.RowId));
+            var updatedRecord = DataRecordFromRow(record.RowId);
+            _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord));
         }
 
         private async void WebProxy_ReceivedWebRequestAsync(object sender, HttpRequestEventArgs requestEvent)
         {
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return;
+            }
+
+            using var callbackLeaseScope = callbackLease;
+            var cancellationToken =
+                _captureCallbackCancellationTokenSource?.Token ??
+                CancellationToken.None;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
                 var sp = new WebServiceCaptureScriptParams() { Request = requestEvent.Request, Response = null };
-                await Scripts[WebServiceCaptureScriptableEventType.WebRequest].RunScriptAsync(sp);
+                await Scripts[WebServiceCaptureScriptableEventType.WebRequest].RunScriptAsync(
+                    sp,
+                    cancellationToken);
                 requestEvent.AcceptRequest = sp.Continue;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                requestEvent.AcceptRequest = false;
+                return;
             }
             catch (Exception e)
             {
@@ -512,6 +812,12 @@ namespace XMAT.WebServiceCapture
                 PublicUtilities.AppLog(LogLevel.INFO,
                     $"Blocked {requestEvent.Request.Method} {requestEvent.Request.Host}{requestEvent.Request.Path} (BlockList)");
                 requestEvent.AcceptRequest = false;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                requestEvent.AcceptRequest = false;
+                return;
             }
 
             string base64Body = string.Empty;
@@ -539,21 +845,44 @@ namespace XMAT.WebServiceCapture
                 DeviceName
             );
 
-            PublicUtilities.SafeInvoke(() => HandleRowAdded(rowId));
+            var addedRecord = DataRecordFromRow(rowId);
+            _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
         }
 
         private async void WebProxy_ReceivedWebResponseAsync(object sender, HttpResponseEventArgs responseEvent)
         {
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return;
+            }
+
+            using var callbackLeaseScope = callbackLease;
+            var cancellationToken =
+                _captureCallbackCancellationTokenSource?.Token ??
+                CancellationToken.None;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
                 var sp = new WebServiceCaptureScriptParams() { Request = responseEvent.Request, Response = responseEvent.Response };
-                await Scripts[WebServiceCaptureScriptableEventType.WebResponse].RunScriptAsync(sp);
+                await Scripts[WebServiceCaptureScriptableEventType.WebResponse].RunScriptAsync(
+                    sp,
+                    cancellationToken);
                 responseEvent.SendResponse = sp.Continue;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                responseEvent.SendResponse = false;
+                return;
             }
             catch (Exception e)
             {
                 PublicUtilities.AppLog(LogLevel.ERROR, $"WebResponse script error {e}");
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                responseEvent.SendResponse = false;
+                return;
             }
 
             var record = _dataTable.Dataset.DataRecordsWhen(
@@ -574,13 +903,20 @@ namespace XMAT.WebServiceCapture
                     new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body)
                 );
 
-                PublicUtilities.SafeInvoke(() => HandleRowUpdated(record.RowId));
+                var updatedRecord = DataRecordFromRow(record.RowId);
+                _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord));
             }
         }
 
         private void WebProxy_WebSocketMessage(object sender, WebSocketMessageEventArgs messageEvent)
         {
-            PublicUtilities.SafeInvoke(() =>
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return;
+            }
+
+            using var callbackLeaseScope = callbackLease;
+            _uiUpdateQueue.TryEnqueue(() =>
             {
                 var message = new WebSocketMessageModel(messageEvent);
                 WebSocketMessages.AddMessage(message);
@@ -590,15 +926,30 @@ namespace XMAT.WebServiceCapture
 
         public void ClearAllCaptures()
         {
+            ClearCaptureViewModels();
+            if (_captureDataSource == CaptureDataSource.ActiveTable)
+            {
+                _dataTable?.RemoveRowsWhere(
+                    new FieldValue<string>(
+                        WebServiceCaptureMethod.FieldKey_DeviceName,
+                        DeviceName)
+                    );
+            }
+            _loadedCaptureDataset = null;
+            _webProxy?.Reset();
+        }
+
+        internal void PrepareForActiveCaptureData()
+        {
+            _captureDataSource = CaptureDataSource.ActiveTable;
+            _loadedCaptureDataset = null;
+        }
+
+        private void ClearCaptureViewModels()
+        {
             ProxyConnections.RemoveAll();
             WebSocketMessages.Clear();
             SelectedWebSocketMessage = null;
-            _dataTable.RemoveRowsWhere(
-                new FieldValue<string>(
-                    WebServiceCaptureMethod.FieldKey_DeviceName,
-                    DeviceName)
-                );
-            _webProxy?.Reset();
         }
 
         public void ImportFromFiddler(string fromFilePath)
@@ -669,6 +1020,26 @@ namespace XMAT.WebServiceCapture
         private CancellationTokenSource _fiddlerAsyncImportCancelTokenSource;
         private bool _isRunning;
         private ControllerParameters _parameters;
+
+        private sealed class TransitionLease : IDisposable
+        {
+            private WebServiceDeviceCaptureController _owner;
+
+            internal TransitionLease(WebServiceDeviceCaptureController owner)
+            {
+                _owner = owner;
+            }
+
+            public void Dispose()
+            {
+                var owner = _owner;
+                _owner = null;
+                if (owner != null)
+                {
+                    owner.IsTransitioning = false;
+                }
+            }
+        }
 
         public event PropertyChangedEventHandler PropertyChanged;
         public void RaisePropertyChange([CallerMemberName] string name = null)

@@ -10,7 +10,7 @@
                  mc:Ignorable="d" 
                  >
     <UserControl.CommandBindings>
-            <CommandBinding Command="Close" Executed="TabClose_Executed"/>
+            <CommandBinding Command="Close" Executed="TabClose_Executed" CanExecute="TabClose_CanExecute"/>
     </UserControl.CommandBindings>
     <UserControl.Resources>
         <DataTemplate x:Key="WebProxyTemplate">

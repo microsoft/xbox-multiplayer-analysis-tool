@@ -5,6 +5,8 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using XMAT.Models;
+using XMAT.NetworkTrace;
 using XMAT.SharedInterfaces;
 
 namespace XMAT
@@ -24,14 +26,26 @@ namespace XMAT
             get { return Localization.GetLocalizedString("CAPTURE_DEVICES_TAB_READONLY"); }
         }
 
-        private async void TabClose_Executed(object sender, ExecutedRoutedEventArgs e)
+        private void TabClose_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (e.Parameter is not ICaptureDeviceContext deviceContext ||
+                deviceContext.CaptureController == null)
+            {
+                return;
+            }
+
+            RaiseDeviceTabClosedEvent(deviceContext);
+        }
+
+        private void TabClose_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
             var deviceContext = e.Parameter as ICaptureDeviceContext;
-
-            if (await deviceContext.CaptureController.CanCloseAsync())
-            {
-                RaiseDeviceTabClosedEvent(deviceContext);
-            }
+            e.CanExecute =
+                CaptureAppModel.AppModel.CanModifyCaptureData &&
+                !(deviceContext?.CaptureController is NetworkTraceCaptureController
+                {
+                    IsRunning: true
+                });
         }
 
         //
