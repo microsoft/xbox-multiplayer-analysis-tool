@@ -204,7 +204,9 @@ JSON ──► WebView2 HTML rendering   # Displayed in UI
 | `SmallBatchDetectionRule` | Inefficient small batches |
 | `CallRecorderRule` | Records all calls for debugging |
 | `StatsRecorderRule` | Collects aggregate statistics |
-| `XR049Rule` | Xbox-specific validation |
+| `XR049Rule` | Xbox rich-presence validation |
+
+`XR049Rule` checks JSON objects for a top-level `activity` property, skipping empty request bodies and non-object JSON values. Malformed JSON is recorded as a per-call warning in the exported rule results, and scanning continues with subsequent calls.
 
 **Reports:** `PerEndpointReport`, `CallReport`, `StatsReport`, `CertWarningReport` — rendered as HTML via WebView2.
 
