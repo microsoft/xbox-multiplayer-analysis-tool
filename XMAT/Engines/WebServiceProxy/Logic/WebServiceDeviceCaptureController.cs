@@ -36,12 +36,10 @@ namespace XMAT.WebServiceCapture
         class ControllerParameters : ICaptureMethodParameters
         {
             public UInt16 Port { get; set; }
-            public bool PromptToDisableOnClose { get; set; }
 
             internal ControllerParameters()
             {
                 Port = 0;
-                PromptToDisableOnClose = true;
             }
 
             public void Serialized() { }
@@ -52,11 +50,6 @@ namespace XMAT.WebServiceCapture
                 if (serializedObject.TryGetProperty(nameof(Port), out prop))
                 {
                     Port = prop.GetUInt16();
-                }
-
-                if (serializedObject.TryGetProperty(nameof(PromptToDisableOnClose), out prop))
-                {
-                    PromptToDisableOnClose = prop.GetBoolean();
                 }
             }
         }
@@ -92,7 +85,6 @@ namespace XMAT.WebServiceCapture
             }
         }
         public UInt16 Port { get => _parameters.Port; set { _parameters.Port = value; RaisePropertyChange(); } }
-        public bool PromptToDisableOnClose { get => _parameters.PromptToDisableOnClose; set { _parameters.PromptToDisableOnClose = value; RaisePropertyChange(); } }
         public bool IsPortValid { get => Port > 0; }
         internal bool CanBeginTransition => !IsRunning && !IsTransitioning;
         internal bool CanBeginStopTransition => IsRunning && !IsTransitioning;
@@ -223,8 +215,6 @@ namespace XMAT.WebServiceCapture
                     Port = ProxyPortPool.ObtainPort();
                 }
 
-                PromptToDisableOnClose = (CaptureMethod.PreferencesModel as PreferencesModel).PromptToDisableOnClose;
-
                 _webProxy = WebServiceProxy.CreateProxy();
                 _webProxy.BypassList = BypassList;
                 _webProxy.ReceivedSslConnectionRequest += WebProxy_ReceivedSslConnectionRequestAsync;
@@ -235,29 +225,39 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        public async Task<bool> CanCloseAsync()
+        public Task<bool> CanCloseAsync()
         {
-            EProxyEnabledCheckResult proxyCheckResult = await IsProxyEnabled();
-            if (proxyCheckResult == EProxyEnabledCheckResult.ProxyEnabled && _parameters.PromptToDisableOnClose)
+            return CanCloseAsync(IsProxyEnabled, ShowDisableProxyPrompt, DisableProxying);
+        }
+
+        internal async Task<bool> CanCloseAsync(
+            Func<Task<EProxyEnabledCheckResult>> checkProxyEnabledAsync,
+            Func<bool?> confirmDisableProxy,
+            Func<Task> disableProxyAsync)
+        {
+            if (_readOnly || !((PreferencesModel)CaptureMethod.PreferencesModel).PromptToDisableOnClose)
             {
-                DisableDeviceOnCloseWindow disableProxy = new()
-                {
-                    Owner = Application.Current.MainWindow,
-                    DataContext = this
-                };
-
-                var confirmed = disableProxy.ShowDialog();
-
-                if (confirmed == true)
-                {
-                    await DisableProxying();
-                }
-                else
-                {
-                    return false;
-                }
+                return true;
             }
+
+            var proxyCheckResult = await checkProxyEnabledAsync();
+            if (proxyCheckResult == EProxyEnabledCheckResult.ProxyEnabled && confirmDisableProxy() == true)
+            {
+                await disableProxyAsync();
+            }
+
             return true;
+        }
+
+        private bool? ShowDisableProxyPrompt()
+        {
+            var disableProxy = new DisableDeviceOnCloseWindow
+            {
+                Owner = Application.Current.MainWindow,
+                DataContext = this
+            };
+
+            return disableProxy.ShowDialog();
         }
 
         public async Task CloseAsync()

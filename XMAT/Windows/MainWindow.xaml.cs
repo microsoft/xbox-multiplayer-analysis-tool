@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -26,6 +27,8 @@ namespace XMAT
         private readonly string NetTraceFilter = $"Network trace files (*.{NetTraceFileExtension})|*.{NetTraceFileExtension}";
 
         private Cursor _originalCursor;
+        private bool _isCloseInProgress;
+        private bool _closeConfirmed;
 
         public MainWindow()
         {
@@ -81,6 +84,44 @@ namespace XMAT
                 {
                     Cursor = _originalCursor;
                 };
+        }
+
+        private async void Window_Closing(object sender, CancelEventArgs e)
+        {
+            if (_closeConfirmed)
+            {
+                return;
+            }
+
+            e.Cancel = true;
+            if (_isCloseInProgress)
+            {
+                return;
+            }
+
+            _isCloseInProgress = true;
+            var wasEnabled = IsEnabled;
+            IsEnabled = false;
+
+            try
+            {
+                // Let WPF finish the synchronous Closing event before showing dialogs or closing again.
+                await Task.Yield();
+
+                if (!await CaptureAppModel.AppModel.CanCloseAsync())
+                {
+                    return;
+                }
+
+                CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+                _closeConfirmed = true;
+                Close();
+            }
+            finally
+            {
+                _isCloseInProgress = false;
+                IsEnabled = wasEnabled;
+            }
         }
 
         private async void AllCaptureDevicesPanel_TabClosed(object sender, RoutedEventArgs e)
@@ -306,7 +347,7 @@ namespace XMAT
 
         private void Exit_Executed(object sender, RoutedEventArgs e)
         {
-            Application.Current.Shutdown();
+            Close();
         }
 
         private void Preferences_Executed(object sender, RoutedEventArgs e)

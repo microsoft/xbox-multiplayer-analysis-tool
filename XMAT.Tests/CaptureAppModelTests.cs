@@ -15,6 +15,100 @@ namespace XMAT.Tests
     public class CaptureAppModelTests
     {
         [Fact]
+        public async Task CanCloseAsync_WithNoDevices_ReturnsTrue()
+        {
+            var model = new CaptureAppModel();
+
+            Assert.True(await model.CanCloseAsync());
+        }
+
+        [Fact]
+        public async Task CanCloseAsync_ChecksWritableDevicesSequentially()
+        {
+            var firstResult = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var first = new TestCaptureController(() => firstResult.Task);
+            var second = new TestCaptureController(() => Task.FromResult(true));
+            var model = new CaptureAppModel();
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(first));
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(second));
+
+            var closeTask = model.CanCloseAsync();
+
+            Assert.False(closeTask.IsCompleted);
+            Assert.Equal(1, first.CloseCheckCount);
+            Assert.Equal(0, second.CloseCheckCount);
+
+            firstResult.SetResult(true);
+
+            Assert.True(await closeTask);
+            Assert.Equal(1, second.CloseCheckCount);
+            Assert.Equal(2, model.CaptureDeviceContexts.Count);
+        }
+
+        [Fact]
+        public async Task CanCloseAsync_SkipsReadOnlyCaptures()
+        {
+            var imported = new TestCaptureController(() => throw new InvalidOperationException("Read-only capture checked."));
+            var active = new TestCaptureController(() => Task.FromResult(true));
+            var model = new CaptureAppModel();
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(imported) { IsReadOnly = true });
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(active));
+
+            Assert.True(await model.CanCloseAsync());
+            Assert.Equal(0, imported.CloseCheckCount);
+            Assert.Equal(1, active.CloseCheckCount);
+        }
+
+        [Fact]
+        public async Task CanCloseAsync_StopsWhenDeviceCannotClose()
+        {
+            var first = new TestCaptureController(() => Task.FromResult(true));
+            var second = new TestCaptureController(() => Task.FromResult(false));
+            var third = new TestCaptureController(() => Task.FromResult(true));
+            var model = new CaptureAppModel();
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(first));
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(second));
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(third));
+
+            Assert.False(await model.CanCloseAsync());
+            Assert.Equal(1, first.CloseCheckCount);
+            Assert.Equal(1, second.CloseCheckCount);
+            Assert.Equal(0, third.CloseCheckCount);
+            Assert.Equal(3, model.CaptureDeviceContexts.Count);
+        }
+
+        [Fact]
+        public async Task CanCloseAsync_PropagatesCloseCheckErrors()
+        {
+            var expected = new InvalidOperationException("Close check failed.");
+            var controller = new TestCaptureController(() => Task.FromException<bool>(expected));
+            var model = new CaptureAppModel();
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(controller));
+
+            var actual = await Assert.ThrowsAsync<InvalidOperationException>(model.CanCloseAsync);
+
+            Assert.Same(expected, actual);
+        }
+
+        [Fact]
+        public async Task CanCloseAsync_UsesSnapshotOfDeviceContexts()
+        {
+            var model = new CaptureAppModel();
+            var first = new TestCaptureController(() =>
+            {
+                model.CaptureDeviceContexts.Clear();
+                return Task.FromResult(true);
+            });
+            var second = new TestCaptureController(() => Task.FromResult(true));
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(first));
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(second));
+
+            Assert.True(await model.CanCloseAsync());
+            Assert.Equal(1, first.CloseCheckCount);
+            Assert.Equal(1, second.CloseCheckCount);
+        }
+
+        [Fact]
         public void CanAnalyzeCaptures_ReturnsFalseWhenAnotherCaptureIsRunning()
         {
             var model = new CaptureAppModel();
@@ -277,6 +371,11 @@ namespace XMAT.Tests
                 CaptureController = new TestCaptureController(isRunning);
             }
 
+            internal TestCaptureDeviceContext(TestCaptureController controller)
+            {
+                CaptureController = controller;
+            }
+
             internal void SetIsRunning(bool isRunning)
             {
                 (CaptureController as TestCaptureController).SetIsRunning(isRunning);
@@ -286,15 +385,24 @@ namespace XMAT.Tests
 
         private sealed class TestCaptureController : IDeviceCaptureController
         {
+            private readonly Func<Task<bool>> _canCloseAsync;
+
             public bool IsRunning { get; private set; }
             public ICaptureMethod CaptureMethod => null;
             public object Parameters => null;
             public event PropertyChangedEventHandler PropertyChanged;
+            public int CloseCheckCount { get; private set; }
             public bool CloseCalled { get; private set; }
+
+            internal TestCaptureController(Func<Task<bool>> canCloseAsync)
+            {
+                _canCloseAsync = canCloseAsync;
+            }
 
             internal TestCaptureController(bool isRunning)
             {
                 IsRunning = isRunning;
+                _canCloseAsync = () => Task.FromResult(true);
             }
 
             internal void SetIsRunning(bool isRunning)
@@ -319,7 +427,8 @@ namespace XMAT.Tests
 
             public Task<bool> CanCloseAsync()
             {
-                return Task.FromResult(true);
+                CloseCheckCount++;
+                return _canCloseAsync();
             }
 
             public Task CloseAsync()

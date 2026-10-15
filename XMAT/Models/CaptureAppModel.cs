@@ -143,6 +143,20 @@ namespace XMAT.Models
             }
         }
 
+        internal async Task<bool> CanCloseAsync()
+        {
+            var devices = CaptureDeviceContexts.Where(context => !context.IsReadOnly).ToList();
+            foreach (var device in devices)
+            {
+                if (!await device.CaptureController.CanCloseAsync())
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         public ICaptureDeviceContext SelectCaptureDeviceContext(string deviceContextName)
         {
             ICaptureDeviceContext context = _captureDeviceContexts.FirstOrDefault(
