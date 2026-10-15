@@ -2,10 +2,12 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Reflection;
 using System.Text.Json;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
+using XMAT.WebServiceCapture.Proxy;
 using static XboxClient.XboxClientConnection;
 
 namespace XMAT.Tests
@@ -284,6 +286,44 @@ namespace XMAT.Tests
 
             Assert.False(controller.IsTransitioning);
             Assert.True(controller.CanBeginStopTransition);
+        }
+
+        [Fact]
+        public void StoppedController_RejectsConnectionsRequestsAndResponses()
+        {
+            var controller = CreateController(new PreferencesModel());
+            var connection = new SslConnectionRequestEventArgs { AcceptConnection = true };
+            var request = new HttpRequestEventArgs { AcceptRequest = true };
+            var response = new HttpResponseEventArgs { SendResponse = true };
+
+            InvokeCaptureCallback(
+                controller,
+                "WebProxy_ReceivedSslConnectionRequestAsync",
+                connection);
+            InvokeCaptureCallback(
+                controller,
+                "WebProxy_ReceivedWebRequestAsync",
+                request);
+            InvokeCaptureCallback(
+                controller,
+                "WebProxy_ReceivedWebResponseAsync",
+                response);
+
+            Assert.False(connection.AcceptConnection);
+            Assert.False(request.AcceptRequest);
+            Assert.False(response.SendResponse);
+        }
+
+        private static void InvokeCaptureCallback<TEventArgs>(
+            WebServiceDeviceCaptureController controller,
+            string methodName,
+            TEventArgs args) where TEventArgs : EventArgs
+        {
+            var method = typeof(WebServiceDeviceCaptureController).GetMethod(
+                methodName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var callback = method.CreateDelegate<EventHandler<TEventArgs>>(controller);
+            callback(controller, args);
         }
 
         [Fact]

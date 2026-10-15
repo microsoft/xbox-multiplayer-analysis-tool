@@ -25,12 +25,20 @@ namespace XMAT.WebServiceCapture.Proxy
 
     internal static class ProxyHostShutdown
     {
-        internal static async Task StopAndDisposeAsync(
+        internal static Task StopAndDisposeAsync(
             IHost host,
             TimeSpan timeout)
         {
             ArgumentNullException.ThrowIfNull(host);
 
+            // Host shutdown and disposal can block before returning a task.
+            return Task.Run(() => StopAndDisposeCoreAsync(host, timeout));
+        }
+
+        private static async Task StopAndDisposeCoreAsync(
+            IHost host,
+            TimeSpan timeout)
+        {
             Exception stopException = null;
             Exception disposeException = null;
             try
@@ -44,7 +52,14 @@ namespace XMAT.WebServiceCapture.Proxy
 
             try
             {
-                host.Dispose();
+                if (host is IAsyncDisposable asyncDisposable)
+                {
+                    await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    host.Dispose();
+                }
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {

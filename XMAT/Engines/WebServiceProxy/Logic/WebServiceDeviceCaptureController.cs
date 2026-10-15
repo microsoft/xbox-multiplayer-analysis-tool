@@ -386,7 +386,7 @@ namespace XMAT.WebServiceCapture
             switch (_deviceType)
             {
                 case DeviceType.LocalPC:
-                    InternetProxy.Disable();
+                    await Task.Run(InternetProxy.Disable);
                     return;
 
                 case DeviceType.GenericProxyDevice:
@@ -464,7 +464,7 @@ namespace XMAT.WebServiceCapture
             catch
             {
                 var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
-                _captureCallbackCancellationTokenSource.Cancel();
+                await _captureCallbackCancellationTokenSource.CancelAsync();
                 await _webProxy.StopProxyAsync();
                 await WaitForCaptureCallbacksAsync(
                     callbacksDrained,
@@ -488,7 +488,10 @@ namespace XMAT.WebServiceCapture
         {
             var stopStopwatch = Stopwatch.StartNew();
             var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
-            _captureCallbackCancellationTokenSource?.Cancel();
+            if (_captureCallbackCancellationTokenSource != null)
+            {
+                await _captureCallbackCancellationTokenSource.CancelAsync();
+            }
             Exception proxyStopException = null;
             try
             {
@@ -685,6 +688,7 @@ namespace XMAT.WebServiceCapture
         {
             if (!_captureCallbacks.TryBegin(out var callbackLease))
             {
+                connectionEvent.AcceptConnection = false;
                 return;
             }
 
@@ -781,6 +785,7 @@ namespace XMAT.WebServiceCapture
         {
             if (!_captureCallbacks.TryBegin(out var callbackLease))
             {
+                requestEvent.AcceptRequest = false;
                 return;
             }
 
@@ -853,6 +858,7 @@ namespace XMAT.WebServiceCapture
         {
             if (!_captureCallbacks.TryBegin(out var callbackLease))
             {
+                responseEvent.SendResponse = false;
                 return;
             }
 

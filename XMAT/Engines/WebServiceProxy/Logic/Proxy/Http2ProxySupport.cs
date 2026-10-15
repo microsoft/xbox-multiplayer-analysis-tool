@@ -188,21 +188,46 @@ namespace XMAT.WebServiceCapture.Proxy
         private readonly HttpClient _httpClient;
         private readonly InterceptedTunnelRegistry _tunnels;
         private readonly Logger _logger;
+        private readonly CancellationToken _stoppingToken;
 
         internal InterceptedProxyApplication(
             WebServiceProxy proxy,
             HttpClient httpClient,
             InterceptedTunnelRegistry tunnels,
-            Logger logger = null)
+            Logger logger = null,
+            CancellationToken stoppingToken = default)
         {
             _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _tunnels = tunnels ?? throw new ArgumentNullException(nameof(tunnels));
             _logger = logger;
+            _stoppingToken = stoppingToken;
         }
 
         internal async Task InvokeAsync(HttpContext context)
         {
+            using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                context.RequestAborted,
+                _stoppingToken);
+            try
+            {
+                await ProcessRequestAsync(
+                    context,
+                    requestCancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested)
+            {
+                Log(0, LogLevel.DEBUG, "Intercepted request canceled during shutdown or client disconnect.");
+                context.Abort();
+            }
+        }
+
+        private async Task ProcessRequestAsync(
+            HttpContext context,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
             // Kestrel sees the loopback relay as its client. Its remote port is
             // the stable key back to XMAT's original device connection.
             if (!_tunnels.TryGet(context.Connection.RemotePort, out var tunnel))
@@ -214,7 +239,7 @@ namespace XMAT.WebServiceCapture.Proxy
             ClientRequest clientRequest = await AspNetCoreRequestAdapter.CreateAsync(
                 context,
                 _proxy.GetNextRequestID(),
-                context.RequestAborted).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
 
             if (!_proxy.RaiseReceivedWebRequest(tunnel.ConnectionId, clientRequest))
             {
@@ -225,7 +250,11 @@ namespace XMAT.WebServiceCapture.Proxy
             Uri uri = ProxyUriFactory.Create(clientRequest);
             if (context.WebSockets.IsWebSocketRequest)
             {
-                await ProxyWebSocketAsync(context, uri, clientRequest).ConfigureAwait(false);
+                await ProxyWebSocketAsync(
+                    context,
+                    uri,
+                    clientRequest,
+                    cancellationToken).ConfigureAwait(false);
                 return;
             }
 
@@ -236,7 +265,7 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 upstreamResponse = await _httpClient.SendAsync(
                     upstreamRequest,
-                    context.RequestAborted).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
             }
             catch (HttpRequestException ex)
             {
@@ -244,7 +273,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 context.Response.StatusCode = StatusCodes.Status502BadGateway;
                 return;
             }
-            catch (TaskCanceledException ex) when (!context.RequestAborted.IsCancellationRequested)
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
                 Log(tunnel.ConnectionId, LogLevel.ERROR, $"Upstream HTTP request timed out: {ex.Message}");
                 context.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
@@ -256,7 +285,10 @@ namespace XMAT.WebServiceCapture.Proxy
                 // Keep the full response mutable until scripts have run, matching
                 // the behavior of the original HTTP/1 proxy implementation.
                 ServerResponse serverResponse =
-                    await CreateServerResponseAsync(clientRequest, upstreamResponse).ConfigureAwait(false);
+                    await CreateServerResponseAsync(
+                        clientRequest,
+                        upstreamResponse,
+                        cancellationToken).ConfigureAwait(false);
 
                 if (!_proxy.RaiseReceivedWebResponse(
                     tunnel.ConnectionId,
@@ -267,14 +299,18 @@ namespace XMAT.WebServiceCapture.Proxy
                     return;
                 }
 
-                await WriteResponseAsync(context, serverResponse).ConfigureAwait(false);
+                await WriteResponseAsync(
+                    context,
+                    serverResponse,
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 
         private async Task ProxyWebSocketAsync(
             HttpContext context,
             Uri uri,
-            ClientRequest clientRequest)
+            ClientRequest clientRequest,
+            CancellationToken cancellationToken)
         {
             using var upstream = new ClientWebSocket();
             upstream.Options.Proxy = null;
@@ -301,14 +337,14 @@ namespace XMAT.WebServiceCapture.Proxy
                 Port = uri.IsDefaultPort ? -1 : uri.Port
             }.Uri;
 
-            await upstream.ConnectAsync(upstreamUri, context.RequestAborted).ConfigureAwait(false);
+            await upstream.ConnectAsync(upstreamUri, cancellationToken).ConfigureAwait(false);
             using WebSocket downstream =
                 await context.WebSockets.AcceptWebSocketAsync(upstream.SubProtocol).ConfigureAwait(false);
 
             // WebSockets leave HTTP framing after the handshake, so relay messages
             // directly until either peer closes and then stop the opposite pump.
             using var relayCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-                context.RequestAborted);
+                cancellationToken);
 
             Task downstreamToUpstream = RelayWebSocketAsync(
                 downstream,
@@ -370,7 +406,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private static async Task<ServerResponse> CreateServerResponseAsync(
             ClientRequest request,
-            HttpResponseMessage response)
+            HttpResponseMessage response,
+            CancellationToken cancellationToken)
         {
             var result = new ServerResponse
             {
@@ -379,7 +416,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 Version = GetProtocol(response.Version),
                 Status = ((int)response.StatusCode).ToString(),
                 StatusDescription = response.ReasonPhrase,
-                BodyBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false)
+                BodyBytes = await response.Content.ReadAsByteArrayAsync(
+                    cancellationToken).ConfigureAwait(false)
             };
 
             result.Headers.CopyFrom(response.Headers);
@@ -396,17 +434,42 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private static async Task WriteResponseAsync(
             HttpContext context,
-            ServerResponse response)
+            ServerResponse response,
+            CancellationToken cancellationToken)
         {
-            context.Response.StatusCode = int.Parse(response.Status);
+            var statusCode = int.Parse(response.Status);
+            context.Response.StatusCode = statusCode;
 
             CopyHeaders(response.Headers, context.Response);
             CopyHeaders(response.ContentHeaders, context.Response);
 
+            if (statusCode < 200 || statusCode == StatusCodes.Status204NoContent)
+            {
+                context.Response.ContentLength = null;
+                return;
+            }
+
+            if (statusCode == StatusCodes.Status205ResetContent)
+            {
+                context.Response.ContentLength = 0;
+                return;
+            }
+
+            // HEAD and 304 may describe the representation's length, not the
+            // empty response body. Preserve that metadata without writing.
+            if (HttpMethods.IsHead(context.Request.Method) ||
+                statusCode == StatusCodes.Status304NotModified)
+            {
+                return;
+            }
+
             context.Response.ContentLength = response.BodyBytes.Length;
-            await context.Response.Body.WriteAsync(
-                response.BodyBytes,
-                context.RequestAborted).ConfigureAwait(false);
+            if (response.BodyBytes.Length != 0)
+            {
+                await context.Response.Body.WriteAsync(
+                    response.BodyBytes,
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
 
         private static void CopyHeaders(
