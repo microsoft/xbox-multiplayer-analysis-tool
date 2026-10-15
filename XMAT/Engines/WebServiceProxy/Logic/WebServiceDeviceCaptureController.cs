@@ -364,21 +364,31 @@ namespace XMAT.WebServiceCapture
                     }
 
                     // TODO: async this, it hangs the UI if the Xbox is not connected
-                    if (!await CaptureUtilities.EnableXboxProxyAsync(DeviceName, sourceAddress, Port))
-                    {
-                        MessageBox.Show(
-                           Localization.GetLocalizedString("PROXY_ERROR_CONNECTION_DESC"),
-                           Localization.GetLocalizedString("PROXY_ERROR_CONNECTION"),
-                           MessageBoxButton.OK,
-                           MessageBoxImage.Error);
-                    }
-                    break;
+                    return await EnableXboxProxyOrReportFailureAsync(
+                        () => CaptureUtilities.EnableXboxProxyAsync(DeviceName, sourceAddress, Port),
+                        () => MessageBox.Show(
+                            Localization.GetLocalizedString("PROXY_ERROR_CONNECTION_DESC"),
+                            Localization.GetLocalizedString("PROXY_ERROR_CONNECTION"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error));
 
                 default:
                     throw new NotImplementedException(Localization.GetLocalizedString("PROXY_ERROR_DEVICE_TYPE_XBOX"));
             }
+        }
 
-            return true;
+        // A failed setup must report false so the caller rolls the listener back.
+        internal static async Task<bool> EnableXboxProxyOrReportFailureAsync(
+            Func<Task<bool>> enableXboxProxyAsync,
+            Action showFailure)
+        {
+            if (await enableXboxProxyAsync())
+            {
+                return true;
+            }
+
+            showFailure();
+            return false;
         }
 
         internal async Task DisableProxying()
@@ -459,19 +469,13 @@ namespace XMAT.WebServiceCapture
             _captureCallbackCancellationTokenSource = new CancellationTokenSource();
             try
             {
-                _webProxy.StartProxy(options);
+                await _webProxy.StartProxyAsync(
+                    options,
+                    _captureCallbackCancellationTokenSource.Token);
             }
             catch
             {
-                var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
-                await _captureCallbackCancellationTokenSource.CancelAsync();
-                await _webProxy.StopProxyAsync();
-                await WaitForCaptureCallbacksAsync(
-                    callbacksDrained,
-                    null,
-                    Stopwatch.StartNew());
-                await _uiUpdateQueue.CompleteAndDrainAsync();
-                DisposeCaptureCallbackCancellation();
+                await CleanUpAfterFailedStartAsync();
                 throw;
             }
 
@@ -480,6 +484,77 @@ namespace XMAT.WebServiceCapture
             if (bShowProxyInformation)
             {
                 ShowGenericProxyDetails();
+            }
+        }
+
+        // Runs while the startup exception is propagating. Every step is attempted and logged on
+        // failure so a secondary cleanup error neither masks the startup error nor leaves the
+        // callback gate or UI queue open (which would block every later start).
+        private async Task CleanUpAfterFailedStartAsync()
+        {
+            var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
+            await TryCleanupStepAsync(
+                () => _captureCallbackCancellationTokenSource.CancelAsync(),
+                "cancel capture callbacks");
+            await TryCleanupStepAsync(() => _webProxy.StopProxyAsync(), "stop the proxy");
+            await TryCleanupStepAsync(
+                () => WaitForCaptureCallbacksAsync(callbacksDrained, null, Stopwatch.StartNew()),
+                "drain capture callbacks");
+            await TryCleanupStepAsync(() => _uiUpdateQueue.CompleteAndDrainAsync(), "drain the UI queue");
+            DisposeCaptureCallbackCancellation();
+
+            // The toggle's checked state follows IsRunning one-way, so it must be told to
+            // re-read the unchanged value or it keeps the state the click gave it.
+            RaisePropertyChange(nameof(IsRunning));
+            CommandManager.InvalidateRequerySuggested();
+        }
+
+        private static async Task TryCleanupStepAsync(Func<Task> step, string description)
+        {
+            try
+            {
+                await step();
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"Cleanup after a failed proxy start could not {description}: {ex}");
+            }
+        }
+
+        // Runs after the listener is confirmed. If the device cannot be pointed at the proxy,
+        // the listener is stopped again so nothing is left half-configured.
+        internal async Task EnableDeviceProxyingOrRollBackAsync(Func<Task<bool>> enableDevice)
+        {
+            var enabled = false;
+            try
+            {
+                enabled = await enableDevice();
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                await TryStopProxyAfterFailedDeviceSetupAsync();
+                throw;
+            }
+
+            if (!enabled)
+            {
+                await TryStopProxyAfterFailedDeviceSetupAsync();
+            }
+        }
+
+        private async Task TryStopProxyAfterFailedDeviceSetupAsync()
+        {
+            try
+            {
+                await StopProxyAsync();
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"Rolling back the proxy after device setup failed also failed: {ex}");
             }
         }
 

@@ -177,6 +177,177 @@ namespace XMAT.Tests
             Assert.Equal(0, operations.DisableCount);
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task EnableDeviceProxyingOrRollBackAsync_DeviceSetupFailure_StopsListener(bool throws)
+        {
+            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            ushort port = (ushort)((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+
+            var controller = new WebServiceDeviceCaptureController("rollback-test", DeviceType.XboxConsole, false)
+            {
+                Port = port
+            };
+            var proxy = new WebServiceProxy();
+            typeof(WebServiceDeviceCaptureController)
+                .GetField("_webProxy", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(controller, proxy);
+
+            await controller.StartProxyAsync(false);
+            Assert.True(await CanConnectAsync(port));
+
+            Func<Task<bool>> enable = throws
+                ? () => throw new InvalidOperationException("device setup failed")
+                : () => Task.FromResult(false);
+            if (throws)
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => controller.EnableDeviceProxyingOrRollBackAsync(enable));
+            }
+            else
+            {
+                await controller.EnableDeviceProxyingOrRollBackAsync(enable);
+            }
+
+            Assert.False(await CanConnectAsync(port));
+        }
+
+        [Theory]
+        [InlineData(false, false, 1)]
+        [InlineData(true, true, 0)]
+        public async Task EnableXboxProxyOrReportFailureAsync_ReportsFailureAsFalse(
+            bool enabled,
+            bool expected,
+            int expectedFailureReports)
+        {
+            int reports = 0;
+
+            var result = await WebServiceDeviceCaptureController.EnableXboxProxyOrReportFailureAsync(
+                () => Task.FromResult(enabled),
+                () => reports++);
+
+            Assert.Equal(expected, result);
+            Assert.Equal(expectedFailureReports, reports);
+        }
+
+        [Fact]
+        public async Task XboxSetupFailure_RollsBackTheListener()
+        {
+            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            ushort port = (ushort)((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+
+            var controller = new WebServiceDeviceCaptureController("xbox-rollback-test", DeviceType.XboxConsole, false)
+            {
+                Port = port
+            };
+            typeof(WebServiceDeviceCaptureController)
+                .GetField("_webProxy", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(controller, new WebServiceProxy());
+            await controller.StartProxyAsync(false);
+            Assert.True(await CanConnectAsync(port));
+
+            await controller.EnableDeviceProxyingOrRollBackAsync(
+                () => WebServiceDeviceCaptureController.EnableXboxProxyOrReportFailureAsync(
+                    () => Task.FromResult(false),
+                    () => { }));
+
+            Assert.False(await CanConnectAsync(port));
+        }
+
+        [Fact]
+        public async Task FailedStart_RaisesIsRunningSoTheToggleResets()
+        {
+            var controller = new WebServiceDeviceCaptureController("toggle-reset", DeviceType.XboxConsole, false);
+            SetProxy(controller, new FailingProxy(new InvalidOperationException("bind failed"), stopThrows: false));
+            var raised = new List<string>();
+            controller.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => controller.StartProxyAsync(false));
+
+            Assert.False(controller.IsRunning);
+            Assert.Contains(nameof(WebServiceDeviceCaptureController.IsRunning), raised);
+        }
+
+        [Fact]
+        public async Task FailedStart_WithFailingCleanup_RethrowsOriginalAndStaysRestartable()
+        {
+            var controller = new WebServiceDeviceCaptureController("cleanup-fails", DeviceType.XboxConsole, false);
+            var startFailure = new InvalidOperationException("original startup failure");
+            SetProxy(controller, new FailingProxy(startFailure, stopThrows: true));
+
+            var first = await Assert.ThrowsAsync<InvalidOperationException>(() => controller.StartProxyAsync(false));
+            var second = await Assert.ThrowsAsync<InvalidOperationException>(() => controller.StartProxyAsync(false));
+
+            Assert.Same(startFailure, first);
+            Assert.Same(startFailure, second);
+        }
+
+        private static void SetProxy(WebServiceDeviceCaptureController controller, IWebServiceProxy proxy)
+        {
+            typeof(WebServiceDeviceCaptureController)
+                .GetField("_webProxy", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(controller, proxy);
+        }
+
+        private sealed class FailingProxy : IWebServiceProxy
+        {
+            private readonly Exception _startFailure;
+            private readonly bool _stopThrows;
+
+            public FailingProxy(Exception startFailure, bool stopThrows)
+            {
+                _startFailure = startFailure;
+                _stopThrows = stopThrows;
+            }
+
+#pragma warning disable CS0067
+            public event EventHandler<InitialConnectionEventArgs> ReceivedInitialConnection;
+            public event EventHandler<SslConnectionRequestEventArgs> ReceivedSslConnectionRequest;
+            public event EventHandler<SslConnectionCompletionEventArgs> CompletedSslConnectionRequest;
+            public event EventHandler<ConnectionFailureEventArgs> FailedSslConnectionRequest;
+            public event EventHandler<HttpRequestEventArgs> ReceivedWebRequest;
+            public event EventHandler<HttpResponseEventArgs> ReceivedWebResponse;
+            public event EventHandler<WebSocketOpenedEventArgs> WebSocketOpened;
+            public event EventHandler<WebSocketMessageEventArgs> WebSocketMessage;
+            public event EventHandler<WebSocketClosedEventArgs> WebSocketClosed;
+            public event EventHandler<ConnectionClosedEventArgs> ConnectionClosed;
+            public event EventHandler ProxyStopped;
+#pragma warning restore CS0067
+
+            public bool IsProxyEnabled => false;
+            public BypassListModel BypassList { get; set; }
+
+            public Task StartProxyAsync(WebServiceProxyOptions options, CancellationToken cancellationToken = default)
+                => Task.FromException(_startFailure);
+
+            public Task StopProxyAsync(IProgress<WebProxyStopProgress> progress = null)
+                => _stopThrows ? Task.FromException(new InvalidOperationException("cleanup failed")) : Task.CompletedTask;
+
+            public void Reset()
+            {
+            }
+        }
+
+        private static async Task<bool> CanConnectAsync(ushort port)
+        {
+            using var tcp = new System.Net.Sockets.TcpClient();
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await tcp.ConnectAsync(System.Net.IPAddress.Loopback, port, cts.Token);
+                return true;
+            }
+            catch (Exception ex) when (ex is System.Net.Sockets.SocketException or OperationCanceledException)
+            {
+                return false;
+            }
+        }
+
         private static WebServiceDeviceCaptureController CreateController(PreferencesModel preferences, bool readOnly = false)
         {
             return new WebServiceDeviceCaptureController("test-console", DeviceType.XboxConsole, readOnly)

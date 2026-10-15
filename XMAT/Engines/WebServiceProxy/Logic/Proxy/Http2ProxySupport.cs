@@ -514,10 +514,10 @@ namespace XMAT.WebServiceCapture.Proxy
             if (_host != null)
                 throw new InvalidOperationException("The intercepted HTTP host is already running.");
 
-            var builder = Host.CreateDefaultBuilder();
-            builder.ConfigureWebHostDefaults(webBuilder =>
+            var builder = new HostBuilder();
+            builder.ConfigureWebHost(webBuilder =>
             {
-                webBuilder.ConfigureKestrel(options =>
+                webBuilder.UseKestrel(options =>
                 {
                     // Port zero lets the OS choose a collision-free private port.
                     // Only the outer forward proxy connects to this listener.
@@ -550,18 +550,29 @@ namespace XMAT.WebServiceCapture.Proxy
             Port = new Uri(address).Port;
         }
 
-        public async ValueTask DisposeAsync()
+        public ValueTask DisposeAsync()
+        {
+            return new ValueTask(StopAndDisposeAsync(CancellationToken.None, ProxyShutdownPolicy.Deadline));
+        }
+
+        // Graceful until the deadline token (or the default budget) fires, then connections are aborted.
+        internal async Task StopAndDisposeAsync(
+            CancellationToken deadline,
+            TimeSpan? maxDuration = null)
         {
             if (_host == null)
                 return;
 
             var host = _host;
             var hostDisposed = false;
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(deadline);
+            if (maxDuration.HasValue)
+                budget.CancelAfter(maxDuration.Value);
             try
             {
                 await ProxyHostShutdown.StopAndDisposeAsync(
                     host,
-                    TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                    budget.Token).ConfigureAwait(false);
                 hostDisposed = true;
             }
             catch (ProxyHostDisposalException)

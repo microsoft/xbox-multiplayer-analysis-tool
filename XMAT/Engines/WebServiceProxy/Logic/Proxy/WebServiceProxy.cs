@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
@@ -39,7 +41,46 @@ namespace XMAT.WebServiceCapture.Proxy
         public event EventHandler<ConnectionClosedEventArgs> ConnectionClosed;
         public event EventHandler ProxyStopped;
 
-        public bool IsProxyEnabled { get { return _host != null; } }
+        public bool IsProxyEnabled { get { return State == ProxyState.Running; } }
+
+        internal ProxyState State
+        {
+            get { lock (_stateLock) { return _state; } }
+        }
+
+        private readonly object _stateLock = new();
+        private readonly SemaphoreSlim _transitionGate = new(1, 1);
+        private ProxyState _state = ProxyState.Stopped;
+        private Task _stopTask;
+        private int _pendingStarts;
+
+        // Test seam: cancellation token of the current run, so tests can wait for a stop's cancellation.
+        internal CancellationToken RunCancellationToken => _cts?.Token ?? CancellationToken.None;
+
+        // Test seam: called with the phase name after each startup step so tests can inject failures.
+        internal Action<string> StartupFaultInjection { get; set; }
+
+        // Test seam: called during teardown, after the hosts are stopped.
+        internal Action ShutdownFaultInjection { get; set; }
+
+        // Test seam: called at the end of teardown, just before the log is closed.
+        internal Action LogCloseFaultInjection { get; set; }
+
+        private bool _logOpen;
+
+        // One budget for stopping both hosts; tests shorten it.
+        internal TimeSpan StopDeadline { get; set; } = ProxyShutdownPolicy.Deadline;
+
+        // Accepted connections that were still open when the deadline expired on the last stop.
+        internal int AbortedConnectionCount { get; private set; }
+
+        internal IHost PublicHost => _host;
+        internal InterceptedHttpHost InterceptedHost => _interceptedHost;
+
+        // Why the last startup or cleanup failed while the proxy is Faulted; for diagnostics.
+        internal Exception FaultException { get; private set; }
+
+        private readonly ConcurrentDictionary<int, byte> _openConnections = new();
 
         private readonly Logger _logger = new();
         private static bool _isInitialized = false;
@@ -84,6 +125,17 @@ namespace XMAT.WebServiceCapture.Proxy
             _availableRequestId = 0;
         }
 
+        // Upstream handler shared by production and tests. Cookies are disabled so a
+        // capture-wide cookie jar never injects one client's cookies into another's requests.
+        internal static HttpClientHandler CreateUpstreamHandler() => new()
+        {
+            UseProxy = false,
+            Proxy = null,
+            UseCookies = false,
+            AllowAutoRedirect = false,
+            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+        };
+
         internal static CertificateManager CertManager { get { return _certManager; } }
 
         internal static WebServiceProxy CreateProxy()
@@ -96,7 +148,90 @@ namespace XMAT.WebServiceCapture.Proxy
             return new WebServiceProxy();
         }
 
-        public void StartProxy(WebServiceProxyOptions options)
+        public async Task StartProxyAsync(
+            WebServiceProxyOptions options,
+            CancellationToken cancellationToken = default)
+        {
+            if (options.Port <= 0 || options.Port > IPEndPoint.MaxPort)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(options),
+                    options.Port,
+                    "The public proxy port must be between 1 and 65535.");
+            }
+
+            // Counted before the gate is awaited so a concurrent stop can never mistake a
+            // start that already owns (or is about to own) the gate for an idle proxy.
+            Interlocked.Increment(ref _pendingStarts);
+            try
+            {
+                await _transitionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    if (State == ProxyState.Faulted)
+                    {
+                        throw new InvalidOperationException(
+                            "The proxy is Faulted and may hold unreleased resources. Call StopProxyAsync and wait for it to succeed before starting again.");
+                    }
+
+                    if (State != ProxyState.Stopped)
+                    {
+                        throw new InvalidOperationException(
+                            $"The proxy cannot start while it is {State}.");
+                    }
+
+                    StartupFaultInjection?.Invoke("GateAcquired");
+
+                    // Created before Starting is published so a stop that arrives during startup
+                    // always has a token to cancel.
+                    _cts = new CancellationTokenSource();
+                    SetState(ProxyState.Starting);
+                    FaultException = null;
+                    AbortedConnectionCount = 0;
+                    try
+                    {
+                        await StartCoreAsync(options, cancellationToken).ConfigureAwait(false);
+                        SetState(ProxyState.Running);
+                    }
+                    catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                    {
+                        await RollBackPartialStartAsync(ex).ConfigureAwait(false);
+                        throw;
+                    }
+                }
+                finally
+                {
+                    _transitionGate.Release();
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _pendingStarts);
+            }
+        }
+
+        private async Task RollBackPartialStartAsync(Exception startFailure)
+        {
+            _logger.Log(0, LogLevel.ERROR, $"Proxy startup failed, rolling back: {startFailure}");
+            try
+            {
+                await TearDownAsync(null).ConfigureAwait(false);
+                SetState(ProxyState.Stopped);
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Proxy startup rollback failed: {ex}");
+                FaultException = new AggregateException(
+                    "Proxy startup failed and its rollback also failed.",
+                    startFailure,
+                    ex);
+                SetState(ProxyState.Faulted);
+            }
+        }
+
+        private async Task StartCoreAsync(
+            WebServiceProxyOptions options,
+            CancellationToken cancellationToken)
         {
             if (_host != null || _interceptedHost != null)
             {
@@ -105,17 +240,18 @@ namespace XMAT.WebServiceCapture.Proxy
 
             Reset();
 
-            _logger.InitLog(options.LogFilePath, options.CurrentLogLevel);
-            _port = options.Port;
-            _cts = new CancellationTokenSource();
+            using var startCts = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _cts.Token);
 
-            _httpClient = new HttpClient(new HttpClientHandler()
-            {
-                UseProxy = false,
-                Proxy = null,
-                AllowAutoRedirect = false,
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-            });
+            _logOpen = true;
+            _logger.InitLog(options.LogFilePath, options.CurrentLogLevel);
+            StartupFaultInjection?.Invoke("LoggerInitialized");
+            startCts.Token.ThrowIfCancellationRequested();
+            _port = options.Port;
+            _openConnections.Clear();
+
+            _httpClient = new HttpClient(CreateUpstreamHandler());
 
             // The public listener handles forward-proxy CONNECT requests. The
             // private listener terminates the tunneled TLS and lets Kestrel
@@ -129,38 +265,84 @@ namespace XMAT.WebServiceCapture.Proxy
             _interceptedHost = new InterceptedHttpHost(
                 SelectInterceptedCertificate,
                 interceptedApplication.InvokeAsync);
-            _interceptedHost.StartAsync(_cts.Token).GetAwaiter().GetResult();
+            await _interceptedHost.StartAsync(startCts.Token).ConfigureAwait(false);
+            StartupFaultInjection?.Invoke("InterceptedStarted");
+            startCts.Token.ThrowIfCancellationRequested();
 
-            var builder = Host.CreateDefaultBuilder();
-            builder.ConfigureWebHostDefaults(webBuilder =>
-            {
-                webBuilder.ConfigureKestrel(serverOptions =>
+            // Minimal host: no default configuration sources, and no RunAsync. StartAsync
+            // binds the listener, so a bind failure surfaces here instead of in a lost task.
+            var host = new HostBuilder()
+                .ConfigureWebHost(webBuilder =>
                 {
-                    serverOptions.Listen(IPAddress.Any, _port, listenOptions =>
+                    webBuilder.UseKestrel(serverOptions =>
                     {
-                        listenOptions.UseConnectionHandler<ForwardProxyConnectionHandler>();
+                        serverOptions.Listen(IPAddress.Any, _port, listenOptions =>
+                        {
+                            listenOptions.UseConnectionHandler<ForwardProxyConnectionHandler>();
+                        });
                     });
-                });
-                webBuilder.ConfigureServices(services =>
-                {
-                    services.AddSingleton(_certManager);
-                    services.AddSingleton(_httpClient);
-                    services.AddSingleton(_logger);
-                    services.AddSingleton(this);
-                    services.AddSingleton(_interceptedHost);
-                    services.AddSingleton(_interceptedTunnels);
-                    services.AddSingleton<ForwardProxyConnectionHandler>();
-                });
-                webBuilder.Configure(app => { });
-            });
-
-            _host = builder.Build();
+                    webBuilder.UseSockets(socketOptions =>
+                    {
+                        socketOptions.CreateBoundListenSocket = CreateExclusiveListenSocket;
+                    });
+                    webBuilder.ConfigureServices(services =>
+                    {
+                        services.AddSingleton(_certManager);
+                        services.AddSingleton(_httpClient);
+                        services.AddSingleton(_logger);
+                        services.AddSingleton(this);
+                        services.AddSingleton(_interceptedHost);
+                        services.AddSingleton(_interceptedTunnels);
+                        services.AddSingleton<ForwardProxyConnectionHandler>();
+                    });
+                    webBuilder.Configure(app => { });
+                })
+                .Build();
+            _host = host;
 
             _logger.Log(0, LogLevel.INFO, $"Kestrel proxy starting on port {_port}");
+            await host.StartAsync(startCts.Token).ConfigureAwait(false);
+            StartupFaultInjection?.Invoke("PublicStarted");
+            startCts.Token.ThrowIfCancellationRequested();
+        }
 
-            // StopProxyAsync exclusively owns shutdown and disposal. RunAsync
-            // would independently stop and dispose this host on cancellation.
-            _host.StartAsync(_cts.Token).GetAwaiter().GetResult();
+        // Kestrel does not set SO_EXCLUSIVEADDRUSE, so on Windows a wildcard bind can succeed
+        // over another application's loopback bind of the same port. Bind exclusively instead.
+        internal static Socket CreateExclusiveListenSocket(EndPoint endpoint)
+        {
+            var ipEndPoint = (IPEndPoint)endpoint;
+            var socket = new Socket(
+                ipEndPoint.AddressFamily,
+                SocketType.Stream,
+                ProtocolType.Tcp);
+            try
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    socket.ExclusiveAddressUse = true;
+                }
+
+                if (ipEndPoint.AddressFamily == AddressFamily.InterNetworkV6)
+                {
+                    socket.DualMode = true;
+                }
+
+                socket.Bind(ipEndPoint);
+                return socket;
+            }
+            catch
+            {
+                socket.Dispose();
+                throw;
+            }
+        }
+
+        private void SetState(ProxyState state)
+        {
+            lock (_stateLock)
+            {
+                _state = state;
+            }
         }
 
         private X509Certificate2 SelectInterceptedCertificate(
@@ -184,100 +366,142 @@ namespace XMAT.WebServiceCapture.Proxy
             return _certManager.GetCertificateForHost(certificateHost);
         }
 
-        public async Task StopProxyAsync(
-            IProgress<WebProxyStopProgress> progress = null)
+        // Concurrent callers share one stop operation, and the first caller's progress wins.
+        // A start that already owns the gate is not bypassed: stop queues behind it (cancelling it
+        // if it has published its token) and then stops whatever it produced.
+        public Task StopProxyAsync(IProgress<WebProxyStopProgress> progress = null)
         {
-            if (_host == null && _interceptedHost == null)
+            lock (_stateLock)
+            {
+                if (_state == ProxyState.Stopped && Volatile.Read(ref _pendingStarts) == 0)
+                {
+                    return Task.CompletedTask;
+                }
+
+                // Task.Run keeps the teardown off the caller's (UI) context.
+                return _stopTask ??= Task.Run(() => StopCoreAsync(progress));
+            }
+        }
+
+        private async Task StopCoreAsync(IProgress<WebProxyStopProgress> progress)
+        {
+            // Cancel before taking the gate so a start in progress aborts promptly.
+            await CancelRunAsync().ConfigureAwait(false);
+
+            await _transitionGate.WaitAsync().ConfigureAwait(false);
+            var stopped = false;
+            try
+            {
+                if (State == ProxyState.Stopped)
+                    return;
+
+                SetState(ProxyState.Stopping);
+                try
+                {
+                    await TearDownAsync(progress).ConfigureAwait(false);
+                    FaultException = null;
+                    SetState(ProxyState.Stopped);
+                    stopped = true;
+                }
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                {
+                    // Stays Faulted; calling stop again retries the cleanup.
+                    FaultException = ex;
+                    SetState(ProxyState.Faulted);
+                    throw;
+                }
+            }
+            finally
+            {
+                // Retire the shared stop task while the gate is still held, so a restart
+                // can never be joined by (or stopped through) a stale stop operation.
+                lock (_stateLock)
+                {
+                    _stopTask = null;
+                }
+
+                _transitionGate.Release();
+                if (stopped)
+                {
+                    try
+                    {
+                        ProxyStopped?.Invoke(this, EventArgs.Empty);
+                    }
+                    catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                    {
+                        PublicUtilities.AppLog(LogLevel.ERROR, $"Proxy stopped observer failed: {ex}");
+                    }
+                }
+            }
+        }
+
+        // True while anything started by a run (hosts, client, token sources, log) is still owned.
+        internal bool HasOutstandingResources =>
+            _host != null || _interceptedHost != null || _httpClient != null ||
+            _cts != null || _logOpen;
+
+        // The callbacks belong to in-flight work. One that throws must not abort the stop or a
+        // rollback before cleanup (or before the shared stop task is retired), so the failure is
+        // logged and cleanup continues. Cancellation has still been requested at that point.
+        private async Task CancelRunAsync()
+        {
+            var cts = _cts;
+            if (cts == null)
+                return;
+
+            try
+            {
+                await cts.CancelAsync().ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"A proxy cancellation callback failed: {ex}");
+            }
+        }
+
+        private async Task TearDownAsync(IProgress<WebProxyStopProgress> progress)
+        {
+            if (!HasOutstandingResources)
                 return;
 
             var totalStopwatch = Stopwatch.StartNew();
             List<Exception> disposalFailures = new();
-            if (_cts != null)
+            await CancelRunAsync().ConfigureAwait(false);
+
+            // One budget covers both hosts. When it expires the hosts abort what is left.
+            using var budget = new CancellationTokenSource();
+            budget.CancelAfter(StopDeadline);
+            using var deadlineRegistration = budget.Token.Register(() =>
             {
-                await _cts.CancelAsync().ConfigureAwait(false);
+                AbortedConnectionCount = _openConnections.Count;
+                if (AbortedConnectionCount > 0)
+                {
+                    _logger.Log(
+                        0,
+                        LogLevel.WARN,
+                        $"Stop deadline expired with {AbortedConnectionCount} open connection(s); aborting them.");
+                }
+            });
+
+            var publicHost = _host;
+            var interceptedHost = _interceptedHost;
+            var publicTask = publicHost == null
+                ? Task.FromResult<Exception>(null)
+                : StopPublicHostAsync(publicHost, progress, totalStopwatch, budget.Token);
+            var interceptedTask = interceptedHost == null
+                ? Task.FromResult<Exception>(null)
+                : StopInterceptedHostAsync(interceptedHost, progress, totalStopwatch, budget.Token);
+            var results = await Task.WhenAll(publicTask, interceptedTask).ConfigureAwait(false);
+            foreach (var failure in results)
+            {
+                if (failure != null)
+                    disposalFailures.Add(failure);
             }
 
-            if (_host != null)
-            {
-                var host = _host;
-                var hostDisposed = false;
-                var phaseStopwatch = Stopwatch.StartNew();
-                progress?.Report(new WebProxyStopProgress(
-                    WebProxyStopPhase.StoppingPublicListener,
-                    totalStopwatch.Elapsed));
-                try
-                {
-                    await ProxyHostShutdown.StopAndDisposeAsync(
-                        host,
-                        TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-                    hostDisposed = true;
-                }
-                catch (ProxyHostDisposalException ex) when (!ExceptionUtilities.IsFatal(ex))
-                {
-                    disposalFailures.Add(ex);
-                    _logger.Log(
-                        0,
-                        LogLevel.ERROR,
-                        $"Error disposing proxy host: {ex}");
-                }
-                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
-                {
-                    hostDisposed = true;
-                    _logger.Log(0, LogLevel.ERROR, $"Error stopping proxy: {ex.Message}");
-                }
-                finally
-                {
-                    if (hostDisposed)
-                    {
-                        _host = null;
-                    }
-                    _logger.Log(
-                        0,
-                        LogLevel.INFO,
-                        $"Public proxy host stopped in {phaseStopwatch.Elapsed}.");
-                }
-            }
-
-            if (_interceptedHost != null)
-            {
-                var interceptedHostDisposed = false;
-                var phaseStopwatch = Stopwatch.StartNew();
-                progress?.Report(new WebProxyStopProgress(
-                    WebProxyStopPhase.StoppingInterceptedListener,
-                    totalStopwatch.Elapsed));
-                try
-                {
-                    await _interceptedHost.DisposeAsync().ConfigureAwait(false);
-                    interceptedHostDisposed = true;
-                }
-                catch (ProxyHostDisposalException ex) when (!ExceptionUtilities.IsFatal(ex))
-                {
-                    disposalFailures.Add(ex);
-                    _logger.Log(
-                        0,
-                        LogLevel.ERROR,
-                        $"Error disposing intercepted proxy: {ex}");
-                }
-                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
-                {
-                    interceptedHostDisposed = true;
-                    _logger.Log(
-                        0,
-                        LogLevel.ERROR,
-                        $"Error stopping intercepted proxy: {ex.Message}");
-                }
-                finally
-                {
-                    if (interceptedHostDisposed)
-                    {
-                        _interceptedHost = null;
-                    }
-                    _logger.Log(
-                        0,
-                        LogLevel.INFO,
-                        $"Intercepted proxy host stopped in {phaseStopwatch.Elapsed}.");
-                }
-            }
+            ShutdownFaultInjection?.Invoke();
 
             if (disposalFailures.Count != 0)
             {
@@ -291,12 +515,97 @@ namespace XMAT.WebServiceCapture.Proxy
             _cts?.Dispose();
             _cts = null;
 
-            ProxyStopped?.Invoke(this, EventArgs.Empty);
             _logger.Log(
                 0,
                 LogLevel.INFO,
                 $"Proxy hosts stopped in {totalStopwatch.Elapsed}.");
+            LogCloseFaultInjection?.Invoke();
             await Task.Run(_logger.CloseLog).ConfigureAwait(false);
+            _logOpen = false;
+        }
+
+        // Returns a disposal failure to report, or null. A host that stopped but failed to
+        // dispose stays referenced so a later stop can retry.
+        private async Task<Exception> StopPublicHostAsync(
+            IHost host,
+            IProgress<WebProxyStopProgress> progress,
+            Stopwatch totalStopwatch,
+            CancellationToken deadline)
+        {
+            var hostDisposed = false;
+            var phaseStopwatch = Stopwatch.StartNew();
+            progress?.Report(new WebProxyStopProgress(
+                WebProxyStopPhase.StoppingPublicListener,
+                totalStopwatch.Elapsed));
+            try
+            {
+                await ProxyHostShutdown.StopAndDisposeAsync(host, deadline).ConfigureAwait(false);
+                hostDisposed = true;
+                return null;
+            }
+            catch (ProxyHostDisposalException ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                _logger.Log(0, LogLevel.ERROR, $"Error disposing proxy host: {ex}");
+                return ex;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                hostDisposed = true;
+                _logger.Log(0, LogLevel.ERROR, $"Error stopping proxy: {ex.Message}");
+                return null;
+            }
+            finally
+            {
+                if (hostDisposed)
+                {
+                    _host = null;
+                }
+                _logger.Log(
+                    0,
+                    LogLevel.INFO,
+                    $"Public proxy host stopped in {phaseStopwatch.Elapsed}.");
+            }
+        }
+
+        private async Task<Exception> StopInterceptedHostAsync(
+            InterceptedHttpHost host,
+            IProgress<WebProxyStopProgress> progress,
+            Stopwatch totalStopwatch,
+            CancellationToken deadline)
+        {
+            var disposed = false;
+            var phaseStopwatch = Stopwatch.StartNew();
+            progress?.Report(new WebProxyStopProgress(
+                WebProxyStopPhase.StoppingInterceptedListener,
+                totalStopwatch.Elapsed));
+            try
+            {
+                await host.StopAndDisposeAsync(deadline).ConfigureAwait(false);
+                disposed = true;
+                return null;
+            }
+            catch (ProxyHostDisposalException ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                _logger.Log(0, LogLevel.ERROR, $"Error disposing intercepted proxy: {ex}");
+                return ex;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                disposed = true;
+                _logger.Log(0, LogLevel.ERROR, $"Error stopping intercepted proxy: {ex.Message}");
+                return null;
+            }
+            finally
+            {
+                if (disposed)
+                {
+                    _interceptedHost = null;
+                }
+                _logger.Log(
+                    0,
+                    LogLevel.INFO,
+                    $"Intercepted proxy host stopped in {phaseStopwatch.Elapsed}.");
+            }
         }
 
         internal int GetNextConnectionID()
@@ -325,6 +634,11 @@ namespace XMAT.WebServiceCapture.Proxy
             };
 
             ReceivedInitialConnection?.Invoke(this, args);
+            if (args.AcceptConnection)
+            {
+                _openConnections.TryAdd(connectionID, 0);
+            }
+
             return args.AcceptConnection;
         }
 
@@ -411,6 +725,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal void RaiseConnectionClosed(int connectionID)
         {
+            _openConnections.TryRemove(connectionID, out _);
             ConnectionClosed?.Invoke(this,
                 new ConnectionClosedEventArgs
                 {
