@@ -492,10 +492,32 @@ namespace XMAT.WebServiceCapture.Proxy
             if (_host == null)
                 return;
 
-            await _host.StopAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-            _host.Dispose();
-            _host = null;
-            Port = 0;
+            var host = _host;
+            var hostDisposed = false;
+            try
+            {
+                await ProxyHostShutdown.StopAndDisposeAsync(
+                    host,
+                    TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                hostDisposed = true;
+            }
+            catch (ProxyHostDisposalException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                hostDisposed = true;
+                throw;
+            }
+            finally
+            {
+                if (hostDisposed && ReferenceEquals(_host, host))
+                {
+                    _host = null;
+                    Port = 0;
+                }
+            }
         }
     }
 

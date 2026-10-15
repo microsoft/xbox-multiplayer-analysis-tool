@@ -24,7 +24,21 @@ namespace XMAT.NetworkTrace
 
     public class NetworkTraceCaptureController : INotifyPropertyChanged, IDeviceCaptureController, IDisposable
     {
-        public bool IsRunning { get => _isRunning; set { _isRunning = value; RaisePropertyChange(nameof(IsRunning)); } }
+        public bool IsRunning
+        {
+            get => _isRunning;
+            private set
+            {
+                if (_isRunning == value)
+                {
+                    return;
+                }
+
+                _isRunning = value;
+                RaisePropertyChange(nameof(IsRunning));
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
 
         // TODO: implement my parameters
         // NOTE: this is an 'object' because the parameters are
@@ -35,7 +49,21 @@ namespace XMAT.NetworkTrace
         public /*CaptureMethodParameters*/object Parameters { get { return null; } }
 
         private bool _isCapturing;
-        public bool IsCapturing { get => _isCapturing; set { _isCapturing = value; RaisePropertyChange(nameof(IsCapturing)); } }
+        public bool IsCapturing
+        {
+            get => _isCapturing;
+            set
+            {
+                if (_isCapturing == value)
+                {
+                    return;
+                }
+
+                _isCapturing = value;
+                IsRunning = value;
+                RaisePropertyChange(nameof(IsCapturing));
+            }
+        }
 
         public NetworkTracePacketsCollection NetworkTracePackets { get; internal set; }
         public ICaptureMethod CaptureMethod { get; internal set; }
@@ -94,7 +122,6 @@ namespace XMAT.NetworkTrace
             _dataTable = (CaptureMethod as NetworkTraceCaptureMethod).NetworkTracePacketsTable;
             _dataTable.RowAdded += HandleRowAdded;
             IsCapturing = false;
-            IsRunning = false;
             DeviceStatus = DeviceStatusEnum.Idle;
             RaisePropertyChange(nameof(HaveTraces));
             RaisePropertyChange(nameof(HaveNoTraces));
@@ -110,12 +137,13 @@ namespace XMAT.NetworkTrace
 
         public Task<bool> CanCloseAsync()
         {
-            return Task.FromResult<bool>(true);
+            return Task.FromResult(!IsRunning);
         }
 
-        public void Close()
+        public Task CloseAsync()
         {
             Dispose();
+            return Task.CompletedTask;
         }
 
         public void Dispose()
