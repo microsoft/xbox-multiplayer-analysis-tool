@@ -102,6 +102,7 @@
 	"NETCAP_ANALYZE": "Analyze Capture",
 	"NETCAP_CLEAR": "Clear Captures",
 	"NETCAP_ERROR": "Network Trace Error",
+	"NETCAP_IMPORT_NO_PACKETS": "No packets were found in this trace. Only traces captured with 'netsh trace start capture=yes' (Microsoft-Windows-NDIS-PacketCapture) are supported.",
 
 	"NETCAP_STATE_CONNECTING": "Connecting to device ...",
 	"NETCAP_STATE_DISCONNECTING": "Disconnecting from device ...",

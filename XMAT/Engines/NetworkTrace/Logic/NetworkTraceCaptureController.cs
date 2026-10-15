@@ -213,6 +213,24 @@ namespace XMAT.NetworkTrace
             CommandManager.InvalidateRequerySuggested();
         }
 
+        internal async Task<int> ImportFromEtlFileAsync(string etlPath)
+        {
+            var fileEngine = new LocalNetworkTraceEngineImpl();
+            fileEngine.EventRecordAvailable += OnEventRecordAvailable;
+
+            DeviceStatus = DeviceStatusEnum.Downloading;
+            try
+            {
+                return await fileEngine.ReadEventsFromFileAsync(etlPath);
+            }
+            finally
+            {
+                fileEngine.EventRecordAvailable -= OnEventRecordAvailable;
+                DeviceStatus = DeviceStatusEnum.Idle;
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+
         internal async Task ConnectToDevice(ICaptureDeviceContext device)
         {
             if (_networkTraceEngine == null)

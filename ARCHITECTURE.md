@@ -204,7 +204,9 @@ JSON ──► WebView2 HTML rendering   # Displayed in UI
 | `SmallBatchDetectionRule` | Inefficient small batches |
 | `CallRecorderRule` | Records all calls for debugging |
 | `StatsRecorderRule` | Collects aggregate statistics |
-| `XR049Rule` | Xbox-specific validation |
+| `XR049Rule` | Xbox rich-presence validation |
+
+`XR049Rule` checks JSON objects for a top-level `activity` property, skipping empty request bodies and non-object JSON values. Malformed JSON is recorded as a per-call warning in the exported rule results, and scanning continues with subsequent calls.
 
 **Reports:** `PerEndpointReport`, `CallReport`, `StatsReport`, `CertWarningReport` — rendered as HTML via WebView2.
 
@@ -214,7 +216,7 @@ JSON ──► WebView2 HTML rendering   # Displayed in UI
 
 1. **Device setup** — User adds a device (Xbox Kit, PC, or generic) and selects a capture method (Web Proxy or Network Trace)
 2. **Capture** — `IDeviceCaptureController` starts capturing; each captured item is stored as a row in the SQLite database via `IDataTable.AddRow()`; `RowAdded` events drive real-time UI updates
-3. **Persistence** — Captures can be saved to file (`IDatabase.SaveToFile()`) and reloaded (`DataAbstractionLayer.LoadDatabaseFromFile()`); Fiddler SAZ import/export also supported
+3. **Persistence** — Captures can be saved to file (`IDatabase.SaveToFile()`) and reloaded (`DataAbstractionLayer.LoadDatabaseFromFile()`); Fiddler SAZ import/export also supported, and network traces captured on another PC with `netsh trace start capture=yes` (.etl) can be imported
 4. **Analysis** — `ICaptureAnalyzer.RunAsync()` reads the capture table, converts rows to `ServiceCallItem` objects, groups by endpoint, computes `ServiceCallStats`, then feeds data to the `RulesEngine`
 5. **Rule execution** — Rules run in parallel; each produces a `RuleResult` containing violations (`RuleViolation`) categorized as Error, Warning, or Info
 6. **Reporting** — Results are transformed into JSON reports, rendered in WebView2 using HTML/CSS/JS templates, and displayed in analysis tabs
