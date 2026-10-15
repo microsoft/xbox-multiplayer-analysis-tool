@@ -6,17 +6,18 @@
         xmlns:local="clr-namespace:XMAT"
         mc:Ignorable="d"
         Loaded="Window_Loaded"
+        Closing="Window_Closing"
         Title="{StaticResource appName}"
         AllowDrop="True"
         Drop="Window_Drop"
         WindowStartupLocation="CenterScreen"
         d:Height="720" d:Width="1280" >
     <Window.CommandBindings>
-        <CommandBinding Command="New"  Executed="New_Executed"/>
-        <CommandBinding Command="Open" Executed="Open_Executed"/>
-        <CommandBinding Command="Save" Executed="Save_Executed"/>
-        <CommandBinding Command="{x:Static local:AppCommands.Import}"           Executed="Import_Executed"/>
-        <CommandBinding Command="{x:Static local:AppCommands.Export}"           Executed="Export_Executed"/>
+        <CommandBinding Command="New"  Executed="New_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
+        <CommandBinding Command="Open" Executed="Open_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
+        <CommandBinding Command="Save" Executed="Save_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.Import}"           Executed="Import_Executed" CanExecute="Import_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.Export}"           Executed="Export_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.Preferences}"      Executed="Preferences_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.Exit}"             Executed="Exit_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ClearAllCaptures}" Executed="ClearAllCaptures_Executed" CanExecute="ClearAllCaptures_CanExecute"/>
@@ -55,7 +56,9 @@
                 <MenuItem x:Name="EditPreferences" Command="{x:Static local:AppCommands.Preferences}"/>
             </MenuItem>
             <MenuItem x:Name="AnalysisMenu" HorizontalAlignment="Left" Header="_Analysis">
-                <MenuItem x:Name="ViewAnalyzeCaptures" Command="{x:Static local:AppCommands.AnalyzeCaptures}" />
+                <MenuItem x:Name="ViewAnalyzeCaptures"
+                          Command="{x:Static local:AppCommands.AnalyzeCaptures}"
+                          ToolTipService.ShowOnDisabled="True"/>
             </MenuItem>
             <MenuItem x:Name="ActionsMenu" HorizontalAlignment="Left" Header="_Actions">
                 <MenuItem x:Name="ExportRootCert" Header="_Export Root Certificate to Desktop" Command="{x:Static local:AppCommands.ExportRootCert}" />

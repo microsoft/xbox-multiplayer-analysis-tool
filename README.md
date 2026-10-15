@@ -167,6 +167,12 @@ Proxying may be stopped from with Xbox Multiplayer Analysis Tool for a specific 
 button on the tool bar. Disabling proxing for a device will cause the kit to reboot and no longer route
 web service traffic through the Xbox Multiplayer Analysis Tool proxy, thereby implicit stopping proxying.
 
+The **Edit > Preferences > Web Proxy > Prompt to disable Xbox proxy on close** setting applies immediately
+to existing capture tabs. When enabled, closing a device tab or exiting the application (including **File > Exit**
+and the window's close button) prompts for each reachable console whose proxy is still enabled. Choosing **Yes**
+disables the proxy and reboots the console; choosing **No** leaves its proxy settings unchanged. Imported,
+read-only captures do not trigger this prompt.
+
 If proxying remains enabled, but Xbox Multiplayer Analysis Tool is not proxying web traffic for that particular device, then the kit
 will fail to perform Xbox services status checks, as well as successfully execute other Xbox services related APIs or
 REST requests. The kit will eventually show an “unknown” status like this:

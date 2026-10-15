@@ -10,7 +10,7 @@
                  mc:Ignorable="d" 
                  >
     <UserControl.CommandBindings>
-            <CommandBinding Command="Close" Executed="TabClose_Executed"/>
+            <CommandBinding Command="Close" Executed="TabClose_Executed" CanExecute="TabClose_CanExecute"/>
     </UserControl.CommandBindings>
     <UserControl.Resources>
         <DataTemplate x:Key="WebProxyTemplate">
@@ -74,16 +74,18 @@
             <TabControl.ItemTemplate>
                 <DataTemplate>
                     <StackPanel Height="20" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="Visible">
-                        <TextBlock HorizontalAlignment="Left" VerticalAlignment="Top">
+                        <TextBlock HorizontalAlignment="Left" VerticalAlignment="Center">
                             <TextBlock.Inlines>
                                 <Run Text="{Binding DeviceName, Mode=OneWay}"/>
                                 <Run Text=":"/>
                                 <Run Text="{Binding CaptureTypeString, Mode=OneWay}"/>
                             </TextBlock.Inlines>
                         </TextBlock>
-                        <TextBlock Text="{x:Static local:AllCaptureDevicesTabControl.ReadOnlyLabel}" Visibility="{Binding IsReadOnly, Mode=OneWay, FallbackValue=Collapsed, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                        <TextBlock VerticalAlignment="Center" Text="{x:Static local:AllCaptureDevicesTabControl.ReadOnlyLabel}" Visibility="{Binding IsReadOnly, Mode=OneWay, FallbackValue=Collapsed, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                         <!--<CheckBox x:Name="SelectCheckBox" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10,0,10,0" IsChecked="{Binding IsSelected}"/>-->
-                        <Button x:Name="CloseButton" Width="20" Content="&#xE894;" FontFamily="Segoe MDL2 Assets" BorderBrush="{x:Null}" Background="{x:Null}"
+                        <Button x:Name="CloseButton" Width="20" Height="20" Margin="8,0,0,0"
+                                Padding="0" BorderThickness="0" BorderBrush="{x:Null}" Background="Transparent"
+                                Content="&#xE894;" FontFamily="Segoe MDL2 Assets"
                                 Command="Close" CommandParameter="{Binding}"/>
                     </StackPanel>
                 </DataTemplate>
