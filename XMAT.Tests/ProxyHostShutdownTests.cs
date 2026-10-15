@@ -22,6 +22,83 @@ namespace XMAT.Tests
             Assert.True(host.DisposeCalled);
         }
 
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task StopAndDisposeAsync_DoesNotRunBlockingTeardownOnCallingThread(
+            bool blockDuringStop)
+        {
+            using var teardownStarted = new ManualResetEventSlim();
+            using var releaseTeardown = new ManualResetEventSlim();
+            var callingThreadId = Environment.CurrentManagedThreadId;
+            var teardownThreadId = callingThreadId;
+            Action blockingTeardown = () =>
+            {
+                teardownThreadId = Environment.CurrentManagedThreadId;
+                teardownStarted.Set();
+                releaseTeardown.Wait(TimeSpan.FromSeconds(5));
+            };
+            var host = new TestHost
+            {
+                StopAction = blockDuringStop ? blockingTeardown : null,
+                DisposeAction = blockDuringStop ? null : blockingTeardown
+            };
+
+            var stopTask = ProxyHostShutdown.StopAndDisposeAsync(
+                host,
+                TimeSpan.FromSeconds(1));
+            try
+            {
+                Assert.True(teardownStarted.Wait(TimeSpan.FromSeconds(5)));
+                Assert.False(stopTask.IsCompleted);
+                Assert.NotEqual(callingThreadId, teardownThreadId);
+            }
+            finally
+            {
+                releaseTeardown.Set();
+                await stopTask.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+
+            Assert.True(host.StopCalled);
+            Assert.True(host.DisposeCalled);
+        }
+
+        [Fact]
+        public async Task StopAndDisposeAsync_PrefersAndAwaitsAsynchronousDisposal()
+        {
+            var disposalStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseDisposal = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var host = new AsyncTestHost
+            {
+                DisposeAsyncAction = () =>
+                {
+                    disposalStarted.SetResult();
+                    return new ValueTask(releaseDisposal.Task);
+                }
+            };
+
+            var stopTask = ProxyHostShutdown.StopAndDisposeAsync(
+                host,
+                TimeSpan.FromSeconds(1));
+            try
+            {
+                await disposalStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(stopTask.IsCompleted);
+                Assert.False(host.DisposeCalled);
+            }
+            finally
+            {
+                releaseDisposal.SetResult();
+                await stopTask.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+
+            Assert.True(host.StopCalled);
+            Assert.True(host.DisposeAsyncCalled);
+            Assert.False(host.DisposeCalled);
+        }
+
         [Fact]
         public async Task StopAndDisposeAsync_DisposesHostWhenStopFails()
         {
@@ -152,11 +229,13 @@ namespace XMAT.Tests
             Assert.Same(disposeException, aggregateException.InnerExceptions[1]);
         }
 
-        private sealed class TestHost : IHost
+        private class TestHost : IHost
         {
             public IServiceProvider Services => null;
             public Exception StopException { get; set; }
             public Exception DisposeException { get; set; }
+            public Action StopAction { get; set; }
+            public Action DisposeAction { get; set; }
             public bool StopCalled { get; private set; }
             public bool DisposeCalled { get; private set; }
 
@@ -168,6 +247,7 @@ namespace XMAT.Tests
             public Task StopAsync(CancellationToken cancellationToken = default)
             {
                 StopCalled = true;
+                StopAction?.Invoke();
                 return StopException == null
                     ? Task.CompletedTask
                     : Task.FromException(StopException);
@@ -176,10 +256,23 @@ namespace XMAT.Tests
             public void Dispose()
             {
                 DisposeCalled = true;
+                DisposeAction?.Invoke();
                 if (DisposeException != null)
                 {
                     throw DisposeException;
                 }
+            }
+        }
+
+        private sealed class AsyncTestHost : TestHost, IAsyncDisposable
+        {
+            public Func<ValueTask> DisposeAsyncAction { get; set; }
+            public bool DisposeAsyncCalled { get; private set; }
+
+            public ValueTask DisposeAsync()
+            {
+                DisposeAsyncCalled = true;
+                return DisposeAsyncAction?.Invoke() ?? ValueTask.CompletedTask;
             }
         }
     }

@@ -98,6 +98,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
         public void StartProxy(WebServiceProxyOptions options)
         {
+            if (_host != null || _interceptedHost != null)
+            {
+                throw new InvalidOperationException("The proxy is already running.");
+            }
+
             Reset();
 
             _logger.InitLog(options.LogFilePath, options.CurrentLogLevel);
@@ -119,7 +124,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 this,
                 _httpClient,
                 _interceptedTunnels,
-                _logger);
+                _logger,
+                _cts.Token);
             _interceptedHost = new InterceptedHttpHost(
                 SelectInterceptedCertificate,
                 interceptedApplication.InvokeAsync);
@@ -152,21 +158,9 @@ namespace XMAT.WebServiceCapture.Proxy
 
             _logger.Log(0, LogLevel.INFO, $"Kestrel proxy starting on port {_port}");
 
-            Task.Run(async () =>
-            {
-                try
-                {
-                    await _host.RunAsync(_cts.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    // Expected on shutdown
-                }
-                catch (Exception ex)
-                {
-                    _logger.Log(0, LogLevel.ERROR, $"Kestrel host error: {ex}");
-                }
-            });
+            // StopProxyAsync exclusively owns shutdown and disposal. RunAsync
+            // would independently stop and dispose this host on cancellation.
+            _host.StartAsync(_cts.Token).GetAwaiter().GetResult();
         }
 
         private X509Certificate2 SelectInterceptedCertificate(
@@ -198,7 +192,10 @@ namespace XMAT.WebServiceCapture.Proxy
 
             var totalStopwatch = Stopwatch.StartNew();
             List<Exception> disposalFailures = new();
-            _cts?.Cancel();
+            if (_cts != null)
+            {
+                await _cts.CancelAsync().ConfigureAwait(false);
+            }
 
             if (_host != null)
             {
@@ -212,7 +209,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 {
                     await ProxyHostShutdown.StopAndDisposeAsync(
                         host,
-                        TimeSpan.FromSeconds(5));
+                        TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                     hostDisposed = true;
                 }
                 catch (ProxyHostDisposalException ex) when (!ExceptionUtilities.IsFatal(ex))
@@ -250,7 +247,7 @@ namespace XMAT.WebServiceCapture.Proxy
                     totalStopwatch.Elapsed));
                 try
                 {
-                    await _interceptedHost.DisposeAsync();
+                    await _interceptedHost.DisposeAsync().ConfigureAwait(false);
                     interceptedHostDisposed = true;
                 }
                 catch (ProxyHostDisposalException ex) when (!ExceptionUtilities.IsFatal(ex))
@@ -299,7 +296,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 0,
                 LogLevel.INFO,
                 $"Proxy hosts stopped in {totalStopwatch.Elapsed}.");
-            _logger.CloseLog();
+            await Task.Run(_logger.CloseLog).ConfigureAwait(false);
         }
 
         internal int GetNextConnectionID()
@@ -314,6 +311,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal bool RaiseReceivedInitialConnection(int connectionID, string remoteEndPoint)
         {
+            if (_cts?.IsCancellationRequested == true)
+            {
+                return false;
+            }
+
             var args = new InitialConnectionEventArgs
             {
                 ConnectionID = connectionID,
@@ -328,6 +330,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal bool RaiseReceivedSslConnectionRequest(int connectionID, string clientIP, ClientRequest request)
         {
+            if (_cts?.IsCancellationRequested == true)
+            {
+                return false;
+            }
+
             var args = new SslConnectionRequestEventArgs
             {
                 ConnectionID = connectionID,
@@ -365,6 +372,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal bool RaiseReceivedWebRequest(int connectionID, ClientRequest request)
         {
+            if (_cts?.IsCancellationRequested == true)
+            {
+                return false;
+            }
+
             var args = new HttpRequestEventArgs
             {
                 ConnectionID = connectionID,
@@ -379,6 +391,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal bool RaiseReceivedWebResponse(int connectionID, ClientRequest request, ServerResponse response)
         {
+            if (_cts?.IsCancellationRequested == true)
+            {
+                return false;
+            }
+
             var args = new HttpResponseEventArgs
             {
                 ConnectionID = connectionID,

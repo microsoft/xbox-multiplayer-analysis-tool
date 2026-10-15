@@ -15,6 +15,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
+using Microsoft.Extensions.Hosting;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -25,27 +26,35 @@ namespace XMAT.WebServiceCapture.Proxy
         private readonly InterceptedTunnelRegistry _interceptedTunnels;
         private readonly Logger _logger;
         private readonly WebServiceProxy _proxy;
+        private readonly CancellationToken _applicationStopping;
 
         public ForwardProxyConnectionHandler(
             HttpClient httpClient,
             InterceptedHttpHost interceptedHost,
             InterceptedTunnelRegistry interceptedTunnels,
             Logger logger,
-            WebServiceProxy proxy)
+            WebServiceProxy proxy,
+            IHostApplicationLifetime applicationLifetime)
         {
             _httpClient = httpClient;
             _interceptedHost = interceptedHost;
             _interceptedTunnels = interceptedTunnels;
             _logger = logger;
             _proxy = proxy;
+            _applicationStopping = applicationLifetime.ApplicationStopping;
         }
 
         public override async Task OnConnectedAsync(ConnectionContext connection)
         {
+            using var connectionCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                connection.ConnectionClosed,
+                _applicationStopping);
+            var cancellationToken = connectionCancellation.Token;
             var connectionID = _proxy.GetNextConnectionID();
             var remoteEndPoint = connection.RemoteEndPoint?.ToString() ?? "unknown";
 
-            if (!_proxy.RaiseReceivedInitialConnection(connectionID, remoteEndPoint))
+            if (cancellationToken.IsCancellationRequested ||
+                !_proxy.RaiseReceivedInitialConnection(connectionID, remoteEndPoint))
             {
                 _logger.Log(connectionID, LogLevel.WARN, $"REJECTING connection from {remoteEndPoint}");
                 return;
@@ -56,7 +65,7 @@ namespace XMAT.WebServiceCapture.Proxy
             try
             {
                 var stream = new DuplexPipeStream(connection.Transport);
-                var request = await ReadHttpRequestAsync(connectionID, stream, connection.ConnectionClosed).ConfigureAwait(false);
+                var request = await ReadHttpRequestAsync(connectionID, stream, cancellationToken).ConfigureAwait(false);
 
                 if (request == null)
                 {
@@ -66,12 +75,12 @@ namespace XMAT.WebServiceCapture.Proxy
 
                 if (request.Method == "CONNECT")
                 {
-                    await HandleConnectAsync(connectionID, stream, request, remoteEndPoint, connection.ConnectionClosed).ConfigureAwait(false);
+                    await HandleConnectAsync(connectionID, stream, request, remoteEndPoint, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
                     request.Scheme = "http";
-                    await HandleHttpRequestAsync(connectionID, stream, request, connection.ConnectionClosed).ConfigureAwait(false);
+                    await HandleHttpRequestAsync(connectionID, stream, request, cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
