@@ -21,7 +21,8 @@ namespace XMAT.Models
 
     public enum ImportType : int
     {
-        Fiddler = 0
+        Fiddler = 0,
+        NetTrace = 1
     }
 
     internal class CaptureAppModel : ICaptureAppModel, INotifyPropertyChanged
@@ -182,6 +183,34 @@ namespace XMAT.Models
                         null
                     );
                     await (captureDevice.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ImportFromFiddlerAsync(fromFilePath, captureDevice);
+                }
+                break;
+
+                // create a new read-only network trace tab and populate it from a netsh .etl file
+                case ImportType.NetTrace:
+                {
+                    captureDevice = AppModel.AddDeviceContext(
+                        DeviceType.Unknown,
+                        $"{importType} - {Path.GetFileName(fromFilePath)}",
+                        CaptureType.NetworkTrace,
+                        true,
+                        null
+                    );
+
+                    try
+                    {
+                        int packetCount = await (captureDevice.CaptureController as NetworkTrace.NetworkTraceCaptureController).ImportFromEtlFileAsync(fromFilePath);
+                        if (packetCount == 0)
+                        {
+                            System.Windows.MessageBox.Show(
+                                Localization.GetLocalizedString("NETCAP_IMPORT_NO_PACKETS"),
+                                Localization.GetLocalizedString("NETCAP_ERROR"));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Windows.MessageBox.Show(ex.Message, Localization.GetLocalizedString("NETCAP_ERROR"));
+                    }
                 }
                 break;
             }
