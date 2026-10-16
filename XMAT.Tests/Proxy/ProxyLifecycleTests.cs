@@ -386,6 +386,7 @@ namespace XMAT.Tests.Proxy
             }
             catch (OperationCanceledException)
             {
+                // A cancelled start is an accepted outcome.
             }
 
             await stop.WaitAsync(TimeSpan.FromSeconds(15));
@@ -522,7 +523,7 @@ namespace XMAT.Tests.Proxy
             await using var origin = await LoopbackOrigin.StartAsync(async context =>
             {
                 try { await Task.Delay(Timeout.Infinite, release.Token); }
-                catch (OperationCanceledException) { }
+                catch (OperationCanceledException) { /* Cancelling the infinite delay is expected. */ }
             });
             int port = GetFreePort();
             var proxy = new WebServiceProxy();

@@ -76,6 +76,7 @@ namespace XMAT
             }
             catch (InvalidOperationException)
             {
+                // By design: a line logged while the log is closing is dropped.
             }
         }
 

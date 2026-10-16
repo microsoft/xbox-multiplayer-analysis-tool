@@ -455,6 +455,7 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             catch (ObjectDisposedException)
             {
+                // A finished teardown already disposed the token source; there is nothing left to cancel.
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
