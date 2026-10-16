@@ -102,8 +102,11 @@ The following diagram illustrates the trust boundaries in XMAT:
 
 - The application runs as a **standard user process** — no administrator
   privileges required for normal operation.
-- The proxy binds to **localhost or a developer-specified address** only; it
-  does not listen on all interfaces by default.
+- The proxy listens on **all IPv4 interfaces (`0.0.0.0`)** on its configured
+  port so that consoles and other devices on the network can connect. On
+  Windows the public listener binds exclusively (`SO_EXCLUSIVEADDRUSE`), so it
+  fails to start instead of sharing the port with another application. Restrict
+  access to the port with the host firewall.
 - Certificate installation uses the **CurrentUser** certificate store (not
   LocalMachine), limiting scope to the running user.
 - Device connections require explicit user-initiated pairing by IP address —
