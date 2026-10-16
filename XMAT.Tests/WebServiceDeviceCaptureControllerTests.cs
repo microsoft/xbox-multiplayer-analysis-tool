@@ -182,7 +182,7 @@ namespace XMAT.Tests
         [InlineData(true)]
         public async Task EnableDeviceProxyingOrRollBackAsync_DeviceSetupFailure_StopsListener(bool throws)
         {
-            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
             listener.Start();
             ushort port = (ushort)((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
             listener.Stop();
@@ -236,7 +236,7 @@ namespace XMAT.Tests
         [Fact]
         public async Task XboxSetupFailure_RollsBackTheListener()
         {
-            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
             listener.Start();
             ushort port = (ushort)((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
             listener.Stop();

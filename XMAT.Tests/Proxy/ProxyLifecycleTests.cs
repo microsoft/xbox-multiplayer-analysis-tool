@@ -19,7 +19,7 @@ namespace XMAT.Tests.Proxy
 
         private static int GetFreePort()
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
             listener.Stop();
@@ -359,7 +359,7 @@ namespace XMAT.Tests.Proxy
         {
             int port = GetFreePort();
             var atGate = new TaskCompletionSource();
-            var release = new ManualResetEventSlim(false);
+            using var release = new ManualResetEventSlim(false);
             var proxy = new WebServiceProxy
             {
                 StartupFaultInjection = p =>

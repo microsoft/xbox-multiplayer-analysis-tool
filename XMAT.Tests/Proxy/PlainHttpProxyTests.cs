@@ -32,9 +32,10 @@ namespace XMAT.Tests.Proxy
             await using var proxy = await ProxyTestHarness.StartAsync();
             using HttpClient client = proxy.CreateClient();
 
+            using var content = new StringContent("payload");
             using var response = await client.PostAsync(
                 $"http://127.0.0.1:{origin.Port}/post",
-                new StringContent("payload"));
+                content);
 
             Assert.True(response.IsSuccessStatusCode);
             Assert.Equal("payload", Encoding.UTF8.GetString(Assert.Single(origin.Requests).Body));

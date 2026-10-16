@@ -43,7 +43,7 @@ namespace XMAT.Tests.Proxy
 
         private static int GetFreePort()
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
             listener.Stop();
@@ -61,7 +61,7 @@ namespace XMAT.Tests.Proxy
         {
             try
             {
-                var probe = new TcpListener(IPAddress.Any, port) { ExclusiveAddressUse = true };
+                using var probe = new TcpListener(IPAddress.Any, port) { ExclusiveAddressUse = true };
                 probe.Start();
                 probe.Stop();
                 return true;
@@ -101,6 +101,7 @@ namespace XMAT.Tests.Proxy
             int port = GetFreePort();
             var proxy = new WebServiceProxy { StopDeadline = TimeSpan.FromSeconds(1) };
             await proxy.StartProxyAsync(Options(port));
+            // Not disposed: the blocked request thread may still be leaving Wait when the test ends.
             var release = new ManualResetEventSlim(false);
             using var stuck = await OpenBlockedRequestAsync(proxy, port, release);
 
@@ -127,6 +128,7 @@ namespace XMAT.Tests.Proxy
             int port = GetFreePort();
             var proxy = new WebServiceProxy { StopDeadline = TimeSpan.FromSeconds(2) };
             await proxy.StartProxyAsync(Options(port));
+            // Not disposed: the blocked request thread may still be leaving Wait when the test ends.
             var release = new ManualResetEventSlim(false);
             using var stuck = await OpenBlockedRequestAsync(proxy, port, release);
             var progress = new SyncProgress();
