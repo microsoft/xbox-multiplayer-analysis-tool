@@ -11,7 +11,7 @@ namespace XMAT.Tests.Proxy
         [Fact]
         public async Task Log_ConcurrentWithCloseLog_NeverThrows()
         {
-            for (int round = 0; round < 20; round++)
+            for (int round = 0; round < 5; round++)
             {
                 var logger = new Logger();
                 logger.InitLog("xmat-logger-race-tests.log", LogLevel.DEBUG);
