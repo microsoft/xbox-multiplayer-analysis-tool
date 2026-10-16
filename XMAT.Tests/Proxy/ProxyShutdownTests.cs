@@ -13,7 +13,17 @@ using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.Tests.Proxy
 {
+    // These tests deliberately hold a thread-pool thread to simulate work that ignores
+    // cancellation. Running them on their own keeps a held thread from stalling unrelated
+    // tests on a small CI runner, and keeps parallel load from delaying their stop deadlines.
+    [CollectionDefinition(Name, DisableParallelization = true)]
+    public sealed class ThreadHoldingProxyTests
+    {
+        public const string Name = "Thread-holding proxy tests";
+    }
+
     // Shared stop deadline, concurrent host shutdown and cleanup-failure handling.
+    [Collection(ThreadHoldingProxyTests.Name)]
     public class ProxyShutdownTests
     {
         private const string LogName = "xmat-shutdown-tests.log";
