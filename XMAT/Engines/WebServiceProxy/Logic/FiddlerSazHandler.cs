@@ -58,7 +58,7 @@ namespace XMAT.WebServiceCapture
             // Read the client part of the frame (###_c.txt)
             if (cFileStream != null)
             {
-                using (MemoryStream cFileMemory = PublicUtilities.DecompressZipEntryToMemory(cFileStream))
+                using (MemoryStream cFileMemory = ZipUtilities.DecompressEntryToMemory(cFileStream))
                 {
                     using (var cFile = new BinaryReader(cFileMemory))
                     {
@@ -125,7 +125,7 @@ namespace XMAT.WebServiceCapture
             // Read the server part of the frame(###_s.txt)
             if (sFileStream != null)
             {
-                using (MemoryStream sFileMemory = PublicUtilities.DecompressZipEntryToMemory(sFileStream))
+                using (MemoryStream sFileMemory = ZipUtilities.DecompressEntryToMemory(sFileStream))
                 {
                     using (var sFile = new BinaryReader(sFileMemory))
                     {

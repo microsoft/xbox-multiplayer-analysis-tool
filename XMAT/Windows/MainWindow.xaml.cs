@@ -320,7 +320,19 @@ namespace XMAT
                         ? ImportType.NetTrace
                         : ImportType.Fiddler;
 
-                    await CaptureAppModel.AppModel.ImportDataCapturesAsync(importType, filename);
+                    try
+                    {
+                        await CaptureAppModel.AppModel.ImportDataCapturesAsync(importType, filename);
+                    }
+                    catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                    {
+                        PublicUtilities.AppLog(LogLevel.ERROR, $"Capture import failed: {ex}");
+                        MessageBox.Show(
+                            Localization.GetLocalizedString("WEBCAP_IMPORT_ERROR", ex.Message),
+                            Localization.GetLocalizedString("WEBCAP_IMPORT_ERROR_TITLE"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error);
+                    }
                 }
             }
         }
@@ -453,7 +465,6 @@ namespace XMAT
                     CaptureErrorsPanel.AddedAnalysis(analysisRun);
                     await HandleAnalyzerChosen(
                         analysisRun,
-                        selected,
                         captureDeviceContext.CaptureController);
                 }
             }
@@ -461,50 +472,38 @@ namespace XMAT
 
         private async Task HandleAnalyzerChosen(
             AnalysisRunModel analysisRun,
-            ICaptureAnalyzer captureAnalyzer,
             IDeviceCaptureController captureController)
         {
-            analysisRun.IsProcessing = true;
-            try
+            ECaptureAnalyzerResult analyzerResult = await CaptureAppModel.AppModel.RunAnalysisAsync(
+                analysisRun, captureController);
+
+            void OnError(string strErrorMsg)
             {
-                ECaptureAnalyzerResult analyzerResult = await captureAnalyzer.RunAsync(analysisRun, captureController);
-
-                void OnError(string strErrorMsg)
-                {
-                    // remove entry
-                    CaptureAppModel.AppModel.RemoveAnalysisRun(analysisRun);
-
-                    // show error msg
-                    MessageBox.Show(
-                        strErrorMsg,
-                        Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_TITLE"),
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                }
-
-                switch (analyzerResult)
-                {
-                    case ECaptureAnalyzerResult.Success:
-                    {
-                        break;
-                    }
-
-                    case ECaptureAnalyzerResult.NoSuitableData:
-                    {
-                        OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
-                        break;
-                    }
-
-                    case ECaptureAnalyzerResult.UnknownError:
-                    {
-                        OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));
-                        break;
-                    }
-                }
+                MessageBox.Show(
+                    strErrorMsg,
+                    Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_TITLE"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             }
-            finally
+
+            switch (analyzerResult)
             {
-                analysisRun.IsProcessing = false;
+                case ECaptureAnalyzerResult.Success:
+                {
+                    break;
+                }
+
+                case ECaptureAnalyzerResult.NoSuitableData:
+                {
+                    OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
+                    break;
+                }
+
+                case ECaptureAnalyzerResult.UnknownError:
+                {
+                    OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));
+                    break;
+                }
             }
         }
 

@@ -12,7 +12,7 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtDataTable : IDataTable
+    internal class SqLtDataTable : IDataTable, IImportedCaptureTable
     {
         public event Action<IDataTable, Int64> RowAdded;
         public event Action<IDataTable, Int64> RowUpdated;
@@ -144,6 +144,47 @@ namespace XMAT.DataAbstractionLayer
                 {
                     RowsRemoved?.Invoke(this, rowsModified);
                 }
+            }
+        }
+
+        public IReadOnlyList<long> ReplaceImportedRows(
+            IFieldValue capture,
+            IReadOnlyList<object[]> rows)
+        {
+            lock (_lockObj)
+            {
+                var captureField = (FieldDefinition)_fieldDefinitions[capture.Name];
+                var fields = _fieldDefinitions.Values.Cast<FieldDefinition>().ToArray();
+                string fieldNames = string.Join(",", fields.Select(field => field.Name));
+                var inserts = rows.Select(row =>
+                {
+                    if (row.Length != fields.Length)
+                    {
+                        throw new ArgumentException("Inequal number of values to table fields.", nameof(rows));
+                    }
+
+                    return string.Join(",", fields.Select(
+                        (field, index) => field.FieldValueAsString(row[index])));
+                }).ToList();
+                var rowIds = new List<long>(inserts.Count);
+
+                using var transaction = _connection.BeginTransaction();
+                using var command = _connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText =
+                    $"DELETE FROM {_name} WHERE {captureField.Name} = {captureField.FieldValueAsString(capture.Value)}";
+                command.ExecuteNonQuery();
+
+                foreach (string values in inserts)
+                {
+                    command.CommandText = $"INSERT INTO {_name}({fieldNames}) VALUES({values})";
+                    command.ExecuteNonQuery();
+                    command.CommandText = "SELECT last_insert_rowid()";
+                    rowIds.Add((long)command.ExecuteScalar());
+                }
+
+                transaction.Commit();
+                return rowIds;
             }
         }
 

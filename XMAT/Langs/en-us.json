@@ -226,6 +226,8 @@
 	"WEB_SVC_SCRIPT_PROP_DESC_CONTINUE": "Set to 'false' to terminate the request/response.",
 
 	"WEBCAP_ANALYSIS_ERROR_TITLE": "Analyzer Error",
+	"WEBCAP_IMPORT_ERROR_TITLE": "Import Error",
+	"WEBCAP_IMPORT_ERROR": "The capture could not be imported.\n\n{0}",
 	"WEBCAP_ANALYSIS_ERROR_NOSUITABLE": "The capture does not contain any endpoints which XMAT can analyze.",
 	"WEBCAP_ANALYSIS_ERROR_UNKNOWN": "An unknown error occurred",
 
