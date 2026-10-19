@@ -21,7 +21,7 @@ namespace XMAT.Tests
                 {
                     RunOnCurrentDispatcher(test);
                 }
-                catch (Exception exception)
+                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
                 {
                     failure = exception;
                 }

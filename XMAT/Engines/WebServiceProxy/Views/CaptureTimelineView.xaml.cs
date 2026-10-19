@@ -241,7 +241,7 @@ namespace XMAT.WebServiceCapture
 
         private void ViewMode_Changed(object sender, RoutedEventArgs e)
         {
-            _isWaterfall = WaterfallMode.IsChecked == true;
+            _isWaterfall = WaterfallMode.IsChecked is true;
             RequestRefresh(true);
         }
 

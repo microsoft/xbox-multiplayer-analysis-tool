@@ -54,7 +54,7 @@ namespace XMAT.Tests
                     _ready.Set();
                     _application.Run();
                 }
-                catch (Exception exception)
+                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
                 {
                     _failure = exception;
                     _ready.Set();
