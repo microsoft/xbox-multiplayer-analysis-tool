@@ -8,6 +8,8 @@
              xmlns:app="clr-namespace:XMAT"
              mc:Ignorable="d" 
              Loaded="UserControl_Loaded"
+             Unloaded="UserControl_Unloaded"
+             DataContextChanged="UserControl_DataContextChanged"
              x:Name="CaptureConnectionControl"
              FocusManager.FocusedElement="{Binding ElementName=ConnectionList}"
              d:DesignHeight="720" d:DesignWidth="1280">
@@ -122,6 +124,7 @@
         <!-- Timeline -->
         <local:CaptureTimelineView x:Name="TimelineView" Grid.Row="2"
                                    ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
+                                   IsCaptureRunning="{Binding CaptureController.IsRunning, Mode=OneWay}"
                                    SelectedItem="{Binding CaptureController.SelectedConnectionModel}"/>
 
         <GridSplitter Grid.Row="3" Height="4" HorizontalAlignment="Stretch" VerticalAlignment="Center" ResizeDirection="Rows"/>
