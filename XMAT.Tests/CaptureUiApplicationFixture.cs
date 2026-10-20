@@ -40,7 +40,7 @@ namespace XMAT.Tests
                         Source = new Uri(
                             "pack://application:,,,/XboxMultiplayerAnalysisTool;component/Themes/LightTheme.xaml")
                     });
-                    var storage = Path.Combine(
+                    var storage = Path.Join(
                         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", appName);
                     Assert.Equal(storage, PublicUtilities.StorageDirectoryPath);
                     var log = (Logger)typeof(PublicUtilities).GetField(
