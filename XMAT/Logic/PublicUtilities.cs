@@ -39,7 +39,7 @@ namespace XMAT
             get
             {
                 if (string.IsNullOrEmpty(_appName))
-                    _appName = Application.Current.FindResource("appName").ToString();
+                    _appName = Application.Current?.TryFindResource("appName")?.ToString() ?? "Xbox Multiplayer Analysis Tool";
                 return _appName;
             }
         }

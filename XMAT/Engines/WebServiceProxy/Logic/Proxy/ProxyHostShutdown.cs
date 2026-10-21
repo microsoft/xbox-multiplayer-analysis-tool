@@ -4,6 +4,7 @@
 
 using System;
 using System.Runtime.ExceptionServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 
@@ -32,18 +33,35 @@ namespace XMAT.WebServiceCapture.Proxy
             ArgumentNullException.ThrowIfNull(host);
 
             // Host shutdown and disposal can block before returning a task.
-            return Task.Run(() => StopAndDisposeCoreAsync(host, timeout));
+            return Task.Run(async () =>
+            {
+                using var deadline = new CancellationTokenSource(timeout);
+                await StopAndDisposeCoreAsync(host, deadline.Token).ConfigureAwait(false);
+            });
+        }
+
+        // Graceful until the token fires, then Kestrel aborts the remaining
+        // connections. Cancellation never skips disposal.
+        internal static Task StopAndDisposeAsync(
+            IHost host,
+            CancellationToken deadline)
+        {
+            ArgumentNullException.ThrowIfNull(host);
+
+            // Host shutdown and disposal can block before returning a task. The deadline is
+            // deliberately not passed to Task.Run: an expired deadline must not skip disposal.
+            return Task.Run(() => StopAndDisposeCoreAsync(host, deadline), CancellationToken.None);
         }
 
         private static async Task StopAndDisposeCoreAsync(
             IHost host,
-            TimeSpan timeout)
+            CancellationToken deadline)
         {
             Exception stopException = null;
             Exception disposeException = null;
             try
             {
-                await host.StopAsync(timeout).ConfigureAwait(false);
+                await host.StopAsync(deadline).ConfigureAwait(false);
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {

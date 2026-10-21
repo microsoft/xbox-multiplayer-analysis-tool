@@ -386,8 +386,10 @@ namespace XMAT.WebServiceCapture
                 {
                     case DeviceType.LocalPC:
                     {
-                        wsdcc.EnableProxyingPC();
+                        // The listener must be confirmed before the system proxy points at it.
                         await wsdcc.StartProxyAsync(false);
+                        await wsdcc.EnableDeviceProxyingOrRollBackAsync(
+                            () => { wsdcc.EnableProxyingPC(); return Task.FromResult(true); });
                         break;
                     }
 
@@ -457,12 +459,9 @@ namespace XMAT.WebServiceCapture
 
                         if (shouldEnableProxy)
                         {
-                            bool bWasEnabled = await wsdcc.EnableProxyingXbox(proxyHostIpAddress);
-
-                            if (bWasEnabled)
-                            {
-                                await wsdcc.StartProxyAsync(false);
-                            }
+                            await wsdcc.StartProxyAsync(false);
+                            await wsdcc.EnableDeviceProxyingOrRollBackAsync(
+                                () => wsdcc.EnableProxyingXbox(proxyHostIpAddress));
                         }
                         // TODO: if we 've gotten this far, then that means we
                         // were not able to find a suitable source address to use
@@ -586,12 +585,13 @@ namespace XMAT.WebServiceCapture
                             return;
                         }
 
-                        if (captureDeviceContext.DeviceType == DeviceType.LocalPC)
-                        {
-                            wsdcc.EnableProxyingPC();
-                        }
                         await wsdcc.StartProxyAsync(
                             captureDeviceContext.DeviceType == DeviceType.GenericProxyDevice);
+                        if (captureDeviceContext.DeviceType == DeviceType.LocalPC)
+                        {
+                            await wsdcc.EnableDeviceProxyingOrRollBackAsync(
+                                () => { wsdcc.EnableProxyingPC(); return Task.FromResult(true); });
+                        }
                     }
                 }
                 else
