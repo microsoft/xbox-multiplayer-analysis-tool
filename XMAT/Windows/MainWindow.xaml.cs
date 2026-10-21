@@ -113,7 +113,10 @@ namespace XMAT
                     return;
                 }
 
-                CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+                if (!CaptureAppSettings.Serialize(CaptureAppModel.AppModel))
+                {
+                    return;
+                }
                 _closeConfirmed = true;
                 Close();
             }
@@ -198,7 +201,8 @@ namespace XMAT
                 var context = CaptureAppModel.AppModel.GetDeviceContext(deviceSelector.SelectedDeviceType, deviceSelector.SelectedDeviceName, deviceSelector.SelectedCaptureType, false);
                 if (context != null)
                 {
-                    MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    CaptureAppModel.AppModel.SelectedDeviceContext = context;
+                    MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
                 else

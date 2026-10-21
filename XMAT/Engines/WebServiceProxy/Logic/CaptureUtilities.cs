@@ -2,7 +2,10 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.IO;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Threading.Tasks;
 using XboxClient;
 using static XboxClient.XboxClientConnection;
@@ -12,7 +15,6 @@ namespace XMAT.WebServiceCapture
     internal static class CaptureUtilities
     {
         private static string CertFile = "XMATRoot.cer"; // Locally we use XMAT... but on the box we need to user FiddlerRoot
-        private static string ConfigFile = "ProxyAddress.txt";
         private static string XboxCertPath = "xs:\\microsoft\\cert\\FiddlerRoot.cer";
         private static string XboxConfigPath = "xs:\\microsoft\\fiddler\\ProxyAddress.txt";
 
@@ -23,21 +25,36 @@ namespace XMAT.WebServiceCapture
 
         internal static Task<bool> EnableXboxProxyAsync(string ipAddress, string proxyAddr, int port)
         {
-            var proxyFileContents = $"{proxyAddr}:{port}";
-            File.WriteAllText(GetPath(ConfigFile), proxyFileContents);
-
             return Task.Run(() =>
             {
-                if (XboxClientConnection.IsOnline(ipAddress))
+                var configFile = Path.GetTempFileName();
+                try
                 {
+                    File.WriteAllText(configFile, $"{proxyAddr}:{port}");
+                    if (!XboxClientConnection.IsOnline(ipAddress))
+                    {
+                        return false;
+                    }
                     XboxClientConnection.CopyFile(ipAddress, GetPath(CertFile), XboxCertPath);
-                    XboxClientConnection.CopyFile(ipAddress, GetPath(ConfigFile), XboxConfigPath);
+                    XboxClientConnection.CopyFile(ipAddress, configFile, XboxConfigPath);
                     XboxClientConnection.Reboot(ipAddress);
                     return true;
                 }
-                else
+                catch (TargetInvocationException ex) when (ex.InnerException != null)
                 {
-                    return false;
+                    ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+                    throw;
+                }
+                finally
+                {
+                    try
+                    {
+                        File.Delete(configFile);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        PublicUtilities.AppLog(LogLevel.ERROR, $"Could not remove proxy configuration temporary file: {ex}");
+                    }
                 }
             });
         }

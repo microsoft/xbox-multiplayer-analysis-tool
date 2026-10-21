@@ -536,7 +536,8 @@ namespace XMAT.Models
             string deviceName,
             CaptureType captureType,
             bool readOnly,
-            object serializedParameters)
+            object serializedParameters,
+            bool deferPortAllocation = false)
         {
             var newCaptureDeviceModel = GetDeviceContext(
                 deviceType,
@@ -551,7 +552,8 @@ namespace XMAT.Models
                     deviceName,
                     captureType,
                     readOnly,
-                    serializedParameters);
+                    serializedParameters,
+                    deferPortAllocation);
                 _captureDeviceContexts.Add(newCaptureDeviceModel);
 
                 if (!readOnly)
@@ -573,7 +575,9 @@ namespace XMAT.Models
             return (from cc in _captureDeviceContexts
                     where
                     cc.DeviceType == deviceType &&
-                    cc.DeviceName == deviceName &&
+                    (captureType == CaptureType.WebProxy && !readOnly
+                        ? SameProxyDevice(deviceType, cc.DeviceName, deviceName)
+                        : cc.DeviceName == deviceName) &&
                     cc.CaptureType == captureType &&
                     cc.IsReadOnly == readOnly
                     select cc
@@ -597,6 +601,15 @@ namespace XMAT.Models
             _captureDeviceContexts.Remove(captureDeviceContext);
             InvalidateCommands();
         }
+
+        internal static bool SameProxyDevice(DeviceType type, string first, string second) =>
+            type == DeviceType.LocalPC ||
+            (type == DeviceType.XboxConsole
+                ? string.Equals(
+                    XMAT.WebServiceCapture.ProxyEndpoint.NormalizeHost(first),
+                    XMAT.WebServiceCapture.ProxyEndpoint.NormalizeHost(second),
+                    StringComparison.OrdinalIgnoreCase)
+                : first == second);
 
         internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer)
         {

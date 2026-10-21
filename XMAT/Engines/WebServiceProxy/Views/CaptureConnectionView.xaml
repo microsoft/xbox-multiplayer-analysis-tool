@@ -21,6 +21,9 @@
         </Style>
     </UserControl.Resources>
     <UserControl.CommandBindings>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ChangePort}" Executed="ChangePort_Executed" CanExecute="ChangePort_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}" Executed="DiscardPort_Executed" CanExecute="DiscardPort_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}" Executed="CancelPort_Executed" CanExecute="CancelPort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.EnableDevice}"     Executed="EnableDevice_Executed"     CanExecute="Enable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DisableDevice}"    Executed="DisableDevice_Executed"    CanExecute="Disable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}" Executed="StartStopCapture_Executed" CanExecute="StartStopCapture_CanExecute"/>
@@ -84,6 +87,14 @@
                 </ToggleButton.Style>
             </ToggleButton>
             <Separator/>
+            <Button x:Name="ChangePortButton" Command="{x:Static local:WebServiceProxyCommands.ChangePort}"
+                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"/>
+            <Button x:Name="DiscardPortButton" Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}"
+                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    Visibility="{Binding CaptureController.HasPendingPort, Converter={StaticResource booleanToVisibilityConverter}}"/>
+            <Button x:Name="CancelPortButton" Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}"
+                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    Visibility="{Binding CaptureController.IsPortChangeInProgress, Converter={StaticResource booleanToVisibilityConverter}}"/>
             <Button x:Name="AnalyzeButton"
                     Command="{x:Static app:AppCommands.AnalyzeCaptures}"
                     CommandTarget="{Binding ElementName=CaptureConnectionControl}"
@@ -118,6 +129,8 @@
                         </Style>
                     </TextBlock.Style>
                 </TextBlock>
+                <TextBlock Text="{Binding CaptureController.PortStatus}" ToolTip="{Binding CaptureController.PortStatus}"
+                           MaxWidth="480" TextTrimming="CharacterEllipsis" Margin="12,0,0,0"/>
             </StackPanel>
         </StackPanel>
 

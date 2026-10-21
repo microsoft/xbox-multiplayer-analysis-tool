@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using static WinInetConnectionOption;
 
@@ -99,99 +100,97 @@ namespace XMAT.WebServiceCapture
 
 
         public static bool IsEnabled()
+            => ReadConfiguration().State == ProxyConfigurationState.Enabled;
+
+        internal static ProxyConfiguration ReadConfiguration()
         {
-            int size = 0;
+            var size = 0;
             WinInetFuncs.InternetQueryOption(IntPtr.Zero, EWinInetOptions.INTERNET_PER_CONN_PROXY_SERVER, IntPtr.Zero, ref size);
-
-            IntPtr buffer = Marshal.AllocHGlobal(size);
-            if (!WinInetFuncs.InternetQueryOption(IntPtr.Zero, EWinInetOptions.INTERNET_PER_CONN_PROXY_SERVER, buffer, ref size))
+            if (size < Marshal.SizeOf<WinInetProxyDetails>())
             {
-                return false;
+                throw new Win32Exception(Marshal.GetLastWin32Error());
             }
-
-            return Marshal.PtrToStructure<WinInetProxyDetails>(buffer).dwAccessType == (int)EWinInetCurrentProxyState.INTERNET_OPEN_TYPE_PROXY;
+            var buffer = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (!WinInetFuncs.InternetQueryOption(IntPtr.Zero, EWinInetOptions.INTERNET_PER_CONN_PROXY_SERVER, buffer, ref size))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                var details = Marshal.PtrToStructure<WinInetProxyDetails>(buffer);
+                return details.dwAccessType == (int)EWinInetCurrentProxyState.INTERNET_OPEN_TYPE_PROXY
+                    ? ProxyConfiguration.FromSetting(details.GetProxy())
+                    : new ProxyConfiguration(ProxyConfigurationState.Disabled);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
         }
 
         public static void Enable(string strIPAddr, UInt16 uiPort)
         {
-            string strProxyAddr = String.Format("{0}:{1}", strIPAddr, uiPort);
-
-            InternetPerConnOptionList list = new InternetPerConnOptionList();
-            WinInetConnectionOption[] options = new WinInetConnectionOption[2]
-            {
-                new WinInetConnectionOption()
-                {
-                    m_Option = EWinInetConnectionOptions.INTERNET_PER_CONN_FLAGS,
-                    m_Value = new WinInetConnectionOptionVal { m_Int = (int)EWinInetConnectionFlag.PROXY_TYPE_PROXY }
-                },
-
-                new WinInetConnectionOption()
-                {
-                    m_Option = EWinInetConnectionOptions.INTERNET_PER_CONN_PROXY_SERVER,
-                    m_Value = new WinInetConnectionOptionVal { m_StringPtr = Marshal.StringToHGlobalAuto(strProxyAddr) }
-                }
-            };
-
-            list.dwSize = Marshal.SizeOf(list);
-            list.szConnection = IntPtr.Zero;
-            list.dwOptionCount = options.Length;
-            list.dwOptionError = 0;
-
-            int optSize = Marshal.SizeOf(typeof(WinInetConnectionOption));
-            IntPtr optionsPtr = Marshal.AllocCoTaskMem(optSize * options.Length);
-            for (int i = 0; i < options.Length; ++i)
-            {
-                IntPtr opt = IntPtr.Add(optionsPtr, i * optSize);
-                Marshal.StructureToPtr(options[i], opt, false);
-            }
-            list.options = optionsPtr;
-
-            IntPtr ipcoListPtr = Marshal.AllocCoTaskMem((Int32)list.dwSize);
-            Marshal.StructureToPtr(list, ipcoListPtr, false);
-
-            WinInetFuncs.InternetSetOption(IntPtr.Zero, EWinInetOptions.INTERNET_OPTION_PER_CONNECTION_OPTION, ipcoListPtr, list.dwSize);
-            WinInetFuncs.InternetSetOption(IntPtr.Zero, EWinInetOptions.INTERNET_OPTION_SETTINGS_CHANGED, IntPtr.Zero, 0);
-            WinInetFuncs.InternetSetOption(IntPtr.Zero, EWinInetOptions.INTERNET_OPTION_REFRESH, IntPtr.Zero, 0);
-
-            Marshal.FreeCoTaskMem(optionsPtr);
-            Marshal.FreeCoTaskMem(ipcoListPtr);
+            SetProxy(new ProxyEndpoint(strIPAddr, uiPort).ToString());
         }
 
         public static void Disable()
+            => SetProxy(null);
+
+        private static void SetProxy(string server)
         {
-            InternetPerConnOptionList list = new InternetPerConnOptionList();
-            WinInetConnectionOption[] options = new WinInetConnectionOption[1]
+            var serverPointer = server == null ? IntPtr.Zero : Marshal.StringToHGlobalAuto(server);
+            var options = new[]
             {
-                new WinInetConnectionOption()
+                new WinInetConnectionOption
                 {
                     m_Option = EWinInetConnectionOptions.INTERNET_PER_CONN_FLAGS,
-                    m_Value = new WinInetConnectionOptionVal { m_Int = (int)EWinInetConnectionFlag.PROXY_TYPE_DIRECT }
+                    m_Value = new WinInetConnectionOptionVal
+                    {
+                        m_Int = (int)(server == null ? EWinInetConnectionFlag.PROXY_TYPE_DIRECT : EWinInetConnectionFlag.PROXY_TYPE_PROXY)
+                    }
+                },
+                new WinInetConnectionOption
+                {
+                    m_Option = EWinInetConnectionOptions.INTERNET_PER_CONN_PROXY_SERVER,
+                    m_Value = new WinInetConnectionOptionVal { m_StringPtr = serverPointer }
                 }
             };
-
-            list.dwSize = Marshal.SizeOf(list);
-            list.szConnection = IntPtr.Zero;
-            list.dwOptionCount = options.Length;
-            list.dwOptionError = 0;
-
-            int optSize = Marshal.SizeOf(typeof(WinInetConnectionOption));
-            IntPtr optionsPtr = Marshal.AllocCoTaskMem(optSize * options.Length);
-            for (int i = 0; i < options.Length; ++i)
+            var optionSize = Marshal.SizeOf<WinInetConnectionOption>();
+            var optionsPointer = IntPtr.Zero;
+            var listPointer = IntPtr.Zero;
+            try
             {
-                IntPtr opt = IntPtr.Add(optionsPtr, i * optSize);
-                Marshal.StructureToPtr(options[i], opt, false);
+                optionsPointer = Marshal.AllocCoTaskMem(optionSize * options.Length);
+                for (var i = 0; i < options.Length; i++)
+                {
+                    Marshal.StructureToPtr(options[i], IntPtr.Add(optionsPointer, i * optionSize), false);
+                }
+                var list = new InternetPerConnOptionList
+                {
+                    dwSize = Marshal.SizeOf<InternetPerConnOptionList>(),
+                    dwOptionCount = options.Length,
+                    options = optionsPointer
+                };
+                listPointer = Marshal.AllocCoTaskMem(list.dwSize);
+                Marshal.StructureToPtr(list, listPointer, false);
+                Check(WinInetFuncs.InternetSetOption(IntPtr.Zero, EWinInetOptions.INTERNET_OPTION_PER_CONNECTION_OPTION, listPointer, list.dwSize));
+                Check(WinInetFuncs.InternetSetOption(IntPtr.Zero, EWinInetOptions.INTERNET_OPTION_SETTINGS_CHANGED, IntPtr.Zero, 0));
+                Check(WinInetFuncs.InternetSetOption(IntPtr.Zero, EWinInetOptions.INTERNET_OPTION_REFRESH, IntPtr.Zero, 0));
             }
-            list.options = optionsPtr;
+            finally
+            {
+                Marshal.FreeHGlobal(serverPointer);
+                Marshal.FreeCoTaskMem(optionsPointer);
+                Marshal.FreeCoTaskMem(listPointer);
+            }
+        }
 
-            IntPtr ipcoListPtr = Marshal.AllocCoTaskMem((Int32)list.dwSize);
-            Marshal.StructureToPtr(list, ipcoListPtr, false);
-
-            WinInetFuncs.InternetSetOption(IntPtr.Zero, EWinInetOptions.INTERNET_OPTION_PER_CONNECTION_OPTION, ipcoListPtr, list.dwSize);
-            WinInetFuncs.InternetSetOption(IntPtr.Zero, EWinInetOptions.INTERNET_OPTION_SETTINGS_CHANGED, IntPtr.Zero, 0);
-            WinInetFuncs.InternetSetOption(IntPtr.Zero, EWinInetOptions.INTERNET_OPTION_REFRESH, IntPtr.Zero, 0);
-
-            Marshal.FreeCoTaskMem(optionsPtr);
-            Marshal.FreeCoTaskMem(ipcoListPtr);
+        private static void Check(bool succeeded)
+        {
+            if (!succeeded)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
         }
     }
 }

@@ -16,7 +16,7 @@ namespace XMAT.WebServiceCapture.Models
 
         public void Serialized()
         {
-            ProxyPortPool.Initialize(FirstPort, LastPort);
+            ProxyPortPool.Shared.Initialize(FirstPort, LastPort);
         }
 
         public void DeserializeFrom(JsonElement serializedObject)
@@ -38,7 +38,7 @@ namespace XMAT.WebServiceCapture.Models
                 PromptToDisableOnClose = prop.GetBoolean();
             }
 
-            ProxyPortPool.Initialize(FirstPort, LastPort);
+            ProxyPortPool.Shared.RestoreRange(FirstPort, LastPort);
         }
 
         internal PreferencesModel()
