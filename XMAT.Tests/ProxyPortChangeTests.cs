@@ -260,8 +260,8 @@ namespace XMAT.Tests
         [Fact]
         public void SettingsReplacement_IsAtomicAndCleansItsTemporaryFileOnFailure()
         {
-            var directory = Path.Combine(Path.GetTempPath(), "XMAT-settings-test-" + Guid.NewGuid().ToString("N"));
-            var path = Path.Combine(directory, "settings.json");
+            var directory = Path.Join(Path.GetTempPath(), "XMAT-settings-test-" + Guid.NewGuid().ToString("N"));
+            var path = Path.Join(directory, "settings.json");
             Directory.CreateDirectory(directory);
             try
             {

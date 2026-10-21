@@ -33,10 +33,7 @@ namespace XMAT.Tests
         {
             if (!createHost)
             {
-                lock (HostLock)
-                {
-                    _shared = _host ??= new CaptureUiApplicationFixture(true);
-                }
+                _shared = GetOrCreateHost();
                 _ready.Dispose();
                 return;
             }
@@ -83,6 +80,14 @@ namespace XMAT.Tests
             if (_failure != null)
             {
                 ExceptionDispatchInfo.Capture(_failure).Throw();
+            }
+        }
+
+        private static CaptureUiApplicationFixture GetOrCreateHost()
+        {
+            lock (HostLock)
+            {
+                return _host ??= new CaptureUiApplicationFixture(true);
             }
         }
 
