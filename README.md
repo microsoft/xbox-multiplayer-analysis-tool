@@ -161,6 +161,18 @@ indicate an error condition.
 _Screenshot of filtering also by status to further prune connections._
 
 
+### Capture Timeline
+
+The Waterfall and By Host timeline views retain the complete capture history, including gaps between
+capture sessions. Only the visible request bars, host labels, and time-axis ticks are rendered, so
+scrolling through an older part of a capture does not require rebuilding the entire timeline.
+
+Incoming capture changes are combined into at most ten timeline refreshes per second. This affects
+only presentation; requests are still captured and stored without that limit. Scrolling, resizing,
+switching timeline modes, and stopping a capture refresh the visible timeline without waiting for the
+live-update cadence. Stopping also displays the final response status and duration, even if no further
+requests arrive.
+
 ### Stopping Proxying
 
 Proxying may be stopped from with Xbox Multiplayer Analysis Tool for a specific device by clicking on the “Stop Capturing”

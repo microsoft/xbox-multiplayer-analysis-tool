@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -15,7 +14,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
-using Microsoft.CodeAnalysis;
+using System.Windows.Threading;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
@@ -30,6 +29,15 @@ namespace XMAT.WebServiceCapture
         private static readonly TimeSpan StopDialogDelay =
             TimeSpan.FromMilliseconds(500);
         private bool _notAtBottom;
+        private readonly Predicate<object> _connectionFilter;
+        private readonly HashSet<ProxyConnectionModel> _observedConnections = new(ReferenceEqualityComparer.Instance);
+        private readonly CaptureFilterIndex _statusValues = new();
+        private readonly CaptureFilterIndex _hostValues = new();
+        private readonly CaptureFilterIndex _methodValues = new();
+        private WebServiceDeviceCaptureController _attachedController;
+        private ProxyConnectionsCollection _attachedConnections;
+        private INotifyCollectionChanged _attachedGridItems;
+        private DispatcherOperation _pendingFilterRefresh;
 
         public bool AutoScroll
         {
@@ -51,6 +59,7 @@ namespace XMAT.WebServiceCapture
 
         public CaptureConnectionView()
         {
+            _connectionFilter = IncludeConnection;
             InitializeComponent();
 
             EnableButton.Content = Localization.GetLocalizedString("WEBCAP_ENABLE");
@@ -89,35 +98,178 @@ namespace XMAT.WebServiceCapture
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
         {
-            ((DataContext as ICaptureDeviceContext).CaptureController
-                as WebServiceDeviceCaptureController).PropertyChanged += CaptureConnectionView_ControllerChanged;
-            (ConnectionList.Items as INotifyCollectionChanged).CollectionChanged += CaptureConnectionView_CollectionChanged;
+            AttachContext();
+        }
 
-            ConnectionList.Items.Filter =
-                (item) =>
+        private void UserControl_Unloaded(object sender, RoutedEventArgs e) => DetachContext();
+
+        private void UserControl_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            if (IsLoaded)
+            {
+                AttachContext();
+            }
+            else
+            {
+                DetachContext();
+            }
+        }
+
+        private void AttachContext()
+        {
+            if (!TryGetCaptureContext(DataContext, out _, out var controller))
+            {
+                DetachContext();
+                return;
+            }
+            if (ReferenceEquals(controller, _attachedController) &&
+                ReferenceEquals(controller.ProxyConnections, _attachedConnections))
+            {
+                return;
+            }
+            DetachContext();
+            _attachedController = controller;
+            controller.PropertyChanged += CaptureConnectionView_ControllerChanged;
+            UpdateFilterSources();
+            AttachConnections(controller.ProxyConnections);
+            _attachedGridItems = ConnectionList.Items;
+            _attachedGridItems.CollectionChanged += CaptureConnectionView_CollectionChanged;
+            RequestFilterRefresh();
+        }
+
+        private void DetachContext()
+        {
+            _pendingFilterRefresh?.Abort();
+            _pendingFilterRefresh = null;
+            if (_attachedGridItems != null)
+            {
+                _attachedGridItems.CollectionChanged -= CaptureConnectionView_CollectionChanged;
+                _attachedGridItems = null;
+            }
+            if (_attachedController != null)
+            {
+                _attachedController.PropertyChanged -= CaptureConnectionView_ControllerChanged;
+                _attachedController = null;
+            }
+            DetachConnections();
+            if (ConnectionList != null && ReferenceEquals(ConnectionList.Items.Filter, _connectionFilter))
+            {
+                ConnectionList.Items.Filter = null;
+            }
+            UpdateFilterSources();
+        }
+
+        private void AttachConnections(ProxyConnectionsCollection connections)
+        {
+            DetachConnections();
+            _attachedConnections = connections;
+            if (connections != null)
+            {
+                connections.CollectionChanged += CaptureConnections_CollectionChanged;
+                foreach (var model in connections)
                 {
-                    bool includeStatus = true;
-                    bool includeHost = true;
-                    bool includeMethod = true;
+                    ObserveConnection(model);
+                }
+            }
+        }
 
-                    var model = item as ProxyConnectionModel;
+        private void DetachConnections()
+        {
+            if (_attachedConnections != null)
+            {
+                _attachedConnections.CollectionChanged -= CaptureConnections_CollectionChanged;
+                _attachedConnections = null;
+            }
+            DetachObservedItems();
+        }
 
-                    if (StatusFilters.IsFilterEnabled)
-                        includeStatus = Filter(model.Status, StatusFilters.ItemsSource as ObservableCollection<CheckedListItem>);
+        private void DetachObservedItems()
+        {
+            foreach (var model in _observedConnections)
+            {
+                model.PropertyChanged -= ProxyConnectionModel_PropertyChanged;
+            }
+            _observedConnections.Clear();
+        }
 
-                    if (HostFilters.IsFilterEnabled)
-                        includeHost = Filter(model.Host, HostFilters.ItemsSource as ObservableCollection<CheckedListItem>);
+        private void ObserveConnection(ProxyConnectionModel model)
+        {
+            if (_observedConnections.Add(model))
+            {
+                model.PropertyChanged += ProxyConnectionModel_PropertyChanged;
+                UpdateFilters(model);
+            }
+        }
 
-                    if (MethodFilters.IsFilterEnabled)
-                        includeMethod = Filter(model.Method, MethodFilters.ItemsSource as ObservableCollection<CheckedListItem>);
+        private void CaptureConnections_CollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (!ReferenceEquals(sender, _attachedConnections))
+            {
+                return;
+            }
+            if (e.Action == NotifyCollectionChangedAction.Reset)
+            {
+                DetachObservedItems();
+                foreach (var model in _attachedConnections)
+                {
+                    ObserveConnection(model);
+                }
+                return;
+            }
+            if (e.OldItems != null)
+            {
+                foreach (ProxyConnectionModel model in e.OldItems)
+                {
+                    if (_observedConnections.Remove(model))
+                    {
+                        model.PropertyChanged -= ProxyConnectionModel_PropertyChanged;
+                    }
+                }
+            }
+            if (e.NewItems != null)
+            {
+                foreach (ProxyConnectionModel model in e.NewItems)
+                {
+                    ObserveConnection(model);
+                }
+            }
+        }
 
-                    return includeStatus && includeHost && includeMethod;
-                };
+        private bool IncludeConnection(object item)
+        {
+            if (item is not ProxyConnectionModel model)
+            {
+                return false;
+            }
+            return (!StatusFilters.IsFilterEnabled ||
+                _statusValues.IsChecked(model.Status)) &&
+                (!HostFilters.IsFilterEnabled ||
+                _hostValues.IsChecked(model.Host)) &&
+                (!MethodFilters.IsFilterEnabled ||
+                _methodValues.IsChecked(model.Method));
         }
 
         private void CaptureConnectionView_ControllerChanged(object sender, PropertyChangedEventArgs args)
         {
-            if (args.PropertyName == @"SelectedConnectionModel")
+            if (!ReferenceEquals(sender, _attachedController))
+            {
+                return;
+            }
+            if (string.IsNullOrEmpty(args.PropertyName) ||
+                args.PropertyName is nameof(WebServiceDeviceCaptureController.ProxyConnections) or
+                    nameof(WebServiceDeviceCaptureController.StatusFilterList) or
+                    nameof(WebServiceDeviceCaptureController.HostFilterList) or
+                    nameof(WebServiceDeviceCaptureController.MethodFilterList))
+            {
+                UpdateFilterSources();
+                if (!ReferenceEquals(_attachedConnections, _attachedController.ProxyConnections))
+                {
+                    AttachConnections(_attachedController.ProxyConnections);
+                }
+                RequestFilterRefresh();
+            }
+            if (string.IsNullOrEmpty(args.PropertyName) ||
+                args.PropertyName == nameof(WebServiceDeviceCaptureController.SelectedConnectionModel))
             {
                 WebServiceDeviceCaptureController controller =
                     (sender as WebServiceDeviceCaptureController);
@@ -131,58 +283,81 @@ namespace XMAT.WebServiceCapture
 
         private void CaptureConnectionView_CollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
         {
-            // we want to update the filters as items changed
-            // hook up the PropertyChanged event so we can update the filter list
-            // every time a ProxyConnectionModel updates
-            // mostly, this fixes the Status filter since that data comes in after the object gets added
-            // to the observable collection
-            if (e.NewItems != null)
-            {
-                foreach (ProxyConnectionModel item in e.NewItems)
-                {
-                    item.PropertyChanged += ProxyConnectionModel_PropertyChanged;
-                    UpdateFilters(item);
-                }
-            }
-
-            if (e.OldItems != null)
-            {
-                foreach (ProxyConnectionModel item in e.OldItems)
-                    item.PropertyChanged -= ProxyConnectionModel_PropertyChanged;
-            }
-
             if (AutoScroll && ConnectionList.Items.Count > 0 && !_notAtBottom)
                 ConnectionList.ScrollIntoView(ConnectionList.Items[^1]);
         }
 
         private void ProxyConnectionModel_PropertyChanged(object sender, PropertyChangedEventArgs args)
         {
-            UpdateFilters(sender as ProxyConnectionModel);
-        }
-
-        private bool Filter(string text, ObservableCollection<CheckedListItem> list)
-        {
-            var include = list?.Where(item => item?.Text == text).FirstOrDefault();
-            return (include != null && include.IsChecked);
+            if (sender is not ProxyConnectionModel model || !_observedConnections.Contains(model))
+            {
+                return;
+            }
+            if (string.IsNullOrEmpty(args.PropertyName) ||
+                args.PropertyName is nameof(ProxyConnectionModel.Status) or
+                    nameof(ProxyConnectionModel.Host) or nameof(ProxyConnectionModel.Method))
+            {
+                UpdateFilters(model);
+            }
         }
 
         private void OnFiltersChanged(object sender, RoutedEventArgs e)
         {
-            // force all items to be re-filtered using the Filter delegate
-            CollectionViewSource.GetDefaultView(ConnectionList.ItemsSource).Refresh();
+            RequestFilterRefresh();
         }
 
-        private void UpdateFilter(string text, ObservableCollection<CheckedListItem> list)
+        private void RequestFilterRefresh()
         {
-            if (!string.IsNullOrEmpty(text) && !list.Where(cli => cli.Text == text).Any())
-                list.Add(new CheckedListItem(text));
+            if (_attachedController != null &&
+                _pendingFilterRefresh?.Status != DispatcherOperationStatus.Pending)
+            {
+                _pendingFilterRefresh = Dispatcher.BeginInvoke(
+                    DispatcherPriority.Background, new Action(ApplyConnectionFilter));
+            }
+        }
+
+        private void ApplyConnectionFilter()
+        {
+            _pendingFilterRefresh = null;
+            if (_attachedController == null || ConnectionList.ItemsSource == null)
+            {
+                return;
+            }
+            var filter = StatusFilters.IsFilterEnabled || HostFilters.IsFilterEnabled || MethodFilters.IsFilterEnabled
+                ? _connectionFilter
+                : null;
+            if (!ReferenceEquals(ConnectionList.Items.Filter, filter))
+            {
+                ConnectionList.Items.Filter = filter;
+            }
+            else if (filter != null)
+            {
+                CollectionViewSource.GetDefaultView(ConnectionList.ItemsSource).Refresh();
+            }
+        }
+
+        private void UpdateFilterSources()
+        {
+            _statusValues.SetSource(_attachedController?.StatusFilterList);
+            _hostValues.SetSource(_attachedController?.HostFilterList);
+            _methodValues.SetSource(_attachedController?.MethodFilterList);
         }
 
         private void UpdateFilters(ProxyConnectionModel item)
         {
-            UpdateFilter(item.Status, StatusFilters.ItemsSource as ObservableCollection<CheckedListItem>);
-            UpdateFilter(item.Host, HostFilters.ItemsSource as ObservableCollection<CheckedListItem>);
-            UpdateFilter(item.Method, MethodFilters.ItemsSource as ObservableCollection<CheckedListItem>);
+            UpdateFilterSources();
+            var controller = _attachedController;
+            _statusValues.EnsureValue(item.Status);
+            if (!ReferenceEquals(controller, _attachedController) || !_observedConnections.Contains(item))
+            {
+                return;
+            }
+            _hostValues.EnsureValue(item.Host);
+            if (!ReferenceEquals(controller, _attachedController) || !_observedConnections.Contains(item))
+            {
+                return;
+            }
+            _methodValues.EnsureValue(item.Method);
         }
 
         private async void EnableDevice_Executed(object sender, ExecutedRoutedEventArgs e)
