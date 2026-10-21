@@ -22,6 +22,7 @@ namespace XMAT
     public static class PublicUtilities
     {
         private static readonly Logger _appLog = new();
+        private const string DefaultAppName = "Xbox Multiplayer Analysis Tool";
         private static string _appName;
 
         static PublicUtilities()
@@ -39,7 +40,14 @@ namespace XMAT
             get
             {
                 if (string.IsNullOrEmpty(_appName))
-                    _appName = Application.Current?.TryFindResource("appName")?.ToString() ?? "Xbox Multiplayer Analysis Tool";
+                {
+                    // Only cache a name resolved from the WPF application. Code that runs
+                    // before it exists (e.g. tests) gets the default without pinning it.
+                    string resolved = Application.Current?.TryFindResource("appName")?.ToString();
+                    if (string.IsNullOrEmpty(resolved))
+                        return DefaultAppName;
+                    _appName = resolved;
+                }
                 return _appName;
             }
         }
