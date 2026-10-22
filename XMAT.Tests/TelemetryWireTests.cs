@@ -44,6 +44,7 @@ namespace XMAT.Tests
                         new("ext.xbl.sbx", "TEST_SANDBOX"),
                         new("BuildChannel", "Test")
                     ], diagnostics.Add, new Uri($"http://127.0.0.1:{port}/collector/"));
+                Assert.True(TelemetryTraffic.IsExcluded("127.0.0.1", port));
                 var session = Guid.NewGuid();
                 reporter.Send(new(TelemetryEventKind.AppLaunched), session);
                 var payload = await receive;
@@ -65,6 +66,7 @@ namespace XMAT.Tests
             {
                 Environment.SetEnvironmentVariable("OTEL_RESOURCE_ATTRIBUTES", originalResourceEnvironment);
             }
+            Assert.False(TelemetryTraffic.IsExcluded("127.0.0.1", port));
         }
 
         [Fact]

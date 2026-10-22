@@ -16,13 +16,17 @@ XmatTelemetry
 | summarize Launches = count(), ActiveMachines = dcountif(DeviceId, isnotempty(DeviceId)),
     MissingMachineId = countif(isempty(DeviceId)) by bin(Timestamp, 1d), AppVersion;
 
-// Feature adoption uses launched sessions as the denominator, not action count.
-let launches = XmatTelemetry
+// Attribute feature use to the session's launch day, including sessions spanning midnight.
+let launchSessions = XmatTelemetry
     | where BuildChannel == "Public" and EventName == "AppLaunched"
-    | summarize Sessions = dcount(SessionId) by Day = bin(Timestamp, 1d), AppVersion;
+    | summarize LaunchTime = min(Timestamp) by SessionId, AppVersion
+    | extend Day = bin(LaunchTime, 1d);
+let launches = launchSessions
+    | summarize Sessions = dcount(SessionId) by Day, AppVersion;
 XmatTelemetry
 | where BuildChannel == "Public" and EventName == "FeatureUsed"
-| summarize FeatureSessions = dcount(SessionId) by Day = bin(Timestamp, 1d), AppVersion, Feature
+| join kind=inner launchSessions on SessionId, AppVersion
+| summarize FeatureSessions = dcount(SessionId) by Day, AppVersion, Feature
 | join kind=inner launches on Day, AppVersion
 | extend AdoptionPercent = 100.0 * FeatureSessions / Sessions
 | project Day, AppVersion, Feature, FeatureSessions, Sessions, AdoptionPercent;
@@ -36,20 +40,24 @@ XmatTelemetry
     P50Ms = percentile(DurationMs, 50), P95Ms = percentile(DurationMs, 95)
     by AppVersion, Operation, CaptureOrigin;
 
-// Capture and import-only analysis are separate session funnels.
+// Session-level live-capture and imported-data funnels use the actual analysis origin.
+// A mixed session contributes to both only when it analyzed both origins.
 XmatTelemetry
 | where BuildChannel == "Public"
 | summarize Launched = countif(EventName == "AppLaunched"),
     DeviceAdded = countif(EventName == "OperationCompleted" and Operation == "DeviceAdd" and Outcome == "Succeeded"),
     CaptureWithData = countif(EventName == "CaptureFirstData"),
     Imported = countif(EventName == "OperationCompleted" and Operation == "ImportSaz" and Outcome == "Succeeded"),
-    Analyzed = countif(EventName == "OperationCompleted" and Operation == "Analysis" and Outcome == "Succeeded"),
+    AnalyzedCapture = countif(EventName == "OperationCompleted" and Operation == "Analysis" and Outcome == "Succeeded"
+        and CaptureOrigin in ("User", "Restored")),
+    AnalyzedImport = countif(EventName == "OperationCompleted" and Operation == "Analysis" and Outcome == "Succeeded"
+        and CaptureOrigin == "Imported"),
     ReportViewed = countif(EventName == "FeatureUsed" and Feature in ("PerEndpointReport", "StatisticsReport", "NetworkReport"))
     by SessionId, AppVersion
 | summarize Sessions = count(), SetupSessions = countif(DeviceAdded > 0),
     CaptureSessions = countif(CaptureWithData > 0), ImportSessions = countif(Imported > 0),
-    AnalyzedCaptureSessions = countif(CaptureWithData > 0 and Analyzed > 0),
-    AnalyzedImportSessions = countif(Imported > 0 and Analyzed > 0),
+    AnalyzedCaptureSessions = countif(CaptureWithData > 0 and AnalyzedCapture > 0),
+    AnalyzedImportSessions = countif(Imported > 0 and AnalyzedImport > 0),
     ReportSessions = countif(ReportViewed > 0) by AppVersion;
 
 // First-observed/returning machines are not people or installations.

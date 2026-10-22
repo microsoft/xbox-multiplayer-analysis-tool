@@ -39,9 +39,10 @@ namespace XMAT
             _reset.Reset();
             CurrentLogLevel = level;
 
-            string logsPath = Path.Combine(PublicUtilities.StorageDirectoryPath, "Logs");
+            string finalPath = Path.IsPathFullyQualified(nameOfLogFile) ? nameOfLogFile
+                : Path.Combine(PublicUtilities.StorageDirectoryPath, "Logs", nameOfLogFile);
+            string logsPath = Path.GetDirectoryName(finalPath);
             Directory.CreateDirectory(logsPath);
-            string finalPath = Path.Combine(logsPath, nameOfLogFile);
             _loggingFS = new FileStream(finalPath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
             _loggingSW = new StreamWriter(_loggingFS, Encoding.UTF8, LoggingBufferSize)
             {

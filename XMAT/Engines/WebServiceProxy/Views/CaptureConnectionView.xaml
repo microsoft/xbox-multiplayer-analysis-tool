@@ -123,7 +123,7 @@
 
         <GridSplitter Grid.Row="3" Height="4" HorizontalAlignment="Stretch" VerticalAlignment="Center" ResizeDirection="Rows"/>
 
-        <DataGrid x:Name="ConnectionList" Grid.Row="4" SelectionChanged="ConnectionList_SelectionChanged"
+        <DataGrid x:Name="ConnectionList" Grid.Row="4"
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   d:ItemsSource="{d:SampleData}" 
                   ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"

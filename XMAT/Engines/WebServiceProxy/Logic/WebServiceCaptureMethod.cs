@@ -93,7 +93,7 @@ namespace XMAT.WebServiceCapture
             );
         }
 
-        public async Task ImportFromFiddlerAsync(string fromFilePath, ICaptureDeviceContext context)
+        public async Task<bool> ImportFromFiddlerAsync(string fromFilePath, ICaptureDeviceContext context)
         {
             // get the controller for this imported data...
             var captureController = context.CaptureController as WebServiceDeviceCaptureController;
@@ -114,7 +114,7 @@ namespace XMAT.WebServiceCapture
             // ...then kick off another import
             using (var bo = PublicUtilities.BlockingOperation())
             {
-                await Task.Run(() => captureController.ImportFromFiddler(fromFilePath));
+                return await Task.Run(() => captureController.ImportFromFiddler(fromFilePath));
             }
         }
 

@@ -15,6 +15,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
+using XMAT.Telemetry;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -123,8 +124,9 @@ namespace XMAT.WebServiceCapture.Proxy
             string hostname = connectRequest.Host ?? GetHostFromPath(connectRequest.Path);
             int port = connectRequest.Port > 0 ? connectRequest.Port : GetPortFromPath(connectRequest.Path);
 
-            // If the host is on the bypass list, tunnel raw bytes without TLS interception
-            if (_proxy.BypassList != null && _proxy.BypassList.IsBypassed(hostname))
+            // Collector traffic must not be decrypted or recorded by XMAT's own proxy.
+            if (TelemetryTraffic.IsExcluded(hostname, port) ||
+                (_proxy.BypassList != null && _proxy.BypassList.IsBypassed(hostname)))
             {
                 _logger.Log(connectionID, LogLevel.INFO, $"Bypassing TLS interception for {hostname}:{port}");
                 _proxy.RaiseCompletedSslConnectionRequest(connectionID, connectRequest);

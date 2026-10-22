@@ -26,6 +26,8 @@ namespace XMAT.Telemetry
         private readonly ConditionalWeakTable<Exception, object> _unhandled = new();
         private int _peakCaptures;
         private int _activeCaptures;
+        private readonly HashSet<TelemetryOperation> _operations = [];
+        private readonly object _operationGate = new();
 
         internal static XmatTelemetryService Current { get; private set; } = new(null, Diagnose);
         internal bool IsEnabled => _reporter != null && Volatile.Read(ref _disposed) == 0;
@@ -158,7 +160,24 @@ namespace XMAT.Telemetry
         internal TelemetryOperation Begin(TelemetryOperationKind operation, TelemetryFeature feature = TelemetryFeature.None,
             TelemetryContext? context = null, TelemetryEntryPoint entryPoint = TelemetryEntryPoint.None)
         {
-            return new(this, operation, feature, context, entryPoint);
+            lock (_operationGate)
+            {
+                var result = new TelemetryOperation(this, operation, feature, context, entryPoint);
+                if (IsEnabled && Volatile.Read(ref _closing) == 0)
+                {
+                    _operations.Add(result);
+                    result.Start();
+                }
+                return result;
+            }
+        }
+
+        internal void OperationEnded(TelemetryOperation operation)
+        {
+            lock (_operationGate)
+            {
+                _operations.Remove(operation);
+            }
         }
 
         internal void Ready()
@@ -231,6 +250,15 @@ namespace XMAT.Telemetry
             {
                 return;
             }
+            TelemetryOperation[] pending;
+            lock (_operationGate)
+            {
+                pending = _operations.ToArray();
+            }
+            foreach (var operation in pending)
+            {
+                operation.Complete(TelemetryOutcome.Cancelled, TelemetryError.Cancelled);
+            }
             foreach (var feature in Enum.GetValues<TelemetryFeature>())
             {
                 var count = Volatile.Read(ref _uses[(int)feature]);
@@ -270,6 +298,7 @@ namespace XMAT.Telemetry
         private long _stageStarted;
         private TelemetryStage _stage;
         private int _finished;
+        private bool _active;
         private long _items;
         private readonly object _gate = new();
 
@@ -279,11 +308,16 @@ namespace XMAT.Telemetry
             _service = service;
             _template = new(TelemetryEventKind.OperationStarted, feature, kind, Context: context,
                 OperationId: Guid.NewGuid(), EntryPoint: entryPoint);
-            service.Use(feature);
-            service.Track(_template);
-            if (kind == TelemetryOperationKind.Capture)
+        }
+
+        internal void Start()
+        {
+            _active = true;
+            _service.Use(_template.Feature);
+            _service.Track(_template);
+            if (_template.Operation == TelemetryOperationKind.Capture)
             {
-                service.CaptureStarted();
+                _service.CaptureStarted();
             }
         }
 
@@ -295,7 +329,7 @@ namespace XMAT.Telemetry
             }
             lock (_gate)
             {
-                if (_finished == 0 && ++_items == 1)
+                if (_active && _finished == 0 && ++_items == 1)
                 {
                     _service.Track(_template with { Kind = TelemetryEventKind.CaptureFirstData, DurationMs = ElapsedMilliseconds });
                 }
@@ -306,7 +340,7 @@ namespace XMAT.Telemetry
         {
             lock (_gate)
             {
-                if (_finished != 0)
+                if (!_active || _finished != 0)
                 {
                     return;
                 }
@@ -335,7 +369,7 @@ namespace XMAT.Telemetry
         {
             lock (_gate)
             {
-                if (_finished != 0)
+                if (!_active || _finished != 0)
                 {
                     return;
                 }
@@ -361,6 +395,7 @@ namespace XMAT.Telemetry
                     _service.CaptureEnded();
                 }
             }
+            _service.OperationEnded(this);
         }
 
         internal void Fail(Exception exception) => Complete(

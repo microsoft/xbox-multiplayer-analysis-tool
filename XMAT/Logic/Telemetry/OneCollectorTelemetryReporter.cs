@@ -27,6 +27,7 @@ namespace XMAT.Telemetry
         private readonly ILogger _logger;
         private readonly Action<string> _diagnose;
         private readonly SdkDiagnostics _diagnostics;
+        private readonly IDisposable _trafficExclusion;
         private int _disposed;
 
         internal OneCollectorTelemetryReporter(
@@ -44,6 +45,8 @@ namespace XMAT.Telemetry
                 throw new ArgumentException("A test transport must use a loopback endpoint.", nameof(testEndpoint));
             }
             _diagnose = diagnose;
+            var endpoint = testEndpoint ?? new Uri("https://mobile.events.data.microsoft.com/OneCollector/1.0/");
+            _trafficExclusion = TelemetryTraffic.Exclude(endpoint);
             _diagnostics = new(diagnose);
             try
             {
@@ -64,10 +67,7 @@ namespace XMAT.Telemetry
                             options.ExceptionStackTraceHandling = OneCollectorExporterSerializationExceptionStackTraceHandlingType.Ignore)
                         .ConfigureTransportOptions(options =>
                         {
-                            if (testEndpoint != null)
-                            {
-                                options.Endpoint = testEndpoint;
-                            }
+                            options.Endpoint = endpoint;
                         })
                         .ConfigureExporter(exporter => exporter.RegisterPayloadTransmittedCallback((in OneCollectorExporterPayloadTransmittedCallbackArguments args) =>
                         {
@@ -82,6 +82,7 @@ namespace XMAT.Telemetry
             catch
             {
                 _diagnostics.Dispose();
+                _trafficExclusion.Dispose();
                 throw;
             }
         }
@@ -127,6 +128,10 @@ namespace XMAT.Telemetry
                 catch (Exception)
                 {
                     _diagnose("ShutdownFailed");
+                }
+                finally
+                {
+                    _trafficExclusion.Dispose();
                 }
             });
             if (!shutdown.Wait(2000))

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Generic;
+using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -42,6 +43,7 @@ namespace XMAT.WebServiceCapture
     /// </summary>
     public partial class RequestResponseView : UserControl
     {
+        private readonly TelemetryViewUsage _inspectionUsage;
         public string Title
         {
             get { return (string)GetValue(TitleProperty); }
@@ -60,7 +62,8 @@ namespace XMAT.WebServiceCapture
 
         // Using a DependencyProperty as the backing store for FirstLineAndHeaders.  This enables animation, styling, binding, etc...
         public static readonly DependencyProperty FirstLineAndHeadersProperty =
-            DependencyProperty.Register("FirstLineAndHeaders", typeof(string), typeof(RequestResponseView));
+            DependencyProperty.Register("FirstLineAndHeaders", typeof(string), typeof(RequestResponseView),
+                new PropertyMetadata(null, InspectionDataChanged));
 
         public string BodyText
         {
@@ -74,7 +77,8 @@ namespace XMAT.WebServiceCapture
             DependencyProperty.Register(
                 nameof(BodyText),
                 typeof(string),
-                typeof(RequestResponseView));
+                typeof(RequestResponseView),
+                new PropertyMetadata(null, InspectionDataChanged));
 
         public Dictionary<string, string> HeaderDictionary
         {
@@ -94,35 +98,46 @@ namespace XMAT.WebServiceCapture
 
         // Using a DependencyProperty as the backing store for BodyBytes.  This enables animation, styling, binding, etc...
         public static readonly DependencyProperty BodyBytesProperty =
-           DependencyProperty.Register("BodyBytes", typeof(byte[]), typeof(RequestResponseView));
+           DependencyProperty.Register("BodyBytes", typeof(byte[]), typeof(RequestResponseView),
+               new PropertyMetadata(null, InspectionDataChanged));
 
-        public RequestResponseView()
+        public RequestResponseView() : this(feature => XmatTelemetryService.Current.Use(feature))
         {
+        }
+
+        internal RequestResponseView(Action<TelemetryFeature> use)
+        {
+            _inspectionUsage = new(use);
             InitializeComponent();
 
             HeadersTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_HEADERS");
             BodyTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_BODY");
             JsonTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_JSON");
+            Loaded += (_, _) => RecordInspection();
+            IsVisibleChanged += (_, _) => RecordInspection();
         }
 
-        internal void RecordInspection(bool hasSelection)
+        private static void InspectionDataChanged(DependencyObject owner, DependencyPropertyChangedEventArgs args)
         {
-            if (IsLoaded && IsVisible && hasSelection)
-            {
-                XmatTelemetryService.Current.Use(RequestTabs.SelectedIndex switch
+            ((RequestResponseView)owner).RecordInspection();
+        }
+
+        private void RecordInspection()
+        {
+            _inspectionUsage.Update(IsLoaded && IsVisible, !string.IsNullOrEmpty(FirstLineAndHeaders),
+                RequestTabs?.SelectedIndex switch
                 {
                     1 => TelemetryFeature.RequestBody,
                     2 => TelemetryFeature.RequestJson,
                     _ => TelemetryFeature.RequestHeaders
                 });
-            }
         }
 
         private void InspectionTab_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (e.Source == RequestTabs)
             {
-                RecordInspection(!string.IsNullOrEmpty(FirstLineAndHeaders));
+                RecordInspection();
             }
         }
     }

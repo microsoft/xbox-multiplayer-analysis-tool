@@ -20,6 +20,8 @@
 	"TELEMETRY_SAMPLE_FAILED_MESSAGE": "No telemetry samples are being recorded and no collector export was started. Use a non-exporting build with --telemetry-sample followed by a fully qualified path to a new file in an existing writable directory. Existing files are not overwritten.",
 
 	"PROXY_ROOT_CERT_WARNING_TITLE": "Root Certificate Information",
+	"PROXY_START_FAILED_TITLE": "Proxy capture could not start",
+	"PROXY_START_FAILED_MESSAGE": "The proxy listener could not start. Check that the configured port is available and try again.\n\n{0}",
 	"PROXY_ROOT_CERT_WARNING_MESSAGE": "You will see a pop-up message asking you to install and trust our Root Certificate.\n\nThis will only occur once and is essential in order for the tool to be able to decrypt HTTPS traffic transmitted to and from services.",
 
 	"GENERIC_DEVICE_PROXY_INFO_CAPTION": "Proxy Information",

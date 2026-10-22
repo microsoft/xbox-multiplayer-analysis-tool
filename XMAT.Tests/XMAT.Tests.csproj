@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <None Include="..\XMAT\Data\TelemetryUsage.kql" Link="TelemetryUsage.kql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

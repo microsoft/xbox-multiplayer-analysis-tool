@@ -13,6 +13,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using XMAT.WebServiceCapture.Models;
+using XMAT.Telemetry;
 
 namespace XMAT.WebServiceCapture
 {
@@ -54,10 +55,18 @@ namespace XMAT.WebServiceCapture
         }
 
         private bool _isWaterfall = true;
+        private readonly TelemetryViewUsage _modeUsage;
 
-        public CaptureTimelineView()
+        public CaptureTimelineView() : this(feature => XmatTelemetryService.Current.Use(feature))
         {
+        }
+
+        internal CaptureTimelineView(Action<TelemetryFeature> use)
+        {
+            _modeUsage = new(use);
             InitializeComponent();
+            Loaded += (_, _) => RedrawTimeline();
+            IsVisibleChanged += (_, _) => RecordMode();
         }
 
         private static void OnItemsSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -78,12 +87,13 @@ namespace XMAT.WebServiceCapture
         private void ViewMode_Changed(object sender, RoutedEventArgs e)
         {
             _isWaterfall = WaterfallMode.IsChecked == true;
-            if (IsLoaded && IsVisible)
-            {
-                XMAT.Telemetry.XmatTelemetryService.Current.Use(_isWaterfall
-                    ? XMAT.Telemetry.TelemetryFeature.TimelineWaterfall : XMAT.Telemetry.TelemetryFeature.TimelineByHost);
-            }
             RedrawTimeline();
+        }
+
+        private void RecordMode()
+        {
+            _modeUsage.Update(IsLoaded && IsVisible, TimelineCanvas?.Children.Count > 0,
+                _isWaterfall ? TelemetryFeature.TimelineWaterfall : TelemetryFeature.TimelineByHost);
         }
 
         private void RedrawTimeline()
@@ -100,12 +110,16 @@ namespace XMAT.WebServiceCapture
                 TimelineCanvas.Width = MinCanvasWidth;
                 TimelineCanvas.Height = 0;
                 TimeAxisCanvas.Width = MinCanvasWidth;
+                RecordMode();
                 return;
             }
 
             var valid = items.Where(i => i.RequestTime != DateTime.MinValue).ToList();
             if (valid.Count == 0)
+            {
+                RecordMode();
                 return;
+            }
 
             var firstTime = valid.Min(i => i.RequestTime);
             var lastEnd = valid.Max(i => i.RequestTime + i.Duration);
@@ -118,6 +132,7 @@ namespace XMAT.WebServiceCapture
                 DrawByHost(valid, firstTime, canvasW, totalMs);
 
             DrawTimeAxis(canvasW, totalMs);
+            RecordMode();
         }
 
         #region Waterfall layout
@@ -219,6 +234,7 @@ namespace XMAT.WebServiceCapture
             if (sender is FrameworkElement fe && fe.Tag is ProxyConnectionModel model)
             {
                 SelectedItem = model;
+                RecordMode();
                 XMAT.Telemetry.XmatTelemetryService.Current.Use(XMAT.Telemetry.TelemetryFeature.TimelineSelection);
             }
         }

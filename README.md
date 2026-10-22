@@ -44,6 +44,8 @@ Application-side filtering does not control collector-side IP enrichment; that r
 | `UnhandledFailure` | Deduplicated observed failures with fixed error categories, never exception contents |
 
 Delivery is best-effort, uses a bounded in-memory exporter queue, and never persists an offline event queue.
+Collector-destination traffic is excluded from proxy capture while telemetry export is active, preventing
+XMAT from recording its own telemetry. Unfinished operations are marked cancelled on normal application exit.
 Missing exit events do not prove crashes, and statistics exclude non-exporting/offline launches. Hidden reports
 are not counted as viewed. Statistics report timing measures WebView2 navigation, not proof that every graph's
 JavaScript rendered successfully. See [CONTRIBUTING.md](CONTRIBUTING.md) for build/validation controls.

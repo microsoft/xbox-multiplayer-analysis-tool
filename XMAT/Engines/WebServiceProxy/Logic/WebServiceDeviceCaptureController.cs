@@ -102,7 +102,6 @@ namespace XMAT.WebServiceCapture
         private readonly DeviceType _deviceType;
         private readonly bool _readOnly;
         private TelemetryOperation _captureTelemetry;
-        internal bool LastImportCancelled { get; private set; }
         private IWebServiceProxy _webProxy;
         private IDataTable _dataTable;
         private readonly object _lockObj = new object();
@@ -436,7 +435,6 @@ namespace XMAT.WebServiceCapture
                 DeviceName))
             {
                 ProxyConnections.AddFromDataRecord(record, false);
-                _captureTelemetry?.ItemReceived();
             }
         }
 
@@ -481,6 +479,7 @@ namespace XMAT.WebServiceCapture
 
         private async void WebProxy_ReceivedSslConnectionRequestAsync(object sender, SslConnectionRequestEventArgs connectionEvent)
         {
+            var capture = _captureTelemetry;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
@@ -526,7 +525,13 @@ namespace XMAT.WebServiceCapture
                 connectionEvent.ClientIP
             );
 
-            PublicUtilities.SafeInvoke(() => HandleRowAdded(rowId));
+            RecordCapturedRow(rowId, capture, PublicUtilities.SafeInvoke);
+        }
+
+        internal void RecordCapturedRow(long rowId, TelemetryOperation capture, Action<Action> dispatch)
+        {
+            capture?.ItemReceived();
+            dispatch(() => HandleRowAdded(rowId));
         }
 
         private void WebProxy_CompletedSslConnectionRequest(object sender, SslConnectionCompletionEventArgs completionEvent)
@@ -548,6 +553,7 @@ namespace XMAT.WebServiceCapture
 
         private async void WebProxy_ReceivedWebRequestAsync(object sender, HttpRequestEventArgs requestEvent)
         {
+            var capture = _captureTelemetry;
             try
             {
                 // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
@@ -593,7 +599,7 @@ namespace XMAT.WebServiceCapture
                 DeviceName
             );
 
-            PublicUtilities.SafeInvoke(() => HandleRowAdded(rowId));
+            RecordCapturedRow(rowId, capture, PublicUtilities.SafeInvoke);
         }
 
         private async void WebProxy_ReceivedWebResponseAsync(object sender, HttpResponseEventArgs responseEvent)
@@ -656,16 +662,16 @@ namespace XMAT.WebServiceCapture
             _webProxy?.Reset();
         }
 
-        public void ImportFromFiddler(string fromFilePath)
+        public bool ImportFromFiddler(string fromFilePath, CancellationToken cancellationToken = default)
         {
-            LastImportCancelled = false;
-            using (var cancelTokenSource = new CancellationTokenSource())
+            using (var cancelTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
                 _fiddlerAsyncImportCancelTokenSource = cancelTokenSource;
                 _importResetEvent.Reset();
                 try
                 {
-                    var cancelToken = _fiddlerAsyncImportCancelTokenSource.Token;
+                    var cancelToken = cancelTokenSource.Token;
+                    cancelToken.ThrowIfCancellationRequested();
 
                     // convert what we can from a Fiddler file into a bunch of
                     // proxy connection models...
@@ -684,10 +690,12 @@ namespace XMAT.WebServiceCapture
                     StatusFilterList = UpdateFilter(list);
                     list = (from p in ProxyConnections select p.Method).Distinct().ToList();
                     MethodFilterList = UpdateFilter(list);
+                    cancelToken.ThrowIfCancellationRequested();
+                    return true;
                 }
                 catch (OperationCanceledException)
                 {
-                    LastImportCancelled = true;
+                    return false;
                 }
 
                 finally

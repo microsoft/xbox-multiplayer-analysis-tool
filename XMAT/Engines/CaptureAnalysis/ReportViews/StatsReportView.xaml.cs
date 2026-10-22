@@ -14,7 +14,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
     /// </summary>
     public partial class StatsReportView : UserControl
     {
-        private TelemetryOperation _navigation;
+        private readonly TelemetryNavigationTracker _navigation = new(XmatTelemetryService.Current);
         public StatsReportView()
         {
             InitializeComponent();
@@ -22,25 +22,17 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         private void Navigation_Starting(object sender, CoreWebView2NavigationStartingEventArgs e)
         {
-            _navigation?.Complete(TelemetryOutcome.Cancelled);
-            _navigation = null;
-            if (IsVisible)
-            {
-                _navigation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.StatisticsRender, TelemetryFeature.StatisticsReport);
-            }
+            _navigation.Start(e.NavigationId, IsVisible);
         }
 
         private void Navigation_Completed(object sender, CoreWebView2NavigationCompletedEventArgs e)
         {
-            _navigation?.Complete(e.IsSuccess ? TelemetryOutcome.Succeeded : TelemetryOutcome.Failed,
-                e.IsSuccess ? TelemetryError.None : TelemetryError.InvalidData);
-            _navigation = null;
+            _navigation.Complete(e.NavigationId, e.IsSuccess);
         }
 
         private void View_Unloaded(object sender, RoutedEventArgs e)
         {
-            _navigation?.Complete(TelemetryOutcome.Cancelled);
-            _navigation = null;
+            _navigation.Cancel();
         }
     }
 }

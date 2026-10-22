@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.ObjectModel;
+using System;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
@@ -14,6 +15,7 @@ namespace XMAT.WebServiceCapture
 {
     public partial class WebSocketMessagesView : UserControl
     {
+        private readonly TelemetryViewUsage _payloadUsage;
         public static readonly DependencyProperty ItemsSourceProperty =
             DependencyProperty.Register(
                 nameof(ItemsSource),
@@ -43,9 +45,16 @@ namespace XMAT.WebServiceCapture
             set => SetValue(SelectedItemProperty, value);
         }
 
-        public WebSocketMessagesView()
+        public WebSocketMessagesView() : this(feature => XmatTelemetryService.Current.Use(feature))
         {
+        }
+
+        internal WebSocketMessagesView(Action<TelemetryFeature> use)
+        {
+            _payloadUsage = new(use);
             InitializeComponent();
+            Loaded += (_, _) => RecordPayloadView();
+            IsVisibleChanged += (_, _) => RecordPayloadView();
         }
 
         private static void OnItemsSourceChanged(
@@ -68,10 +77,7 @@ namespace XMAT.WebServiceCapture
         private static void OnSelectedItemChanged(DependencyObject owner, DependencyPropertyChangedEventArgs args)
         {
             var view = (WebSocketMessagesView)owner;
-            if (args.NewValue != null)
-            {
-                view.RecordPayloadView();
-            }
+            view.RecordPayloadView();
         }
 
         private void PayloadTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -84,15 +90,13 @@ namespace XMAT.WebServiceCapture
 
         private void RecordPayloadView()
         {
-            if (IsLoaded && IsVisible && SelectedItem != null)
-            {
-                XmatTelemetryService.Current.Use(PayloadTabs.SelectedIndex switch
+            _payloadUsage.Update(IsLoaded && IsVisible, SelectedItem != null,
+                PayloadTabs?.SelectedIndex switch
                 {
                     1 => TelemetryFeature.WebSocketJson,
                     2 => TelemetryFeature.WebSocketHex,
                     _ => TelemetryFeature.WebSocketText
                 });
-            }
         }
 
         private void ApplyFilter()

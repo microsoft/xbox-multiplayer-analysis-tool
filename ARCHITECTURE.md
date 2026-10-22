@@ -244,12 +244,17 @@ The data abstraction layer wraps SQLite via `Microsoft.Data.Sqlite`:
 session, fixed feature counters, explicit operation IDs, and build-derived export gate. Individual capture and
 analysis operations retain their own timing/context, including simultaneous runs and restored/loaded/imported
 origins. There is no user preference, settings store, installation ID, or offline event file.
+The service retains unfinished operations and finalizes them as cancelled before `SessionSummary`/
+`AppClosed`, so normal exit does not abandon active capture measurements.
 
 `OneCollectorTelemetryReporter` owns an isolated logging pipeline with an empty resource builder populated
 only by approved metadata. It suppresses ambient activity/baggage and scopes, rejects free-form exception
 payloads, and batches at most 256 queued records with batches of 64. Shutdown waits at most two seconds;
 unsent records remain memory-only and may be lost. SDK overflow/transmission/shutdown failures produce
 sanitized local trace diagnostics, not uploaded application logs.
+Its destination host/port is temporarily excluded from proxy capture/script events, with CONNECT
+traffic tunneled directly. This avoids self-capture when the SDK follows the Windows system proxy;
+other traffic to that exact collector destination is excluded while the reporter is alive as well.
 
 Metadata is read only for a validated enabled/approved build or an explicitly requested local sample run.
 The host machine ID and sandbox are
@@ -259,6 +264,10 @@ are case-sensitive. Public SDK packages are referenced directly; no DevTools imp
 Lifecycle hooks reside in `App`/`MainWindow`; controller/result boundaries report real operations, and WPF
 interaction hooks report fixed view/filter/report categories. Programmatic filter initialization is excluded.
 Capture rows and script exceptions contribute counts only; their contents are never passed to the reporter.
+Proxy rows are counted at storage time before UI dispatch, and listener startup is reported only after
+binding succeeds. Import cancellation is returned per task rather than through controller-wide state.
+Statistics navigation uses WebView2 IDs for local correlation; visible inspection-mode tracking handles
+late responses, already-selected payloads, and the default timeline without duplicate binding notifications.
 Collector registration, retention/access policy, and backend enrichment review are external release gates.
 
 An explicit `--telemetry-sample` launch in a non-exporting build instead selects

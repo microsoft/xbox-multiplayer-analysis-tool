@@ -153,6 +153,7 @@ namespace XMAT.Models
         internal async Task<TelemetryOutcome> ImportDataCapturesAsync(ImportType importType, string fromFilePath)
         {
             ICaptureDeviceContext captureDevice = null;
+            var imported = false;
 
             switch (importType)
             {
@@ -170,7 +171,11 @@ namespace XMAT.Models
                         null,
                         CaptureOrigin.Imported
                     );
-                    await (captureDevice.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ImportFromFiddlerAsync(fromFilePath, captureDevice);
+                    if (captureDevice.CaptureController.CaptureMethod is not WebServiceCapture.WebServiceCaptureMethod method)
+                    {
+                        throw new InvalidOperationException("The capture does not support Fiddler import.");
+                    }
+                    imported = await method.ImportFromFiddlerAsync(fromFilePath, captureDevice);
                 }
                 break;
             }
@@ -178,8 +183,7 @@ namespace XMAT.Models
             if (captureDevice != null)
             {
                 AppModel.SelectedDeviceContext = captureDevice;
-                return captureDevice.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController controller &&
-                    controller.LastImportCancelled ? TelemetryOutcome.Cancelled : TelemetryOutcome.Succeeded;
+                return imported ? TelemetryOutcome.Succeeded : TelemetryOutcome.Cancelled;
             }
             System.Diagnostics.Trace.TraceWarning("XMAT import does not support this format.");
             return TelemetryOutcome.Unsupported;

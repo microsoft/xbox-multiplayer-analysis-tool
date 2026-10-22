@@ -9,6 +9,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 using System.Net;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -188,18 +189,6 @@ namespace XMAT.WebServiceCapture
                 _ => XMAT.Telemetry.TelemetryFeature.None
             };
             XMAT.Telemetry.XmatTelemetryService.Current.Use(feature);
-            if (tabs.SelectedIndex == 0)
-            {
-                RequestViewControl.RecordInspection(ConnectionList.SelectedItem != null);
-            }
-        }
-
-        private void ConnectionList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (e.Source == ConnectionList)
-            {
-                RequestViewControl.RecordInspection(ConnectionList.SelectedItem != null);
-            }
         }
 
         private void UpdateFilter(string text, ObservableCollection<CheckedListItem> list)
@@ -224,13 +213,13 @@ namespace XMAT.WebServiceCapture
                 case DeviceType.LocalPC:
                 {
                     wsdcc.EnableProxyingPC();
-                    wsdcc.StartProxy(false);
+                    await StartProxyWithErrorHandlingAsync(wsdcc, false);
                     break;
                 }
 
                 case DeviceType.GenericProxyDevice:
                 {
-                    wsdcc.StartProxy(true);
+                    await StartProxyWithErrorHandlingAsync(wsdcc, true);
                     break;
                 }
 
@@ -298,7 +287,7 @@ namespace XMAT.WebServiceCapture
 
                         if (bWasEnabled)
                         {
-                            wsdcc.StartProxy(false);
+                            await StartProxyWithErrorHandlingAsync(wsdcc, false);
                         }
                     }
                     // TODO: if we 've gotten this far, then that means we
@@ -371,7 +360,7 @@ namespace XMAT.WebServiceCapture
                 {
                     wsdcc.EnableProxyingPC();
                 }
-                wsdcc.StartProxy(captureDeviceContext?.DeviceType == DeviceType.GenericProxyDevice);
+                await StartProxyWithErrorHandlingAsync(wsdcc, captureDeviceContext?.DeviceType == DeviceType.GenericProxyDevice);
             }
             else
             {
@@ -389,6 +378,24 @@ namespace XMAT.WebServiceCapture
             if (captureDeviceContext != null)
             {
                 e.CanExecute = !captureDeviceContext.IsReadOnly;
+            }
+        }
+
+        private async Task StartProxyWithErrorHandlingAsync(WebServiceDeviceCaptureController controller, bool showInformation)
+        {
+            try
+            {
+                controller.StartProxy(showInformation);
+            }
+            catch (Exception ex)
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Proxy startup failed: {ex}");
+                if (DataContext is ICaptureDeviceContext { DeviceType: DeviceType.LocalPC })
+                {
+                    await controller.DisableProxying();
+                }
+                MessageBox.Show(Localization.GetLocalizedString("PROXY_START_FAILED_MESSAGE", ex.Message),
+                    Localization.GetLocalizedString("PROXY_START_FAILED_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 

@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using XMAT.WebServiceCapture.Models;
+using XMAT.Telemetry;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -96,75 +97,74 @@ namespace XMAT.WebServiceCapture.Proxy
 
         public void StartProxy(WebServiceProxyOptions options)
         {
+            if (_host != null)
+            {
+                throw new InvalidOperationException("The proxy is already running.");
+            }
             Reset();
 
             _logger.InitLog(options.LogFilePath, options.CurrentLogLevel);
-            _port = options.Port;
-            _cts = new CancellationTokenSource();
-
-            _httpClient = new HttpClient(new HttpClientHandler()
+            try
             {
-                UseProxy = false,
-                Proxy = null,
-                AllowAutoRedirect = false,
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-            });
+                _port = options.Port;
+                _cts = new CancellationTokenSource();
 
-            // The public listener handles forward-proxy CONNECT requests. The
-            // private listener terminates the tunneled TLS and lets Kestrel
-            // decode either HTTP/1.1 or HTTP/2 after ALPN negotiation.
-            var interceptedApplication = new InterceptedProxyApplication(
-                this,
-                _httpClient,
-                _interceptedTunnels,
-                _logger);
-            _interceptedHost = new InterceptedHttpHost(
-                SelectInterceptedCertificate,
-                interceptedApplication.InvokeAsync);
-            _interceptedHost.StartAsync(_cts.Token).GetAwaiter().GetResult();
-
-            var builder = Host.CreateDefaultBuilder();
-            builder.ConfigureWebHostDefaults(webBuilder =>
-            {
-                webBuilder.ConfigureKestrel(serverOptions =>
+                _httpClient = new HttpClient(new HttpClientHandler()
                 {
-                    serverOptions.Listen(IPAddress.Any, _port, listenOptions =>
+                    UseProxy = false,
+                    Proxy = null,
+                    AllowAutoRedirect = false,
+                    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+                });
+
+                // The public listener handles forward-proxy CONNECT requests. The
+                // private listener terminates the tunneled TLS and lets Kestrel
+                // decode either HTTP/1.1 or HTTP/2 after ALPN negotiation.
+                var interceptedApplication = new InterceptedProxyApplication(
+                    this,
+                    _httpClient,
+                    _interceptedTunnels,
+                    _logger);
+                _interceptedHost = new InterceptedHttpHost(
+                    SelectInterceptedCertificate,
+                    interceptedApplication.InvokeAsync);
+                _interceptedHost.StartAsync(_cts.Token).GetAwaiter().GetResult();
+
+                var builder = Host.CreateDefaultBuilder();
+                builder.ConfigureWebHostDefaults(webBuilder =>
+                {
+                    webBuilder.ConfigureKestrel(serverOptions =>
                     {
-                        listenOptions.UseConnectionHandler<ForwardProxyConnectionHandler>();
+                        serverOptions.Listen(IPAddress.Any, _port, listenOptions =>
+                        {
+                            listenOptions.UseConnectionHandler<ForwardProxyConnectionHandler>();
+                        });
                     });
+                    webBuilder.ConfigureServices(services =>
+                    {
+                        services.AddSingleton(_certManager);
+                        services.AddSingleton(_httpClient);
+                        services.AddSingleton(_logger);
+                        services.AddSingleton(this);
+                        services.AddSingleton(_interceptedHost);
+                        services.AddSingleton(_interceptedTunnels);
+                        services.AddSingleton<ForwardProxyConnectionHandler>();
+                    });
+                    webBuilder.Configure(app => { });
                 });
-                webBuilder.ConfigureServices(services =>
-                {
-                    services.AddSingleton(_certManager);
-                    services.AddSingleton(_httpClient);
-                    services.AddSingleton(_logger);
-                    services.AddSingleton(this);
-                    services.AddSingleton(_interceptedHost);
-                    services.AddSingleton(_interceptedTunnels);
-                    services.AddSingleton<ForwardProxyConnectionHandler>();
-                });
-                webBuilder.Configure(app => { });
-            });
 
-            _host = builder.Build();
+                _host = builder.Build();
 
-            _logger.Log(0, LogLevel.INFO, $"Kestrel proxy starting on port {_port}");
+                _logger.Log(0, LogLevel.INFO, $"Kestrel proxy starting on port {_port}");
 
-            Task.Run(async () =>
+                Task.Run(() => _host.StartAsync(_cts.Token)).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
             {
-                try
-                {
-                    await _host.RunAsync(_cts.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    // Expected on shutdown
-                }
-                catch (Exception ex)
-                {
-                    _logger.Log(0, LogLevel.ERROR, $"Kestrel host error: {ex}");
-                }
-            });
+                _logger.Log(0, LogLevel.ERROR, $"Kestrel startup error: {ex}");
+                StopProxy();
+                throw;
+            }
         }
 
         private X509Certificate2 SelectInterceptedCertificate(
@@ -190,7 +190,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         public void StopProxy()
         {
-            if (_host == null && _interceptedHost == null)
+            if (_host == null && _interceptedHost == null && _httpClient == null)
                 return;
 
             _cts?.Cancel();
@@ -225,6 +225,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
             _httpClient?.Dispose();
             _httpClient = null;
+            _cts?.Dispose();
+            _cts = null;
 
             ProxyStopped?.Invoke(this, EventArgs.Empty);
             _logger.CloseLog();
@@ -256,6 +258,10 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal bool RaiseReceivedSslConnectionRequest(int connectionID, string clientIP, ClientRequest request)
         {
+            if (TelemetryTraffic.IsExcluded(request.Host, request.Port))
+            {
+                return true;
+            }
             var args = new SslConnectionRequestEventArgs
             {
                 ConnectionID = connectionID,
@@ -271,6 +277,10 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal void RaiseCompletedSslConnectionRequest(int connectionID, ClientRequest request)
         {
+            if (TelemetryTraffic.IsExcluded(request.Host, request.Port))
+            {
+                return;
+            }
             CompletedSslConnectionRequest?.Invoke(this,
                 new SslConnectionCompletionEventArgs
                 {
@@ -293,6 +303,10 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal bool RaiseReceivedWebRequest(int connectionID, ClientRequest request)
         {
+            if (TelemetryTraffic.IsExcluded(request.Host, request.Port))
+            {
+                return true;
+            }
             var args = new HttpRequestEventArgs
             {
                 ConnectionID = connectionID,
@@ -307,6 +321,10 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal bool RaiseReceivedWebResponse(int connectionID, ClientRequest request, ServerResponse response)
         {
+            if (TelemetryTraffic.IsExcluded(request.Host, request.Port))
+            {
+                return true;
+            }
             var args = new HttpResponseEventArgs
             {
                 ConnectionID = connectionID,

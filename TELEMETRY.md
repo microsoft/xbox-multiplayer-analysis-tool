@@ -31,6 +31,10 @@ The namespace is `Microsoft.Gaming.XMAT`. For example, the launch event is
 Capture starts include setup/connection time. Peak capture operations include attempts that may fail;
 they are not a count of simultaneously successful captures. A proxy listener starting does not prove
 traffic arrived: use `CaptureFirstData` or a non-empty completed capture.
+Proxy startup waits for the public listener to bind: a port conflict produces a failed operation,
+not an empty successful capture. Stored requests are counted before their deferred UI updates.
+On normal application shutdown, unfinished operations are completed once with
+`Outcome = Cancelled` and `ErrorCategory = Cancelled` before session closure.
 
 Durations measure elapsed wall-clock intervals using a monotonic timer; they are not active interaction
 time. Abrupt termination, offline delivery, or queue overflow can leave unmatched starts or missing exit
@@ -51,6 +55,9 @@ Do not indiscriminately add all `Counter.Count` values together:
 
 Configuration edits can contribute to both an immediate action counter and a feature usage-call total.
 Use `FeatureUsed` for distinct-session adoption and the appropriate counter pattern for action totals.
+Inspection views record an entry when the selected mode is visible with data, including a late-arriving
+response, a preselected WebSocket payload, and the default populated waterfall. Repeated data/visibility
+notifications for the same continuously visible mode do not inflate those usage-call totals.
 
 ## Common metadata
 
@@ -155,7 +162,7 @@ uses conversion/validation/report generation; network analysis currently uses va
 | `Io` | Other `IOException` |
 | `InvalidData` | JSON/format/invalid-data exceptions, or failed Statistics navigation |
 | `InvalidOperation` | `InvalidOperationException` |
-| `Cancelled` | `OperationCanceledException` |
+| `Cancelled` | `OperationCanceledException`, or an unfinished operation cancelled during normal session shutdown |
 | `Network` | Socket/HTTP request exceptions or failed proxy configuration |
 | `MissingGdk` | Required GDK unavailable |
 | `MissingDefaultConsole` | Device setup cannot find the default console |
@@ -267,6 +274,23 @@ Local samples do not satisfy those approval gates.
 
 The templates intentionally filter to `BuildChannel = Public`; local sample data will not appear in those
 results unless you deliberately adapt a query for local testing. Never relabel local samples as production.
+Daily adoption joins feature events to their session's observed launch, so a session spanning midnight
+stays in its launch-day cohort. Analysis funnels distinguish live (`User`/`Restored`) from `Imported`
+origins; a mixed session is credited to both only if it analyzed both origins. These are session-level
+conversions, not proof that a particular captured request was analyzed. Loaded-file analysis does not
+count as live-capture conversion.
+
+### Collector traffic and report navigation
+
+While a OneCollector reporter is active (including its final flush), its exact destination host and
+port are excluded from proxy capture/script events. HTTPS CONNECT to that destination is tunneled
+without TLS interception. This prevents Local PC proxying from recording XMAT's own telemetry;
+traffic from other clients to the same collector destination is also excluded during that interval.
+The exclusion is removed when the reporter finishes disposal. Local file sampling does not create it.
+
+Statistics operations are correlated by WebView2 navigation ID. Redirects keep one operation, a
+replacement navigation cancels its predecessor, and stale completion notifications cannot finish the
+replacement. Navigation IDs are used locally only and are not added to the exported schema.
 
 ## Generate samples from the app without a collector
 
