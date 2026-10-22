@@ -11,6 +11,6 @@ namespace XMAT.SharedInterfaces
         // Imports publish their prepared view only after this atomic replacement succeeds.
         IReadOnlyList<long> ReplaceImportedRows(
             IFieldValue capture,
-            IReadOnlyList<object[]> rows);
+            IEnumerable<object[]> rows);
     }
 }

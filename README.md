@@ -286,7 +286,7 @@ Files can also be dragged and dropped onto the main window -- .XMATCAP files are
 files are imported.
 
 If a new .SAZ import fails, XMAT reports the error and removes only the tab created for that attempt.
-If re-importing the same file fails, the existing tab, its selection, and its previously imported data
+If re-importing a .SAZ with the same file name fails, the existing tab, its selection, and its previously imported data
 remain unchanged. You can retry the import without restarting XMAT. Error details are written to
 `application.log` in the application's `Logs` directory.
 
@@ -342,11 +342,7 @@ _Screenshot of the Xbox Live Trace analysis in progress._
 The analysis will undergo many steps which includes the export of analysis related files placed in the
 **/AppRoaming/Microsoft/Xbox Multiplayer Analysis Tool** storage directory. The folder will have a prefix of “xlca_” and contain a
 timestamp for the executed analysis. Stop all captures before starting analysis; the disabled Analyze
-tooltip explains this requirement, and `CaptureAppModel.CanAnalyzeCaptures` and
-`CaptureAppModel.TryBeginAnalysis` in
-[`XMAT/Models/CaptureAppModel.cs`](./XMAT/Models/CaptureAppModel.cs) enforce it. That same code's
-`TryBeginAnalysis` and `TryBeginCaptureDataOperation` methods also ensure only one analysis or
-capture-data operation can run at a time.
+tooltip explains this requirement. Only one analysis or capture-data operation can run at a time.
 
 Recoverable analysis failures display an error and remove the failed result tab instead of closing XMAT.
 The capture remains available for another attempt, and exception details are written to `application.log`.

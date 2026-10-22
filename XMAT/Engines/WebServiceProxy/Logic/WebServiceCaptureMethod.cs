@@ -135,8 +135,7 @@ namespace XMAT.WebServiceCapture
                 var methodFilters = captureController.UpdateFilter(
                     connections.Select(connection => connection.Method).Distinct().ToList());
                 var rows = connections.Select(
-                    connection => connection.ToDataTableValues(captureController.DeviceName))
-                    .ToList();
+                    connection => connection.ToDataTableValues(captureController.DeviceName));
                 var rowIds = importTable.ReplaceImportedRows(
                     new FieldValue<string>(FieldKey_DeviceName, captureController.DeviceName),
                     rows);

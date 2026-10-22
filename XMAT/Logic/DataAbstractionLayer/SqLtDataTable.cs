@@ -149,43 +149,84 @@ namespace XMAT.DataAbstractionLayer
 
         public IReadOnlyList<long> ReplaceImportedRows(
             IFieldValue capture,
-            IReadOnlyList<object[]> rows)
+            IEnumerable<object[]> rows)
         {
             lock (_lockObj)
             {
                 var captureField = (FieldDefinition)_fieldDefinitions[capture.Name];
                 var fields = _fieldDefinitions.Values.Cast<FieldDefinition>().ToArray();
                 string fieldNames = string.Join(",", fields.Select(field => field.Name));
-                var inserts = rows.Select(row =>
+                string[] parameterNames = fields.Select(
+                    (_, index) => $"$value{index}").ToArray();
+                var rowIds = new List<long>();
+
+                using var transaction = _connection.BeginTransaction();
+                using (var deleteCommand = _connection.CreateCommand())
+                {
+                    deleteCommand.Transaction = transaction;
+                    deleteCommand.CommandText =
+                        $"DELETE FROM {_name} WHERE {captureField.Name} = $capture";
+                    deleteCommand.Parameters.AddWithValue(
+                        "$capture",
+                        ImportedFieldValueAsParameter(captureField, capture.Value));
+                    deleteCommand.ExecuteNonQuery();
+                }
+
+                using var insertCommand = _connection.CreateCommand();
+                insertCommand.Transaction = transaction;
+                insertCommand.CommandText =
+                    $"INSERT INTO {_name}({fieldNames}) VALUES({string.Join(",", parameterNames)})";
+                var parameters = parameterNames.Select(name =>
+                {
+                    var parameter = insertCommand.CreateParameter();
+                    parameter.ParameterName = name;
+                    insertCommand.Parameters.Add(parameter);
+                    return parameter;
+                }).ToArray();
+
+                using var rowIdCommand = _connection.CreateCommand();
+                rowIdCommand.Transaction = transaction;
+                rowIdCommand.CommandText = "SELECT last_insert_rowid()";
+
+                foreach (object[] row in rows)
                 {
                     if (row.Length != fields.Length)
                     {
                         throw new ArgumentException("Inequal number of values to table fields.", nameof(rows));
                     }
 
-                    return string.Join(",", fields.Select(
-                        (field, index) => field.FieldValueAsString(row[index])));
-                }).ToList();
-                var rowIds = new List<long>(inserts.Count);
+                    for (int index = 0; index < fields.Length; index++)
+                    {
+                        parameters[index].Value =
+                            ImportedFieldValueAsParameter(fields[index], row[index]);
+                    }
 
-                using var transaction = _connection.BeginTransaction();
-                using var command = _connection.CreateCommand();
-                command.Transaction = transaction;
-                command.CommandText =
-                    $"DELETE FROM {_name} WHERE {captureField.Name} = {captureField.FieldValueAsString(capture.Value)}";
-                command.ExecuteNonQuery();
-
-                foreach (string values in inserts)
-                {
-                    command.CommandText = $"INSERT INTO {_name}({fieldNames}) VALUES({values})";
-                    command.ExecuteNonQuery();
-                    command.CommandText = "SELECT last_insert_rowid()";
-                    rowIds.Add((long)command.ExecuteScalar());
+                    insertCommand.ExecuteNonQuery();
+                    rowIds.Add((long)rowIdCommand.ExecuteScalar());
                 }
 
                 transaction.Commit();
                 return rowIds;
             }
+        }
+
+        private static object ImportedFieldValueAsParameter(
+            FieldDefinition field,
+            object value)
+        {
+            if (value == null)
+            {
+                return string.Empty;
+            }
+
+            if (field.ValueType != FieldValueType.String)
+            {
+                return value;
+            }
+
+            // Preserve FieldValueAsString's stored text: doubled single quotes
+            // were SQL syntax, while doubled double quotes became data.
+            return value.ToString().Replace("\"", "\"\"");
         }
 
         private IDataset GetDataset()

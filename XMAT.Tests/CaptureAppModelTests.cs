@@ -685,6 +685,119 @@ namespace XMAT.Tests
             }
         }
 
+        [Fact]
+        public void ReplaceImportedRows_InsertsFirstRowBeforeEnumeratingSecond()
+        {
+            const string deviceName = "Fiddler - streaming.saz";
+            using var database = CreateCaptureDatabase(out var table);
+            bool firstInsertObserved = false;
+            database.CreateFunction("observe_import_insert", () =>
+            {
+                firstInsertObserved = true;
+                return 0;
+            });
+            ExecuteSql(database,
+                "CREATE TRIGGER ObserveImportInsert AFTER INSERT ON WebProxyConnections " +
+                "BEGIN SELECT observe_import_insert(); END;");
+
+            IEnumerable<object[]> Rows()
+            {
+                var first = CreateCaptureRowValues(
+                    deviceName,
+                    "first\"quoted.example",
+                    "/first's",
+                    "first body");
+                first[15] = null;
+                yield return first;
+
+                Assert.True(
+                    firstInsertObserved,
+                    "The first row must be inserted before the second row is requested.");
+                yield return CreateCaptureRowValues(
+                    deviceName,
+                    "second.example",
+                    "/second",
+                    "second body",
+                    2);
+            }
+
+            var rowIds = ((IImportedCaptureTable)table).ReplaceImportedRows(
+                new FieldValue<string>(
+                    WebServiceCaptureMethod.FieldKey_DeviceName,
+                    deviceName),
+                Rows());
+
+            var records = RowsForDevice(table, deviceName)
+                .OrderBy(record => record.RowId)
+                .ToList();
+            Assert.Equal(2, records.Count);
+            Assert.Equal(
+                rowIds.ToArray(),
+                records.Select(record => (long)record.RowId).ToArray());
+            Assert.Equal(
+                "first\"\"quoted.example",
+                records[0].Str(WebServiceCaptureMethod.FieldKey_RequestHost));
+            Assert.Equal(
+                "/first's",
+                records[0].Str(WebServiceCaptureMethod.FieldKey_RequestPath));
+            Assert.Equal(
+                string.Empty,
+                records[0].Str(WebServiceCaptureMethod.FieldKey_ClientIP));
+            Assert.Equal(
+                2L,
+                records[1].Int(WebServiceCaptureMethod.FieldKey_RequestNumber));
+        }
+
+        [Fact]
+        public void ReplaceImportedRows_IteratorFailureRollsBackExactOriginalRows()
+        {
+            const string deviceName = "Fiddler - rollback.saz";
+            using var database = CreateCaptureDatabase(out var table);
+            AddCaptureRow(
+                table,
+                deviceName,
+                "original.example",
+                "/original",
+                "original body");
+            AddCaptureRow(
+                table,
+                "Unrelated capture",
+                "unrelated.example",
+                "/keep",
+                "unrelated body");
+            var originalRows = SnapshotRows(table);
+            int insertsObserved = 0;
+            database.CreateFunction("observe_failed_import_insert", () =>
+            {
+                insertsObserved++;
+                return 0;
+            });
+            ExecuteSql(database,
+                "CREATE TRIGGER ObserveFailedImportInsert AFTER INSERT ON WebProxyConnections " +
+                "BEGIN SELECT observe_failed_import_insert(); END;");
+
+            IEnumerable<object[]> Rows()
+            {
+                yield return CreateCaptureRowValues(
+                    deviceName,
+                    "replacement.example",
+                    "/replacement",
+                    "replacement body");
+                throw new InvalidOperationException("Injected iterator failure.");
+            }
+
+            var actual = Assert.Throws<InvalidOperationException>(() =>
+                ((IImportedCaptureTable)table).ReplaceImportedRows(
+                    new FieldValue<string>(
+                        WebServiceCaptureMethod.FieldKey_DeviceName,
+                        deviceName),
+                    Rows()));
+
+            Assert.Equal("Injected iterator failure.", actual.Message);
+            Assert.Equal(1, insertsObserved);
+            Assert.Equal(originalRows, SnapshotRows(table));
+        }
+
         private static Func<string, ICaptureDeviceContext, Task> CreateFiddlerImporter(
             IDataTable table)
         {
@@ -799,7 +912,10 @@ namespace XMAT.Tests
                     }
                 }));
                 Dispatcher.Run();
-            });
+            })
+            {
+                IsBackground = true
+            };
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
             try
@@ -941,10 +1057,25 @@ namespace XMAT.Tests
             string requestPath,
             string responseBody)
         {
-            table.AddRow(
+            table.AddRow(CreateCaptureRowValues(
                 deviceName,
-                1L,
-                1L,
+                host,
+                requestPath,
+                responseBody));
+        }
+
+        private static object[] CreateCaptureRowValues(
+            string deviceName,
+            string host,
+            string requestPath,
+            string responseBody,
+            long requestNumber = 1)
+        {
+            return new object[]
+            {
+                deviceName,
+                requestNumber,
+                requestNumber,
                 "2026-01-01T00:00:00.0000000Z",
                 "2026-01-01T00:00:00.1000000Z",
                 "https",
@@ -957,7 +1088,8 @@ namespace XMAT.Tests
                 string.Empty,
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n",
                 Convert.ToBase64String(Encoding.UTF8.GetBytes(responseBody)),
-                "10.0.0.1");
+                "10.0.0.1"
+            };
         }
 
         private static void AssertCaptureRow(
@@ -1156,7 +1288,7 @@ namespace XMAT.Tests
             }
 
             public IReadOnlyList<long> ReplaceImportedRows(
-                IFieldValue capture, IReadOnlyList<object[]> rows)
+                IFieldValue capture, IEnumerable<object[]> rows)
             {
                 ImportThreadId = Environment.CurrentManagedThreadId;
                 return ((IImportedCaptureTable)_inner).ReplaceImportedRows(capture, rows);
