@@ -109,8 +109,8 @@ local capture activity, so stopping capture does not leave a message claiming it
 The new port is not silently substituted for the device's old endpoint. If binding, saving, or
 device configuration fails, XMAT reports the failed step and preserves the assignments needed
 for recovery. Once a replacement is saved and the device may already be using it, an uncertain
-activation does not automatically tear down its listener or revert to the old port. Use
-**Check Proxy Status** before retrying, stopping, or disabling it. Canceling an apply stops
+activation does not automatically tear down its listener or revert to the old port. For an Xbox,
+use **Check Proxy Status** before retrying, stopping, or disabling it. Canceling an apply stops
 subsequent steps; a console reboot or SDK operation already requested cannot be undone.
 
 For a generic/manual device, XMAT cannot edit its proxy settings remotely. Stop the device/app
@@ -140,6 +140,10 @@ so clearing stale console settings does not require first starting another liste
 Status checks show the reported endpoint rather than treating any nonempty proxy host as a
 match. Re-enabling a verified matching endpoint does not rewrite its settings or request another
 reboot; a different existing endpoint is not overwritten automatically.
+
+**Check Proxy Status** is an Xbox action and is not available for Local PC captures.
+Generic/manual devices instead offer **Proxy Setup Details**; that displays connection
+instructions rather than querying device state.
 
 The Xbox proxy-address file is written as NUL-terminated UTF-8. The console loader requires
 that terminator; an EOF-only or CRLF-only file can leave garbage after the port in the reported

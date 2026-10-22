@@ -186,6 +186,7 @@
 	"WEBCAP_CAPTURE_TYPE_UNKNOWN": "Unknown",
 
 	"PROXY_DETAILS": "Details",
+	"PROXY_SETUP_DETAILS": "Proxy Setup Details",
 	"PROXY_PORT": "Port",
 	"PROXY_PORT_CHANGE": "Change Proxy Port",
 	"PROXY_PORT_CHANGE_TOOLTIP": "Change the selected web proxy capture's port. Stop capture first.",

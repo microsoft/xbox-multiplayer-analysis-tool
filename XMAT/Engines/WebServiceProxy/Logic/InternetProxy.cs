@@ -49,8 +49,9 @@ public struct WinInetProxyDetails
     public IntPtr lpszProxy;
     public IntPtr lpszProxyBypass;
 
-    public string GetProxy() => Marshal.PtrToStringUni(lpszProxy) ?? string.Empty;
-    public string GetProxyBypass() => Marshal.PtrToStringUni(lpszProxyBypass) ?? string.Empty;
+    // Paired with the explicit ANSI INTERNET_OPTION_PROXY query below.
+    public string GetProxy() => Marshal.PtrToStringAnsi(lpszProxy) ?? string.Empty;
+    public string GetProxyBypass() => Marshal.PtrToStringAnsi(lpszProxyBypass) ?? string.Empty;
 }
 
 public enum EWinInetOptions : uint
@@ -86,7 +87,7 @@ static class WinInetFuncs
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool InternetSetOption(IntPtr hInternet, EWinInetOptions dwOption, IntPtr lpBuffer, int dwBufferLength);
 
-    [DllImport("WinInet.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    [DllImport("WinInet.dll", EntryPoint = "InternetQueryOptionA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool InternetQueryOption(IntPtr hInternet, EWinInetOptions dwOption, IntPtr lpBuffer, ref int dwBufferLength);
 }

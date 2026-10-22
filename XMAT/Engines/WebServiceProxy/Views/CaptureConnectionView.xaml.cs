@@ -111,15 +111,18 @@ namespace XMAT.WebServiceCapture
             {
                 DetachContext();
             }
+            CommandManager.InvalidateRequerySuggested();
         }
 
         private void AttachContext()
         {
-            if (!TryGetCaptureContext(DataContext, out _, out var controller))
+            if (!TryGetCaptureContext(DataContext, out var context, out var controller))
             {
                 DetachContext();
                 return;
             }
+            CheckButton.Content = Localization.GetLocalizedString(
+                context.DeviceType == DeviceType.GenericProxyDevice ? "PROXY_SETUP_DETAILS" : "WEBCAP_CHECK");
             if (ReferenceEquals(controller, _attachedController) &&
                 ReferenceEquals(controller.ProxyConnections, _attachedConnections))
             {
@@ -608,7 +611,8 @@ namespace XMAT.WebServiceCapture
 
         private async void CheckDevice_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            if (!TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc))
+            if (!CanCheckDevice(DataContext) ||
+                !TryGetCaptureContext(DataContext, out var captureDeviceContext, out var wsdcc))
             {
                 return;
             }
@@ -818,6 +822,16 @@ namespace XMAT.WebServiceCapture
                         ? CaptureAppModel.AppModel.CanStopCaptures
                         : CaptureAppModel.AppModel.CanModifyCaptureData);
             }
+        }
+
+        internal static bool CanCheckDevice(object dataContext) =>
+            TryGetCaptureContext(dataContext, out var context, out _) &&
+            !context.IsReadOnly &&
+            context.DeviceType is DeviceType.XboxConsole or DeviceType.GenericProxyDevice;
+
+        private void CheckDevice_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CanCheckDevice(DataContext);
         }
 
         private void Enable_CanExecute(object sender, CanExecuteRoutedEventArgs e)

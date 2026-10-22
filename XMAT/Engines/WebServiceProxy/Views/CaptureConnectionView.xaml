@@ -27,7 +27,7 @@
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.EnableDevice}"     Executed="EnableDevice_Executed"     CanExecute="Enable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DisableDevice}"    Executed="DisableDevice_Executed"    CanExecute="Disable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}" Executed="StartStopCapture_Executed" CanExecute="StartStopCapture_CanExecute"/>
-        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CheckDevice}"    Executed="CheckDevice_Executed" />
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CheckDevice}" Executed="CheckDevice_Executed" CanExecute="CheckDevice_CanExecute"/>
     </UserControl.CommandBindings>
 
     <Grid>
