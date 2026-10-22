@@ -4,6 +4,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:XMAT"
+        xmlns:proxy="clr-namespace:XMAT.WebServiceCapture"
         mc:Ignorable="d"
         Loaded="Window_Loaded"
         Closing="Window_Closing"
@@ -25,12 +26,14 @@
         <CommandBinding Command="{x:Static local:AppCommands.CollectLogs}"      Executed="CollectLogs_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ViewGDKXInfo}"      Executed="ViewGDKXInfo_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ExportRootCert}"   Executed="ExportRootCert_Executed"/>
+        <CommandBinding Command="{x:Static proxy:WebServiceProxyCommands.ChangePort}"
+                        Executed="ChangeProxyPort_Executed" CanExecute="ChangeProxyPort_CanExecute"/>
     </Window.CommandBindings>
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="20"/>
             <RowDefinition/>
-            <RowDefinition Height="20"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="9*"/>
@@ -61,6 +64,10 @@
                           ToolTipService.ShowOnDisabled="True"/>
             </MenuItem>
             <MenuItem x:Name="ActionsMenu" HorizontalAlignment="Left" Header="_Actions">
+                <MenuItem x:Name="ChangeProxyPort" Command="{x:Static proxy:WebServiceProxyCommands.ChangePort}"
+                          CommandTarget="{Binding ElementName=AllCaptureDevicesPanel}"
+                          ToolTipService.ShowOnDisabled="True"/>
+                <Separator/>
                 <MenuItem x:Name="ExportRootCert" Header="_Export Root Certificate to Desktop" Command="{x:Static local:AppCommands.ExportRootCert}" />
             </MenuItem>
             <MenuItem x:Name="HelpMenu" HorizontalAlignment="Left" Header="_Help">
@@ -81,12 +88,20 @@
             <local:CaptureAnalysisControl x:Name="CaptureErrorsPanel" Grid.Row="2" AnalysisTabAdded="CaptureErrorsPanel_TabAdded" AnalysisTabClosed="CaptureErrorsPanel_TabClosed"/>
         </Grid>
 
-        <StatusBar Grid.Row="2" Grid.Column="0" x:Name="MainStatusBar" VerticalAlignment="Center" VerticalContentAlignment="Top" HorizontalContentAlignment="Left" Grid.ColumnSpan="2">
-            <StackPanel x:Name="StatusBarPanels" Orientation="Horizontal">
-                <TextBlock x:Name="StatusBar1" Width="200" Text="{Binding StatusBarText1}" />
-                <TextBlock x:Name="StatusBar2" Width="200" Text="{Binding StatusBarText2}" />
-                <TextBlock x:Name="StatusBar3" MinWidth="400" Text="{Binding StatusBarText3}"/>
-            </StackPanel>
+        <StatusBar Grid.Row="2" Grid.Column="0" x:Name="MainStatusBar" MinHeight="20" Grid.ColumnSpan="2">
+            <StatusBarItem HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                <Grid x:Name="StatusBarPanels">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="StatusBar1" Margin="0,0,16,0" Text="{Binding StatusBarText1}"/>
+                    <TextBlock x:Name="StatusBar2" Grid.Column="1" Margin="0,0,16,0" Text="{Binding StatusBarText2}"/>
+                    <TextBlock x:Name="StatusBar3" Grid.Column="2" Text="{Binding StatusBarText3}"
+                               ToolTip="{Binding StatusBarText3}" TextTrimming="CharacterEllipsis"/>
+                </Grid>
+            </StatusBarItem>
         </StatusBar>
 
     </Grid>

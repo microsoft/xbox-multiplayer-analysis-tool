@@ -84,6 +84,7 @@ namespace XMAT.WebServiceCapture
 
                 _isRunning = value;
                 RaisePropertyChange();
+                RaisePropertyChange(nameof(CaptureStatusText));
                 CommandManager.InvalidateRequerySuggested();
             }
         }
@@ -113,11 +114,16 @@ namespace XMAT.WebServiceCapture
                 }
                 _parameters.Port = value;
                 RaisePropertyChange();
+                RaisePropertyChange(nameof(PortDescription));
             }
         }
         public UInt16 PendingPort => _parameters.PendingPort;
         public bool HasPendingPort => PendingPort != 0;
         public string PortStatus { get => _portStatus; private set { _portStatus = value; RaisePropertyChange(); } }
+        public string CaptureStatusText => Localization.GetLocalizedString(
+            _readOnly ? "PROXY_CAPTURE_READ_ONLY" : IsRunning ? "PROXY_CAPTURE_RUNNING" : "PROXY_CAPTURE_STOPPED");
+        public string PortDescription => Localization.GetLocalizedString(
+            _readOnly ? "PROXY_PORT_NONE" : IsPortValid ? "PROXY_PORT_DESCRIPTION" : "PROXY_PORT_UNASSIGNED", Port);
         public bool IsPortChangeInProgress => _portChangeCancellation != null;
         public bool IsPortValid { get => Port > 0; }
         internal bool CanBeginTransition => !IsRunning && !IsTransitioning;
@@ -302,6 +308,7 @@ namespace XMAT.WebServiceCapture
                     : _portPool.ReservePort(Port, DeviceName);
                 _parameters.Port = _portReservation.Port;
                 RaisePropertyChange(nameof(Port));
+                RaisePropertyChange(nameof(PortDescription));
                 PortStatus = null;
             }
             catch (InvalidOperationException ex)
@@ -398,6 +405,7 @@ namespace XMAT.WebServiceCapture
         private void NotifyPortState()
         {
             RaisePropertyChange(nameof(Port));
+            RaisePropertyChange(nameof(PortDescription));
             RaisePropertyChange(nameof(PendingPort));
             RaisePropertyChange(nameof(HasPendingPort));
             RaisePropertyChange(nameof(IsPortChangeInProgress));

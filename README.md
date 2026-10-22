@@ -89,9 +89,13 @@ Network Trace capture and read-only imported captures are still supported.
 
 ### Changing a Proxy Port
 
-Stop capture, then choose **Change Proxy Port** in that device's existing tab. You can choose any
+Select the device's existing tab, stop capture, then choose **Actions > Change Proxy Port**. You can choose any
 unassigned port from **1 through 65535**, including ports outside the automatic range in
 Preferences. The capture history, filters, and selection are retained.
+
+The bottom status bar shows the selected capture's running/stopped state, assigned port, and
+pending-change or device-configuration details. Endpoint confirmation is shown separately from
+local capture activity, so stopping capture does not leave a message claiming it is still running.
 
 - **Apply now** starts the replacement listener before changing device settings. For an Xbox,
   it disables/re-enables proxying and waits for the required restarts; the console may reboot

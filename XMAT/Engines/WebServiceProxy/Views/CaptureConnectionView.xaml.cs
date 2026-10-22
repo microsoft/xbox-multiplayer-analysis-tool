@@ -63,7 +63,6 @@ namespace XMAT.WebServiceCapture
 
             EnableButton.Content = Localization.GetLocalizedString("WEBCAP_ENABLE");
             DisableButton.Content = Localization.GetLocalizedString("WEBCAP_DISABLE");
-            ChangePortButton.Content = Localization.GetLocalizedString("PROXY_PORT_CHANGE");
             DiscardPortButton.Content = Localization.GetLocalizedString("PROXY_PORT_DISCARD");
             CancelPortButton.Content = Localization.GetLocalizedString("PROXY_PORT_CANCEL_APPLY");
             CheckButton.Content = Localization.GetLocalizedString("WEBCAP_CHECK");
@@ -76,9 +75,6 @@ namespace XMAT.WebServiceCapture
             StatusFilters.FilterDesc = Localization.GetLocalizedString("WEBCAP_FILTER_STATUS");
             HostFilters.FilterDesc = Localization.GetLocalizedString("WEBCAP_FILTER_HOST");
             MethodFilters.FilterDesc = Localization.GetLocalizedString("WEBCAP_FILTER_METHOD");
-
-            DetailsText.Text = Localization.GetLocalizedString("PROXY_DETAILS");
-            PortText.Text = String.Format("{0}: ", Localization.GetLocalizedString("PROXY_PORT"));
 
             ReqestResponseTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB");
             ScriptEditorTab.Header = Localization.GetLocalizedString("WEBCAP_EDITOR_TAB");
@@ -370,7 +366,12 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private static async Task ShowPortChangeAsync(
+        internal static bool CanChangeProxyPort(object dataContext) =>
+            TryGetCaptureContext(dataContext, out var context, out var controller) &&
+            !context.IsReadOnly && controller.CanBeginTransition &&
+            CaptureAppModel.AppModel.CanModifyCaptureData;
+
+        internal static async Task ShowPortChangeAsync(
             ICaptureDeviceContext context, WebServiceDeviceCaptureController controller)
         {
             if (context.IsReadOnly || !controller.CanBeginTransition ||
@@ -790,9 +791,7 @@ namespace XMAT.WebServiceCapture
 
         private void ChangePort_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            e.CanExecute = TryGetCaptureContext(DataContext, out var context, out var controller) &&
-                !context.IsReadOnly && controller.CanBeginTransition &&
-                CaptureAppModel.AppModel.CanModifyCaptureData;
+            e.CanExecute = CanChangeProxyPort(DataContext);
         }
 
         private void DiscardPort_CanExecute(object sender, CanExecuteRoutedEventArgs e)

@@ -5,6 +5,7 @@
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 
 namespace XMAT.Tests
@@ -44,6 +45,8 @@ namespace XMAT.Tests
                     _application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
                     var appName = $"XMAT-UI-Tests-{Guid.NewGuid():N}";
                     _application.Resources["appName"] = appName;
+                    _application.Resources["BooleanToVisibilityConverter"] = new BooleanToVisibilityConverter();
+                    Localization.LoadLanguage("en-us");
                     _application.Resources[typeof(DataGridColumnHeader)] = new Style(typeof(DataGridColumnHeader));
                     _application.Resources.MergedDictionaries.Add(new ResourceDictionary
                     {

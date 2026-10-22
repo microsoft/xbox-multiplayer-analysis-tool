@@ -158,6 +158,8 @@ namespace XMAT.Tests
                 var record = CaptureTimelineTestData.Create();
                 controller.ProxyConnections.Add(record);
                 controller.QueuePortChange(newPort, () => { });
+                var model = new CaptureAppModel();
+                model.SelectedDeviceContext = new Context(controller);
                 var saved = false;
                 device.OnEnable = () =>
                 {
@@ -179,6 +181,13 @@ namespace XMAT.Tests
                     Assert.True(saved);
                     Assert.False(controller.HasPendingPort);
                     Assert.Same(record, Assert.Single(controller.ProxyConnections));
+                    Assert.Equal(Localization.GetLocalizedString("PROXY_CAPTURE_RUNNING"), model.StatusBarText1);
+                    Assert.Equal(Localization.GetLocalizedString("PROXY_PORT_APPLIED"), model.StatusBarText3);
+                    Complete(controller.StopProxyAsync());
+                    Assert.Equal(Localization.GetLocalizedString("PROXY_CAPTURE_STOPPED"), model.StatusBarText1);
+                    Assert.DoesNotContain("running", model.StatusBarText3, StringComparison.OrdinalIgnoreCase);
+                    Assert.Equal(controller.PortDescription, model.StatusBarText2);
+                    model.SelectedDeviceContext = null;
                     Assert.Throws<InvalidOperationException>(() => pool.ReservePort(newPort, "other"));
                     using var retired = pool.ReservePort(oldPort, "reusable only after disable/commit");
                 }
