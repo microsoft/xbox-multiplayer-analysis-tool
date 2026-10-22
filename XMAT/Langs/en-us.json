@@ -289,6 +289,7 @@
 
 	"WEBCAP_CHECK": "Check Proxy Status",
 	"PROXY_CHECK_STATUS_TITLE": "Proxy Status",
+	"PROXY_CHECK_STATUS_MESSAGE_UNKNOWN": "The device's proxy configuration could not be read reliably: {0}\n\nChecking status did not change the device's proxy settings.",
 	"PROXY_CHECK_STATUS_MESSAGE_ENABLED": "Proxy is currently enabled on the target device",
 	"PROXY_CHECK_STATUS_MESSAGE_DISABLED": "Proxy is currently disabled on the target device",
 	"PROXY_CHECK_STATUS_MESSAGE_CONSOLE_UNREACHABLE": "The target device could not be reached.\n\nPlease ensure it is powered on and connected to the network",

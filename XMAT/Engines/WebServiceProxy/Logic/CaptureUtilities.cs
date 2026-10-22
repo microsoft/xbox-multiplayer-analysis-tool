@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using System.Text;
 using System.Threading.Tasks;
 using XboxClient;
 using static XboxClient.XboxClientConnection;
@@ -23,6 +24,13 @@ namespace XMAT.WebServiceCapture
             return Path.Combine(PublicUtilities.StorageDirectoryPath, file);
         }
 
+        internal static byte[] EncodeXboxProxyAddress(string proxyAddress, int port)
+        {
+            // The console's loader consumes a C string; EOF or CRLF alone can
+            // leave trailing memory in httpproxyhost.
+            return Encoding.UTF8.GetBytes($"{proxyAddress}:{port}\0");
+        }
+
         internal static Task<bool> EnableXboxProxyAsync(string ipAddress, string proxyAddr, int port)
         {
             return Task.Run(() =>
@@ -30,7 +38,7 @@ namespace XMAT.WebServiceCapture
                 var configFile = Path.GetTempFileName();
                 try
                 {
-                    File.WriteAllText(configFile, $"{proxyAddr}:{port}");
+                    File.WriteAllBytes(configFile, EncodeXboxProxyAddress(proxyAddr, port));
                     if (!XboxClientConnection.IsOnline(ipAddress))
                     {
                         return false;

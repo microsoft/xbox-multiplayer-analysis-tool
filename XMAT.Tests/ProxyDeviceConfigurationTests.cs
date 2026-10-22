@@ -29,6 +29,9 @@ namespace XMAT.Tests
         [InlineData("http=proxy:8080;https=other:8080")]
         [InlineData("user:password@proxy:8080")]
         [InlineData("ftp://proxy:8080")]
+        [InlineData("192.0.2.152:8889\uFFFDcz")]
+        [InlineData("192.0.2.152:8889garbage")]
+        [InlineData("192.0.2.152:8889\0garbage")]
         public void Endpoint_RejectsUnverifiableSetting(string input)
         {
             Assert.False(ProxyEndpoint.TryParse(input, out _));

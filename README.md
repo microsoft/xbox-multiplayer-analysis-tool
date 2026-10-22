@@ -141,6 +141,12 @@ Status checks show the reported endpoint rather than treating any nonempty proxy
 match. Re-enabling a verified matching endpoint does not rewrite its settings or request another
 reboot; a different existing endpoint is not overwritten automatically.
 
+The Xbox proxy-address file is written as NUL-terminated UTF-8. The console loader requires
+that terminator; an EOF-only or CRLF-only file can leave garbage after the port in the reported
+setting. If an older XMAT version configured such a value, explicitly disable and re-enable
+Xbox proxying with the current version to rewrite it. Invalid endpoint suffixes are still
+reported as unverified rather than silently stripped.
+
 A console that has successfully enabled proxying of web service traffic will provide a notification to the kit
 like what is shown below. Even though the Fiddler app is not actually being executed, the words “Fiddler
 enabled” in the notification, and on the front of the kit, will indicate success.
