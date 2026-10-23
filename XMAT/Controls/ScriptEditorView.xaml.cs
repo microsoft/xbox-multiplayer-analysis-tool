@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: MIT
 
 using System.IO;
-using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -134,26 +133,32 @@ namespace XMAT
 
         private async void ValidateScript_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            if (ScriptEnabled.IsChecked.GetValueOrDefault())
+            if (e.Parameter is not ScriptModel sm)
+                return;
+
+            if (sm.IsEnabled)
             {
-                if (e.Parameter is not ScriptModel sm)
-                    return;
+                sm.DisableScript();
+                return;
+            }
 
-                await sm.CompileScriptAsync<WebServiceCaptureScriptParams>();
+            ScriptActivationResult result =
+                await sm.EnableScriptAsync<WebServiceCaptureScriptParams>();
+            if (result == ScriptActivationResult.Superseded ||
+                !ReferenceEquals(EventSelector.SelectedItem, sm))
+            {
+                return;
+            }
 
-                if (sm.CompilationStatus.Any(x => x.Severity == DiagnosticSeverity.Error))
-                {
-                    ScriptEnabled.IsChecked = false;
-                    ScriptSuccess.Visibility = Visibility.Collapsed;
-                    ScriptOutput.Visibility = Visibility.Visible;
-                }
-                else
-                {
-                    ScriptOutput.Visibility = Visibility.Collapsed;
-                    ScriptSuccess.Visibility = Visibility.Visible;
-                }
-
-                ScriptEnabled.IsEnabled = true;
+            if (result == ScriptActivationResult.Failed)
+            {
+                ScriptSuccess.Visibility = Visibility.Collapsed;
+                ScriptOutput.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                ScriptOutput.Visibility = Visibility.Collapsed;
+                ScriptSuccess.Visibility = Visibility.Visible;
             }
         }
 

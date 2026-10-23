@@ -257,11 +257,12 @@ status to determine how your client/title code behaves in the case of an error. 
 **System.Text.Json** namespace is available to use in the scripting engine for easily parsing and
 manipulating JSON content.
 
-To enable a script, complete your code in the text editor, then click the **Enable** button. If any errors are
-detected in the script, the **Script Compilation Status** window will display these errors. Double-click on
-any error in the list to go to the source of the error in the script window. Once the script is enabled, all
-future requests and responses will pass through the script silently, and any modifications you have
-created in the script code will be applied.
+To enable a script, complete your code in the text editor, then click the **Enable** button. The script turns
+on only after it compiles without errors. Warnings are listed in the **Script Compilation Status** window but
+do not prevent the script from turning on. Double-click any error in the list to go to its source in the script
+window. Once enabled, all future requests and responses will pass through the script silently, and any
+modifications you created will be applied. Editing an enabled script turns it off until you click **Enable**
+again.
 
 You can also use the **Load** and **Save** buttons to load scripts you have already written and save new scripts
 to disk for later usage. The **Revert to Saved** button can also be used to undo any changes since the last
