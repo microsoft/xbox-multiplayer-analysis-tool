@@ -343,12 +343,17 @@ status to determine how your client/title code behaves in the case of an error. 
 **System.Text.Json** namespace is available to use in the scripting engine for easily parsing and
 manipulating JSON content.
 
-To enable a script, complete your code in the text editor, then click the **Enable** button. The script turns
-on only after it compiles without errors. Warnings do not prevent the script from turning on. Compilation
-errors are listed in the **Script Compilation Status** window; double-click an error to go to its source in the
-script window. Once enabled, all future requests and responses will pass through the script silently, and any
-modifications you created will be applied. Editing an enabled script turns it off until you click **Enable**
-again.
+To enable a script, complete your code in the text editor, then click the **Enable** button. While the script
+compiles, the button shows **Compiling…** and can't be clicked again. The script turns on only after it compiles
+without errors. The **Script Compilation Status** window shows the result for the selected event's script. Errors
+are listed there, and the script stays off. Warnings do not prevent the script from turning on; they are listed
+there with the message "Script compiled successfully with warnings." Double-click an error or warning to go to
+its source in the script window. If compiling fails unexpectedly, the script stays off and the window shows
+"Could not compile; script remains disabled. See the app log." The app log has the details. Once enabled, all
+future requests and responses will pass through the script silently, and any modifications you created will be
+applied. Editing a script clears its compilation status: an enabled script turns off, and a script that is
+compiling stays off, until you click **Enable** again. **Load** and **Save** are unavailable while a script is
+compiling or enabled.
 
 Scripts may use `await`. XMAT waits for that event's script before it forwards the request or response.
 Each invocation has a 60-second deadline. If a script reaches the deadline, XMAT writes an error to the app

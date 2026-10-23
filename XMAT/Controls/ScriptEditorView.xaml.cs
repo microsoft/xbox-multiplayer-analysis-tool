@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -20,6 +21,7 @@ namespace XMAT
     {
         private const string ScriptFileExtension = "txt";
         private readonly string ScriptFilter = $"{PublicUtilities.AppName} Script File (*.{ScriptFileExtension})|*.{ScriptFileExtension}";
+        private ScriptModel _selectedScript;
 
         public ScriptCollection ScriptCollection
         {
@@ -55,14 +57,20 @@ namespace XMAT
             get { return Localization.GetLocalizedString("SCRIPT_CMD_DISABLED"); }
         }
 
+        public static string CompilingText
+        {
+            get { return Localization.GetLocalizedString("SCRIPT_CMD_COMPILING"); }
+        }
+
         public ScriptEditorView()
         {
             InitializeComponent();
 
-            ScriptSuccess.Text = Localization.GetLocalizedString("SCRIPT_SUCCESS");
             ScriptLabel.Content = Localization.GetLocalizedString("SCRIPT_CONTENT_LABEL");
             EventSelectorLabel.Content = Localization.GetLocalizedString("SCRIPT_EVENT_LABEL");
             ScriptStatusLabel.Content = Localization.GetLocalizedString("SCRIPT_STATUS_LABEL");
+            EventSelector.SelectionChanged += EventSelector_SelectionChanged;
+            AttachSelectedScript(EventSelector.SelectedItem as ScriptModel);
         }
 
         private void LoadScript_Executed(object sender, ExecutedRoutedEventArgs e)
@@ -136,30 +144,16 @@ namespace XMAT
             if (e.Parameter is not ScriptModel sm)
                 return;
 
+            if (sm.IsCompiling)
+                return;
+
             if (sm.IsEnabled)
             {
                 sm.DisableScript();
                 return;
             }
 
-            ScriptActivationResult result =
-                await sm.EnableScriptAsync<WebServiceCaptureScriptParams>();
-            if (result == ScriptActivationResult.Superseded ||
-                !ReferenceEquals(EventSelector.SelectedItem, sm))
-            {
-                return;
-            }
-
-            if (result == ScriptActivationResult.Failed)
-            {
-                ScriptSuccess.Visibility = Visibility.Collapsed;
-                ScriptOutput.Visibility = Visibility.Visible;
-            }
-            else
-            {
-                ScriptOutput.Visibility = Visibility.Collapsed;
-                ScriptSuccess.Visibility = Visibility.Visible;
-            }
+            await sm.EnableScriptAsync<WebServiceCaptureScriptParams>();
         }
 
         private void ValidateScript_CanExecute(object sender, CanExecuteRoutedEventArgs e)
@@ -167,7 +161,7 @@ namespace XMAT
             if (e.Parameter is not ScriptModel sm)
                 return;
 
-            e.CanExecute = !(sm == null || string.IsNullOrEmpty(sm.Script));
+            e.CanExecute = !sm.IsCompiling && !string.IsNullOrEmpty(sm.Script);
         }
 
         private void ScriptErrorSelected_Executed(object sender, ExecutedRoutedEventArgs e)
@@ -185,7 +179,54 @@ namespace XMAT
 
         private void LoadSaveScript_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            e.CanExecute = !ScriptEnabled.IsChecked.GetValueOrDefault();
+            e.CanExecute = e.Parameter is ScriptModel sm &&
+                !sm.IsEnabled &&
+                !sm.IsCompiling;
+        }
+
+        private void EventSelector_SelectionChanged(
+            object sender,
+            SelectionChangedEventArgs e)
+        {
+            AttachSelectedScript(EventSelector.SelectedItem as ScriptModel);
+            CommandManager.InvalidateRequerySuggested();
+        }
+
+        private void AttachSelectedScript(ScriptModel script)
+        {
+            if (ReferenceEquals(_selectedScript, script))
+                return;
+
+            if (_selectedScript != null)
+            {
+                PropertyChangedEventManager.RemoveHandler(
+                    _selectedScript,
+                    SelectedScript_PropertyChanged,
+                    string.Empty);
+            }
+
+            _selectedScript = script;
+            if (_selectedScript != null)
+            {
+                PropertyChangedEventManager.AddHandler(
+                    _selectedScript,
+                    SelectedScript_PropertyChanged,
+                    string.Empty);
+            }
+        }
+
+        private void SelectedScript_PropertyChanged(
+            object sender,
+            PropertyChangedEventArgs e)
+        {
+            if (string.IsNullOrEmpty(e.PropertyName) ||
+                e.PropertyName is nameof(ScriptModel.IsEnabled) or
+                    nameof(ScriptModel.IsCompiling) or
+                    nameof(ScriptModel.Script) or
+                    nameof(ScriptModel.Filename))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
         }
 
         private void TreeViewItem_MouseDoubleClick(object sender, MouseButtonEventArgs e)

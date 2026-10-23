@@ -9,6 +9,11 @@ namespace XMAT.Tests
 {
     public class ScriptModelTests
     {
+        public ScriptModelTests()
+        {
+            Localization.LoadLanguage("en-us");
+        }
+
         [Fact]
         public async Task EnableScriptAsync_WarningActivatesNewCode()
         {
@@ -27,6 +32,11 @@ namespace XMAT.Tests
             Assert.Contains(
                 model.CompilationStatus,
                 diagnostic => diagnostic.Severity == DiagnosticSeverity.Warning);
+            Assert.Equal(
+                "Script compiled successfully with warnings.",
+                model.CompilationMessage);
+            Assert.True(model.HasCompilationMessage);
+            Assert.True(model.HasCompilationDiagnostics);
             Assert.True(await RunScriptAsync(model, initialValue: false));
         }
 
@@ -48,6 +58,9 @@ namespace XMAT.Tests
             Assert.Contains(
                 model.CompilationStatus,
                 diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+            Assert.Null(model.CompilationMessage);
+            Assert.False(model.HasCompilationMessage);
+            Assert.True(model.HasCompilationDiagnostics);
             Assert.True(await RunScriptAsync(model, initialValue: true));
         }
 
@@ -84,11 +97,14 @@ namespace XMAT.Tests
             await gate.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.False(model.IsEnabled);
+            Assert.True(model.IsCompiling);
             Assert.Contains(nameof(ScriptModel.IsEnabled), propertyChanges);
+            Assert.Contains(nameof(ScriptModel.IsCompiling), propertyChanges);
 
             gate.Release();
             Assert.Equal(ScriptActivationResult.Enabled, await enabling);
             Assert.True(model.IsEnabled);
+            Assert.False(model.IsCompiling);
         }
 
         [Fact]
@@ -132,6 +148,103 @@ namespace XMAT.Tests
 
             Assert.False(model.IsEnabled);
             Assert.True(await RunScriptAsync(model, initialValue: true));
+        }
+
+        [Fact]
+        public async Task ScriptEdit_DuringCompilationInvalidatesPendingActivation()
+        {
+            var gate = new CompileGate();
+            ScriptModel model = CreateModel(new ScriptHost(gate.WaitAsync));
+            model.Script = "// slow\nParams.Continue = false;";
+            Task<ScriptActivationResult> enabling =
+                model.EnableScriptAsync<WebServiceCaptureScriptParams>();
+            await gate.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            model.Script = "Params.Continue = true;";
+
+            Assert.False(model.IsCompiling);
+            Assert.False(model.IsEnabled);
+            Assert.Empty(model.CompilationStatus);
+            Assert.Null(model.CompilationMessage);
+
+            gate.Release();
+            Assert.Equal(ScriptActivationResult.Superseded, await enabling);
+            Assert.False(model.IsEnabled);
+            Assert.False(model.IsCompiling);
+        }
+
+        [Fact]
+        public async Task EnableScriptAsync_NewerSuccessSurvivesOlderFailure()
+        {
+            var gate = new CompileGate();
+            ScriptModel model = CreateModel(new ScriptHost(gate.WaitAsync));
+            model.Script = "// slow-fault\nParams.Continue = false;";
+            Task<ScriptActivationResult> older =
+                model.EnableScriptAsync<WebServiceCaptureScriptParams>();
+            await gate.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            model.Script = "Params.Continue = true;";
+            Assert.Equal(
+                ScriptActivationResult.Enabled,
+                await model.EnableScriptAsync<WebServiceCaptureScriptParams>());
+
+            gate.Release();
+
+            Assert.Equal(ScriptActivationResult.Superseded, await older);
+            Assert.True(model.IsEnabled);
+            Assert.False(model.IsCompiling);
+            Assert.Equal("Script compiled successfully.", model.CompilationMessage);
+            Assert.True(await RunScriptAsync(model, initialValue: false));
+        }
+
+        [Fact]
+        public async Task EnableScriptAsync_UnexpectedFailureRecoversInline()
+        {
+            var gate = new CompileGate();
+            ScriptModel model = CreateModel(new ScriptHost(gate.WaitAsync));
+            model.Script = "// unexpected-fault\nParams.Continue = false;";
+
+            ScriptActivationResult result =
+                await model.EnableScriptAsync<WebServiceCaptureScriptParams>();
+
+            Assert.Equal(ScriptActivationResult.Failed, result);
+            Assert.False(model.IsEnabled);
+            Assert.False(model.IsCompiling);
+            Assert.Empty(model.CompilationStatus);
+            Assert.Equal(
+                "Could not compile; script remains disabled. See the app log.",
+                model.CompilationMessage);
+        }
+
+        [Fact]
+        public async Task EnableScriptAsync_FatalFailurePropagates()
+        {
+            var gate = new CompileGate();
+            ScriptModel model = CreateModel(new ScriptHost(gate.WaitAsync));
+            model.Script = "// fatal-fault\nParams.Continue = false;";
+
+            await Assert.ThrowsAsync<BadImageFormatException>(
+                () => model.EnableScriptAsync<WebServiceCaptureScriptParams>());
+        }
+
+        [Fact]
+        public async Task ScriptEdit_ClearsDiagnosticsAndMessage()
+        {
+            ScriptModel model = CreateModel();
+            model.Script = "#warning xmat-test\nParams.Continue = true;";
+            Assert.Equal(
+                ScriptActivationResult.Enabled,
+                await model.EnableScriptAsync<WebServiceCaptureScriptParams>());
+            Assert.NotEmpty(model.CompilationStatus);
+            Assert.NotNull(model.CompilationMessage);
+
+            model.Script = "Params.Continue = false;";
+
+            Assert.Empty(model.CompilationStatus);
+            Assert.Null(model.CompilationMessage);
+            Assert.False(model.HasCompilationDiagnostics);
+            Assert.False(model.HasCompilationMessage);
+            Assert.False(model.IsEnabled);
         }
 
         [Fact]
@@ -215,13 +328,26 @@ namespace XMAT.Tests
             internal TaskCompletionSource<bool> Started { get; } =
                 new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            internal Task WaitAsync(string script)
+            internal async Task WaitAsync(string script)
             {
+                if (script.Contains("// unexpected-fault", StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("Unexpected compile failure.");
+                }
+                if (script.Contains("// fatal-fault", StringComparison.Ordinal))
+                {
+                    throw new BadImageFormatException("Fatal compile failure.");
+                }
+
                 if (!script.Contains("// slow", StringComparison.Ordinal))
-                    return Task.CompletedTask;
+                    return;
 
                 Started.TrySetResult(true);
-                return _release.Task;
+                await _release.Task;
+                if (script.Contains("// slow-fault", StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("Delayed compile failure.");
+                }
             }
 
             internal void Release()

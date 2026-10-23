@@ -30,7 +30,9 @@ namespace XMAT.Scripting
         private string _script;
         private string _compiledScript;
         private bool _isEnabled;
+        private bool _isCompiling;
         private Diagnostic[] _compilationStatus;
+        private string _compilationMessage;
         private long _activationVersion;
 
         public string DisplayName { get; private set; }
@@ -59,12 +61,17 @@ namespace XMAT.Scripting
                     _compiledScript = null;
                     wasEnabled = _isEnabled;
                     _isEnabled = false;
+                    _isCompiling = false;
+                    _compilationStatus = Array.Empty<Diagnostic>();
+                    _compilationMessage = null;
                     _host.ClearScript();
                 }
 
                 RaisePropertyChange();
                 if (wasEnabled)
                     RaisePropertyChange(nameof(IsEnabled));
+                RaisePropertyChange(nameof(IsCompiling));
+                RaiseCompilationStatusChanged();
             }
         }
         public bool IsEnabled
@@ -77,6 +84,16 @@ namespace XMAT.Scripting
                 }
             }
         }
+        public bool IsCompiling
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _isCompiling;
+                }
+            }
+        }
         public Diagnostic[] CompilationStatus
         {
             get
@@ -84,6 +101,36 @@ namespace XMAT.Scripting
                 lock (_syncRoot)
                 {
                     return _compilationStatus;
+                }
+            }
+        }
+        public string CompilationMessage
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _compilationMessage;
+                }
+            }
+        }
+        public bool HasCompilationDiagnostics
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _compilationStatus.Length > 0;
+                }
+            }
+        }
+        public bool HasCompilationMessage
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return !string.IsNullOrEmpty(_compilationMessage);
                 }
             }
         }
@@ -111,11 +158,48 @@ namespace XMAT.Scripting
                 script = _script;
                 _compiledScript = null;
                 _isEnabled = false;
+                _isCompiling = true;
+                _compilationStatus = Array.Empty<Diagnostic>();
+                _compilationMessage = null;
                 _host.ClearScript();
             }
             RaisePropertyChange(nameof(IsEnabled));
+            RaisePropertyChange(nameof(IsCompiling));
+            RaiseCompilationStatusChanged();
 
-            Diagnostic[] diagnostics = await _host.CompileScriptAsync<T>(script);
+            Diagnostic[] diagnostics;
+            try
+            {
+                diagnostics = await _host.CompileScriptAsync<T>(script);
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"Unexpected script compilation failure: {ex}");
+                lock (_syncRoot)
+                {
+                    if (activationVersion != _activationVersion ||
+                        !string.Equals(script, _script, StringComparison.Ordinal))
+                    {
+                        return ScriptActivationResult.Superseded;
+                    }
+
+                    _compiledScript = null;
+                    _isEnabled = false;
+                    _isCompiling = false;
+                    _compilationStatus = Array.Empty<Diagnostic>();
+                    _compilationMessage = Localization.GetLocalizedString(
+                        "SCRIPT_COMPILE_UNEXPECTED_FAILURE");
+                    _host.ClearScript();
+                }
+
+                RaisePropertyChange(nameof(IsEnabled));
+                RaisePropertyChange(nameof(IsCompiling));
+                RaiseCompilationStatusChanged();
+                return ScriptActivationResult.Failed;
+            }
+
             ScriptActivationResult result;
             lock (_syncRoot)
             {
@@ -126,41 +210,61 @@ namespace XMAT.Scripting
                 }
 
                 _compilationStatus = diagnostics;
+                _isCompiling = false;
                 bool hasErrors = diagnostics.Any(
                     diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
                 if (string.IsNullOrEmpty(script) || hasErrors)
                 {
                     _compiledScript = null;
                     _isEnabled = false;
+                    _compilationMessage = null;
                     result = ScriptActivationResult.Failed;
                 }
                 else
                 {
                     _compiledScript = script;
                     _isEnabled = true;
+                    _compilationMessage = diagnostics.Any(
+                        diagnostic => diagnostic.Severity == DiagnosticSeverity.Warning)
+                        ? Localization.GetLocalizedString("SCRIPT_SUCCESS_WITH_WARNINGS")
+                        : Localization.GetLocalizedString("SCRIPT_SUCCESS");
                     result = ScriptActivationResult.Enabled;
                 }
             }
 
-            RaisePropertyChange(nameof(CompilationStatus));
+            RaisePropertyChange(nameof(IsCompiling));
             RaisePropertyChange(nameof(IsEnabled));
+            RaiseCompilationStatusChanged();
             return result;
         }
 
         internal void DisableScript()
         {
             bool wasEnabled;
+            bool wasCompiling;
             lock (_syncRoot)
             {
                 ++_activationVersion;
                 _compiledScript = null;
                 wasEnabled = _isEnabled;
+                wasCompiling = _isCompiling;
                 _isEnabled = false;
+                _isCompiling = false;
                 _host.ClearScript();
             }
 
             if (wasEnabled)
                 RaisePropertyChange(nameof(IsEnabled));
+            if (wasCompiling)
+                RaisePropertyChange(nameof(IsCompiling));
+        }
+
+        private void RaiseCompilationStatusChanged()
+        {
+            RaisePropertyChange(nameof(CompilationStatus));
+            RaisePropertyChange(nameof(HasCompilationDiagnostics));
+            RaisePropertyChange(nameof(CompilationMessage));
+            RaisePropertyChange(nameof(HasCompilationMessage));
         }
 
         private T GetEnumAttribute<T>(Enum enumType) where T : Attribute
