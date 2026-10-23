@@ -673,9 +673,10 @@ namespace XMAT.Tests
             await origin.StartAsync(CancellationToken.None);
             await using var proxy = await ProxyTestHarness.StartAsync();
             using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
             await Assert.ThrowsAsync<WebSocketException>(() => client.ConnectAsync(
-                new Uri($"wss://127.0.0.1:{origin.Port}/socket"), CancellationToken.None));
+                new Uri($"wss://127.0.0.1:{origin.Port}/socket"), timeout.Token));
 
             Assert.Equal(HttpStatusCode.Unauthorized, client.HttpStatusCode);
             Assert.Contains(client.HttpResponseHeaders, header =>
@@ -686,12 +687,13 @@ namespace XMAT.Tests
         [Fact]
         public async Task ForwardProxy_ReturnsBadGatewayWhenWebSocketUpstreamIsUnreachable()
         {
-            int closedPort = GetUnusedPort();
+            using Socket reservedEndpoint = ReserveNonListeningSocket(out int closedPort);
             await using var proxy = await ProxyTestHarness.StartAsync();
             using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
             await Assert.ThrowsAsync<WebSocketException>(() => client.ConnectAsync(
-                new Uri($"wss://127.0.0.1:{closedPort}/socket"), CancellationToken.None));
+                new Uri($"wss://127.0.0.1:{closedPort}/socket"), timeout.Token));
 
             Assert.Equal(HttpStatusCode.BadGateway, client.HttpStatusCode);
         }
@@ -705,27 +707,46 @@ namespace XMAT.Tests
                 async context =>
                 {
                     using WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+                        context.RequestAborted);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(10));
                     var received = new byte[64];
-                    WebSocketReceiveResult message = await socket.ReceiveAsync(received, CancellationToken.None);
+                    WebSocketReceiveResult message = await socket.ReceiveAsync(received, timeout.Token);
                     await socket.SendAsync(
                         new ArraySegment<byte>(received, 0, message.Count),
                         WebSocketMessageType.Text,
                         true,
-                        CancellationToken.None);
-                    await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None);
+                        timeout.Token);
+                    WebSocketReceiveResult close = await socket.ReceiveAsync(
+                        received,
+                        timeout.Token);
+                    if (close.MessageType == WebSocketMessageType.Close)
+                    {
+                        await socket.CloseOutputAsync(
+                            close.CloseStatus ?? WebSocketCloseStatus.NormalClosure,
+                            close.CloseStatusDescription,
+                            timeout.Token);
+                    }
                 });
             await origin.StartAsync(CancellationToken.None);
             await using var proxy = await ProxyTestHarness.StartAsync();
             using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-            await client.ConnectAsync(new Uri($"wss://127.0.0.1:{origin.Port}/socket"), timeout.Token);
-            await client.SendAsync(Encoding.UTF8.GetBytes("ping"), WebSocketMessageType.Text, true, timeout.Token);
-            var buffer = new byte[64];
-            WebSocketReceiveResult echo = await client.ReceiveAsync(buffer, timeout.Token);
+            try
+            {
+                await client.ConnectAsync(new Uri($"wss://127.0.0.1:{origin.Port}/socket"), timeout.Token);
+                await client.SendAsync(Encoding.UTF8.GetBytes("ping"), WebSocketMessageType.Text, true, timeout.Token);
+                var buffer = new byte[64];
+                WebSocketReceiveResult echo = await client.ReceiveAsync(buffer, timeout.Token);
 
-            Assert.Equal(HttpStatusCode.SwitchingProtocols, client.HttpStatusCode);
-            Assert.Equal("ping", Encoding.UTF8.GetString(buffer, 0, echo.Count));
+                Assert.Equal(HttpStatusCode.SwitchingProtocols, client.HttpStatusCode);
+                Assert.Equal("ping", Encoding.UTF8.GetString(buffer, 0, echo.Count));
+            }
+            finally
+            {
+                await CloseWebSocketAsync(client);
+            }
         }
 
         private static ClientWebSocket CreateProxiedWebSocket(int proxyPort)
@@ -737,13 +758,45 @@ namespace XMAT.Tests
             return client;
         }
 
-        private static int GetUnusedPort()
+        private static Socket ReserveNonListeningSocket(out int port)
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            listener.Stop();
-            return port;
+            var socket = new Socket(
+                AddressFamily.InterNetwork,
+                SocketType.Stream,
+                ProtocolType.Tcp)
+            {
+                ExclusiveAddressUse = true
+            };
+            socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            port = ((IPEndPoint)socket.LocalEndPoint).Port;
+            return socket;
+        }
+
+        private static async Task CloseWebSocketAsync(ClientWebSocket client)
+        {
+            if (client.State is not (WebSocketState.Open or WebSocketState.CloseReceived))
+            {
+                return;
+            }
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                await client.CloseAsync(
+                    WebSocketCloseStatus.NormalClosure,
+                    "test complete",
+                    timeout.Token);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or WebSocketException)
+            {
+            }
+            finally
+            {
+                if (client.State != WebSocketState.Closed)
+                {
+                    client.Abort();
+                }
+            }
         }
 
         [Fact]

@@ -76,7 +76,7 @@
 	"SCRIPT_SUCCESS": "Script compiled successfully.",
 	"SCRIPT_CONTENT_LABEL": "_Script",
 	"SCRIPT_EVENT_LABEL": "Select _Event:",
-	"SCRIPT_STATUS_LABEL": "Script Compliation Status",
+	"SCRIPT_STATUS_LABEL": "Script Compilation Status",
 	"SCRIPT_ACTIVE_NONE": "No scripts are enabled for this capture.",
 	"SCRIPT_ACTIVE_LIST": "Enabled scripts: {0}",
 	"SCRIPT_ALL_HOSTS_WARNING": "Enabled scripts run on every host unless the script checks Params.Request.Host.",

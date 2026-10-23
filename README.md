@@ -344,13 +344,13 @@ status to determine how your client/title code behaves in the case of an error. 
 manipulating JSON content.
 
 To enable a script, complete your code in the text editor, then click the **Enable** button. The script turns
-on only after it compiles without errors. Warnings are listed in the **Script Compilation Status** window but
-do not prevent the script from turning on. Double-click any error in the list to go to its source in the script
-window. Once enabled, all future requests and responses will pass through the script silently, and any
+on only after it compiles without errors. Warnings do not prevent the script from turning on. Compilation
+errors are listed in the **Script Compilation Status** window; double-click an error to go to its source in the
+script window. Once enabled, all future requests and responses will pass through the script silently, and any
 modifications you created will be applied. Editing an enabled script turns it off until you click **Enable**
 again.
 
-Scripts may use `await`. XMAT waits for the selected event script before it forwards that request or response.
+Scripts may use `await`. XMAT waits for that event's script before it forwards the request or response.
 Each invocation has a 60-second deadline. If a script reaches the deadline, XMAT writes an error to the app
 log and drops that transaction without sending a response. Stopping capture while a script is running also
 cancels the wait and drops that transaction, but it is not reported as a deadline error. For a CONNECT
