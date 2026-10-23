@@ -252,6 +252,7 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 await ProxyWebSocketAsync(
                     context,
+                    tunnel.ConnectionId,
                     uri,
                     clientRequest,
                     cancellationToken).ConfigureAwait(false);
@@ -308,6 +309,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private async Task ProxyWebSocketAsync(
             HttpContext context,
+            int connectionId,
             Uri uri,
             ClientRequest clientRequest,
             CancellationToken cancellationToken)
@@ -315,6 +317,7 @@ namespace XMAT.WebServiceCapture.Proxy
             using var upstream = new ClientWebSocket();
             upstream.Options.Proxy = null;
             upstream.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+            upstream.Options.CollectHttpResponseDetails = true;
 
             foreach (KeyValuePair<string, IEnumerable<string>> header in clientRequest.Headers)
             {
@@ -337,7 +340,18 @@ namespace XMAT.WebServiceCapture.Proxy
                 Port = uri.IsDefaultPort ? -1 : uri.Port
             }.Uri;
 
-            await upstream.ConnectAsync(upstreamUri, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await upstream.ConnectAsync(upstreamUri, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is WebSocketException or HttpRequestException)
+            {
+                // A failure racing with client abort or shutdown is a cancellation.
+                cancellationToken.ThrowIfCancellationRequested();
+                RespondToFailedUpgrade(context, connectionId, upstream, ex);
+                return;
+            }
+
             using WebSocket downstream =
                 await context.WebSockets.AcceptWebSocketAsync(upstream.SubProtocol).ConfigureAwait(false);
 
@@ -358,6 +372,44 @@ namespace XMAT.WebServiceCapture.Proxy
             await Task.WhenAny(downstreamToUpstream, upstreamToDownstream).ConfigureAwait(false);
             relayCancellation.Cancel();
             await Task.WhenAll(downstreamToUpstream, upstreamToDownstream).ConfigureAwait(false);
+        }
+
+        // The server either answered the upgrade without switching protocols (for example 401
+        // for an expired token) or could not be reached. Give the client that answer, or 502,
+        // as the HTTP/1 WebSocket path does, instead of failing the whole request.
+        private void RespondToFailedUpgrade(
+            HttpContext context,
+            int connectionId,
+            ClientWebSocket upstream,
+            Exception exception)
+        {
+            int status = (int)upstream.HttpStatusCode;
+            if (status < StatusCodes.Status200OK)
+            {
+                Log(connectionId, LogLevel.ERROR,
+                    $"Upstream WebSocket handshake failed: {exception.GetBaseException().Message}");
+                context.Response.StatusCode = StatusCodes.Status502BadGateway;
+                return;
+            }
+
+            Log(connectionId, LogLevel.INFO, $"Upstream refused the WebSocket upgrade with status {status}.");
+            context.Response.StatusCode = status;
+            if (upstream.HttpResponseHeaders == null)
+                return;
+
+            foreach (KeyValuePair<string, IEnumerable<string>> header in upstream.HttpResponseHeaders)
+            {
+                // The upstream body is not available, so its length must not be forwarded.
+                if (ProxyHeaderUtilities.IsHopByHopHeader(header.Key) ||
+                    ProxyHeaderUtilities.IsWebSocketHandshakeHeader(header.Key) ||
+                    string.Equals(header.Key, "Content-Length", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                context.Response.Headers[header.Key] = new Microsoft.Extensions.Primitives.StringValues(
+                    new List<string>(header.Value).ToArray());
+            }
         }
 
         private static async Task RelayWebSocketAsync(
