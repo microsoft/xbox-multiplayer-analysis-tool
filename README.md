@@ -258,6 +258,34 @@ connections list will be clear until proxying resumes for that device.
 ![](./ReadmeImages/12.png)
 _Screenshot when Xbox Multiplayer Analysis Tool is closed and reopened -- previous capture device is remembered._
 
+### If Xbox Multiplayer Analysis Tool Closes Unexpectedly
+
+Capturing the **Local PC** points the Windows proxy setting at Xbox Multiplayer Analysis Tool. If the tool ended
+without changing it back, apps that use the Windows proxy would lose internet access, so the tool protects it:
+
+- Before it changes the Windows proxy, the tool records your current proxy settings and starts a small helper
+  process. If the tool then crashes, is ended from Task Manager, or is stopped from a debugger, the helper restores
+  the recorded settings, which are usually a direct connection. If the helper cannot start, the Windows proxy is not
+  changed and the capture does not start.
+- Exiting normally, or an error that closes the tool, also restores the recorded settings.
+- If the helper stops unexpectedly during a capture, the tool restores your settings right away and tells you. Start
+  the capture again to resume.
+- The next start finishes any restore that is still pending. If the Windows proxy points at this PC (for example
+  `127.0.0.1:8880`) but nothing is listening there and the tool has no record of setting it, which an older version
+  can leave behind, the tool asks before turning that proxy off.
+- If you change the Windows proxy settings yourself during a capture, the tool leaves your changes alone.
+
+Limits:
+
+- While the tool is paused in a debugger or not responding, the proxy stays on, because the tool has not ended.
+- If the PC restarts during a capture, the settings are restored the next time you start the tool.
+- If the tool and its helper are ended together, for example by ending the whole process tree, the settings are
+  restored the next time you start the tool.
+- The tool does not capture the Local PC when it runs inside a process group that could end the helper together
+  with it, as some terminals and tools do. Start the tool directly instead.
+- Xbox consoles are never reset automatically. If the tool closed unexpectedly while capturing a console, the next
+  start offers to disable that console's proxy, which restarts the console.
+
 
 ## Viewing WebSocket Messages
 
