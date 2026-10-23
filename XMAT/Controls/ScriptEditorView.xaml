@@ -15,8 +15,16 @@
         <CommandBinding Command="{x:Static local:ScriptCommands.ValidateScript}"      Executed="ValidateScript_Executed"      CanExecute="ValidateScript_CanExecute"/>
         <CommandBinding Command="{x:Static local:ScriptCommands.ScriptErrorSelected}" Executed="ScriptErrorSelected_Executed"/>
     </UserControl.CommandBindings>
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </UserControl.Resources>
 
     <StackPanel Orientation="Vertical" Background="{DynamicResource PanelBackgroundBrush}" DockPanel.Dock="Top">
+        <StackPanel Margin="5">
+            <TextBlock x:Name="ActiveScriptsSummary" TextWrapping="Wrap" Text="{Binding ScriptCollection.ActiveScriptsText, ElementName=ScriptEditorViewControl}"/>
+            <TextBlock x:Name="AllHostsWarning" TextWrapping="Wrap" FontWeight="Bold" Text="{x:Static script:ScriptCollection.AllHostsWarningText}"
+                       Visibility="{Binding ScriptCollection.HasActiveScripts, ElementName=ScriptEditorViewControl, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+        </StackPanel>
         <StackPanel Orientation="Horizontal">
             <Label x:Name="EventSelectorLabel" Target="{Binding ElementName=EventSelector}"/>
             <ComboBox x:Name="EventSelector" Width="200" SelectedIndex="0" IsSynchronizedWithCurrentItem="True" ItemsSource="{Binding ScriptCollection, ElementName=ScriptEditorViewControl}" DisplayMemberPath="DisplayName"/>
