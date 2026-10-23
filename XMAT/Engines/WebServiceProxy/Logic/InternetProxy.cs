@@ -144,9 +144,15 @@ namespace XMAT.WebServiceCapture
         public static void Enable(string strIPAddr, UInt16 uiPort)
             => PcProxyRecovery.Current.Enable(new ProxyEndpoint(strIPAddr, uiPort));
 
-        // Restores the settings from before capture when they are unchanged; otherwise turns the proxy off.
+        // Stops capturing this PC: restores the settings from before capture when they are unchanged, otherwise turns
+        // the proxy off only while it uses XMAT's own endpoint. Throws when it uses someone else's proxy, which is
+        // kept, or when the result does not read back as written, keeping the recovery lease.
         public static void Disable()
             => PcProxyRecovery.Current.Disable();
+
+        // The same, also turning off the given endpoint, the one this capture configured, when nothing is journaled.
+        public static void Disable(string strIPAddr, UInt16 uiPort)
+            => PcProxyRecovery.Current.Disable(new ProxyEndpoint(strIPAddr, uiPort));
 
         internal static ProxySettings ReadSettings()
         {

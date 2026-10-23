@@ -268,12 +268,15 @@ without changing it back, apps that use the Windows proxy would lose internet ac
   the recorded settings, which are usually a direct connection. If the helper cannot start, the Windows proxy is not
   changed and the capture does not start.
 - Exiting normally, or an error that closes the tool, also restores the recorded settings.
-- If the helper stops unexpectedly during a capture, the tool restores your settings right away and tells you. Start
-  the capture again to resume.
+- If the helper stops unexpectedly during a capture, the tool restores your settings right away and tells you. Stop,
+  then start capture to resume.
 - The next start finishes any restore that is still pending. If the Windows proxy points at this PC (for example
-  `127.0.0.1:8880`) but nothing is listening there and the tool has no record of setting it, which an older version
-  can leave behind, the tool asks before turning that proxy off.
-- If you change the Windows proxy settings yourself during a capture, the tool leaves your changes alone.
+  `127.0.0.1:8880`) but nothing is listening there, and either the tool has no record of setting it, which an older
+  version can leave behind, or its settings were changed during the capture, the tool asks before turning that proxy
+  off.
+- If you change the Windows proxy settings yourself during a capture, the tool leaves your changes alone. Stopping
+  the capture turns off only the tool's own proxy; if Windows uses a different proxy by then, the tool leaves it on
+  and tells you.
 
 Limits:
 
@@ -284,7 +287,8 @@ Limits:
 - The tool does not capture the Local PC when it runs inside a process group that could end the helper together
   with it, as some terminals and tools do. Start the tool directly instead.
 - Xbox consoles are never reset automatically. If the tool closed unexpectedly while capturing a console, the next
-  start offers to disable that console's proxy, which restarts the console.
+  start offers to disable that console's proxy, which restarts the console; the offer is repeated at later starts
+  until you answer it.
 
 
 ## Viewing WebSocket Messages

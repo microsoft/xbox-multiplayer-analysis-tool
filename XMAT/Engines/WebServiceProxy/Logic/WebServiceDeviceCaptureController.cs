@@ -758,7 +758,7 @@ namespace XMAT.WebServiceCapture
                         throw new InvalidOperationException(Localization.GetLocalizedString(
                             "PROXY_ENDPOINT_CONFLICT", configuration.Endpoint, new ProxyEndpoint("127.0.0.1", Port)));
                     }
-                    await Task.Run(InternetProxy.Disable);
+                    await Task.Run(() => InternetProxy.Disable("127.0.0.1", Port));
                     return true;
 
                 case DeviceType.GenericProxyDevice:

@@ -67,13 +67,16 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // Consoles that an XMAT, which ended without shutting down, was capturing. Each is reported once.
-        internal static IReadOnlyList<string> CollectAbandoned(string directory)
+        // Consoles that an XMAT, which ended without shutting down, was capturing. The records stay until
+        // Acknowledge is called once the offer to disable those proxies has been answered, so a start that
+        // ends before then offers them again.
+        internal static AbandonedXboxSessions FindAbandoned(string directory)
         {
             var consoles = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            var files = new List<string>();
             if (!Directory.Exists(directory))
             {
-                return consoles.ToArray();
+                return new AbandonedXboxSessions(consoles.ToArray(), files);
             }
             foreach (var file in Directory.EnumerateFiles(directory, "xbox-*.json"))
             {
@@ -95,10 +98,35 @@ namespace XMAT.WebServiceCapture
                 {
                     continue;
                 }
-                consoles.UnionWith(session?.Consoles ?? Array.Empty<string>());
-                SharedFile.Delete(file);
+                if (session?.Consoles is { Length: > 0 })
+                {
+                    consoles.UnionWith(session.Consoles);
+                    files.Add(file);
+                }
+                else
+                {
+                    // Nothing to offer from an unreadable or empty record.
+                    SharedFile.Delete(file);
+                }
             }
-            return consoles.ToArray();
+            return new AbandonedXboxSessions(consoles.ToArray(), files);
+        }
+
+        internal static void Acknowledge(AbandonedXboxSessions sessions)
+        {
+            foreach (var file in sessions.Files)
+            {
+                try
+                {
+                    SharedFile.Delete(file);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, $"Could not remove the Xbox capture record {file}: {ex}");
+                }
+            }
         }
     }
+
+    internal sealed record AbandonedXboxSessions(IReadOnlyList<string> Consoles, IReadOnlyList<string> Files);
 }

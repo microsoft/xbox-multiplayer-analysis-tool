@@ -57,7 +57,7 @@ namespace XMAT.WebServiceCapture
                 ? new FileProxySettingsStore(args[4])
                 : WinInetProxySettingsStore.Instance;
             var lease = LeaseJournal.TryRead(journalPath);
-            if (lease?.Nonce != nonce || !EventWaitHandle.TryOpenExisting(ProxyGuardSignals.Disarm(nonce), out var disarm))
+            if (lease?.Nonce != nonce || !ProxyGuardSignals.TryOpen(ProxyGuardSignals.Disarm(nonce), out var disarm))
             {
                 return NotOwner;
             }
@@ -68,7 +68,7 @@ namespace XMAT.WebServiceCapture
                 if (owner.IsInvalid ||
                     !RecoveryNativeMethods.GetProcessTimes(owner, out var created, out _, out _, out _) ||
                     created != lease.OwnerCreationTime ||
-                    !EventWaitHandle.TryOpenExisting(ProxyGuardSignals.Ready(nonce), out var ready))
+                    !ProxyGuardSignals.TryOpen(ProxyGuardSignals.Ready(nonce), out var ready))
                 {
                     return NotOwner;
                 }
@@ -142,8 +142,11 @@ namespace XMAT.WebServiceCapture
                             // A readable replacement belongs to someone else; it and its settings stay.
                             return NotOwner;
                         }
-                        PcProxyRecovery.Recover(store, journalPath, journal ?? lease);
-                        return Completed;
+                        if (PcProxyRecovery.Settle(store, journalPath, journal ?? lease, SettleMode.Recover).Result !=
+                            RecoveryResult.Failed)
+                        {
+                            return Completed;
+                        }
                     }
                 }
                 catch (Exception)

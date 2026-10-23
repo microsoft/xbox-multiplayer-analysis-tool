@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: MIT
 
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -72,16 +71,24 @@ namespace XMAT
         {
             try
             {
-                PcProxyRecovery.Current.GuardLost += result => Dispatcher.BeginInvoke(new Action(() => MessageBox.Show(
-                    Localization.GetLocalizedString(result switch
+                PcProxyRecovery.Current.GuardLost += (result, nonce) => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    // A capture started since then has its own guard, so the notice no longer applies.
+                    if (PcProxyRecovery.Current.IsSuperseded(nonce))
                     {
-                        RecoveryResult.Restored or RecoveryResult.NotNeeded => "PROXY_RECOVERY_GUARD_LOST",
-                        RecoveryResult.SettingsChanged => "PROXY_RECOVERY_GUARD_LOST_CHANGED",
-                        _ => "PROXY_RECOVERY_GUARD_LOST_UNRESTORED"
-                    }),
-                    Localization.GetLocalizedString("PROXY_RECOVERY_TITLE"),
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning)));
+                        return;
+                    }
+                    MessageBox.Show(
+                        Localization.GetLocalizedString(result switch
+                        {
+                            RecoveryResult.Restored or RecoveryResult.NotNeeded => "PROXY_RECOVERY_GUARD_LOST",
+                            RecoveryResult.SettingsChanged => "PROXY_RECOVERY_GUARD_LOST_CHANGED",
+                            _ => "PROXY_RECOVERY_GUARD_LOST_UNRESTORED"
+                        }),
+                        Localization.GetLocalizedString("PROXY_RECOVERY_TITLE"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }));
                 var abandoned = PcProxyRecovery.Current.HealAtStartup();
                 if (abandoned != null &&
                     MessageBox.Show(
@@ -99,10 +106,10 @@ namespace XMAT
             }
             try
             {
-                var consoles = XboxProxySessions.CollectAbandoned(PcProxyRecovery.DefaultDirectory);
-                if (consoles.Count > 0)
+                var abandoned = XboxProxySessions.FindAbandoned(PcProxyRecovery.DefaultDirectory);
+                if (abandoned.Consoles.Count > 0)
                 {
-                    Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => OfferXboxProxyDisable(consoles)));
+                    Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => OfferXboxProxyDisable(abandoned)));
                 }
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
@@ -111,19 +118,21 @@ namespace XMAT
             }
         }
 
-        // Consoles are only contacted, and restarted, after the user agrees.
-        private async void OfferXboxProxyDisable(IReadOnlyList<string> consoles)
+        // Consoles are only contacted, and restarted, after the user agrees. The records are removed once the
+        // offer is answered, so a start that ends before then offers it again.
+        private async void OfferXboxProxyDisable(AbandonedXboxSessions abandoned)
         {
-            if (MessageBox.Show(
-                    Localization.GetLocalizedString("PROXY_RECOVERY_XBOX_MESSAGE", string.Join(", ", consoles)),
-                    Localization.GetLocalizedString("PROXY_RECOVERY_XBOX_TITLE"),
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning) != MessageBoxResult.Yes ||
-                !GDKXHelper.IsGDKXInstalled(true))
+            var answer = MessageBox.Show(
+                Localization.GetLocalizedString("PROXY_RECOVERY_XBOX_MESSAGE", string.Join(", ", abandoned.Consoles)),
+                Localization.GetLocalizedString("PROXY_RECOVERY_XBOX_TITLE"),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            XboxProxySessions.Acknowledge(abandoned);
+            if (answer != MessageBoxResult.Yes || !GDKXHelper.IsGDKXInstalled(true))
             {
                 return;
             }
-            foreach (var console in consoles)
+            foreach (var console in abandoned.Consoles)
             {
                 try
                 {

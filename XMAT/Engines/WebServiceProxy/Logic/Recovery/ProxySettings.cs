@@ -22,9 +22,23 @@ namespace XMAT.WebServiceCapture
 
         internal ProxySettings WithoutProxy() => this with { Flags = (Flags & ~Proxy) | Direct };
 
-        internal bool ProxiesTo(string server) =>
-            UsesProxy && ProxyEndpoint.TryParse(Server, out var current) &&
-            ProxyEndpoint.TryParse(server, out var other) && current.Matches(other);
+        internal ProxySettings WithoutProxyTo(string server) => ProxiesTo(server) ? WithoutProxy() : this;
+
+        internal bool ProxiesTo(string server) => ProxyEndpoint.TryParse(server, out var endpoint) && ProxiesTo(endpoint);
+
+        // Whether traffic goes to `endpoint`: the proxy is on and its server is that same host and port.
+        internal bool ProxiesTo(ProxyEndpoint endpoint) =>
+            UsesProxy && ProxyEndpoint.TryParse(Server, out var current) && current.Matches(endpoint);
+
+        // Settings read back as the same as these: identical flags, since each flag is a distinct connection type,
+        // and identical strings, except that an empty string may come back as missing.
+        internal bool IsEquivalentTo(ProxySettings other) =>
+            other != null && Flags == other.Flags &&
+            SameText(Server, other.Server) && SameText(Bypass, other.Bypass) &&
+            SameText(AutoConfigUrl, other.AutoConfigUrl);
+
+        private static bool SameText(string first, string second) =>
+            string.IsNullOrEmpty(first) ? string.IsNullOrEmpty(second) : string.Equals(first, second, StringComparison.Ordinal);
     }
 
     internal interface IProxySettingsStore
@@ -43,14 +57,14 @@ namespace XMAT.WebServiceCapture
     }
 
     // Keeps the settings in a file, so tests and the guards they start never write WinINet. Tests derive
-    // from it to fail writes; the guard is still given the same file.
+    // from it to script reads and writes; the guard is still given the same file.
     internal class FileProxySettingsStore : IProxySettingsStore
     {
         internal FileProxySettingsStore(string path) => FilePath = path;
 
         internal string FilePath { get; }
 
-        public ProxySettings Read() => JsonSerializer.Deserialize<ProxySettings>(SharedFile.ReadAllText(FilePath));
+        public virtual ProxySettings Read() => JsonSerializer.Deserialize<ProxySettings>(SharedFile.ReadAllText(FilePath));
 
         public virtual void Write(ProxySettings settings) => SharedFile.Replace(FilePath, JsonSerializer.Serialize(settings));
     }
