@@ -228,6 +228,11 @@
                     SelectedItem="{Binding CaptureController.SelectedWebSocketMessage, Mode=TwoWay}"/>
             </TabItem>
             <TabItem x:Name="ScriptEditorTab" Header="Script Editor">
+                <TabItem.HeaderTemplate>
+                    <DataTemplate>
+                        <TextBlock><Run Text="{Binding Mode=OneWay}"/><Run Text="{Binding DataContext.CaptureController.Scripts.ActiveCountText, RelativeSource={RelativeSource AncestorType=TabItem}, Mode=OneWay}"/></TextBlock>
+                    </DataTemplate>
+                </TabItem.HeaderTemplate>
                 <app:ScriptEditorView ScriptCollection="{Binding CaptureController.Scripts}" ScriptTypeCollection="{Binding CaptureController.ScriptTypes}" TabSize="4"/>
             </TabItem>
             <TabItem x:Name="BlockListTab" Header="Block List">

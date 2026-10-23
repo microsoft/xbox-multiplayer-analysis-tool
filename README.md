@@ -239,7 +239,10 @@ forwarded to the server.
 **Web Response** – This script is called after the HTTP response is received by the server, but before it is
 forwarded to the client.
 
-Sample scripts are provided as you select each event type to get you started.
+Each event starts with a commented sample script that does nothing until you remove the `//` from the start of
+its example lines. An enabled script runs on every host that passes through that capture unless the script checks
+`Params.Request.Host`, and a **Web Response** script should also skip `CONNECT` requests, because their responses
+open the HTTPS connection. The script editor and the **Script Editor** tab show which scripts are active.
 
 All inspectable and modifiable properties are members of the **Params** object. **Params** contains the web
 **Request** and the web **Response** objects, as well as a Boolean named **Continue** which can be set to **_false_**
