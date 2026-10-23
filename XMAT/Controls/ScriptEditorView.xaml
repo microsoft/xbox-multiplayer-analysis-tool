@@ -75,7 +75,7 @@
                 </Style>
             </StackPanel.Resources>
 
-            <ToggleButton x:Name="ScriptEnabled" Padding="5" Margin="5" Width="100" IsChecked="{Binding SelectedItem.IsEnabled, ElementName=EventSelector}"
+            <ToggleButton x:Name="ScriptEnabled" Padding="5" Margin="5" Width="100" IsChecked="{Binding SelectedItem.IsEnabled, ElementName=EventSelector, Mode=OneWay}"
                                       Command="{x:Static local:ScriptCommands.ValidateScript}" CommandParameter="{Binding SelectedItem, ElementName=EventSelector}">
                 <ToggleButton.Style>
                     <Style TargetType="{x:Type ToggleButton}">
