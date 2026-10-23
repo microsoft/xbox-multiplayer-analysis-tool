@@ -58,7 +58,8 @@ namespace XMAT.Models
             string deviceName,
             CaptureType captureType,
             bool readOnly,
-            object serializedParameters)
+            object serializedParameters,
+            bool deferPortAllocation = false)
         {
             DeviceType = deviceType;
             DeviceName = deviceName;
@@ -85,7 +86,14 @@ namespace XMAT.Models
                     .DeserializeFrom((JsonElement)serializedParameters);
             }
 
-            CaptureController.Initialize();
+            if (CaptureController is WebServiceDeviceCaptureController proxy)
+            {
+                proxy.Initialize(deferPortAllocation);
+            }
+            else
+            {
+                CaptureController.Initialize();
+            }
             AssignDeviceColor();
         }
 

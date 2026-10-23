@@ -81,6 +81,43 @@ Note that once a port has been chosen for a particular device that is being capt
 the available proxy ports from the preferences will not alter the designated port for the already added
 device proxy session.
 
+XMAT keeps each open capture's port reserved, including while capture is stopped and after
+remembered devices are restored. Editing the automatic allocation range does not free ports
+belonging to existing tabs. One managed proxy endpoint is supported per device; adding a known
+existing device selects its current tab instead of creating a second proxy session. A separate
+Network Trace capture and read-only imported captures are still supported.
+
+### Changing a Proxy Port
+
+Select the device's existing tab, stop capture, then choose **Actions > Change Proxy Port**. You can choose any
+unassigned port from **1 through 65535**, including ports outside the automatic range in
+Preferences. The capture history, filters, and selection are retained.
+
+The bottom status bar shows the selected capture's running/stopped state, assigned port, and
+pending-change or device-configuration details. Endpoint confirmation is shown separately from
+local capture activity, so stopping capture does not leave a message claiming it is still running.
+
+- **Apply now** starts the replacement listener before changing device settings. For an Xbox,
+  it disables/re-enables proxying and waits for the required restarts; the console may reboot
+  twice. The popup explains this before you consent. Other devices remain stoppable while the
+  console restarts.
+- **Later** saves a pending replacement without changing the device or its current assigned
+  port. Both ports remain protected, including after restarting XMAT. Starting/enabling the
+  capture offers the pending change again; **Discard pending change** keeps the current port.
+- **Cancel** closes the popup without accepting a new selection.
+
+The new port is not silently substituted for the device's old endpoint. If binding, saving, or
+device configuration fails, XMAT reports the failed step and preserves the assignments needed
+for recovery. Once a replacement is saved and the device may already be using it, an uncertain
+activation does not automatically tear down its listener or revert to the old port. For an Xbox,
+use **Check Proxy Status** before retrying, stopping, or disabling it. Canceling an apply stops
+subsequent steps; a console reboot or SDK operation already requested cannot be undone.
+
+For a generic/manual device, XMAT cannot edit its proxy settings remotely. Stop the device/app
+from using the old endpoint, confirm that in the popup, then update its settings to the new
+endpoint shown by XMAT. Different applications can use independently configured generic
+listeners, but enabling two global proxy endpoints does not duplicate the same device traffic.
+
 
 ### Enabling/Starting Proxying
 
@@ -96,6 +133,23 @@ _Screenshot of Xbox Multiplayer Analysis Tool when hitting the Enable Proxy butt
 
 A kit will remain enabled to proxy until told to disable proxying through the “Disable Xbox Proxy” tool bar
 option, even after successive console reboots, and restarts of the Xbox Multiplayer Analysis Tool application.
+
+**Stop Capture** stops the local listener; it does not disable or reboot an Xbox.
+**Disable Xbox Proxy** remains available while capture is stopped or after a failed start,
+so clearing stale console settings does not require first starting another listener.
+Status checks show the reported endpoint rather than treating any nonempty proxy host as a
+match. Re-enabling a verified matching endpoint does not rewrite its settings or request another
+reboot; a different existing endpoint is not overwritten automatically.
+
+**Check Proxy Status** is an Xbox action and is not available for Local PC captures.
+Generic/manual devices instead offer **Proxy Setup Details**; that displays connection
+instructions rather than querying device state.
+
+The Xbox proxy-address file is written as NUL-terminated UTF-8. The console loader requires
+that terminator; an EOF-only or CRLF-only file can leave garbage after the port in the reported
+setting. If an older XMAT version configured such a value, explicitly disable and re-enable
+Xbox proxying with the current version to rewrite it. Invalid endpoint suffixes are still
+reported as unverified rather than silently stripped.
 
 A console that has successfully enabled proxying of web service traffic will provide a notification to the kit
 like what is shown below. Even though the Fiddler app is not actually being executed, the words “Fiddler
@@ -477,14 +531,19 @@ choice is remembered the next time the application starts.
 
 ## Known Issues
 
-**Enabling Proxying on a Device twice with a different port the second time will fail to proxy.**
-_Workaround: Make sure to disable proxying first, before re-enabling to ensure the port setting is correct._
+**Xbox proxy endpoint verification depends on the console recovery and installed SDK.**
+Use **Change Proxy Port** for a stopped capture rather than changing an active tab's port indirectly
+through Preferences. If the console cannot report a complete endpoint, XMAT reports it as
+unverified instead of claiming setup succeeded. Explicitly disable proxying, wait for the console
+to return, and check its status before re-enabling or retrying a pending change.
 
 **Proxying with the same header spanned across multiple lines fails to proxy correctly.**
 _Workaround: None currently. Apps like Outlook may fail to function properly when proxying PC._
 
-**Enabling proxying does not confirm settings with user, nor allow cancellation of the process.**
-_Workaround: Be sure to double check that your console device is ready to reboot when enabling._
+**A console reboot or SDK write already requested may not be interruptible.**
+Canceling a port apply prevents later steps but waits for an in-flight mutation to settle.
+Check proxy status before retrying; a saved new port may remain assigned even if activation
+could not be confirmed.
 
 **Potential Future Improvements:**
 
