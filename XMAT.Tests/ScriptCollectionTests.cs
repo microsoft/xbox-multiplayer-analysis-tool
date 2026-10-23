@@ -110,13 +110,12 @@ namespace XMAT.Tests
 
         private static ScriptCollection Scripts() => new(typeof(WebServiceCaptureScriptableEventType));
 
-        private static Task EnableAsync(ScriptModel script)
-        {
-            script.IsEnabled = true;
-            return Task.CompletedTask;
-        }
+        private static async Task EnableAsync(ScriptModel script) =>
+            Assert.Equal(
+                ScriptActivationResult.Enabled,
+                await script.EnableScriptAsync<WebServiceCaptureScriptParams>());
 
-        private static void Disable(ScriptModel script) => script.IsEnabled = false;
+        private static void Disable(ScriptModel script) => script.DisableScript();
 
         private static string HeaderText(TabItem tab) => string.Concat(
             Descendants(tab).OfType<TextBlock>().Single().Inlines.OfType<Run>().Select(run => run.Text));
