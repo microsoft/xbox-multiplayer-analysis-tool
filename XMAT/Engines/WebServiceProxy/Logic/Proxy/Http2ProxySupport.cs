@@ -241,7 +241,10 @@ namespace XMAT.WebServiceCapture.Proxy
                 _proxy.GetNextRequestID(),
                 cancellationToken).ConfigureAwait(false);
 
-            if (!_proxy.RaiseReceivedWebRequest(tunnel.ConnectionId, clientRequest))
+            if (!await _proxy.RaiseReceivedWebRequestAsync(
+                tunnel.ConnectionId,
+                clientRequest,
+                cancellationToken).ConfigureAwait(false))
             {
                 context.Abort();
                 return;
@@ -291,10 +294,11 @@ namespace XMAT.WebServiceCapture.Proxy
                         upstreamResponse,
                         cancellationToken).ConfigureAwait(false);
 
-                if (!_proxy.RaiseReceivedWebResponse(
+                if (!await _proxy.RaiseReceivedWebResponseAsync(
                     tunnel.ConnectionId,
                     clientRequest,
-                    serverResponse))
+                    serverResponse,
+                    cancellationToken).ConfigureAwait(false))
                 {
                     context.Abort();
                     return;

@@ -34,6 +34,13 @@ namespace XMAT.WebServiceCapture
             LoadedDataset
         }
 
+        private enum ScriptPolicyResult
+        {
+            Completed,
+            FailedOpen,
+            Aborted
+        }
+
         class ControllerParameters : ICaptureMethodParameters
         {
             private readonly WebServiceDeviceCaptureController _owner;
@@ -171,6 +178,8 @@ namespace XMAT.WebServiceCapture
         private const int UiUpdateBatchSize = 50;
         private static readonly TimeSpan CaptureCallbackDrainTimeout =
             TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan DefaultScriptExecutionDeadline =
+            TimeSpan.FromSeconds(60);
         private static readonly TimeSpan ProgressUpdateInterval =
             TimeSpan.FromMilliseconds(100);
 
@@ -178,6 +187,7 @@ namespace XMAT.WebServiceCapture
         private WebSocketMessageModel _selectedWebSocketMessage;
         private readonly DeviceType _deviceType;
         private readonly bool _readOnly;
+        private readonly TimeSpan _scriptExecutionDeadline;
         private IWebServiceProxy _webProxy;
         private IDataTable _dataTable;
         private IDataset _loadedCaptureDataset;
@@ -228,8 +238,16 @@ namespace XMAT.WebServiceCapture
 
         internal WebServiceDeviceCaptureController(
             string deviceName, DeviceType deviceType, bool readOnly, ProxyPortPool portPool,
-            IProxyDeviceConfiguration deviceConfiguration = null)
+            IProxyDeviceConfiguration deviceConfiguration = null,
+            TimeSpan? scriptExecutionDeadline = null)
         {
+            _scriptExecutionDeadline =
+                scriptExecutionDeadline ?? DefaultScriptExecutionDeadline;
+            if (_scriptExecutionDeadline <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(scriptExecutionDeadline));
+            }
+
             _portPool = portPool;
             _deviceConfiguration = deviceConfiguration;
             DeviceName = deviceName;
@@ -283,10 +301,10 @@ namespace XMAT.WebServiceCapture
                     throw;
                 }
                 _webProxy.BypassList = BypassList;
-                _webProxy.ReceivedSslConnectionRequest += WebProxy_ReceivedSslConnectionRequestAsync;
+                _webProxy.SslConnectionRequestPolicyAsync = WebProxy_ReceivedSslConnectionRequestAsync;
                 _webProxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
-                _webProxy.ReceivedWebRequest += WebProxy_ReceivedWebRequestAsync;
-                _webProxy.ReceivedWebResponse += WebProxy_ReceivedWebResponseAsync;
+                _webProxy.WebRequestPolicyAsync = WebProxy_ReceivedWebRequestAsync;
+                _webProxy.WebResponsePolicyAsync = WebProxy_ReceivedWebResponseAsync;
                 _webProxy.WebSocketMessage += WebProxy_WebSocketMessage;
                 if (!deferPortAllocation)
                 {
@@ -1139,77 +1157,168 @@ namespace XMAT.WebServiceCapture
             return BlockList.IsBlocked(host, path);
         }
 
-        private async void WebProxy_ReceivedSslConnectionRequestAsync(object sender, SslConnectionRequestEventArgs connectionEvent)
+        private Task<bool> WebProxy_ReceivedSslConnectionRequestAsync(
+            SslConnectionRequestEventArgs connectionEvent,
+            CancellationToken requestCancellation)
         {
-            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            return ExecuteCapturePolicyAsync(
+                "SSL connection",
+                async cancellationToken =>
+                {
+                    var scriptParameters = new WebServiceCaptureScriptParams
+                    {
+                        Request = connectionEvent.Request,
+                        Response = null
+                    };
+                    ScriptPolicyResult scriptResult = await RunScriptPolicyAsync(
+                        WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                        scriptParameters,
+                        "SSL connection",
+                        cancellationToken).ConfigureAwait(false);
+                    if (scriptResult == ScriptPolicyResult.Aborted)
+                    {
+                        return false;
+                    }
+
+                    bool acceptConnection =
+                        scriptResult == ScriptPolicyResult.FailedOpen ||
+                        scriptParameters.Continue;
+                    if (acceptConnection && IsRequestBlocked(connectionEvent.Request))
+                    {
+                        PublicUtilities.AppLog(LogLevel.INFO,
+                            $"Blocked SSL CONNECT to '{connectionEvent.Request.Host ?? connectionEvent.Request.Path}' (BlockList)");
+                        acceptConnection = false;
+                    }
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    string base64Body = string.Empty;
+                    if (connectionEvent.Request.BodyBytes != null)
+                        base64Body = Convert.ToBase64String(connectionEvent.Request.BodyBytes);
+
+                    long rowId = _dataTable.AddRow(
+                        DeviceName,
+                        (long)connectionEvent.Request.RequestNumber,
+                        (long)connectionEvent.ConnectionID,
+                        ProxyConnectionModel.ToDateTimeString(connectionEvent.Timestamp),
+                        string.Empty,
+                        connectionEvent.Request.Scheme,
+                        connectionEvent.Request.Host,
+                        connectionEvent.Request.Port,
+                        connectionEvent.Request.Method,
+                        connectionEvent.Request.Path,
+                        string.Empty,
+                        connectionEvent.Request.FirstLineAndHeaders,
+                        base64Body,
+                        string.Empty,
+                        string.Empty,
+                        connectionEvent.ClientIP
+                    );
+
+                    var addedRecord = DataRecordFromRow(rowId);
+                    _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
+                    return acceptConnection;
+                },
+                requestCancellation);
+        }
+
+        private async Task<bool> ExecuteCapturePolicyAsync(
+            string policyName,
+            Func<CancellationToken, Task<bool>> policy,
+            CancellationToken requestCancellation)
+        {
+            if (requestCancellation.IsCancellationRequested ||
+                !_captureCallbacks.TryBegin(out var callbackLease))
             {
-                connectionEvent.AcceptConnection = false;
-                return;
+                return false;
             }
 
             using var callbackLeaseScope = callbackLease;
-            var cancellationToken =
+            CancellationToken captureCancellation =
                 _captureCallbackCancellationTokenSource?.Token ??
                 CancellationToken.None;
+            using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                requestCancellation,
+                captureCancellation);
             try
             {
-                // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
-                var sp = new WebServiceCaptureScriptParams() { Request = connectionEvent.Request, Response = null };
-                await Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest].RunScriptAsync(
-                    sp,
-                    cancellationToken);
-                connectionEvent.AcceptConnection = sp.Continue;
+                bool accepted = await policy(linkedCancellation.Token).ConfigureAwait(false);
+                return accepted && !linkedCancellation.IsCancellationRequested;
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
             {
-                connectionEvent.AcceptConnection = false;
-                return;
+                return false;
             }
-            catch (Exception e)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"SSL connection script error {e}");
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"{policyName} capture policy failed: {ex}");
+                return false;
             }
+        }
 
-            if (connectionEvent.AcceptConnection && IsRequestBlocked(connectionEvent.Request))
+        private async Task<ScriptPolicyResult> RunScriptPolicyAsync(
+            WebServiceCaptureScriptableEventType eventType,
+            WebServiceCaptureScriptParams scriptParameters,
+            string scriptName,
+            CancellationToken cancellationToken)
+        {
+            ScriptModel script = Scripts[eventType];
+            if (!script.IsEnabled)
             {
-                PublicUtilities.AppLog(LogLevel.INFO,
-                    $"Blocked SSL CONNECT to '{connectionEvent.Request.Host ?? connectionEvent.Request.Path}' (BlockList)");
-                connectionEvent.AcceptConnection = false;
+                return ScriptPolicyResult.Completed;
             }
 
-            if (cancellationToken.IsCancellationRequested)
+            using var scriptCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            scriptCancellation.CancelAfter(_scriptExecutionDeadline);
+            CancellationToken scriptToken = scriptCancellation.Token;
+            // Isolate synchronous user code so the transport can enforce its deadline.
+            Task<WebServiceCaptureScriptParams> scriptTask = Task.Run(
+                () => script.RunScriptAsync(
+                    scriptParameters,
+                    scriptToken));
+            try
             {
-                connectionEvent.AcceptConnection = false;
-                return;
+                await scriptTask.WaitAsync(scriptToken).ConfigureAwait(false);
+                return scriptCancellation.IsCancellationRequested
+                    ? ScriptPolicyResult.Aborted
+                    : ScriptPolicyResult.Completed;
             }
+            catch (OperationCanceledException) when (scriptCancellation.IsCancellationRequested)
+            {
+                ObserveAbandonedScript(scriptTask);
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    PublicUtilities.AppLog(
+                        LogLevel.ERROR,
+                        $"{scriptName} script exceeded the {_scriptExecutionDeadline.TotalSeconds:g} second deadline.");
+                }
+                return ScriptPolicyResult.Aborted;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                if (scriptCancellation.IsCancellationRequested)
+                {
+                    return ScriptPolicyResult.Aborted;
+                }
 
-            string base64Body = string.Empty;
-            if (connectionEvent.Request.BodyBytes != null)
-                base64Body = Convert.ToBase64String(connectionEvent.Request.BodyBytes);
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"{scriptName} script error {ex}");
+                return ScriptPolicyResult.FailedOpen;
+            }
+        }
 
-            // see layout in WebServiceCaptureMethod.InitializeDataTables()
-
-            long rowId = _dataTable.AddRow(
-                DeviceName,
-                (long)connectionEvent.Request.RequestNumber,
-                (long)connectionEvent.ConnectionID,
-                ProxyConnectionModel.ToDateTimeString(connectionEvent.Timestamp),
-                string.Empty,
-                connectionEvent.Request.Scheme,
-                connectionEvent.Request.Host,
-                connectionEvent.Request.Port,
-                connectionEvent.Request.Method,
-                connectionEvent.Request.Path,
-                string.Empty,
-                connectionEvent.Request.FirstLineAndHeaders,
-                base64Body,
-                string.Empty,
-                string.Empty,
-                connectionEvent.ClientIP
-            );
-
-            var addedRecord = DataRecordFromRow(rowId);
-            _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
+        private static void ObserveAbandonedScript(Task scriptTask)
+        {
+            _ = scriptTask.ContinueWith(
+                completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously |
+                    TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
         }
 
         private void WebProxy_CompletedSslConnectionRequest(object sender, SslConnectionCompletionEventArgs completionEvent)
@@ -1236,137 +1345,124 @@ namespace XMAT.WebServiceCapture
             _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord));
         }
 
-        private async void WebProxy_ReceivedWebRequestAsync(object sender, HttpRequestEventArgs requestEvent)
+        private Task<bool> WebProxy_ReceivedWebRequestAsync(
+            HttpRequestEventArgs requestEvent,
+            CancellationToken requestCancellation)
         {
-            if (!_captureCallbacks.TryBegin(out var callbackLease))
-            {
-                requestEvent.AcceptRequest = false;
-                return;
-            }
+            return ExecuteCapturePolicyAsync(
+                "Web request",
+                async cancellationToken =>
+                {
+                    var scriptParameters = new WebServiceCaptureScriptParams
+                    {
+                        Request = requestEvent.Request,
+                        Response = null
+                    };
+                    ScriptPolicyResult scriptResult = await RunScriptPolicyAsync(
+                        WebServiceCaptureScriptableEventType.WebRequest,
+                        scriptParameters,
+                        "WebRequest",
+                        cancellationToken).ConfigureAwait(false);
+                    if (scriptResult == ScriptPolicyResult.Aborted)
+                    {
+                        return false;
+                    }
 
-            using var callbackLeaseScope = callbackLease;
-            var cancellationToken =
-                _captureCallbackCancellationTokenSource?.Token ??
-                CancellationToken.None;
-            try
-            {
-                // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
-                var sp = new WebServiceCaptureScriptParams() { Request = requestEvent.Request, Response = null };
-                await Scripts[WebServiceCaptureScriptableEventType.WebRequest].RunScriptAsync(
-                    sp,
-                    cancellationToken);
-                requestEvent.AcceptRequest = sp.Continue;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                requestEvent.AcceptRequest = false;
-                return;
-            }
-            catch (Exception e)
-            {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"WebRequest script error {e}");
-            }
+                    bool acceptRequest =
+                        scriptResult == ScriptPolicyResult.FailedOpen ||
+                        scriptParameters.Continue;
+                    if (acceptRequest && IsRequestBlocked(requestEvent.Request))
+                    {
+                        PublicUtilities.AppLog(LogLevel.INFO,
+                            $"Blocked {requestEvent.Request.Method} {requestEvent.Request.Host}{requestEvent.Request.Path} (BlockList)");
+                        acceptRequest = false;
+                    }
 
-            if (requestEvent.AcceptRequest && IsRequestBlocked(requestEvent.Request))
-            {
-                PublicUtilities.AppLog(LogLevel.INFO,
-                    $"Blocked {requestEvent.Request.Method} {requestEvent.Request.Host}{requestEvent.Request.Path} (BlockList)");
-                requestEvent.AcceptRequest = false;
-            }
+                    cancellationToken.ThrowIfCancellationRequested();
 
-            if (cancellationToken.IsCancellationRequested)
-            {
-                requestEvent.AcceptRequest = false;
-                return;
-            }
+                    string base64Body = string.Empty;
+                    if (requestEvent.Request.BodyBytes != null)
+                        base64Body = Convert.ToBase64String(requestEvent.Request.BodyBytes);
 
-            string base64Body = string.Empty;
-            if (requestEvent.Request.BodyBytes != null)
-                base64Body = Convert.ToBase64String(requestEvent.Request.BodyBytes);
+                    long rowId = _dataTable.AddRow(
+                        DeviceName,
+                        (long)requestEvent.Request.RequestNumber,
+                        (long)requestEvent.ConnectionID,
+                        ProxyConnectionModel.ToDateTimeString(requestEvent.Timestamp),
+                        string.Empty,
+                        requestEvent.Request.Scheme,
+                        requestEvent.Request.Host,
+                        requestEvent.Request.Port,
+                        requestEvent.Request.Method,
+                        requestEvent.Request.Path,
+                        string.Empty,
+                        requestEvent.Request.FirstLineAndHeaders,
+                        base64Body,
+                        string.Empty,
+                        string.Empty,
+                        DeviceName
+                    );
 
-            // see layout in WebServiceCaptureMethod.InitializeDataTables()
-
-            long rowId = _dataTable.AddRow(
-                DeviceName,
-                (long)requestEvent.Request.RequestNumber,
-                (long)requestEvent.ConnectionID,
-                ProxyConnectionModel.ToDateTimeString(requestEvent.Timestamp),
-                string.Empty,
-                requestEvent.Request.Scheme,
-                requestEvent.Request.Host,
-                requestEvent.Request.Port,
-                requestEvent.Request.Method,
-                requestEvent.Request.Path,
-                string.Empty,
-                requestEvent.Request.FirstLineAndHeaders,
-                base64Body,
-                string.Empty,
-                string.Empty,
-                DeviceName
-            );
-
-            var addedRecord = DataRecordFromRow(rowId);
-            _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
+                    var addedRecord = DataRecordFromRow(rowId);
+                    _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
+                    return acceptRequest;
+                },
+                requestCancellation);
         }
 
-        private async void WebProxy_ReceivedWebResponseAsync(object sender, HttpResponseEventArgs responseEvent)
+        private Task<bool> WebProxy_ReceivedWebResponseAsync(
+            HttpResponseEventArgs responseEvent,
+            CancellationToken requestCancellation)
         {
-            if (!_captureCallbacks.TryBegin(out var callbackLease))
-            {
-                responseEvent.SendResponse = false;
-                return;
-            }
+            return ExecuteCapturePolicyAsync(
+                "Web response",
+                async cancellationToken =>
+                {
+                    var scriptParameters = new WebServiceCaptureScriptParams
+                    {
+                        Request = responseEvent.Request,
+                        Response = responseEvent.Response
+                    };
+                    ScriptPolicyResult scriptResult = await RunScriptPolicyAsync(
+                        WebServiceCaptureScriptableEventType.WebResponse,
+                        scriptParameters,
+                        "WebResponse",
+                        cancellationToken).ConfigureAwait(false);
+                    if (scriptResult == ScriptPolicyResult.Aborted)
+                    {
+                        return false;
+                    }
 
-            using var callbackLeaseScope = callbackLease;
-            var cancellationToken =
-                _captureCallbackCancellationTokenSource?.Token ??
-                CancellationToken.None;
-            try
-            {
-                // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
-                var sp = new WebServiceCaptureScriptParams() { Request = responseEvent.Request, Response = responseEvent.Response };
-                await Scripts[WebServiceCaptureScriptableEventType.WebResponse].RunScriptAsync(
-                    sp,
-                    cancellationToken);
-                responseEvent.SendResponse = sp.Continue;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                responseEvent.SendResponse = false;
-                return;
-            }
-            catch (Exception e)
-            {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"WebResponse script error {e}");
-            }
+                    bool sendResponse =
+                        scriptResult == ScriptPolicyResult.FailedOpen ||
+                        scriptParameters.Continue;
+                    cancellationToken.ThrowIfCancellationRequested();
 
-            if (cancellationToken.IsCancellationRequested)
-            {
-                responseEvent.SendResponse = false;
-                return;
-            }
+                    var record = _dataTable.Dataset.DataRecordsWhen(
+                        new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName),
+                        new FieldValue<long>(WebServiceCaptureMethod.FieldKey_RequestNumber, responseEvent.Response.RequestNumber),
+                        new FieldValue<long>(WebServiceCaptureMethod.FieldKey_ConnectionId, responseEvent.ConnectionID)
+                    ).FirstOrDefault();
 
-            var record = _dataTable.Dataset.DataRecordsWhen(
-                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName),
-                new FieldValue<long>(WebServiceCaptureMethod.FieldKey_RequestNumber, responseEvent.Response.RequestNumber),
-                new FieldValue<long>(WebServiceCaptureMethod.FieldKey_ConnectionId, responseEvent.ConnectionID)
-            ).FirstOrDefault();
+                    if (record != null)
+                    {
+                        var base64Body = Convert.ToBase64String(responseEvent.Response.BodyBytes);
 
-            if (record != null)
-            {
-                var base64Body = Convert.ToBase64String(responseEvent.Response.BodyBytes);
+                        _dataTable.UpdateRow(
+                            record.RowId,
+                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp, ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)),
+                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, responseEvent.Response.Status),
+                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders, responseEvent.Response.FirstLineAndHeaders),
+                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body)
+                        );
 
-                _dataTable.UpdateRow(
-                    record.RowId,
-                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp, ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)),
-                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, responseEvent.Response.Status),
-                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders, responseEvent.Response.FirstLineAndHeaders),
-                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body)
-                );
+                        var updatedRecord = DataRecordFromRow(record.RowId);
+                        _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord));
+                    }
 
-                var updatedRecord = DataRecordFromRow(record.RowId);
-                _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord));
-            }
+                    return sendResponse;
+                },
+                requestCancellation);
         }
 
         private void WebProxy_WebSocketMessage(object sender, WebSocketMessageEventArgs messageEvent)

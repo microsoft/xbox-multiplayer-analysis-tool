@@ -315,6 +315,57 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task InvokeAsync_CancelsPendingRequestPolicyDuringClientAbort()
+        {
+            var proxy = new WebServiceProxy();
+            var registry = new InterceptedTunnelRegistry();
+            registry.Register(
+                53000,
+                new InterceptedTunnelContext(1000, new ClientRequest()));
+            var policyStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var policyCanceled = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.WebRequestPolicyAsync = async (_, cancellationToken) =>
+            {
+                policyStarted.TrySetResult();
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    return true;
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    policyCanceled.TrySetResult();
+                    throw;
+                }
+            };
+            var upstreamHandler = new RecordingHandler();
+            using var httpClient = new HttpClient(upstreamHandler);
+            var application = new InterceptedProxyApplication(
+                proxy,
+                httpClient,
+                registry);
+            using var requestAbort = new CancellationTokenSource();
+            var lifetime = new TrackingRequestLifetimeFeature
+            {
+                RequestAborted = requestAbort.Token
+            };
+            var context = CreateRequestContext();
+            context.Features.Set<IHttpRequestLifetimeFeature>(lifetime);
+
+            Task requestTask = application.InvokeAsync(context);
+            await policyStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await requestAbort.CancelAsync();
+            await requestTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(policyCanceled.Task.IsCompletedSuccessfully);
+            Assert.True(lifetime.Aborted);
+            Assert.Null(upstreamHandler.Request);
+        }
+
+        [Fact]
         public async Task InvokeAsync_DoesNotForwardNewRequestsAfterShutdownBegins()
         {
             var proxy = new WebServiceProxy();

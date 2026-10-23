@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -27,8 +28,8 @@ namespace XMAT.Tests.Proxy
 
         public WebServiceProxy Proxy { get; }
         public int Port { get; }
-        public List<ClientRequest> CapturedRequests { get; } = [];
-        public List<ServerResponse> CapturedResponses { get; } = [];
+        public ConcurrentQueue<ClientRequest> CapturedRequests { get; } = new();
+        public ConcurrentQueue<ServerResponse> CapturedResponses { get; } = new();
 
         private ProxyTestHarness(
             WebServiceProxy proxy,
@@ -83,8 +84,8 @@ namespace XMAT.Tests.Proxy
             int port = new Uri(addresses.Addresses.Single()).Port;
 
             var harness = new ProxyTestHarness(proxy, forwardHost, intercepted, upstream, certificate, port);
-            proxy.ReceivedWebRequest += (_, args) => harness.CapturedRequests.Add(args.Request);
-            proxy.ReceivedWebResponse += (_, args) => harness.CapturedResponses.Add(args.Response);
+            proxy.ReceivedWebRequest += (_, args) => harness.CapturedRequests.Enqueue(args.Request);
+            proxy.ReceivedWebResponse += (_, args) => harness.CapturedResponses.Enqueue(args.Response);
             return harness;
         }
 
@@ -105,7 +106,7 @@ namespace XMAT.Tests.Proxy
             _certificate.Dispose();
         }
 
-        private static X509Certificate2 CreateCertificate()
+        internal static X509Certificate2 CreateCertificate()
         {
             using RSA rsa = RSA.Create(2048);
             var request = new CertificateRequest(

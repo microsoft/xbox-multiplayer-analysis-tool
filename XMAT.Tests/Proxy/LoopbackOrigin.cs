@@ -4,6 +4,7 @@
 
 using System.Collections.Concurrent;
 using System.Net;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -20,30 +21,48 @@ namespace XMAT.Tests.Proxy
         IReadOnlyDictionary<string, string> Headers,
         byte[] Body);
 
-    // Plain-HTTP origin on a loopback ephemeral port that records every request it receives.
+    // HTTP (or HTTPS with a self-signed certificate) origin on a loopback ephemeral port
+    // that records every request it receives.
     internal sealed class LoopbackOrigin : IAsyncDisposable
     {
         private readonly IHost _host;
         private readonly ConcurrentQueue<ObservedRequest> _requests;
+        private readonly X509Certificate2 _certificate;
 
         public int Port { get; }
         public IReadOnlyCollection<ObservedRequest> Requests => _requests;
 
-        private LoopbackOrigin(IHost host, int port, ConcurrentQueue<ObservedRequest> requests)
+        private LoopbackOrigin(
+            IHost host,
+            int port,
+            ConcurrentQueue<ObservedRequest> requests,
+            X509Certificate2 certificate)
         {
             _host = host;
             Port = port;
             _requests = requests;
+            _certificate = certificate;
         }
 
+        public string Url(string pathAndQuery) =>
+            $"{(_certificate == null ? "http" : "https")}://127.0.0.1:{Port}{pathAndQuery}";
+
         public static async Task<LoopbackOrigin> StartAsync(
-            Func<HttpContext, Task> respond = null)
+            Func<HttpContext, Task> respond = null,
+            bool useTls = false)
         {
             var requests = new ConcurrentQueue<ObservedRequest>();
+            X509Certificate2 certificate = useTls ? ProxyTestHarness.CreateCertificate() : null;
             IHost host = Host.CreateDefaultBuilder()
                 .ConfigureWebHostDefaults(web =>
                 {
-                    web.ConfigureKestrel(o => o.Listen(IPAddress.Loopback, 0));
+                    web.ConfigureKestrel(o => o.Listen(IPAddress.Loopback, 0, listen =>
+                    {
+                        if (certificate != null)
+                        {
+                            listen.UseHttps(certificate);
+                        }
+                    }));
                     web.Configure(app => app.Run(async context =>
                     {
                         using var buffer = new MemoryStream();
@@ -72,13 +91,18 @@ namespace XMAT.Tests.Proxy
             await host.StartAsync();
             var addresses = host.Services.GetRequiredService<IServer>()
                 .Features.Get<IServerAddressesFeature>();
-            return new LoopbackOrigin(host, new Uri(addresses.Addresses.Single()).Port, requests);
+            return new LoopbackOrigin(
+                host,
+                new Uri(addresses.Addresses.Single()).Port,
+                requests,
+                certificate);
         }
 
         public async ValueTask DisposeAsync()
         {
             await _host.StopAsync();
             _host.Dispose();
+            _certificate?.Dispose();
         }
     }
 }

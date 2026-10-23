@@ -321,6 +321,9 @@ namespace XMAT.Tests
 
             public bool IsProxyEnabled => false;
             public BypassListModel BypassList { get; set; }
+            public Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> SslConnectionRequestPolicyAsync { get; set; }
+            public Func<HttpRequestEventArgs, CancellationToken, Task<bool>> WebRequestPolicyAsync { get; set; }
+            public Func<HttpResponseEventArgs, CancellationToken, Task<bool>> WebResponsePolicyAsync { get; set; }
 
             public Task StartProxyAsync(WebServiceProxyOptions options, CancellationToken cancellationToken = default)
                 => Task.FromException(_startFailure);
@@ -460,32 +463,24 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void StoppedController_RejectsConnectionsRequestsAndResponses()
+        public async Task StoppedController_RejectsConnectionsRequestsAndResponses()
         {
             var controller = CreateController(new PreferencesModel());
-            var connection = new SslConnectionRequestEventArgs { AcceptConnection = true };
-            var request = new HttpRequestEventArgs { AcceptRequest = true };
-            var response = new HttpResponseEventArgs { SendResponse = true };
-
-            InvokeCaptureCallback(
+            Assert.False(await InvokeCapturePolicyAsync(
                 controller,
                 "WebProxy_ReceivedSslConnectionRequestAsync",
-                connection);
-            InvokeCaptureCallback(
+                new SslConnectionRequestEventArgs()));
+            Assert.False(await InvokeCapturePolicyAsync(
                 controller,
                 "WebProxy_ReceivedWebRequestAsync",
-                request);
-            InvokeCaptureCallback(
+                new HttpRequestEventArgs()));
+            Assert.False(await InvokeCapturePolicyAsync(
                 controller,
                 "WebProxy_ReceivedWebResponseAsync",
-                response);
-
-            Assert.False(connection.AcceptConnection);
-            Assert.False(request.AcceptRequest);
-            Assert.False(response.SendResponse);
+                new HttpResponseEventArgs()));
         }
 
-        private static void InvokeCaptureCallback<TEventArgs>(
+        private static Task<bool> InvokeCapturePolicyAsync<TEventArgs>(
             WebServiceDeviceCaptureController controller,
             string methodName,
             TEventArgs args) where TEventArgs : EventArgs
@@ -493,8 +488,9 @@ namespace XMAT.Tests
             var method = typeof(WebServiceDeviceCaptureController).GetMethod(
                 methodName,
                 BindingFlags.Instance | BindingFlags.NonPublic);
-            var callback = method.CreateDelegate<EventHandler<TEventArgs>>(controller);
-            callback(controller, args);
+            var policy = method.CreateDelegate<
+                Func<TEventArgs, CancellationToken, Task<bool>>>(controller);
+            return policy(args, CancellationToken.None);
         }
 
         [Fact]

@@ -346,6 +346,20 @@ window. Once enabled, all future requests and responses will pass through the sc
 modifications you created will be applied. Editing an enabled script turns it off until you click **Enable**
 again.
 
+Scripts may use `await`. XMAT waits for the selected event script before it forwards that request or response.
+Each invocation has a 60-second deadline. If a script reaches the deadline, XMAT writes an error to the app
+log and drops that transaction without sending a response. Stopping capture while a script is running also
+cancels the wait and drops that transaction, but it is not reported as a deadline error. For a CONNECT
+request, the HTTPS tunnel is not opened. The deadline limits one script invocation, not the total time seen
+by the client. Some clients retry a dropped request, and every retry runs the script again.
+
+A **Web Response** script also runs for XMAT's CONNECT reply. Delaying that reply delays every HTTPS tunnel,
+so Web Response scripts should skip CONNECT unless changing tunnel behavior is intentional. Cancellation
+stops XMAT from waiting, but it cannot terminate arbitrary script code. Blocking code may continue running
+in the background after its request has been dropped and continue using worker threads. Later changes to
+`Params.Request` or `Params.Response` are not forwarded or captured, but other side effects performed by the
+script are not undone.
+
 You can also use the **Load** and **Save** buttons to load scripts you have already written and save new scripts
 to disk for later usage. The **Revert to Saved** button can also be used to undo any changes since the last
 time the script was saved to disk.
