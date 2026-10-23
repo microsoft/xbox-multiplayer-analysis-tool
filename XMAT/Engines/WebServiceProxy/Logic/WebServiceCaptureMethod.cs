@@ -119,7 +119,15 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        // Overloaded method to preserve the ICaptureMethod interface implementation 
+        // and maintain backward compatibility. Defaults to no sanitization.
         public void ExportToFiddler(string toFilePath)
+        {
+            ExportToFiddler(toFilePath, false);
+        }
+
+        // Core export method with an opt-in sanitization flag for removing sensitive data.
+        public void ExportToFiddler(string toFilePath, bool sanitize)
         {
             var list = new List<ProxyConnectionModel>();
             if (WebProxyConnectionsTable != null)
@@ -127,7 +135,31 @@ namespace XMAT.WebServiceCapture
                 var records = WebProxyConnectionsTable.Dataset.DataRecords;
                 foreach (var record in records)
                 {
+                    // Create a new instance of ProxyConnectionModel to ensure the 
+                    // original captured data remains completely unchanged.
                     var m = new ProxyConnectionModel(record);
+
+                    if (sanitize)
+                    {
+                        // Redact sensitive Authorization tokens to prevent credential leaks
+                        if (!string.IsNullOrEmpty(m.RequestLineAndHeaders))
+                        {
+                            m.RequestLineAndHeaders = System.Text.RegularExpressions.Regex.Replace(
+                                m.RequestLineAndHeaders, 
+                                @"(?i)(Authorization:\s*).*?(\r\n|$)", 
+                                "$1[REDACTED]$2");
+                        }
+
+                        // Redact Set-Cookie headers to protect session IDs
+                        if (!string.IsNullOrEmpty(m.ResponseLineAndHeaders))
+                        {
+                            m.ResponseLineAndHeaders = System.Text.RegularExpressions.Regex.Replace(
+                                m.ResponseLineAndHeaders, 
+                                @"(?i)(Set-Cookie:\s*).*?(\r\n|$)", 
+                                "$1[REDACTED]$2");
+                        }
+                    }
+
                     list.Add(m);
                 }
             }
