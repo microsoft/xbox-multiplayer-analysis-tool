@@ -42,6 +42,7 @@ namespace XMAT
             var deviceContext = e.Parameter as ICaptureDeviceContext;
             e.CanExecute =
                 CaptureAppModel.AppModel.CanModifyCaptureData &&
+                !(deviceContext?.CaptureController is XMAT.WebServiceCapture.WebServiceDeviceCaptureController { IsTransitioning: true }) &&
                 !(deviceContext?.CaptureController is NetworkTraceCaptureController
                 {
                     IsRunning: true

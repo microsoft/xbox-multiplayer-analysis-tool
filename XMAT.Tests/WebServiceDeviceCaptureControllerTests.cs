@@ -350,7 +350,7 @@ namespace XMAT.Tests
 
         private static WebServiceDeviceCaptureController CreateController(PreferencesModel preferences, bool readOnly = false)
         {
-            return new WebServiceDeviceCaptureController("test-console", DeviceType.XboxConsole, readOnly)
+            return new WebServiceDeviceCaptureController("test-console", DeviceType.XboxConsole, readOnly, new ProxyPortPool())
             {
                 CaptureMethod = new TestCaptureMethod(preferences)
             };

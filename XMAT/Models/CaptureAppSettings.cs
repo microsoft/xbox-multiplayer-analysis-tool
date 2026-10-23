@@ -2,10 +2,14 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
+using System.Windows;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT.Models
 {
@@ -53,7 +57,20 @@ namespace XMAT.Models
                         captureDevice.DeviceName,
                         captureDevice.CaptureType,
                         false,
-                        captureDevice.Parameters);
+                        captureDevice.Parameters,
+                        true);
+                }
+                var proxies = model.CaptureDeviceContexts
+                    .Where(context => !context.IsReadOnly)
+                    .Select(context => context.CaptureController)
+                    .OfType<WebServiceDeviceCaptureController>().ToArray();
+                foreach (var proxy in proxies)
+                {
+                    proxy.RestorePendingPort();
+                }
+                foreach (var proxy in proxies)
+                {
+                    proxy.RestoreCurrentPort(false);
                 }
             }
 
@@ -84,23 +101,29 @@ namespace XMAT.Models
             public AppPreferencesModel Preferences { get; set; }
         }
 
-        internal static void Serialize(CaptureAppModel model)
+        internal static bool Serialize(CaptureAppModel model)
         {
-            string fullSettingsPath = GetSerializeFullPath(SettingsFileName, model);
-            Directory.CreateDirectory(Path.GetDirectoryName(fullSettingsPath)); // this will ensure the directory exists or will create if it doesn't
-            AppSettings serializedObject = new AppSettings(model);
-            string jsonText = JsonSerializer.Serialize<object>(serializedObject, new JsonSerializerOptions() { WriteIndented = true });
-
             try
             {
-                File.WriteAllText(fullSettingsPath, jsonText);
+                SerializeChecked(model);
+                return true;
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
             {
-                // TODO: handle the IO exception
-                return;
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Could not save application settings: {ex}");
+                MessageBox.Show(
+                    Localization.GetLocalizedString("PROXY_SETTINGS_SAVE_FAILED", ex.Message),
+                    Localization.GetLocalizedString("PROXY_CAPTURE_ERROR_TITLE"),
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                return false;
             }
+        }
 
+        internal static void SerializeChecked(CaptureAppModel model)
+        {
+            model.PreferencesModel.Serialized();
+            string fullSettingsPath = GetSerializeFullPath(SettingsFileName, model);
+            Directory.CreateDirectory(Path.GetDirectoryName(fullSettingsPath)); // this will ensure the directory exists or will create if it doesn't
             foreach (ICaptureDeviceContext captureDevice in model.CaptureDeviceContexts)
             {
                 if (captureDevice.CaptureController.Parameters != null)
@@ -108,8 +131,30 @@ namespace XMAT.Models
                     (captureDevice.CaptureController.Parameters as ICaptureMethodParameters).Serialized();
                 }
             }
+            var serializedObject = new AppSettings(model);
+            var jsonText = JsonSerializer.Serialize<object>(serializedObject, new JsonSerializerOptions() { WriteIndented = true });
+            WriteSettingsFile(fullSettingsPath, jsonText);
+        }
 
-            model.PreferencesModel.Serialized();
+        internal static void WriteSettingsFile(string path, string json)
+        {
+            var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temporaryPath, json);
+                File.Move(temporaryPath, path, true);
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(temporaryPath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, $"Could not remove temporary settings file: {ex}");
+                }
+            }
         }
 
         internal static void Deserialize(CaptureAppModel model)
