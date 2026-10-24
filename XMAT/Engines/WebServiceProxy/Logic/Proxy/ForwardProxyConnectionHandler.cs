@@ -102,7 +102,11 @@ namespace XMAT.WebServiceCapture.Proxy
             connectRequest.Scheme = "https";
             var clientIP = remoteEndPoint.Contains(':') ? remoteEndPoint.Split(':')[0] : remoteEndPoint;
 
-            if (!_proxy.RaiseReceivedSslConnectionRequest(connectionID, clientIP, connectRequest))
+            if (!await _proxy.RaiseReceivedSslConnectionRequestAsync(
+                connectionID,
+                clientIP,
+                connectRequest,
+                ct).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.ERROR, "REJECTING SSL connection request");
                 return;
@@ -119,7 +123,11 @@ namespace XMAT.WebServiceCapture.Proxy
             response.Headers["FiddlerGateway"] = "Direct";
             response.Headers["StartTime"] = DateTime.Now.ToString("HH:mm:ss.fff");
 
-            if (!_proxy.RaiseReceivedWebResponse(connectionID, connectRequest, response))
+            if (!await _proxy.RaiseReceivedWebResponseAsync(
+                connectionID,
+                connectRequest,
+                response,
+                ct).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.WARN, "CONNECT response was aborted.");
                 return;
@@ -153,7 +161,10 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private async Task HandleHttpRequestAsync(int connectionID, Stream clientStream, ClientRequest request, CancellationToken ct)
         {
-            if (!_proxy.RaiseReceivedWebRequest(connectionID, request))
+            if (!await _proxy.RaiseReceivedWebRequestAsync(
+                connectionID,
+                request,
+                ct).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.WARN, "Client request was aborted.");
                 return;
@@ -227,7 +238,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
             serverResponse.RequestNumber = clientRequest.RequestNumber;
 
-            if (!_proxy.RaiseReceivedWebResponse(connectionID, clientRequest, serverResponse))
+            if (!await _proxy.RaiseReceivedWebResponseAsync(
+                connectionID,
+                clientRequest,
+                serverResponse,
+                ct).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.WARN, "Server response was aborted.");
                 return;

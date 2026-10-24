@@ -56,7 +56,11 @@ namespace XMAT.WebServiceCapture
 
         public void Shutdown()
         {
-            InternetProxy.Disable();
+            // Undo only this process's own, unchanged Local PC proxy; never a proxy XMAT did not set.
+            if (PcProxyRecovery.Current.RestoreOnShutdown() == RecoveryResult.Failed)
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, "Could not restore the Windows proxy settings during shutdown.");
+            }
         }
 
         public bool OwnsDataTable(string tableName)

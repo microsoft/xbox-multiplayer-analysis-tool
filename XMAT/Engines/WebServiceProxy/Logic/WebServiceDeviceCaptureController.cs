@@ -17,6 +17,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
+using XMAT.Models;
 using XMAT.Scripting;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
@@ -33,23 +34,47 @@ namespace XMAT.WebServiceCapture
             LoadedDataset
         }
 
+        private enum ScriptPolicyResult
+        {
+            Completed,
+            FailedOpen,
+            Aborted
+        }
+
         class ControllerParameters : ICaptureMethodParameters
         {
-            public UInt16 Port { get; set; }
+            private readonly WebServiceDeviceCaptureController _owner;
+            public UInt16 Port { get; internal set; }
+            public UInt16 PendingPort { get; internal set; }
+            public string ProxyHost { get; internal set; }
 
-            internal ControllerParameters()
+            internal ControllerParameters(WebServiceDeviceCaptureController owner)
             {
+                _owner = owner;
                 Port = 0;
             }
 
             public void Serialized() { }
             public void DeserializeFrom(JsonElement serializedObject)
             {
+                if (_owner._initialized || _owner._portReservation != null ||
+                    _owner._pendingPortReservation != null || _owner.IsRunning || _owner.IsTransitioning)
+                {
+                    throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_PORT_USE_CHANGE"));
+                }
                 JsonElement prop;
 
                 if (serializedObject.TryGetProperty(nameof(Port), out prop))
                 {
                     Port = prop.GetUInt16();
+                }
+                if (serializedObject.TryGetProperty(nameof(PendingPort), out prop))
+                {
+                    PendingPort = prop.GetUInt16();
+                }
+                if (serializedObject.TryGetProperty(nameof(ProxyHost), out prop))
+                {
+                    ProxyHost = prop.GetString();
                 }
             }
         }
@@ -66,6 +91,7 @@ namespace XMAT.WebServiceCapture
 
                 _isRunning = value;
                 RaisePropertyChange();
+                RaisePropertyChange(nameof(CaptureStatusText));
                 CommandManager.InvalidateRequerySuggested();
             }
         }
@@ -84,7 +110,28 @@ namespace XMAT.WebServiceCapture
                 CommandManager.InvalidateRequerySuggested();
             }
         }
-        public UInt16 Port { get => _parameters.Port; set { _parameters.Port = value; RaisePropertyChange(); } }
+        public UInt16 Port
+        {
+            get => _parameters.Port;
+            set
+            {
+                if (_initialized || _portReservation != null || IsRunning || IsTransitioning)
+                {
+                    throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_PORT_USE_CHANGE"));
+                }
+                _parameters.Port = value;
+                RaisePropertyChange();
+                RaisePropertyChange(nameof(PortDescription));
+            }
+        }
+        public UInt16 PendingPort => _parameters.PendingPort;
+        public bool HasPendingPort => PendingPort != 0;
+        public string PortStatus { get => _portStatus; private set { _portStatus = value; RaisePropertyChange(); } }
+        public string CaptureStatusText => Localization.GetLocalizedString(
+            _readOnly ? "PROXY_CAPTURE_READ_ONLY" : IsRunning ? "PROXY_CAPTURE_RUNNING" : "PROXY_CAPTURE_STOPPED");
+        public string PortDescription => Localization.GetLocalizedString(
+            _readOnly ? "PROXY_PORT_NONE" : IsPortValid ? "PROXY_PORT_DESCRIPTION" : "PROXY_PORT_UNASSIGNED", Port);
+        public bool IsPortChangeInProgress => _portChangeCancellation != null;
         public bool IsPortValid { get => Port > 0; }
         internal bool CanBeginTransition => !IsRunning && !IsTransitioning;
         internal bool CanBeginStopTransition => IsRunning && !IsTransitioning;
@@ -131,6 +178,8 @@ namespace XMAT.WebServiceCapture
         private const int UiUpdateBatchSize = 50;
         private static readonly TimeSpan CaptureCallbackDrainTimeout =
             TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan DefaultScriptExecutionDeadline =
+            TimeSpan.FromSeconds(60);
         private static readonly TimeSpan ProgressUpdateInterval =
             TimeSpan.FromMilliseconds(100);
 
@@ -138,6 +187,7 @@ namespace XMAT.WebServiceCapture
         private WebSocketMessageModel _selectedWebSocketMessage;
         private readonly DeviceType _deviceType;
         private readonly bool _readOnly;
+        private readonly TimeSpan _scriptExecutionDeadline;
         private IWebServiceProxy _webProxy;
         private IDataTable _dataTable;
         private IDataset _loadedCaptureDataset;
@@ -147,6 +197,14 @@ namespace XMAT.WebServiceCapture
         private readonly BatchedDispatcherQueue _uiUpdateQueue;
         private CancellationTokenSource _captureCallbackCancellationTokenSource;
         private bool _isTransitioning;
+        private bool _initialized;
+        private readonly ProxyPortPool _portPool;
+        private readonly IProxyDeviceConfiguration _deviceConfiguration;
+        private ProxyPortPool.Reservation _portReservation;
+        private ProxyPortPool.Reservation _pendingPortReservation;
+        private string _portStatus;
+        private Task _portChangeTask;
+        private CancellationTokenSource _portChangeCancellation;
 
         public async Task<EProxyEnabledCheckResult> IsProxyEnabled()
         {
@@ -174,12 +232,29 @@ namespace XMAT.WebServiceCapture
         }
 
         public WebServiceDeviceCaptureController(string deviceName, DeviceType deviceType, bool readOnly)
+            : this(deviceName, deviceType, readOnly, ProxyPortPool.Shared)
         {
+        }
+
+        internal WebServiceDeviceCaptureController(
+            string deviceName, DeviceType deviceType, bool readOnly, ProxyPortPool portPool,
+            IProxyDeviceConfiguration deviceConfiguration = null,
+            TimeSpan? scriptExecutionDeadline = null)
+        {
+            _scriptExecutionDeadline =
+                scriptExecutionDeadline ?? DefaultScriptExecutionDeadline;
+            if (_scriptExecutionDeadline <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(scriptExecutionDeadline));
+            }
+
+            _portPool = portPool;
+            _deviceConfiguration = deviceConfiguration;
             DeviceName = deviceName;
 
             _deviceType = deviceType;
             _readOnly = readOnly;
-            _parameters = new();
+            _parameters = new(this);
 
             ProxyConnections = new ProxyConnectionsCollection();
 
@@ -199,35 +274,289 @@ namespace XMAT.WebServiceCapture
                     $"Capture UI update failed: {ex}"));
         }
 
-        public void Initialize()
+        public void Initialize() => Initialize(false);
+
+        internal void Initialize(bool deferPortAllocation)
         {
+            if (_initialized)
+            {
+                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_OPERATION_BUSY"));
+            }
+            _initialized = true;
             CaptureMethod = WebServiceCaptureMethod.Method;
             _dataTable = (CaptureMethod as WebServiceCaptureMethod).WebProxyConnectionsTable;
 
             if (!_readOnly)
             {
-                ProxyPortPool.Initialize(
-                    (CaptureMethod.PreferencesModel as PreferencesModel).FirstPort,
-                    (CaptureMethod.PreferencesModel as PreferencesModel).LastPort);
+                RestoreCurrentPort(deferPortAllocation);
 
-                if (!IsPortValid)
+                try
                 {
-                    Port = ProxyPortPool.ObtainPort();
+                    _webProxy = WebServiceProxy.CreateProxy();
                 }
-
-                _webProxy = WebServiceProxy.CreateProxy();
+                catch
+                {
+                    _portReservation?.Dispose();
+                    _portReservation = null;
+                    throw;
+                }
                 _webProxy.BypassList = BypassList;
-                _webProxy.ReceivedSslConnectionRequest += WebProxy_ReceivedSslConnectionRequestAsync;
+                _webProxy.SslConnectionRequestPolicyAsync = WebProxy_ReceivedSslConnectionRequestAsync;
                 _webProxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
-                _webProxy.ReceivedWebRequest += WebProxy_ReceivedWebRequestAsync;
-                _webProxy.ReceivedWebResponse += WebProxy_ReceivedWebResponseAsync;
+                _webProxy.WebRequestPolicyAsync = WebProxy_ReceivedWebRequestAsync;
+                _webProxy.WebResponsePolicyAsync = WebProxy_ReceivedWebResponseAsync;
                 _webProxy.WebSocketMessage += WebProxy_WebSocketMessage;
+                if (!deferPortAllocation)
+                {
+                    RestorePendingPort();
+                }
             }
         }
 
-        public Task<bool> CanCloseAsync()
+        internal void RestoreCurrentPort(bool deferAllocation)
         {
-            return CanCloseAsync(IsProxyEnabled, ShowDisableProxyPrompt, DisableProxying);
+            if (_readOnly || _portReservation != null || (Port == 0 && deferAllocation))
+            {
+                return;
+            }
+            try
+            {
+                _portReservation = Port == 0
+                    ? _portPool.ObtainPort(DeviceName)
+                    : _portPool.ReservePort(Port, DeviceName);
+                _parameters.Port = _portReservation.Port;
+                RaisePropertyChange(nameof(Port));
+                RaisePropertyChange(nameof(PortDescription));
+                PortStatus = null;
+            }
+            catch (InvalidOperationException ex)
+            {
+                PortStatus = ex.Message;
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Cannot reserve proxy port for {DeviceName}: {ex}");
+            }
+        }
+
+        internal void RestorePendingPort()
+        {
+            if (_readOnly || !HasPendingPort || _pendingPortReservation != null)
+            {
+                return;
+            }
+            if (PendingPort == Port)
+            {
+                _parameters.PendingPort = 0;
+                return;
+            }
+            try
+            {
+                _pendingPortReservation = _portPool.ReservePort(PendingPort, DeviceName);
+                PortStatus = Localization.GetLocalizedString("PROXY_PORT_PENDING", PendingPort);
+            }
+            catch (InvalidOperationException ex)
+            {
+                PortStatus = ex.Message;
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Cannot restore pending proxy port for {DeviceName}: {ex}");
+            }
+        }
+
+        internal void QueuePortChange(UInt16 port, Action save)
+        {
+            if (_readOnly || !CanBeginTransition)
+            {
+                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_PORT_STOP_FIRST"));
+            }
+            if (port == Port)
+            {
+                DiscardPortChange(save);
+                return;
+            }
+            var replacement = _pendingPortReservation?.Port == port
+                ? _pendingPortReservation : _portPool.ReservePort(port, DeviceName);
+            var previous = _pendingPortReservation;
+            var previousPort = PendingPort;
+            _parameters.PendingPort = port;
+            try
+            {
+                save();
+            }
+            catch
+            {
+                _parameters.PendingPort = previousPort;
+                if (!ReferenceEquals(previous, replacement))
+                {
+                    replacement.Dispose();
+                }
+                throw;
+            }
+            _pendingPortReservation = replacement;
+            if (!ReferenceEquals(previous, replacement))
+            {
+                previous?.Dispose();
+            }
+            NotifyPortState();
+            PortStatus = Localization.GetLocalizedString("PROXY_PORT_PENDING", port);
+        }
+
+        internal void DiscardPortChange(Action save)
+        {
+            if (_readOnly || IsRunning || IsTransitioning)
+            {
+                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_PORT_STOP_FIRST"));
+            }
+            var previous = PendingPort;
+            _parameters.PendingPort = 0;
+            try
+            {
+                save();
+            }
+            catch
+            {
+                _parameters.PendingPort = previous;
+                throw;
+            }
+            _pendingPortReservation?.Dispose();
+            _pendingPortReservation = null;
+            PortStatus = null;
+            NotifyPortState();
+        }
+
+        private void NotifyPortState()
+        {
+            RaisePropertyChange(nameof(Port));
+            RaisePropertyChange(nameof(PortDescription));
+            RaisePropertyChange(nameof(PendingPort));
+            RaisePropertyChange(nameof(HasPendingPort));
+            RaisePropertyChange(nameof(IsPortChangeInProgress));
+            CommandManager.InvalidateRequerySuggested();
+        }
+
+        private bool OwnsEndpoint(ProxyEndpoint endpoint) =>
+            endpoint.Port == Port &&
+            (string.Equals(ProxyEndpoint.NormalizeHost(endpoint.Host),
+                ProxyEndpoint.NormalizeHost(_parameters.ProxyHost), StringComparison.OrdinalIgnoreCase) ||
+             (_deviceType == DeviceType.LocalPC && IPAddress.TryParse(endpoint.Host, out var address) && IPAddress.IsLoopback(address)) ||
+             PublicUtilities.GetMyIp4Addresses().Any(ip => ip.ToString() == endpoint.Host));
+
+        internal IProxyDeviceConfiguration CreateDeviceConfiguration() =>
+            _deviceConfiguration ?? (_deviceType switch
+            {
+                DeviceType.XboxConsole => new XboxProxyDeviceConfiguration(DeviceName),
+                DeviceType.LocalPC => new PcProxyDeviceConfiguration(),
+                _ => throw new NotSupportedException(Localization.GetLocalizedString("PROXY_PORT_MANUAL"))
+            });
+
+        internal async Task ApplyPortChangeAsync(
+            string host, Action save, bool manualUpdateConfirmed = false)
+        {
+            if (Uri.CheckHostName(host) == UriHostNameType.Unknown)
+            {
+                throw new ArgumentException(Localization.GetLocalizedString("PROXY_NO_LOCAL_ADDRESS"), nameof(host));
+            }
+            using var transition = BeginTransition();
+            if (_readOnly || _pendingPortReservation == null || PendingPort != _pendingPortReservation.Port)
+            {
+                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_PORT_NO_PENDING"));
+            }
+            using var target = await ProxyDeviceOperations.AcquireAsync(_deviceType, DeviceName);
+            using var cancellation = new CancellationTokenSource();
+            _portChangeCancellation = cancellation;
+            NotifyPortState();
+            try
+            {
+                _portChangeTask = ApplyPortChangeCoreAsync(host, save, manualUpdateConfirmed, cancellation.Token);
+                await _portChangeTask;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PortStatus = Localization.GetLocalizedString("PROXY_PORT_APPLY_FAILED", Port, ex.GetBaseException().Message);
+                throw;
+            }
+            finally
+            {
+                _portChangeTask = null;
+                _portChangeCancellation = null;
+                NotifyPortState();
+            }
+        }
+
+        internal void CancelPortChange() => _portChangeCancellation?.Cancel();
+
+        private async Task ApplyPortChangeCoreAsync(
+            string host, Action save, bool manualUpdateConfirmed, CancellationToken token)
+        {
+            var desired = new ProxyEndpoint(host, PendingPort);
+            async Task Start()
+            {
+                if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(out var lease))
+                {
+                    throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_OPERATION_BUSY"));
+                }
+                using (lease)
+                {
+                    await StopProxyAsync();
+                    await StartProxyCoreAsync(false, desired.Port);
+                }
+            }
+            void Commit()
+            {
+                var previous = Port;
+                var previousHost = _parameters.ProxyHost;
+                _parameters.Port = desired.Port;
+                _parameters.PendingPort = 0;
+                _parameters.ProxyHost = host;
+                try
+                {
+                    save();
+                }
+                catch
+                {
+                    _parameters.Port = previous;
+                    _parameters.PendingPort = desired.Port;
+                    _parameters.ProxyHost = previousHost;
+                    throw;
+                }
+                _portReservation?.Dispose();
+                _portReservation = _pendingPortReservation;
+                _pendingPortReservation = null;
+                NotifyPortState();
+            }
+            if (_deviceType == DeviceType.GenericProxyDevice)
+            {
+                if (!manualUpdateConfirmed)
+                {
+                    throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_PORT_MANUAL"));
+                }
+                await Start();
+                try
+                {
+                    token.ThrowIfCancellationRequested();
+                    Commit();
+                    PortStatus = Localization.GetLocalizedString("PROXY_PORT_MANUAL");
+                }
+                catch
+                {
+                    await TryStopProxyAfterFailedDeviceSetupAsync();
+                    throw;
+                }
+                return;
+            }
+            var operation = new ProxyPortChangeOperation(
+                CreateDeviceConfiguration(), Start, () => StopProxyAsync(), Commit,
+                key => PortStatus = Localization.GetLocalizedString(key));
+            await operation.ApplyAsync(OwnsEndpoint, desired, token);
+        }
+
+        public async Task<bool> CanCloseAsync()
+        {
+            if (IsTransitioning)
+            {
+                MessageBox.Show(Localization.GetLocalizedString("PROXY_PORT_BUSY_CLOSE"));
+                return false;
+            }
+            var disabled = true;
+            var result = await CanCloseAsync(IsProxyEnabled, ShowDisableProxyPrompt,
+                async () => { disabled = await DisableProxying(); });
+            return result && disabled;
         }
 
         internal async Task<bool> CanCloseAsync(
@@ -262,11 +591,18 @@ namespace XMAT.WebServiceCapture
 
         public async Task CloseAsync()
         {
+            if (IsTransitioning)
+            {
+                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_PORT_BUSY_CLOSE"));
+            }
             CancelExistingFiddlerImport();
             if (!_readOnly)
             {
                 await StopProxyAsync();
-                ProxyPortPool.ReleasePort(Port);
+                _portReservation?.Dispose();
+                _pendingPortReservation?.Dispose();
+                _portReservation = null;
+                _pendingPortReservation = null;
             }
             ClearAllCaptures();
         }
@@ -331,6 +667,15 @@ namespace XMAT.WebServiceCapture
             switch (_deviceType)
             {
                 case DeviceType.LocalPC:
+                    var configuration = InternetProxy.ReadConfiguration();
+                    configuration.RequireKnown();
+                    var desired = new ProxyEndpoint("127.0.0.1", Port);
+                    if (configuration.State == ProxyConfigurationState.Enabled &&
+                        !configuration.Endpoint.Matches(desired))
+                    {
+                        throw new InvalidOperationException(
+                            Localization.GetLocalizedString("PROXY_ENDPOINT_CONFLICT", configuration.Endpoint, desired));
+                    }
                     InternetProxy.Enable("127.0.0.1", Port);
                     break;
 
@@ -344,11 +689,18 @@ namespace XMAT.WebServiceCapture
             if (!GDKXHelper.IsGDKXInstalled(true))
             { return false; }
 
-            EProxyEnabledCheckResult proxyCheckResult = await IsProxyEnabled();
-            if (proxyCheckResult == EProxyEnabledCheckResult.ProxyEnabled)
+            using var target = await ProxyDeviceOperations.AcquireAsync(_deviceType, DeviceName);
+            var configuration = await CreateDeviceConfiguration().ReadAsync();
+            configuration.RequireKnown();
+            if (configuration.State == ProxyConfigurationState.Enabled)
             {
-                MessageBox.Show(Localization.GetLocalizedString("PROXY_ALREADY_ENABLED"));
-                return false;
+                var desired = new ProxyEndpoint(sourceAddress, Port);
+                if (configuration.Endpoint.Matches(desired))
+                {
+                    return true;
+                }
+                throw new InvalidOperationException(
+                    Localization.GetLocalizedString("PROXY_ENDPOINT_CONFLICT", configuration.Endpoint, desired));
             }
 
             switch (_deviceType)
@@ -364,6 +716,8 @@ namespace XMAT.WebServiceCapture
                     }
 
                     // TODO: async this, it hangs the UI if the Xbox is not connected
+                    _parameters.ProxyHost = sourceAddress;
+                    PortStatus = Localization.GetLocalizedString("PROXY_PORT_ENABLING");
                     return await EnableXboxProxyOrReportFailureAsync(
                         () => CaptureUtilities.EnableXboxProxyAsync(DeviceName, sourceAddress, Port),
                         () => MessageBox.Show(
@@ -391,36 +745,52 @@ namespace XMAT.WebServiceCapture
             return false;
         }
 
-        internal async Task DisableProxying()
+        internal async Task<bool> DisableProxying()
         {
+            using var target = await ProxyDeviceOperations.AcquireAsync(_deviceType, DeviceName);
             switch (_deviceType)
             {
                 case DeviceType.LocalPC:
-                    await Task.Run(InternetProxy.Disable);
-                    return;
+                    var configuration = await Task.Run(InternetProxy.ReadConfiguration);
+                    configuration.RequireKnown();
+                    if (configuration.State == ProxyConfigurationState.Enabled && !OwnsEndpoint(configuration.Endpoint))
+                    {
+                        throw new InvalidOperationException(Localization.GetLocalizedString(
+                            "PROXY_ENDPOINT_CONFLICT", configuration.Endpoint, new ProxyEndpoint("127.0.0.1", Port)));
+                    }
+                    await Task.Run(() => InternetProxy.Disable("127.0.0.1", Port));
+                    return true;
 
                 case DeviceType.GenericProxyDevice:
-                    return;
+                    return true;
             }
 
             if (!GDKXHelper.IsGDKXInstalled(true))
-            { return; }
+            { return false; }
 
             EProxyEnabledCheckResult proxyCheckResult = await IsProxyEnabled();
             if (proxyCheckResult != EProxyEnabledCheckResult.ProxyEnabled)
             {
-                return;
+                if (proxyCheckResult == EProxyEnabledCheckResult.ProxyDisabled)
+                {
+                    return true;
+                }
+                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_ERROR_CONNECTION_DESC"));
             }
             switch (_deviceType)
             {
                 case DeviceType.XboxConsole:
+                    var current = await CreateDeviceConfiguration().ReadAsync();
+                    var description = current.State == ProxyConfigurationState.Enabled && !OwnsEndpoint(current.Endpoint)
+                        ? Localization.GetLocalizedString("PROXY_DISABLE_FOREIGN_CONFIRM", current.Endpoint)
+                        : Localization.GetLocalizedString("PROXY_ERROR_RESTART_DESC");
                     if (MessageBox.Show(
-                        Localization.GetLocalizedString("PROXY_ERROR_RESTART_DESC"),
+                        description,
                         Localization.GetLocalizedString("PROXY_ERROR_RESTART_REQUIRED"),
                         MessageBoxButton.OKCancel,
                         MessageBoxImage.Exclamation) != MessageBoxResult.OK)
                     {
-                        return;
+                        return false;
                     }
 
                     // TODO: async this, it hangs the UI if the Xbox is not connected
@@ -431,13 +801,14 @@ namespace XMAT.WebServiceCapture
                            Localization.GetLocalizedString("PROXY_ERROR_CONNECTION"),
                            MessageBoxButton.OK,
                            MessageBoxImage.Error);
-                        return;
+                        return false;
                     }
                     break;
 
                 default:
                     throw new NotImplementedException($"Unimplemented device {DeviceName}");
             }
+            return true;
         }
 
         public void ShowGenericProxyDetails()
@@ -449,10 +820,27 @@ namespace XMAT.WebServiceCapture
 
         internal async Task StartProxyAsync(bool bShowProxyInformation)
         {
+            if (_readOnly || HasPendingPort)
+            {
+                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_PORT_PENDING_START"));
+            }
+            if (_portReservation == null)
+            {
+                RestoreCurrentPort(false);
+            }
+            if (_portReservation == null)
+            {
+                throw new InvalidOperationException(PortStatus);
+            }
+            await StartProxyCoreAsync(bShowProxyInformation, Port);
+        }
+
+        private async Task StartProxyCoreAsync(bool bShowProxyInformation, UInt16 port)
+        {
             var options = new WebServiceProxyOptions
             {
                 LogFilePath = $"{DeviceName.Replace(" ", "")}-wspe.log",
-                Port = Port
+                Port = port
             };
 
             _captureCallbacks.StartAccepting();
@@ -707,6 +1095,16 @@ namespace XMAT.WebServiceCapture
             return new TransitionLease(this);
         }
 
+        internal IDisposable BeginDeviceTransition()
+        {
+            if (_readOnly || IsTransitioning)
+            {
+                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_OPERATION_BUSY"));
+            }
+            IsTransitioning = true;
+            return new TransitionLease(this);
+        }
+
         private IDataRecord DataRecordFromRow(Int64 rowId)
         {
             var records = _dataTable.Dataset.DataRecordsFrom(rowId, 1);
@@ -759,77 +1157,168 @@ namespace XMAT.WebServiceCapture
             return BlockList.IsBlocked(host, path);
         }
 
-        private async void WebProxy_ReceivedSslConnectionRequestAsync(object sender, SslConnectionRequestEventArgs connectionEvent)
+        private Task<bool> WebProxy_ReceivedSslConnectionRequestAsync(
+            SslConnectionRequestEventArgs connectionEvent,
+            CancellationToken requestCancellation)
         {
-            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            return ExecuteCapturePolicyAsync(
+                "SSL connection",
+                async cancellationToken =>
+                {
+                    var scriptParameters = new WebServiceCaptureScriptParams
+                    {
+                        Request = connectionEvent.Request,
+                        Response = null
+                    };
+                    ScriptPolicyResult scriptResult = await RunScriptPolicyAsync(
+                        WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                        scriptParameters,
+                        "SSL connection",
+                        cancellationToken).ConfigureAwait(false);
+                    if (scriptResult == ScriptPolicyResult.Aborted)
+                    {
+                        return false;
+                    }
+
+                    bool acceptConnection =
+                        scriptResult == ScriptPolicyResult.FailedOpen ||
+                        scriptParameters.Continue;
+                    if (acceptConnection && IsRequestBlocked(connectionEvent.Request))
+                    {
+                        PublicUtilities.AppLog(LogLevel.INFO,
+                            $"Blocked SSL CONNECT to '{connectionEvent.Request.Host ?? connectionEvent.Request.Path}' (BlockList)");
+                        acceptConnection = false;
+                    }
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    string base64Body = string.Empty;
+                    if (connectionEvent.Request.BodyBytes != null)
+                        base64Body = Convert.ToBase64String(connectionEvent.Request.BodyBytes);
+
+                    long rowId = _dataTable.AddRow(
+                        DeviceName,
+                        (long)connectionEvent.Request.RequestNumber,
+                        (long)connectionEvent.ConnectionID,
+                        ProxyConnectionModel.ToDateTimeString(connectionEvent.Timestamp),
+                        string.Empty,
+                        connectionEvent.Request.Scheme,
+                        connectionEvent.Request.Host,
+                        connectionEvent.Request.Port,
+                        connectionEvent.Request.Method,
+                        connectionEvent.Request.Path,
+                        string.Empty,
+                        connectionEvent.Request.FirstLineAndHeaders,
+                        base64Body,
+                        string.Empty,
+                        string.Empty,
+                        connectionEvent.ClientIP
+                    );
+
+                    var addedRecord = DataRecordFromRow(rowId);
+                    _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
+                    return acceptConnection;
+                },
+                requestCancellation);
+        }
+
+        private async Task<bool> ExecuteCapturePolicyAsync(
+            string policyName,
+            Func<CancellationToken, Task<bool>> policy,
+            CancellationToken requestCancellation)
+        {
+            if (requestCancellation.IsCancellationRequested ||
+                !_captureCallbacks.TryBegin(out var callbackLease))
             {
-                connectionEvent.AcceptConnection = false;
-                return;
+                return false;
             }
 
             using var callbackLeaseScope = callbackLease;
-            var cancellationToken =
+            CancellationToken captureCancellation =
                 _captureCallbackCancellationTokenSource?.Token ??
                 CancellationToken.None;
+            using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                requestCancellation,
+                captureCancellation);
             try
             {
-                // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
-                var sp = new WebServiceCaptureScriptParams() { Request = connectionEvent.Request, Response = null };
-                await Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest].RunScriptAsync(
-                    sp,
-                    cancellationToken);
-                connectionEvent.AcceptConnection = sp.Continue;
+                bool accepted = await policy(linkedCancellation.Token).ConfigureAwait(false);
+                return accepted && !linkedCancellation.IsCancellationRequested;
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
             {
-                connectionEvent.AcceptConnection = false;
-                return;
+                return false;
             }
-            catch (Exception e)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"SSL connection script error {e}");
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"{policyName} capture policy failed: {ex}");
+                return false;
             }
+        }
 
-            if (connectionEvent.AcceptConnection && IsRequestBlocked(connectionEvent.Request))
+        private async Task<ScriptPolicyResult> RunScriptPolicyAsync(
+            WebServiceCaptureScriptableEventType eventType,
+            WebServiceCaptureScriptParams scriptParameters,
+            string scriptName,
+            CancellationToken cancellationToken)
+        {
+            ScriptModel script = Scripts[eventType];
+            if (!script.IsEnabled)
             {
-                PublicUtilities.AppLog(LogLevel.INFO,
-                    $"Blocked SSL CONNECT to '{connectionEvent.Request.Host ?? connectionEvent.Request.Path}' (BlockList)");
-                connectionEvent.AcceptConnection = false;
+                return ScriptPolicyResult.Completed;
             }
 
-            if (cancellationToken.IsCancellationRequested)
+            using var scriptCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            scriptCancellation.CancelAfter(_scriptExecutionDeadline);
+            CancellationToken scriptToken = scriptCancellation.Token;
+            // Isolate synchronous user code so the transport can enforce its deadline.
+            Task<WebServiceCaptureScriptParams> scriptTask = Task.Run(
+                () => script.RunScriptAsync(
+                    scriptParameters,
+                    scriptToken));
+            try
             {
-                connectionEvent.AcceptConnection = false;
-                return;
+                await scriptTask.WaitAsync(scriptToken).ConfigureAwait(false);
+                return scriptCancellation.IsCancellationRequested
+                    ? ScriptPolicyResult.Aborted
+                    : ScriptPolicyResult.Completed;
             }
+            catch (OperationCanceledException) when (scriptCancellation.IsCancellationRequested)
+            {
+                ObserveAbandonedScript(scriptTask);
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    PublicUtilities.AppLog(
+                        LogLevel.ERROR,
+                        $"{scriptName} script exceeded the {_scriptExecutionDeadline.TotalSeconds:g} second deadline.");
+                }
+                return ScriptPolicyResult.Aborted;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                if (scriptCancellation.IsCancellationRequested)
+                {
+                    return ScriptPolicyResult.Aborted;
+                }
 
-            string base64Body = string.Empty;
-            if (connectionEvent.Request.BodyBytes != null)
-                base64Body = Convert.ToBase64String(connectionEvent.Request.BodyBytes);
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"{scriptName} script error {ex}");
+                return ScriptPolicyResult.FailedOpen;
+            }
+        }
 
-            // see layout in WebServiceCaptureMethod.InitializeDataTables()
-
-            long rowId = _dataTable.AddRow(
-                DeviceName,
-                (long)connectionEvent.Request.RequestNumber,
-                (long)connectionEvent.ConnectionID,
-                ProxyConnectionModel.ToDateTimeString(connectionEvent.Timestamp),
-                string.Empty,
-                connectionEvent.Request.Scheme,
-                connectionEvent.Request.Host,
-                connectionEvent.Request.Port,
-                connectionEvent.Request.Method,
-                connectionEvent.Request.Path,
-                string.Empty,
-                connectionEvent.Request.FirstLineAndHeaders,
-                base64Body,
-                string.Empty,
-                string.Empty,
-                connectionEvent.ClientIP
-            );
-
-            var addedRecord = DataRecordFromRow(rowId);
-            _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
+        private static void ObserveAbandonedScript(Task scriptTask)
+        {
+            _ = scriptTask.ContinueWith(
+                completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously |
+                    TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
         }
 
         private void WebProxy_CompletedSslConnectionRequest(object sender, SslConnectionCompletionEventArgs completionEvent)
@@ -856,137 +1345,124 @@ namespace XMAT.WebServiceCapture
             _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord));
         }
 
-        private async void WebProxy_ReceivedWebRequestAsync(object sender, HttpRequestEventArgs requestEvent)
+        private Task<bool> WebProxy_ReceivedWebRequestAsync(
+            HttpRequestEventArgs requestEvent,
+            CancellationToken requestCancellation)
         {
-            if (!_captureCallbacks.TryBegin(out var callbackLease))
-            {
-                requestEvent.AcceptRequest = false;
-                return;
-            }
+            return ExecuteCapturePolicyAsync(
+                "Web request",
+                async cancellationToken =>
+                {
+                    var scriptParameters = new WebServiceCaptureScriptParams
+                    {
+                        Request = requestEvent.Request,
+                        Response = null
+                    };
+                    ScriptPolicyResult scriptResult = await RunScriptPolicyAsync(
+                        WebServiceCaptureScriptableEventType.WebRequest,
+                        scriptParameters,
+                        "WebRequest",
+                        cancellationToken).ConfigureAwait(false);
+                    if (scriptResult == ScriptPolicyResult.Aborted)
+                    {
+                        return false;
+                    }
 
-            using var callbackLeaseScope = callbackLease;
-            var cancellationToken =
-                _captureCallbackCancellationTokenSource?.Token ??
-                CancellationToken.None;
-            try
-            {
-                // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
-                var sp = new WebServiceCaptureScriptParams() { Request = requestEvent.Request, Response = null };
-                await Scripts[WebServiceCaptureScriptableEventType.WebRequest].RunScriptAsync(
-                    sp,
-                    cancellationToken);
-                requestEvent.AcceptRequest = sp.Continue;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                requestEvent.AcceptRequest = false;
-                return;
-            }
-            catch (Exception e)
-            {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"WebRequest script error {e}");
-            }
+                    bool acceptRequest =
+                        scriptResult == ScriptPolicyResult.FailedOpen ||
+                        scriptParameters.Continue;
+                    if (acceptRequest && IsRequestBlocked(requestEvent.Request))
+                    {
+                        PublicUtilities.AppLog(LogLevel.INFO,
+                            $"Blocked {requestEvent.Request.Method} {requestEvent.Request.Host}{requestEvent.Request.Path} (BlockList)");
+                        acceptRequest = false;
+                    }
 
-            if (requestEvent.AcceptRequest && IsRequestBlocked(requestEvent.Request))
-            {
-                PublicUtilities.AppLog(LogLevel.INFO,
-                    $"Blocked {requestEvent.Request.Method} {requestEvent.Request.Host}{requestEvent.Request.Path} (BlockList)");
-                requestEvent.AcceptRequest = false;
-            }
+                    cancellationToken.ThrowIfCancellationRequested();
 
-            if (cancellationToken.IsCancellationRequested)
-            {
-                requestEvent.AcceptRequest = false;
-                return;
-            }
+                    string base64Body = string.Empty;
+                    if (requestEvent.Request.BodyBytes != null)
+                        base64Body = Convert.ToBase64String(requestEvent.Request.BodyBytes);
 
-            string base64Body = string.Empty;
-            if (requestEvent.Request.BodyBytes != null)
-                base64Body = Convert.ToBase64String(requestEvent.Request.BodyBytes);
+                    long rowId = _dataTable.AddRow(
+                        DeviceName,
+                        (long)requestEvent.Request.RequestNumber,
+                        (long)requestEvent.ConnectionID,
+                        ProxyConnectionModel.ToDateTimeString(requestEvent.Timestamp),
+                        string.Empty,
+                        requestEvent.Request.Scheme,
+                        requestEvent.Request.Host,
+                        requestEvent.Request.Port,
+                        requestEvent.Request.Method,
+                        requestEvent.Request.Path,
+                        string.Empty,
+                        requestEvent.Request.FirstLineAndHeaders,
+                        base64Body,
+                        string.Empty,
+                        string.Empty,
+                        DeviceName
+                    );
 
-            // see layout in WebServiceCaptureMethod.InitializeDataTables()
-
-            long rowId = _dataTable.AddRow(
-                DeviceName,
-                (long)requestEvent.Request.RequestNumber,
-                (long)requestEvent.ConnectionID,
-                ProxyConnectionModel.ToDateTimeString(requestEvent.Timestamp),
-                string.Empty,
-                requestEvent.Request.Scheme,
-                requestEvent.Request.Host,
-                requestEvent.Request.Port,
-                requestEvent.Request.Method,
-                requestEvent.Request.Path,
-                string.Empty,
-                requestEvent.Request.FirstLineAndHeaders,
-                base64Body,
-                string.Empty,
-                string.Empty,
-                DeviceName
-            );
-
-            var addedRecord = DataRecordFromRow(rowId);
-            _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
+                    var addedRecord = DataRecordFromRow(rowId);
+                    _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
+                    return acceptRequest;
+                },
+                requestCancellation);
         }
 
-        private async void WebProxy_ReceivedWebResponseAsync(object sender, HttpResponseEventArgs responseEvent)
+        private Task<bool> WebProxy_ReceivedWebResponseAsync(
+            HttpResponseEventArgs responseEvent,
+            CancellationToken requestCancellation)
         {
-            if (!_captureCallbacks.TryBegin(out var callbackLease))
-            {
-                responseEvent.SendResponse = false;
-                return;
-            }
+            return ExecuteCapturePolicyAsync(
+                "Web response",
+                async cancellationToken =>
+                {
+                    var scriptParameters = new WebServiceCaptureScriptParams
+                    {
+                        Request = responseEvent.Request,
+                        Response = responseEvent.Response
+                    };
+                    ScriptPolicyResult scriptResult = await RunScriptPolicyAsync(
+                        WebServiceCaptureScriptableEventType.WebResponse,
+                        scriptParameters,
+                        "WebResponse",
+                        cancellationToken).ConfigureAwait(false);
+                    if (scriptResult == ScriptPolicyResult.Aborted)
+                    {
+                        return false;
+                    }
 
-            using var callbackLeaseScope = callbackLease;
-            var cancellationToken =
-                _captureCallbackCancellationTokenSource?.Token ??
-                CancellationToken.None;
-            try
-            {
-                // Vars passed into the script are modified for realsies...so if a user modifies the Request/Response object in the script, the real Request/Response object is changed here in the app
-                var sp = new WebServiceCaptureScriptParams() { Request = responseEvent.Request, Response = responseEvent.Response };
-                await Scripts[WebServiceCaptureScriptableEventType.WebResponse].RunScriptAsync(
-                    sp,
-                    cancellationToken);
-                responseEvent.SendResponse = sp.Continue;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                responseEvent.SendResponse = false;
-                return;
-            }
-            catch (Exception e)
-            {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"WebResponse script error {e}");
-            }
+                    bool sendResponse =
+                        scriptResult == ScriptPolicyResult.FailedOpen ||
+                        scriptParameters.Continue;
+                    cancellationToken.ThrowIfCancellationRequested();
 
-            if (cancellationToken.IsCancellationRequested)
-            {
-                responseEvent.SendResponse = false;
-                return;
-            }
+                    var record = _dataTable.Dataset.DataRecordsWhen(
+                        new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName),
+                        new FieldValue<long>(WebServiceCaptureMethod.FieldKey_RequestNumber, responseEvent.Response.RequestNumber),
+                        new FieldValue<long>(WebServiceCaptureMethod.FieldKey_ConnectionId, responseEvent.ConnectionID)
+                    ).FirstOrDefault();
 
-            var record = _dataTable.Dataset.DataRecordsWhen(
-                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName),
-                new FieldValue<long>(WebServiceCaptureMethod.FieldKey_RequestNumber, responseEvent.Response.RequestNumber),
-                new FieldValue<long>(WebServiceCaptureMethod.FieldKey_ConnectionId, responseEvent.ConnectionID)
-            ).FirstOrDefault();
+                    if (record != null)
+                    {
+                        var base64Body = Convert.ToBase64String(responseEvent.Response.BodyBytes);
 
-            if (record != null)
-            {
-                var base64Body = Convert.ToBase64String(responseEvent.Response.BodyBytes);
+                        _dataTable.UpdateRow(
+                            record.RowId,
+                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp, ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)),
+                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, responseEvent.Response.Status),
+                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders, responseEvent.Response.FirstLineAndHeaders),
+                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body)
+                        );
 
-                _dataTable.UpdateRow(
-                    record.RowId,
-                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp, ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)),
-                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, responseEvent.Response.Status),
-                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders, responseEvent.Response.FirstLineAndHeaders),
-                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body)
-                );
+                        var updatedRecord = DataRecordFromRow(record.RowId);
+                        _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord));
+                    }
 
-                var updatedRecord = DataRecordFromRow(record.RowId);
-                _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord));
-            }
+                    return sendResponse;
+                },
+                requestCancellation);
         }
 
         private void WebProxy_WebSocketMessage(object sender, WebSocketMessageEventArgs messageEvent)

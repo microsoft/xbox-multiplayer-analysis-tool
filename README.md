@@ -81,6 +81,43 @@ Note that once a port has been chosen for a particular device that is being capt
 the available proxy ports from the preferences will not alter the designated port for the already added
 device proxy session.
 
+XMAT keeps each open capture's port reserved, including while capture is stopped and after
+remembered devices are restored. Editing the automatic allocation range does not free ports
+belonging to existing tabs. One managed proxy endpoint is supported per device; adding a known
+existing device selects its current tab instead of creating a second proxy session. A separate
+Network Trace capture and read-only imported captures are still supported.
+
+### Changing a Proxy Port
+
+Select the device's existing tab, stop capture, then choose **Actions > Change Proxy Port**. You can choose any
+unassigned port from **1 through 65535**, including ports outside the automatic range in
+Preferences. The capture history, filters, and selection are retained.
+
+The bottom status bar shows the selected capture's running/stopped state, assigned port, and
+pending-change or device-configuration details. Endpoint confirmation is shown separately from
+local capture activity, so stopping capture does not leave a message claiming it is still running.
+
+- **Apply now** starts the replacement listener before changing device settings. For an Xbox,
+  it disables/re-enables proxying and waits for the required restarts; the console may reboot
+  twice. The popup explains this before you consent. Other devices remain stoppable while the
+  console restarts.
+- **Later** saves a pending replacement without changing the device or its current assigned
+  port. Both ports remain protected, including after restarting XMAT. Starting/enabling the
+  capture offers the pending change again; **Discard pending change** keeps the current port.
+- **Cancel** closes the popup without accepting a new selection.
+
+The new port is not silently substituted for the device's old endpoint. If binding, saving, or
+device configuration fails, XMAT reports the failed step and preserves the assignments needed
+for recovery. Once a replacement is saved and the device may already be using it, an uncertain
+activation does not automatically tear down its listener or revert to the old port. For an Xbox,
+use **Check Proxy Status** before retrying, stopping, or disabling it. Canceling an apply stops
+subsequent steps; a console reboot or SDK operation already requested cannot be undone.
+
+For a generic/manual device, XMAT cannot edit its proxy settings remotely. Stop the device/app
+from using the old endpoint, confirm that in the popup, then update its settings to the new
+endpoint shown by XMAT. Different applications can use independently configured generic
+listeners, but enabling two global proxy endpoints does not duplicate the same device traffic.
+
 
 ### Enabling/Starting Proxying
 
@@ -96,6 +133,23 @@ _Screenshot of Xbox Multiplayer Analysis Tool when hitting the Enable Proxy butt
 
 A kit will remain enabled to proxy until told to disable proxying through the “Disable Xbox Proxy” tool bar
 option, even after successive console reboots, and restarts of the Xbox Multiplayer Analysis Tool application.
+
+**Stop Capture** stops the local listener; it does not disable or reboot an Xbox.
+**Disable Xbox Proxy** remains available while capture is stopped or after a failed start,
+so clearing stale console settings does not require first starting another listener.
+Status checks show the reported endpoint rather than treating any nonempty proxy host as a
+match. Re-enabling a verified matching endpoint does not rewrite its settings or request another
+reboot; a different existing endpoint is not overwritten automatically.
+
+**Check Proxy Status** is an Xbox action and is not available for Local PC captures.
+Generic/manual devices instead offer **Proxy Setup Details**; that displays connection
+instructions rather than querying device state.
+
+The Xbox proxy-address file is written as NUL-terminated UTF-8. The console loader requires
+that terminator; an EOF-only or CRLF-only file can leave garbage after the port in the reported
+setting. If an older XMAT version configured such a value, explicitly disable and re-enable
+Xbox proxying with the current version to rewrite it. Invalid endpoint suffixes are still
+reported as unverified rather than silently stripped.
 
 A console that has successfully enabled proxying of web service traffic will provide a notification to the kit
 like what is shown below. Even though the Fiddler app is not actually being executed, the words “Fiddler
@@ -204,6 +258,38 @@ connections list will be clear until proxying resumes for that device.
 ![](./ReadmeImages/12.png)
 _Screenshot when Xbox Multiplayer Analysis Tool is closed and reopened -- previous capture device is remembered._
 
+### If Xbox Multiplayer Analysis Tool Closes Unexpectedly
+
+Capturing the **Local PC** points the Windows proxy setting at Xbox Multiplayer Analysis Tool. If the tool ended
+without changing it back, apps that use the Windows proxy would lose internet access, so the tool protects it:
+
+- Before it changes the Windows proxy, the tool records your current proxy settings and starts a small helper
+  process. If the tool then crashes, is ended from Task Manager, or is stopped from a debugger, the helper restores
+  the recorded settings, which are usually a direct connection. If the helper cannot start, the Windows proxy is not
+  changed and the capture does not start.
+- Exiting normally, or an error that closes the tool, also restores the recorded settings.
+- If the helper stops unexpectedly during a capture, the tool restores your settings right away and tells you. Stop,
+  then start capture to resume.
+- The next start finishes any restore that is still pending. If the Windows proxy points at this PC (for example
+  `127.0.0.1:8880`) but nothing is listening there, and either the tool has no record of setting it, which an older
+  version can leave behind, or its settings were changed during the capture, the tool asks before turning that proxy
+  off.
+- If you change the Windows proxy settings yourself during a capture, the tool leaves your changes alone. Stopping
+  the capture turns off only the tool's own proxy; if Windows uses a different proxy by then, the tool leaves it on
+  and tells you.
+
+Limits:
+
+- While the tool is paused in a debugger or not responding, the proxy stays on, because the tool has not ended.
+- If the PC restarts during a capture, the settings are restored the next time you start the tool.
+- If the tool and its helper are ended together, for example by ending the whole process tree, the settings are
+  restored the next time you start the tool.
+- The tool does not capture the Local PC when it runs inside a process group that could end the helper together
+  with it, as some terminals and tools do. Start the tool directly instead.
+- Xbox consoles are never reset automatically. If the tool closed unexpectedly while capturing a console, the next
+  start offers to disable that console's proxy, which restarts the console; the offer is repeated at later starts
+  until you answer it.
+
 
 ## Viewing WebSocket Messages
 
@@ -239,7 +325,10 @@ forwarded to the server.
 **Web Response** – This script is called after the HTTP response is received by the server, but before it is
 forwarded to the client.
 
-Sample scripts are provided as you select each event type to get you started.
+Each event starts with a commented sample script that does nothing until you remove the `//` from the start of
+its example lines. An enabled script runs on every host that passes through that capture unless the script checks
+`Params.Request.Host`, and a **Web Response** script should also skip `CONNECT` requests, because their responses
+open the HTTPS connection. The script editor and the **Script Editor** tab show which scripts are active.
 
 All inspectable and modifiable properties are members of the **Params** object. **Params** contains the web
 **Request** and the web **Response** objects, as well as a Boolean named **Continue** which can be set to **_false_**
@@ -254,11 +343,31 @@ status to determine how your client/title code behaves in the case of an error. 
 **System.Text.Json** namespace is available to use in the scripting engine for easily parsing and
 manipulating JSON content.
 
-To enable a script, complete your code in the text editor, then click the **Enable** button. If any errors are
-detected in the script, the **Script Compilation Status** window will display these errors. Double-click on
-any error in the list to go to the source of the error in the script window. Once the script is enabled, all
-future requests and responses will pass through the script silently, and any modifications you have
-created in the script code will be applied.
+To enable a script, complete your code in the text editor, then click the **Enable** button. While the script
+compiles, the button shows **Compiling…** and can't be clicked again. The script turns on only after it compiles
+without errors. The **Script Compilation Status** window shows the result for the selected event's script. Errors
+are listed there, and the script stays off. Warnings do not prevent the script from turning on; they are listed
+there with the message "Script compiled successfully with warnings." Double-click an error or warning to go to
+its source in the script window. If compiling fails unexpectedly, the script stays off and the window shows
+"Could not compile; script remains disabled. See the app log." The app log has the details. Once enabled, all
+future requests and responses will pass through the script silently, and any modifications you created will be
+applied. Editing a script clears its compilation status: an enabled script turns off, and a script that is
+compiling stays off, until you click **Enable** again. **Load** and **Save** are unavailable while a script is
+compiling or enabled.
+
+Scripts may use `await`. XMAT waits for that event's script before it forwards the request or response.
+Each invocation has a 60-second deadline. If a script reaches the deadline, XMAT writes an error to the app
+log and drops that transaction without sending a response. Stopping capture while a script is running also
+cancels the wait and drops that transaction, but it is not reported as a deadline error. For a CONNECT
+request, the HTTPS tunnel is not opened. The deadline limits one script invocation, not the total time seen
+by the client. Some clients retry a dropped request, and every retry runs the script again.
+
+A **Web Response** script also runs for XMAT's CONNECT reply. Delaying that reply delays every HTTPS tunnel,
+so Web Response scripts should skip CONNECT unless changing tunnel behavior is intentional. Cancellation
+stops XMAT from waiting, but it cannot terminate arbitrary script code. Blocking code may continue running
+in the background after its request has been dropped and continue using worker threads. Later changes to
+`Params.Request` or `Params.Response` are not forwarded or captured, but other side effects performed by the
+script are not undone.
 
 You can also use the **Load** and **Save** buttons to load scripts you have already written and save new scripts
 to disk for later usage. The **Revert to Saved** button can also be used to undo any changes since the last
@@ -473,14 +582,19 @@ choice is remembered the next time the application starts.
 
 ## Known Issues
 
-**Enabling Proxying on a Device twice with a different port the second time will fail to proxy.**
-_Workaround: Make sure to disable proxying first, before re-enabling to ensure the port setting is correct._
+**Xbox proxy endpoint verification depends on the console recovery and installed SDK.**
+Use **Change Proxy Port** for a stopped capture rather than changing an active tab's port indirectly
+through Preferences. If the console cannot report a complete endpoint, XMAT reports it as
+unverified instead of claiming setup succeeded. Explicitly disable proxying, wait for the console
+to return, and check its status before re-enabling or retrying a pending change.
 
 **Proxying with the same header spanned across multiple lines fails to proxy correctly.**
 _Workaround: None currently. Apps like Outlook may fail to function properly when proxying PC._
 
-**Enabling proxying does not confirm settings with user, nor allow cancellation of the process.**
-_Workaround: Be sure to double check that your console device is ready to reboot when enabling._
+**A console reboot or SDK write already requested may not be interruptible.**
+Canceling a port apply prevents later steps but waits for an in-flight mutation to settle.
+Check proxy status before retrying; a saved new port may remain assigned even if activation
+could not be confirmed.
 
 **Potential Future Improvements:**
 

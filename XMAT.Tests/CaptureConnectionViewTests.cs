@@ -394,6 +394,110 @@ namespace XMAT.Tests
             });
         }
 
+        [Theory]
+        [InlineData(DeviceType.LocalPC, false, false)]
+        [InlineData(DeviceType.XboxConsole, false, true)]
+        [InlineData(DeviceType.GenericProxyDevice, false, true)]
+        [InlineData(DeviceType.Unknown, false, false)]
+        [InlineData(DeviceType.XboxConsole, true, false)]
+        [InlineData(DeviceType.GenericProxyDevice, true, false)]
+        public void CheckAction_IsUnavailableForLocalPcAndImports(
+            DeviceType type, bool readOnly, bool available)
+        {
+            _application.Run(window =>
+            {
+                var controller = new WebServiceDeviceCaptureController("test", type, readOnly);
+                var context = new TestCaptureDeviceContext(controller)
+                {
+                    DeviceType = type,
+                    IsReadOnly = readOnly
+                };
+                var view = new CaptureConnectionView { DataContext = context };
+                ((DataGrid)view.FindName("ConnectionList")).IsSynchronizedWithCurrentItem = false;
+                WpfTestHost.Show(window, view);
+                Assert.Equal(available, WebServiceProxyCommands.CheckDevice.CanExecute(null, view));
+                WpfTestHost.Pump();
+                var button = (Button)view.FindName("CheckButton");
+                Assert.Equal(available, button.IsEnabled);
+                Assert.Equal(available ? Visibility.Visible : Visibility.Collapsed, button.Visibility);
+                if (available)
+                {
+                    Assert.Equal(Localization.GetLocalizedString(
+                        type == DeviceType.GenericProxyDevice ? "PROXY_SETUP_DETAILS" : "WEBCAP_CHECK"),
+                        button.Content);
+                }
+                view.DataContext = null;
+            });
+        }
+
+        [Fact]
+        public void CheckAction_ContextChangesRefreshAvailabilityAndCaption()
+        {
+            _application.Run(window =>
+            {
+                var view = new CaptureConnectionView();
+                ((DataGrid)view.FindName("ConnectionList")).IsSynchronizedWithCurrentItem = false;
+                WpfTestHost.Show(window, view);
+                var button = (Button)view.FindName("CheckButton");
+
+                foreach (var type in new[]
+                {
+                    DeviceType.XboxConsole, DeviceType.GenericProxyDevice, DeviceType.LocalPC,
+                    DeviceType.Unknown, DeviceType.XboxConsole
+                })
+                {
+                    view.DataContext = new TestCaptureDeviceContext(
+                        new WebServiceDeviceCaptureController("test", type, false)) { DeviceType = type };
+                    WpfTestHost.Pump();
+                    var available = type is DeviceType.XboxConsole or DeviceType.GenericProxyDevice;
+                    Assert.Equal(available, WebServiceProxyCommands.CheckDevice.CanExecute(null, view));
+                    Assert.Equal(available, button.IsEnabled);
+                    Assert.Equal(available ? Visibility.Visible : Visibility.Collapsed, button.Visibility);
+                    Assert.Equal(Localization.GetLocalizedString(
+                        type == DeviceType.GenericProxyDevice ? "PROXY_SETUP_DETAILS" : "WEBCAP_CHECK"),
+                        button.Content);
+                }
+
+                view.DataContext = null;
+                WpfTestHost.Pump();
+                Assert.False(WebServiceProxyCommands.CheckDevice.CanExecute(null, view));
+                Assert.Equal(Visibility.Collapsed, button.Visibility);
+            });
+        }
+
+        [Fact]
+        public void CheckAction_LocalPcExecutionGuardDoesNotReadNativeSettings()
+        {
+            _application.Run(window =>
+            {
+                var configuration = new UnusedConfiguration();
+                var controller = new WebServiceDeviceCaptureController(
+                    "local", DeviceType.LocalPC, false, new ProxyPortPool(), configuration);
+                var view = new CaptureConnectionView
+                {
+                    DataContext = new TestCaptureDeviceContext(controller) { DeviceType = DeviceType.LocalPC }
+                };
+                typeof(CaptureConnectionView).GetMethod(
+                    "CheckDevice_Executed", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(view, new object[] { view, null });
+                Assert.Equal(0, configuration.ReadCount);
+                view.DataContext = null;
+            });
+        }
+
+        private sealed class UnusedConfiguration : IProxyDeviceConfiguration
+        {
+            private readonly TaskCompletionSource<ProxyConfiguration> _pending = new();
+            internal int ReadCount { get; private set; }
+            public Task<ProxyConfiguration> ReadAsync()
+            {
+                ReadCount++;
+                return _pending.Task;
+            }
+            public Task DisableAsync() => throw new NotSupportedException();
+            public Task EnableAsync(ProxyEndpoint endpoint) => throw new NotSupportedException();
+        }
+
         private static WebServiceDeviceCaptureController Controller() =>
             new("Test device", DeviceType.Unknown, true);
 
@@ -423,7 +527,7 @@ namespace XMAT.Tests
 
         private sealed class TestCaptureDeviceContext : ICaptureDeviceContext
         {
-            public DeviceType DeviceType => DeviceType.Unknown;
+            public DeviceType DeviceType { get; set; } = DeviceType.Unknown;
             public CaptureType CaptureType => CaptureType.WebProxy;
             public string DeviceName => "Test device";
             public bool IsSelected { get; set; }
