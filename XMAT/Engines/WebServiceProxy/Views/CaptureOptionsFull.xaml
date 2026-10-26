@@ -16,9 +16,9 @@
             <TextBlock x:Name="ProxyPoolLabel" Grid.Row="1"  Grid.Column="0" HorizontalAlignment="Stretch"  FontWeight="Bold" Text="Proxy Port Pool"/>
         </StackPanel>
         <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Left">
-            <TextBox x:Name="StartingPort" Width="50" Text="{Binding FirstPort}" HorizontalContentAlignment="Center" VerticalContentAlignment="Top"/>
+            <TextBox x:Name="StartingPort" Width="50" Text="{Binding FirstPort, Mode=OneWay}" HorizontalContentAlignment="Center" VerticalContentAlignment="Top"/>
             <TextBlock x:Name="PortRangeLabel" TextAlignment="Left" Text=" to "/>
-            <TextBox x:Name="EndingPort" Width="50" Text="{Binding LastPort}" HorizontalContentAlignment="Center"/>
+            <TextBox x:Name="EndingPort" Width="50" Text="{Binding LastPort, Mode=OneWay}" HorizontalContentAlignment="Center"/>
         </StackPanel>
     </StackPanel>
 </UserControl>

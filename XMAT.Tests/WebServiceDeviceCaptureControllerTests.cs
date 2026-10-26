@@ -106,6 +106,41 @@ namespace XMAT.Tests
         }
 
         [Theory]
+        [InlineData(DeviceType.LocalPC, "foreign.example", 8080)]
+        [InlineData(DeviceType.LocalPC, "proxy.example", 8081)]
+        [InlineData(DeviceType.XboxConsole, "foreign.example", 8080)]
+        [InlineData(DeviceType.XboxConsole, "proxy.example", 8081)]
+        public async Task CanCloseAsync_ForeignEndpoint_DoesNotPromptOrDisable(
+            DeviceType deviceType, string host, int port)
+        {
+            var controller = CreateController(new PreferencesModel(), deviceType: deviceType,
+                configuration: new(ProxyConfigurationState.Enabled, new(host, (ushort)port)));
+            var operations = new CloseOperations { Confirmation = true };
+
+            Assert.True(await operations.CanCloseAsync(controller));
+
+            Assert.Equal(1, operations.ProxyCheckCount);
+            Assert.Equal(0, operations.PromptCount);
+            Assert.Equal(0, operations.DisableCount);
+        }
+
+        [Theory]
+        [InlineData((int)ProxyConfigurationState.Disabled)]
+        [InlineData((int)ProxyConfigurationState.Unknown)]
+        [InlineData((int)ProxyConfigurationState.Unreachable)]
+        public async Task CanCloseAsync_EndpointNoLongerKnownEnabled_DoesNotPromptOrDisable(int state)
+        {
+            var controller = CreateController(new PreferencesModel(),
+                configuration: new((ProxyConfigurationState)state));
+            var operations = new CloseOperations { Confirmation = true };
+
+            Assert.True(await operations.CanCloseAsync(controller));
+
+            Assert.Equal(0, operations.PromptCount);
+            Assert.Equal(0, operations.DisableCount);
+        }
+
+        [Theory]
         [InlineData(false)]
         [InlineData(null)]
         public async Task CanCloseAsync_WhenDeclinedOrDismissed_LeavesProxyEnabled(bool? confirmation)
@@ -213,6 +248,81 @@ namespace XMAT.Tests
             }
 
             Assert.False(await CanConnectAsync(port));
+            Assert.False(controller.IsRunning);
+            Assert.Equal(Localization.GetLocalizedString("PROXY_ENABLE_FAILED"), controller.PortStatus);
+        }
+
+        [Theory]
+        [InlineData("certificate")]
+        [InlineData("configuration")]
+        [InlineData("reboot")]
+        public async Task XboxSetupWriteFailure_RetainsListenerOnlyWhenDeviceMayUseIt(string phase)
+        {
+            using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            var port = (ushort)((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+            var controller = new WebServiceDeviceCaptureController(
+                "xbox-write-failure", DeviceType.XboxConsole, false, new ProxyPortPool())
+            {
+                Port = port
+            };
+            SetProxy(controller, new WebServiceProxy());
+            var expected = new IOException("native operation failed");
+            byte[] copiedConfiguration = null;
+            string temporaryFile = null;
+            var rebootAttempted = false;
+            try
+            {
+                await controller.StartProxyAsync(false);
+                Task Enable() => controller.EnableDeviceProxyingOrRollBackAsync(() =>
+                    CaptureUtilities.EnableXboxProxyAsync("127.0.0.1", port, () => true,
+                        (source, destination) =>
+                        {
+                            if (destination.EndsWith("ProxyAddress.txt", StringComparison.Ordinal))
+                            {
+                                temporaryFile = source;
+                                copiedConfiguration = File.ReadAllBytes(source);
+                                if (phase == "configuration")
+                                {
+                                    throw new TargetInvocationException(expected);
+                                }
+                            }
+                            else if (phase == "certificate")
+                            {
+                                throw new TargetInvocationException(expected);
+                            }
+                        },
+                        () =>
+                        {
+                            rebootAttempted = true;
+                            throw new TargetInvocationException(expected);
+                        }));
+
+                if (phase == "certificate")
+                {
+                    Assert.Same(expected, await Assert.ThrowsAsync<IOException>(Enable));
+                    Assert.Null(copiedConfiguration);
+                    Assert.False(controller.IsRunning);
+                    Assert.False(await CanConnectAsync(port));
+                    Assert.Equal(Localization.GetLocalizedString("PROXY_ENABLE_FAILED"), controller.PortStatus);
+                }
+                else
+                {
+                    var failure = await Assert.ThrowsAsync<ProxyActivationUncertainException>(Enable);
+                    Assert.Same(expected, failure.InnerException);
+                    Assert.Equal(CaptureUtilities.EncodeXboxProxyAddress("127.0.0.1", port), copiedConfiguration);
+                    Assert.True(controller.IsRunning);
+                    Assert.True(await CanConnectAsync(port));
+                    Assert.Equal(failure.Message, controller.PortStatus);
+                    Assert.False(File.Exists(temporaryFile));
+                }
+                Assert.Equal(phase == "reboot", rebootAttempted);
+            }
+            finally
+            {
+                await controller.CloseAsync();
+            }
         }
 
         [Theory]
@@ -348,12 +458,27 @@ namespace XMAT.Tests
             }
         }
 
-        private static WebServiceDeviceCaptureController CreateController(PreferencesModel preferences, bool readOnly = false)
+        private static WebServiceDeviceCaptureController CreateController(
+            PreferencesModel preferences, bool readOnly = false,
+            DeviceType deviceType = DeviceType.XboxConsole, ProxyConfiguration configuration = null)
         {
-            return new WebServiceDeviceCaptureController("test-console", DeviceType.XboxConsole, readOnly, new ProxyPortPool())
+            var controller = new WebServiceDeviceCaptureController(
+                "test-console", deviceType, readOnly, new ProxyPortPool(),
+                new TestDeviceConfiguration(configuration ??
+                    new(ProxyConfigurationState.Enabled, new("proxy.example", 8080))))
             {
                 CaptureMethod = new TestCaptureMethod(preferences)
             };
+            ((ICaptureMethodParameters)controller.Parameters).DeserializeFrom(
+                JsonSerializer.SerializeToElement(new { Port = (ushort)8080, ProxyHost = "proxy.example" }));
+            return controller;
+        }
+
+        private sealed class TestDeviceConfiguration(ProxyConfiguration configuration) : IProxyDeviceConfiguration
+        {
+            public Task<ProxyConfiguration> ReadAsync() => Task.FromResult(configuration);
+            public Task DisableAsync() => throw new NotSupportedException();
+            public Task EnableAsync(ProxyEndpoint endpoint) => throw new NotSupportedException();
         }
 
         private sealed class TestCaptureMethod : ICaptureMethod

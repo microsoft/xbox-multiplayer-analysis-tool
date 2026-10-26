@@ -220,6 +220,105 @@ namespace XMAT.Tests
             Assert.Equal("stop", setup.Events.Last());
         }
 
+        [Theory]
+        [InlineData("initial", false)]
+        [InlineData("initial", true)]
+        [InlineData("disable", false)]
+        [InlineData("disable", true)]
+        [InlineData("enable", false)]
+        [InlineData("enable", true)]
+        public async Task Apply_StalledConfigurationRead_RespectsTimeoutAndCancellation(string phase, bool cancel)
+        {
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var read = new TaskCompletionSource<ProxyConfiguration>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var setup = new Setup();
+            setup.ReadAsyncOverride = () =>
+            {
+                if (phase == "initial" || setup.Events.Contains(phase))
+                {
+                    started.TrySetResult();
+                    return read.Task;
+                }
+                return Task.FromResult(setup.Current);
+            };
+            using var cancellation = new CancellationTokenSource();
+            var applying = setup.ApplyAsync(cancellation.Token,
+                cancel ? TimeSpan.FromSeconds(10) : TimeSpan.FromMilliseconds(200));
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                if (cancel)
+                {
+                    cancellation.Cancel();
+                }
+                await Task.WhenAny(applying, Task.Delay(TimeSpan.FromSeconds(3)));
+                Assert.True(applying.IsCompleted, "A stalled configuration read blocked cancellation or the deadline.");
+                if (cancel)
+                {
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => applying);
+                }
+                else
+                {
+                    await Assert.ThrowsAsync<TimeoutException>(() => applying);
+                }
+
+                Assert.Equal(phase == "enable", setup.Committed);
+                Assert.Equal(phase == "disable", setup.Events.Contains("stop"));
+                if (phase == "initial")
+                {
+                    Assert.Equal(new[] { "read" }, setup.Events);
+                }
+                else if (phase == "disable")
+                {
+                    Assert.DoesNotContain("enable", setup.Events);
+                }
+            }
+            finally
+            {
+                cancellation.Cancel();
+                read.TrySetResult(setup.Current);
+                try
+                {
+                    await applying;
+                }
+                catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
+                {
+                }
+            }
+        }
+
+        [Fact]
+        public async Task Apply_PollingDelay_IsBoundedByRemainingDeadline()
+        {
+            var delay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var setup = new Setup
+            {
+                ReadOverride = () => new(ProxyConfigurationState.Enabled, Setup.Old),
+                DelayOverride = _ => delay.Task
+            };
+            var applying = setup.ApplyAsync(timeout: TimeSpan.FromMilliseconds(200));
+            try
+            {
+                await Task.WhenAny(applying, Task.Delay(TimeSpan.FromSeconds(3)));
+                Assert.True(applying.IsCompleted, "The polling delay exceeded the configuration deadline.");
+                await Assert.ThrowsAsync<TimeoutException>(() => applying);
+                Assert.False(setup.Committed);
+                Assert.DoesNotContain("enable", setup.Events);
+                Assert.Equal(new[] { "read", "start", "disable", "read", "stop" }, setup.Events);
+            }
+            finally
+            {
+                delay.TrySetResult();
+                try
+                {
+                    await applying;
+                }
+                catch (TimeoutException)
+                {
+                }
+            }
+        }
+
         private sealed class Setup : IProxyDeviceConfiguration
         {
             internal static readonly ProxyEndpoint Old = new("192.0.2.10", 8880);
@@ -230,7 +329,9 @@ namespace XMAT.Tests
             internal bool Committed { get; private set; }
             internal string Status { get; private set; }
             internal Func<ProxyConfiguration> ReadOverride { get; set; }
+            internal Func<Task<ProxyConfiguration>> ReadAsyncOverride { get; set; }
             internal Func<Task> DisableOverride { get; set; }
+            internal Func<CancellationToken, Task> DelayOverride { get; set; }
 
             internal Task ApplyAsync(CancellationToken token = default, TimeSpan? timeout = null)
             {
@@ -241,7 +342,7 @@ namespace XMAT.Tests
                         Event("commit").GetAwaiter().GetResult();
                         Committed = true;
                     },
-                    value => Status = value, _ => Task.CompletedTask, timeout);
+                    value => Status = value, DelayOverride ?? (_ => Task.CompletedTask), timeout);
                 return operation.ApplyAsync(endpoint => endpoint.Matches(Old), Desired, token);
             }
 
@@ -258,7 +359,7 @@ namespace XMAT.Tests
             public Task<ProxyConfiguration> ReadAsync()
             {
                 Events.Add("read");
-                return Task.FromResult(ReadOverride?.Invoke() ?? Current);
+                return ReadAsyncOverride?.Invoke() ?? Task.FromResult(ReadOverride?.Invoke() ?? Current);
             }
 
             public async Task DisableAsync()

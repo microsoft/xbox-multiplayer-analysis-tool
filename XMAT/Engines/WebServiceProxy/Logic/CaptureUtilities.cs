@@ -13,6 +13,15 @@ using static XboxClient.XboxClientConnection;
 
 namespace XMAT.WebServiceCapture
 {
+    internal sealed class ProxyActivationUncertainException : InvalidOperationException
+    {
+        internal ProxyActivationUncertainException(int port, Exception innerException)
+            : base(Localization.GetLocalizedString(
+                "PROXY_ENABLE_UNCERTAIN", port, innerException.GetBaseException().Message), innerException)
+        {
+        }
+    }
+
     internal static class CaptureUtilities
     {
         private static string CertFile = "XMATRoot.cer"; // Locally we use XMAT... but on the box we need to user FiddlerRoot
@@ -33,24 +42,42 @@ namespace XMAT.WebServiceCapture
 
         internal static Task<bool> EnableXboxProxyAsync(string ipAddress, string proxyAddr, int port)
         {
+            return EnableXboxProxyAsync(proxyAddr, port,
+                () => XboxClientConnection.IsOnline(ipAddress),
+                (source, destination) => XboxClientConnection.CopyFile(ipAddress, source, destination),
+                () => XboxClientConnection.Reboot(ipAddress));
+        }
+
+        internal static Task<bool> EnableXboxProxyAsync(
+            string proxyAddr, int port, Func<bool> isOnline,
+            Action<string, string> copyFile, Action reboot)
+        {
             return Task.Run(() =>
             {
                 var configFile = Path.GetTempFileName();
+                var configurationWriteAttempted = false;
                 try
                 {
                     File.WriteAllBytes(configFile, EncodeXboxProxyAddress(proxyAddr, port));
-                    if (!XboxClientConnection.IsOnline(ipAddress))
+                    if (!isOnline())
                     {
                         return false;
                     }
-                    XboxClientConnection.CopyFile(ipAddress, GetPath(CertFile), XboxCertPath);
-                    XboxClientConnection.CopyFile(ipAddress, configFile, XboxConfigPath);
-                    XboxClientConnection.Reboot(ipAddress);
+                    copyFile(GetPath(CertFile), XboxCertPath);
+                    configurationWriteAttempted = true;
+                    copyFile(configFile, XboxConfigPath);
+                    reboot();
                     return true;
                 }
-                catch (TargetInvocationException ex) when (ex.InnerException != null)
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
                 {
-                    ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+                    var failure = ex is TargetInvocationException { InnerException: not null }
+                        ? ex.InnerException : ex;
+                    if (configurationWriteAttempted)
+                    {
+                        throw new ProxyActivationUncertainException(port, failure);
+                    }
+                    ExceptionDispatchInfo.Capture(failure).Throw();
                     throw;
                 }
                 finally

@@ -137,6 +137,16 @@ namespace XMAT
                 _closeConfirmed = true;
                 Close();
             }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                _closeConfirmed = false;
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Failed to close the application: {ex}");
+                MessageBox.Show(
+                    Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_MESSAGE", ex.Message),
+                    Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_TITLE"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
             finally
             {
                 _isCloseInProgress = false;

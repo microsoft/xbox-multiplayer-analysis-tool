@@ -552,9 +552,14 @@ namespace XMAT.WebServiceCapture
             }
 
             var proxyCheckResult = await checkProxyEnabledAsync();
-            if (proxyCheckResult == EProxyEnabledCheckResult.ProxyEnabled && confirmDisableProxy() == true)
+            if (proxyCheckResult == EProxyEnabledCheckResult.ProxyEnabled)
             {
-                await disableProxyAsync();
+                var configuration = await CreateDeviceConfiguration().ReadAsync();
+                if (configuration.State == ProxyConfigurationState.Enabled &&
+                    OwnsEndpoint(configuration.Endpoint) && confirmDisableProxy() == true)
+                {
+                    await disableProxyAsync();
+                }
             }
 
             return true;
@@ -679,6 +684,8 @@ namespace XMAT.WebServiceCapture
                 var desired = new ProxyEndpoint(sourceAddress, Port);
                 if (configuration.Endpoint.Matches(desired))
                 {
+                    _parameters.ProxyHost = sourceAddress;
+                    PortStatus = Localization.GetLocalizedString("PROXY_PORT_APPLIED");
                     return true;
                 }
                 throw new InvalidOperationException(
@@ -727,70 +734,69 @@ namespace XMAT.WebServiceCapture
             return false;
         }
 
-        internal async Task<bool> DisableProxying()
+        internal Task<bool> DisableProxying() => DisableProxying(description =>
+            MessageBox.Show(
+                description,
+                Localization.GetLocalizedString("PROXY_ERROR_RESTART_REQUIRED"),
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Exclamation) == MessageBoxResult.OK);
+
+        internal async Task<bool> DisableProxying(Func<string, bool> confirmDisableXboxProxy)
         {
-            using var target = await ProxyDeviceOperations.AcquireAsync(_deviceType, DeviceName);
-            switch (_deviceType)
+            try
             {
-                case DeviceType.LocalPC:
-                    var configuration = await Task.Run(InternetProxy.ReadConfiguration);
-                    configuration.RequireKnown();
-                    if (configuration.State == ProxyConfigurationState.Enabled && !OwnsEndpoint(configuration.Endpoint))
-                    {
-                        throw new InvalidOperationException(Localization.GetLocalizedString(
-                            "PROXY_ENDPOINT_CONFLICT", configuration.Endpoint, new ProxyEndpoint("127.0.0.1", Port)));
-                    }
-                    await Task.Run(InternetProxy.Disable);
-                    return true;
-
-                case DeviceType.GenericProxyDevice:
-                    return true;
-            }
-
-            if (!GDKXHelper.IsGDKXInstalled(true))
-            { return false; }
-
-            EProxyEnabledCheckResult proxyCheckResult = await IsProxyEnabled();
-            if (proxyCheckResult != EProxyEnabledCheckResult.ProxyEnabled)
-            {
-                if (proxyCheckResult == EProxyEnabledCheckResult.ProxyDisabled)
+                using var target = await ProxyDeviceOperations.AcquireAsync(_deviceType, DeviceName);
+                if (_deviceType == DeviceType.GenericProxyDevice)
                 {
+                    PortStatus = Localization.GetLocalizedString("PROXY_PORT_MANUAL");
                     return true;
                 }
-                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_ERROR_CONNECTION_DESC"));
+
+                if (_deviceType == DeviceType.XboxConsole &&
+                    _deviceConfiguration == null && !GDKXHelper.IsGDKXInstalled(true))
+                {
+                    PortStatus = Localization.GetLocalizedString("PROXY_DISABLE_FAILED");
+                    return false;
+                }
+
+                var device = CreateDeviceConfiguration();
+                var current = await device.ReadAsync();
+                if (_deviceType == DeviceType.LocalPC || current.State == ProxyConfigurationState.Unreachable)
+                {
+                    current.RequireKnown();
+                }
+                if (current.State == ProxyConfigurationState.Disabled)
+                {
+                    PortStatus = Localization.GetLocalizedString("PROXY_DISABLED");
+                    return true;
+                }
+                if (_deviceType == DeviceType.LocalPC && !OwnsEndpoint(current.Endpoint))
+                {
+                    throw new InvalidOperationException(Localization.GetLocalizedString(
+                        "PROXY_ENDPOINT_CONFLICT", current.Endpoint, new ProxyEndpoint("127.0.0.1", Port)));
+                }
+                if (_deviceType == DeviceType.XboxConsole)
+                {
+                    var description = current.State == ProxyConfigurationState.Unknown
+                        ? Localization.GetLocalizedString("PROXY_DISABLE_UNKNOWN_CONFIRM")
+                        : !OwnsEndpoint(current.Endpoint)
+                            ? Localization.GetLocalizedString("PROXY_DISABLE_FOREIGN_CONFIRM", current.Endpoint)
+                            : Localization.GetLocalizedString("PROXY_ERROR_RESTART_DESC");
+                    if (!confirmDisableXboxProxy(description))
+                    {
+                        return false;
+                    }
+                }
+
+                await device.DisableAsync();
+                PortStatus = Localization.GetLocalizedString("PROXY_DISABLE_REQUESTED");
+                return true;
             }
-            switch (_deviceType)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                case DeviceType.XboxConsole:
-                    var current = await CreateDeviceConfiguration().ReadAsync();
-                    var description = current.State == ProxyConfigurationState.Enabled && !OwnsEndpoint(current.Endpoint)
-                        ? Localization.GetLocalizedString("PROXY_DISABLE_FOREIGN_CONFIRM", current.Endpoint)
-                        : Localization.GetLocalizedString("PROXY_ERROR_RESTART_DESC");
-                    if (MessageBox.Show(
-                        description,
-                        Localization.GetLocalizedString("PROXY_ERROR_RESTART_REQUIRED"),
-                        MessageBoxButton.OKCancel,
-                        MessageBoxImage.Exclamation) != MessageBoxResult.OK)
-                    {
-                        return false;
-                    }
-
-                    // TODO: async this, it hangs the UI if the Xbox is not connected
-                    if (!await CaptureUtilities.DisableXboxProxyAsync(DeviceName))
-                    {
-                        MessageBox.Show(
-                           Localization.GetLocalizedString("PROXY_ERROR_CONNECTION_DESC"),
-                           Localization.GetLocalizedString("PROXY_ERROR_CONNECTION"),
-                           MessageBoxButton.OK,
-                           MessageBoxImage.Error);
-                        return false;
-                    }
-                    break;
-
-                default:
-                    throw new NotImplementedException($"Unimplemented device {DeviceName}");
+                PortStatus = Localization.GetLocalizedString("PROXY_DISABLE_FAILED");
+                throw;
             }
-            return true;
         }
 
         public void ShowGenericProxyDetails()
@@ -893,24 +899,31 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // Runs after the listener is confirmed. If the device cannot be pointed at the proxy,
-        // the listener is stopped again so nothing is left half-configured.
+        // Retain the listener when a device write may have succeeded despite a reported failure.
         internal async Task EnableDeviceProxyingOrRollBackAsync(Func<Task<bool>> enableDevice)
         {
             var enabled = false;
+            PortStatus = null;
             try
             {
                 enabled = await enableDevice();
             }
+            catch (ProxyActivationUncertainException ex)
+            {
+                PortStatus = ex.Message;
+                throw;
+            }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 await TryStopProxyAfterFailedDeviceSetupAsync();
+                PortStatus = Localization.GetLocalizedString("PROXY_ENABLE_FAILED");
                 throw;
             }
 
             if (!enabled)
             {
                 await TryStopProxyAfterFailedDeviceSetupAsync();
+                PortStatus = Localization.GetLocalizedString("PROXY_ENABLE_FAILED");
             }
         }
 

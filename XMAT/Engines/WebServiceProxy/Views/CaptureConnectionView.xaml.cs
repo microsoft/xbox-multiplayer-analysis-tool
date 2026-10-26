@@ -787,7 +787,7 @@ namespace XMAT.WebServiceCapture
         {
             PublicUtilities.AppLog(LogLevel.ERROR, $"Web proxy operation failed: {ex}");
             MessageBox.Show(
-                ex.GetBaseException().Message,
+                ex is ProxyActivationUncertainException ? ex.Message : ex.GetBaseException().Message,
                 Localization.GetLocalizedString("PROXY_CAPTURE_ERROR_TITLE"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
