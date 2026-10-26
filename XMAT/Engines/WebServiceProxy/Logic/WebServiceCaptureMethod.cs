@@ -56,7 +56,14 @@ namespace XMAT.WebServiceCapture
 
         public void Shutdown()
         {
-            InternetProxy.Disable();
+            try
+            {
+                InternetProxy.Disable();
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Could not disable the system proxy during shutdown: {ex}");
+            }
         }
 
         public bool OwnsDataTable(string tableName)

@@ -11,6 +11,7 @@ using System.Windows.Input;
 using Microsoft.Win32;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT
 {
@@ -57,10 +58,26 @@ namespace XMAT
             CollectLogs.Header = Localization.GetLocalizedString("COLLECT_LOGS");
             ViewGDKXInfo.Header = Localization.GetLocalizedString("GDKX_INFO");
             ActionsMenu.Header = Localization.GetLocalizedString("ACTIONS_MENU");
+            ChangeProxyPort.Header = Localization.GetLocalizedString("PROXY_PORT_CHANGE");
+            ChangeProxyPort.ToolTip = Localization.GetLocalizedString("PROXY_PORT_CHANGE_TOOLTIP");
             ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
 
             // Sync dark mode checkbox with saved preference
             ToggleDarkMode.IsChecked = CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark";
+        }
+
+        private void ChangeProxyPort_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureConnectionView.CanChangeProxyPort(CaptureAppModel.AppModel.SelectedDeviceContext);
+        }
+
+        private async void ChangeProxyPort_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (CaptureConnectionView.TryGetCaptureContext(
+                CaptureAppModel.AppModel.SelectedDeviceContext, out var context, out var controller))
+            {
+                await CaptureConnectionView.ShowPortChangeAsync(context, controller);
+            }
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -113,9 +130,22 @@ namespace XMAT
                     return;
                 }
 
-                CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+                if (!CaptureAppSettings.Serialize(CaptureAppModel.AppModel))
+                {
+                    return;
+                }
                 _closeConfirmed = true;
                 Close();
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                _closeConfirmed = false;
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Failed to close the application: {ex}");
+                MessageBox.Show(
+                    Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_MESSAGE", ex.Message),
+                    Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_TITLE"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             }
             finally
             {
@@ -198,7 +228,8 @@ namespace XMAT
                 var context = CaptureAppModel.AppModel.GetDeviceContext(deviceSelector.SelectedDeviceType, deviceSelector.SelectedDeviceName, deviceSelector.SelectedCaptureType, false);
                 if (context != null)
                 {
-                    MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    CaptureAppModel.AppModel.SelectedDeviceContext = context;
+                    MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
                 else

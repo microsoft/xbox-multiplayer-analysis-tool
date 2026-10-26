@@ -21,10 +21,13 @@
         </Style>
     </UserControl.Resources>
     <UserControl.CommandBindings>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ChangePort}" Executed="ChangePort_Executed" CanExecute="ChangePort_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}" Executed="DiscardPort_Executed" CanExecute="DiscardPort_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}" Executed="CancelPort_Executed" CanExecute="CancelPort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.EnableDevice}"     Executed="EnableDevice_Executed"     CanExecute="Enable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DisableDevice}"    Executed="DisableDevice_Executed"    CanExecute="Disable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}" Executed="StartStopCapture_Executed" CanExecute="StartStopCapture_CanExecute"/>
-        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CheckDevice}"    Executed="CheckDevice_Executed" />
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CheckDevice}" Executed="CheckDevice_Executed" CanExecute="CheckDevice_CanExecute"/>
     </UserControl.CommandBindings>
 
     <Grid>
@@ -84,6 +87,12 @@
                 </ToggleButton.Style>
             </ToggleButton>
             <Separator/>
+            <Button x:Name="DiscardPortButton" Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}"
+                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    Visibility="{Binding CaptureController.HasPendingPort, Converter={StaticResource booleanToVisibilityConverter}}"/>
+            <Button x:Name="CancelPortButton" Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}"
+                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    Visibility="{Binding CaptureController.IsPortChangeInProgress, Converter={StaticResource booleanToVisibilityConverter}}"/>
             <Button x:Name="AnalyzeButton"
                     Command="{x:Static app:AppCommands.AnalyzeCaptures}"
                     CommandTarget="{Binding ElementName=CaptureConnectionControl}"
@@ -102,22 +111,6 @@
                 <app:CheckBoxFilters x:Name="StatusFilters" FilterDesc="Status" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.StatusFilterList}"/>
                 <app:CheckBoxFilters x:Name="HostFilters"   FilterDesc="Host"   FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.HostFilterList}"/>
                 <app:CheckBoxFilters x:Name="MethodFilters" FilterDesc="Method" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.MethodFilterList}"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock x:Name="DetailsText" FontWeight="Bold" Margin="20,0" Text="Details"/>
-                <TextBlock x:Name="PortText" Text="Port: "/>
-                <TextBlock>
-                    <TextBlock.Style>
-                        <Style TargetType="{x:Type TextBlock}">
-                            <Setter Property="Text" Value="{Binding CaptureController.Port}"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsReadOnly}" Value="True">
-                                    <Setter Property="Text" Value="None"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
             </StackPanel>
         </StackPanel>
 
