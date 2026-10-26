@@ -227,6 +227,42 @@ switching timeline modes, and stopping a capture refresh the visible timeline wi
 live-update cadence. Stopping also displays the final response status and duration, even if no further
 requests arrive.
 
+### Blocking or Bypassing Hosts
+
+The **Block List** and **Bypass List** apply to every capture in the current session, including imported
+captures and captures created later. They are not saved: closing a capture tab keeps them, and exiting XMAT
+clears them. Each capture's Block and Bypass tabs edit these same lists, so any change there, including
+**Clear All**, applies to every capture.
+
+- **Right-click a host** in the connections list, on a timeline bar or By Host label, or on an analysis Per
+  Endpoint summary row or details header to add or remove that exact host. The menu key acts on the focused
+  row, not the selected one. **Remove** appears only when the exact entry exists, so each action undoes the
+  other, and the menu notes any wildcard that still matches.
+- **Actions > Manage Host Lists...** opens the list editors even when no capture is selected.
+- **Blocked** requests are captured but not forwarded. Block applies to new requests immediately and wins when
+  a host is in both lists, but a bypassed tunnel that is already open continues until it closes.
+- **Bypass** skips HTTPS decryption for new CONNECT tunnels; open connections keep their current mode.
+  Bypassed tunnels appear only as CONNECT rows, and scripts and path-based block patterns cannot see inside
+  them. Plain HTTP is never bypassed. This is not the Windows proxy bypass list.
+
+Entries follow these rules:
+
+- A host entry covers every port and no subdomains; use `*.example.com` for subdomains.
+- DNS names match regardless of case, but a final dot is significant: `example.com.` and `example.com` are
+  different entries.
+- IP addresses match by address, so `[::1]`, `::1`, and `0:0::1` are one entry. A complete IPv6 address such
+  as `2001:db8::1:443` is read as an address, not a host and port.
+- Entries can't include a port: `example.com:443`, `example.com:`, and `[::1]:443` are rejected with an
+  explanation.
+- Entries containing `*` or `/` are glob patterns, such as `example.com/api/*`. A colon inside a pattern is
+  matched literally and is not a port filter. Write IPv6 in patterns without brackets, such as `2001:db8::*`
+  or `::1/api/*`: an IPv6 pattern with brackets is accepted but never matches, including one that matched
+  HTTP/2 traffic in earlier versions.
+
+Analysis endpoints offer host actions only when every request in the endpoint was captured from the same
+host. Endpoints synthesized from telemetry (such as `inGameEvents`), endpoints that combine several hosts,
+and older data without recorded host provenance explain why no action is available.
+
 ### Stopping Proxying
 
 Proxying may be stopped from with Xbox Multiplayer Analysis Tool for a specific device by clicking on the “Stop Capturing”
@@ -523,6 +559,12 @@ upper right corner of the graph indicates which hosts were called at specific po
 
 ![](./ReadmeImages/22.png)
 _Screenshot of the statistics report calls timeline and average call times table._
+
+Each bar, timeline series, and table row is one endpoint. When a captured host and endpoints synthesized
+from telemetry share a name (for example `inGameEvents`), they stay separate and are labeled with their
+source, such as `inGameEvents (captured host)` and `inGameEvents (synthesized telemetry)`. The Stats and Call
+report files in the analysis output folder record each endpoint's numeric `Kind` (0 unknown, 1 captured, 2
+synthesized telemetry) and `EndpointId` next to its `Uri`.
 
 Analysis report content present in its output folder within the Xbox Multiplayer Analysis Tool data storage folder can be removed
 if no longer needed once the Analysis results tab for that analysis run is closed.

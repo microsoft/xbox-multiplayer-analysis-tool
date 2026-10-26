@@ -95,6 +95,10 @@ namespace XMAT.Models
 
         internal static readonly CaptureAppModel AppModel = new();
 
+        // Session-only Block and Bypass lists shared by every capture and analysis view of this
+        // application instance. They are never saved with settings or captures.
+        internal WebServiceCapture.Models.HostListPolicy HostListPolicy { get; } = new();
+
         internal IDataTable CaptureDevicesTable { get; set; }
         internal IList<ICaptureAnalyzer> CaptureAnalyzers { get => _captureAnalyzers; }
         internal AppPreferencesModel PreferencesModel { get; set; }
@@ -685,7 +689,8 @@ namespace XMAT.Models
                     captureType,
                     readOnly,
                     serializedParameters,
-                    deferPortAllocation);
+                    deferPortAllocation,
+                    HostListPolicy);
                 _captureDeviceContexts.Add(newCaptureDeviceModel);
 
                 if (!readOnly)

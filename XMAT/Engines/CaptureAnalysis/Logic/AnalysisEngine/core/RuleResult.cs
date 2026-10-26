@@ -14,6 +14,10 @@ namespace CaptureAnalysisEngine
         public String RuleName { get; set; }
         // Endpoint the had the rule applied
         public String Endpoint { get; set; }
+        // Collision-free identity of the endpoint bucket the rule ran on
+        public EndpointKey EndpointKey { get; set; }
+        // Physical host of that bucket when it is actionable, otherwise null
+        public String ActionableHost { get; set; }
         // Description of the applied rule
         public String RuleDescription { get; set; }
         // List of the violations caught by this rule
@@ -22,6 +26,11 @@ namespace CaptureAnalysisEngine
         public Int32 ViolationCount { get { return Violations.Count; } }
         // Detailed information captured by the rule
         public Dictionary<string, Object> Results { get; }
+
+        // The endpoint identity reports project. A result recorded without one keeps its
+        // endpoint name as an Unknown endpoint; its kind is never inferred from that name.
+        public EndpointKey Identity =>
+            EndpointKey.LogicalName != null ? EndpointKey : new EndpointKey(EndpointKind.Unknown, Endpoint);
 
         public RuleResult(String ruleName, String endpoint, String ruleDescription)
         {

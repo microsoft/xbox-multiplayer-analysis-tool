@@ -80,6 +80,12 @@ namespace XMAT
             }
         }
 
+        // One non-modal manager for the application's session host lists, brought back if open.
+        private void ManageHostLists_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            HostListManagerWindow.ShowOrActivate(this, CaptureAppModel.AppModel.HostListPolicy);
+        }
+
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
             _originalCursor = Cursor;

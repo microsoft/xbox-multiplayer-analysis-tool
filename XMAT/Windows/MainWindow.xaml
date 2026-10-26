@@ -28,6 +28,7 @@
         <CommandBinding Command="{x:Static local:AppCommands.ExportRootCert}"   Executed="ExportRootCert_Executed"/>
         <CommandBinding Command="{x:Static proxy:WebServiceProxyCommands.ChangePort}"
                         Executed="ChangeProxyPort_Executed" CanExecute="ChangeProxyPort_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.ManageHostLists}" Executed="ManageHostLists_Executed"/>
     </Window.CommandBindings>
     <Grid>
         <Grid.RowDefinitions>
@@ -67,6 +68,9 @@
                 <MenuItem x:Name="ChangeProxyPort" Command="{x:Static proxy:WebServiceProxyCommands.ChangePort}"
                           CommandTarget="{Binding ElementName=AllCaptureDevicesPanel}"
                           ToolTipService.ShowOnDisabled="True"/>
+                <MenuItem x:Name="ManageHostLists" Command="{x:Static local:AppCommands.ManageHostLists}"
+                          CommandTarget="{Binding ElementName=AllCaptureDevicesPanel}"
+                          Header="{x:Static local:AppCommands.ManageHostListsHeader}"/>
                 <Separator/>
                 <MenuItem x:Name="ExportRootCert" Header="_Export Root Certificate to Desktop" Command="{x:Static local:AppCommands.ExportRootCert}" />
             </MenuItem>

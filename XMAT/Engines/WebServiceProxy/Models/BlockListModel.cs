@@ -14,7 +14,8 @@ namespace XMAT.WebServiceCapture.Models
     /// Maintains a list of URL patterns whose traffic should be blocked by the proxy.
     /// Patterns may contain the '*' wildcard to match any sequence of characters
     /// (e.g. "*.example.com" or "192.168.1.*"). Patterns are matched against the
-    /// request's host and optionally the full "host/path" string.
+    /// request's host and optionally the full "host/path" string. Host literals are
+    /// normalized by <see cref="HostListEntry"/>; standalone host:port entries are rejected.
     /// </summary>
     public class BlockListModel
     {
@@ -25,39 +26,53 @@ namespace XMAT.WebServiceCapture.Models
 
         public bool Add(string pattern)
         {
-            if (string.IsNullOrWhiteSpace(pattern))
+            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
                 return false;
-
-            pattern = pattern.Trim();
 
             lock (_lockObj)
             {
-                if (BlockedUrls.Any(existing => string.Equals(existing, pattern, StringComparison.OrdinalIgnoreCase)))
+                if (BlockedUrls.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase)))
                     return false;
 
-                BlockedUrls.Add(pattern);
+                BlockedUrls.Add(entry);
                 return true;
             }
         }
 
-        public void Remove(string pattern)
+        /// <summary>
+        /// Returns true when the list holds exactly this entry (after normalization),
+        /// regardless of any other pattern that might also match it.
+        /// </summary>
+        public bool Contains(string pattern)
         {
-            if (string.IsNullOrWhiteSpace(pattern))
-                return;
+            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
+                return false;
 
-            pattern = pattern.Trim();
+            lock (_lockObj)
+            {
+                return BlockedUrls.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase));
+            }
+        }
 
+        public bool Remove(string pattern)
+        {
+            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
+                return false;
+
+            bool removed = false;
             lock (_lockObj)
             {
                 for (int i = BlockedUrls.Count - 1; i >= 0; i--)
                 {
-                    if (string.Equals(BlockedUrls[i], pattern, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(BlockedUrls[i], entry, StringComparison.OrdinalIgnoreCase))
                     {
                         BlockedUrls.RemoveAt(i);
+                        removed = true;
                     }
                 }
-                _regexCache.Remove(pattern);
+                _regexCache.Remove(entry);
             }
+            return removed;
         }
 
         public void Clear()
@@ -77,6 +92,7 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return false;
 
+            host = HostListEntry.MatchCandidate(host);
             string[] candidates;
             if (!string.IsNullOrEmpty(path))
             {
@@ -88,17 +104,30 @@ namespace XMAT.WebServiceCapture.Models
                 candidates = new[] { host };
             }
 
-            string[] patterns;
-            lock (_lockObj)
-            {
-                patterns = new string[BlockedUrls.Count];
-                for (int i = 0; i < BlockedUrls.Count; i++)
-                    patterns[i] = BlockedUrls[i];
-            }
-
-            return patterns
+            return Snapshot()
                 .Select(GetRegex)
                 .Any(regex => candidates.Any(candidate => regex.IsMatch(candidate)));
+        }
+
+        /// <summary>
+        /// Returns the entries that match the host by itself, such as a covering wildcard.
+        /// Path patterns only match particular requests, so they are not included.
+        /// </summary>
+        internal IReadOnlyList<string> MatchingPatterns(string host)
+        {
+            if (string.IsNullOrEmpty(host))
+                return Array.Empty<string>();
+
+            string candidate = HostListEntry.MatchCandidate(host);
+            return Snapshot().Where(pattern => GetRegex(pattern).IsMatch(candidate)).ToList();
+        }
+
+        private string[] Snapshot()
+        {
+            lock (_lockObj)
+            {
+                return BlockedUrls.ToArray();
+            }
         }
 
         private Regex GetRegex(string pattern)
@@ -108,8 +137,7 @@ namespace XMAT.WebServiceCapture.Models
                 if (_regexCache.TryGetValue(pattern, out var cached))
                     return cached;
 
-                string escaped = Regex.Escape(pattern).Replace("\\*", ".*");
-                var regex = new Regex("^" + escaped + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                var regex = HostListEntry.CreatePattern(pattern);
                 _regexCache[pattern] = regex;
                 return regex;
             }

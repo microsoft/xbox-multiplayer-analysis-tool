@@ -12,21 +12,26 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" TextWrapping="Wrap" Margin="0,0,0,8">
-            <Run Text="Enter URLs to block below. You can use * as a wildcard. Examples:"/>
-            <LineBreak/>
-            <Run Text="example.com" FontFamily="Consolas"/><Run Text=" - Blocks traffic to example.com"/>
-            <LineBreak/>
-            <Run Text="*.example.com" FontFamily="Consolas"/><Run Text=" - Blocks traffic to all subdomains of example.com"/>
-            <LineBreak/>
-            <Run Text="192.168.1.*" FontFamily="Consolas"/><Run Text=" - Blocks traffic to all IPs starting with 192.168.1"/>
-        </TextBlock>
+        <StackPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock TextWrapping="Wrap">
+                <Run Text="Enter URLs to block below. You can use * as a wildcard. Examples:"/>
+                <LineBreak/>
+                <Run Text="example.com" FontFamily="Consolas"/><Run Text=" - Blocks traffic to example.com"/>
+                <LineBreak/>
+                <Run Text="*.example.com" FontFamily="Consolas"/><Run Text=" - Blocks traffic to all subdomains of example.com"/>
+                <LineBreak/>
+                <Run Text="192.168.1.*" FontFamily="Consolas"/><Run Text=" - Blocks traffic to all IPs starting with 192.168.1"/>
+            </TextBlock>
+            <TextBlock x:Name="PatternHelpText" TextWrapping="Wrap" Margin="0,4,0,0"/>
+            <TextBlock x:Name="ScopeText" TextWrapping="Wrap" FontStyle="Italic" Margin="0,4,0,0"/>
+        </StackPanel>
 
-        <Grid Grid.Row="1" Margin="0,0,0,8">
+        <Grid Grid.Row="1" Margin="0,0,0,4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
@@ -37,13 +42,15 @@
                     Content="Add URL Block" Click="AddUrlBlock_Click"/>
         </Grid>
 
-        <TextBlock Grid.Row="2" Text="Blocked URLs:" FontWeight="Bold" Margin="0,4,0,4"/>
+        <TextBlock x:Name="EntryErrorText" Grid.Row="2" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,4"/>
 
-        <ListBox x:Name="BlockedUrlList" Grid.Row="3"
+        <TextBlock Grid.Row="3" Text="Blocked URLs:" FontWeight="Bold" Margin="0,4,0,4"/>
+
+        <ListBox x:Name="BlockedUrlList" Grid.Row="4"
                  SelectionMode="Extended"
                  ItemsSource="{Binding BlockList.BlockedUrls, ElementName=BlockListViewControl}"/>
 
-        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
             <Button x:Name="RemoveSelectedButton" Content="Remove Selected" Padding="8,3" Margin="0,0,6,0"
                     Click="RemoveSelected_Click"/>
             <Button x:Name="ClearAllButton" Content="Clear All" Padding="8,3"

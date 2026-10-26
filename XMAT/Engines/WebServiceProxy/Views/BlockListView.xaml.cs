@@ -22,9 +22,17 @@ namespace XMAT.WebServiceCapture
             set => SetValue(BlockListProperty, value);
         }
 
+        public bool ShowScopeNote
+        {
+            get => ScopeText.Visibility == Visibility.Visible;
+            set => ScopeText.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         public BlockListView()
         {
             InitializeComponent();
+            PatternHelpText.Text = Localization.GetLocalizedString("HOST_LIST_PATTERN_HELP");
+            ScopeText.Text = Localization.GetLocalizedString("HOST_LISTS_SCOPE");
         }
 
         private void AddUrlBlock_Click(object sender, RoutedEventArgs e)
@@ -46,10 +54,21 @@ namespace XMAT.WebServiceCapture
             if (BlockList == null)
                 return;
 
-            string text = NewBlockTextBox.Text;
-            if (BlockList.Add(text))
+            // Invalid text (such as a standalone host:port) stays in the box with the reason.
+            if (!HostListEntry.TryNormalize(NewBlockTextBox.Text, out string entry, out string error))
+            {
+                EntryErrorText.Text = error ?? string.Empty;
+                return;
+            }
+
+            if (BlockList.Add(entry))
             {
                 NewBlockTextBox.Clear();
+                EntryErrorText.Text = string.Empty;
+            }
+            else
+            {
+                EntryErrorText.Text = Localization.GetLocalizedString("HOST_LIST_ALREADY_LISTED", entry);
             }
         }
 
