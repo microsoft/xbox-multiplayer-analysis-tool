@@ -18,6 +18,7 @@
         <CommandBinding Command="Save" Executed="Save_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.Import}"           Executed="Import_Executed" CanExecute="Import_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.Export}"           Executed="Export_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.ExportSanitized}"  Executed="ExportSanitized_Executed" CanExecute="ExportSanitized_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.Preferences}"      Executed="Preferences_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.Exit}"             Executed="Exit_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ClearAllCaptures}" Executed="ClearAllCaptures_Executed" CanExecute="ClearAllCaptures_CanExecute"/>
@@ -45,6 +46,8 @@
                 <Separator />
                 <MenuItem x:Name="FileImportCaptures" Command="{x:Static local:AppCommands.Import}" />
                 <MenuItem x:Name="FileExportCaptures" Command="{x:Static local:AppCommands.Export}" />
+                <MenuItem x:Name="FileExportSanitizedCaptures" Command="{x:Static local:AppCommands.ExportSanitized}"
+                          ToolTipService.ShowOnDisabled="True"/>
                 <Separator />
                 <MenuItem x:Name="FileExit"           Command="{x:Static local:AppCommands.Exit}" />
             </MenuItem>

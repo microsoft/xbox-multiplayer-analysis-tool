@@ -114,6 +114,11 @@ namespace XMAT.Models
             CanModifyCaptureData &&
             !IsAnyCaptureRunning;
         internal bool CanStopCaptures => !IsAnalysisRunning;
+        internal bool CanExportSanitizedCaptures =>
+            CanBeginCaptureDataOperation &&
+            SelectedDeviceContext?.CaptureType == CaptureType.WebProxy &&
+            SelectedDeviceContext.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController controller &&
+            controller.ProxyConnections.Count > 0;
 
         private readonly ObservableCollection<ICaptureDeviceContext> _captureDeviceContexts = new();
         private ICaptureDeviceContext _selectedDeviceContext = null;
@@ -145,6 +150,10 @@ namespace XMAT.Models
 
         internal async Task<bool> CanCloseAsync()
         {
+            if (IsCaptureDataOperationRunning)
+            {
+                return false;
+            }
             var devices = CaptureDeviceContexts.Where(context => !context.IsReadOnly).ToList();
             foreach (var device in devices)
             {
@@ -528,6 +537,28 @@ namespace XMAT.Models
                 case ExportType.Fiddler:
                     (SelectedDeviceContext.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ExportToFiddler(toFilePath);
                     break;
+            }
+        }
+
+        internal async Task<WebServiceCapture.SanitizedExportSummary> ExportSanitizedDataCapturesAsync(string toFilePath)
+        {
+            if (!CanExportSanitizedCaptures ||
+                !TryBeginCaptureDataOperation(out var operation, requireAllCapturesStopped: true))
+            {
+                throw new InvalidOperationException(Localization.GetLocalizedString("SANITIZED_EXPORT_UNAVAILABLE"));
+            }
+            using (operation)
+            {
+                var controller = (WebServiceCapture.WebServiceDeviceCaptureController)SelectedDeviceContext.CaptureController;
+                IEnumerable<WebServiceCapture.Models.ProxyConnectionModel> Records()
+                {
+                    foreach (var record in controller.GetCaptureRecords())
+                    {
+                        yield return new WebServiceCapture.Models.ProxyConnectionModel(record);
+                    }
+                }
+                return await Task.Run(() => WebServiceCapture.FiddlerSazHandler.CreateSanitizedSazFile(toFilePath,
+                    Records()));
             }
         }
 

@@ -287,6 +287,69 @@ namespace XMAT.WebServiceCapture
             archive.Dispose();
         }
 
+        internal static SanitizedExportSummary CreateSanitizedSazFile(
+            string filename, IEnumerable<ProxyConnectionModel> records)
+        {
+            if (!string.Equals(Path.GetExtension(filename), ".saz", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(Localization.GetLocalizedString("SANITIZED_EXPORT_SAZ_REQUIRED"), nameof(filename));
+            }
+            var destination = Path.GetFullPath(filename);
+            var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            var sanitizer = new SazSanitizer();
+            try
+            {
+                using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+                {
+                    foreach (var record in records)
+                    {
+                        var request = sanitizer.SanitizeMessage(record.RequestLineAndHeaders, record.RequestBody, true);
+                        AddEntry(archive, EntryType.Request, record.RequestNumber, request.Headers, request.Body);
+                        var metadata = new FiddlerMetaData(record.RecordRowId)
+                        {
+                            ClientBeginRequest = record.RequestTime,
+                            ClientDoneResponse = record.RequestTime + record.Duration
+                        };
+                        metadata.SetClientIP("0.0.0.0");
+                        if (!string.IsNullOrEmpty(record.ClientIP) && record.ClientIP != "0.0.0.0")
+                        {
+                            sanitizer.Summary.RedactedValues++;
+                        }
+                        if (request.BodyOmitted)
+                        {
+                            metadata.SessionFlags["x-xmat-request-body-omitted"] = "uninspectable";
+                        }
+                        SanitizedHttpMessage? response = string.IsNullOrEmpty(record.ResponseLineAndHeaders)
+                            ? null : sanitizer.SanitizeMessage(record.ResponseLineAndHeaders, record.ResponseBody, false, record.Method);
+                        if (response?.BodyOmitted == true)
+                        {
+                            metadata.SessionFlags["x-xmat-response-body-omitted"] = "uninspectable";
+                        }
+                        AddMetaEntry(archive, record.RequestNumber, metadata);
+                        if (response is { } sanitizedResponse)
+                        {
+                            AddEntry(archive, EntryType.Response, record.RequestNumber, sanitizedResponse.Headers, sanitizedResponse.Body);
+                        }
+                        sanitizer.Summary.Sessions++;
+                    }
+                }
+                File.Move(temporary, destination, true);
+                return sanitizer.Summary;
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(temporary);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, "Could not remove a sanitized export temporary file.");
+                }
+            }
+        }
+
         private static void AddMetaEntry(ZipArchive archive, long id, FiddlerMetaData metaDataToSerialize)
         {
             ZipArchiveEntry entry = archive.CreateEntry($"raw/{id}{EntryTypeMap[EntryType.Meta]}");

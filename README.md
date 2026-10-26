@@ -281,9 +281,36 @@ Captures can be saved and shared using the **File** menu:
 | **Load Captures** | Opens a previously saved .XMATCAP file. Loaded captures open in read-only tabs. |
 | **Import** | Imports a Fiddler (.SAZ) archive, or a network trace (.ETL) captured with `netsh`, into a new read-only tab. |
 | **Export** | Exports the selected web proxy capture to a Fiddler (.SAZ) archive. |
+| **Export Sanitized Capture...** | Exports a sanitized .SAZ copy of the selected web proxy capture, without changing the original capture. Stop all captures first. |
 
 Files can also be dragged and dropped onto the main window -- .XMATCAP files are loaded, and .SAZ and .ETL
 files are imported.
+
+### Sanitized Export
+
+Use **File > Export Sanitized Capture...** before sharing a web capture. This is a per-export
+command, not a preference: ordinary **Export** and native **Save Captures** remain unsanitized.
+Loaded and imported web captures are supported. Only the selected capture is exported.
+
+The export redacts recognized credential/cookie headers, sensitive query and form parameters,
+URL credentials, sensitive JSON/XML fields (including OAuth device codes and private JWK
+members), and common token/private-key patterns in text.
+Known personal-identifier fields and client-IP metadata are also masked. Header names are
+matched without regard to case, and repeated headers are retained.
+
+JSON, XML, URL-encoded forms and plain text are inspected. Gzip, deflate and Brotli bodies
+and declared character encodings are supported; exported text is UTF-8 with updated HTTP
+framing, including bodyless HEAD/CONNECT/1xx/204/304 responses. Unsupported content (including
+binary, HTML and multipart bodies), malformed structured data, JSON/XML nesting exceeding
+64 levels, unknown compression/character encodings and bodies exceeding the 4 MiB
+inspection limit are omitted rather than copied unchecked. The completion dialog reports
+redactions and omissions; SAZ session metadata marks which request/response bodies were omitted.
+An existing destination is replaced only after a complete export.
+
+**Review the archive before sharing it.** This is best-effort detection, not a guarantee of
+anonymity: arbitrary unnamed secrets, custom encodings, and identifiers not recognized by the
+rules may remain. Service endpoints, nonsensitive paths/values, timing and request IDs are
+retained for diagnosis. The original capture data is not sanitized in place.
 
 ### Importing Network Traces from Another PC
 

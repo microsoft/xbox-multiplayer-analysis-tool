@@ -47,6 +47,8 @@ namespace XMAT
             FileSaveCaptures.Header = Localization.GetLocalizedString("FILE_SAVE_CAPTURES");
             FileImportCaptures.Header = Localization.GetLocalizedString("FILE_IMPORT_CAPTURES");
             FileExportCaptures.Header = Localization.GetLocalizedString("FILE_EXPORT_CAPTURES");
+            FileExportSanitizedCaptures.Header = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED");
+            FileExportSanitizedCaptures.ToolTip = Localization.GetLocalizedString("SANITIZED_EXPORT_TOOLTIP");
             FileExit.Header = Localization.GetLocalizedString("FILE_EXIT");
             ViewClearCaptures.Header = Localization.GetLocalizedString("VIEW_CLEAR_CAPTURES");
             EditPreferences.Header = Localization.GetLocalizedString("EDIT_PREFERENCES");
@@ -110,6 +112,13 @@ namespace XMAT
 
                 if (!await CaptureAppModel.AppModel.CanCloseAsync())
                 {
+                    if (CaptureAppModel.AppModel.IsCaptureDataOperationRunning)
+                    {
+                        MessageBox.Show(
+                            Localization.GetLocalizedString("CAPTURE_DATA_BUSY_CLOSE"),
+                            Localization.GetLocalizedString("FILE_EXIT"),
+                            MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
                     return;
                 }
 
@@ -342,6 +351,59 @@ namespace XMAT
                 // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
                 // setup the filter above and call export with the appropriate type
                 CaptureAppModel.AppModel.ExportDataCaptures(ExportType.Fiddler, saveFileDialog.FileName);
+            }
+        }
+
+        private void ExportSanitized_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureAppModel.AppModel.CanExportSanitizedCaptures;
+        }
+
+        private async void ExportSanitized_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (!CaptureAppModel.AppModel.CanExportSanitizedCaptures)
+            {
+                return;
+            }
+            if (MessageBox.Show(
+                Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM"),
+                Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
+            {
+                return;
+            }
+            var dialog = new SaveFileDialog
+            {
+                Filter = FiddlerFilter,
+                DefaultExt = ".saz",
+                AddExtension = true,
+                FileName = "sanitized-capture.saz",
+                Title = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED")
+            };
+            if (dialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+            try
+            {
+                WebServiceCapture.SanitizedExportSummary summary;
+                using (PublicUtilities.BlockingOperation())
+                {
+                    summary = await CaptureAppModel.AppModel.ExportSanitizedDataCapturesAsync(dialog.FileName);
+                }
+                MessageBox.Show(
+                    Localization.GetLocalizedString("SANITIZED_EXPORT_COMPLETE",
+                        summary.Sessions, summary.RedactedValues, summary.OmittedBodies, summary.OmittedHeaders),
+                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Sanitized export failed: {exception}");
+                MessageBox.Show(
+                    Localization.GetLocalizedString("SANITIZED_EXPORT_FAILED", exception.Message),
+                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 

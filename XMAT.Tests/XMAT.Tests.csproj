@@ -32,4 +32,8 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="..\XMAT\Windows\MainWindow.xaml" LogicalName="XMAT.Tests.MainWindow.xaml" />
+  </ItemGroup>
+
 </Project>
