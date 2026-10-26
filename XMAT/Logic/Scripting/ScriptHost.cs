@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
@@ -42,7 +43,9 @@ namespace XMAT.Scripting
             });
         }
 
-        public async Task<T> RunScriptAsync<T>(T input) where T : class
+        public async Task<T> RunScriptAsync<T>(
+            T input,
+            CancellationToken cancellationToken = default) where T : class
         {
             // if we didn't call Compile above, just bail out
             if (_script == null)
@@ -50,7 +53,9 @@ namespace XMAT.Scripting
 
             // run the script and return the params we passed in...
             // they are passed in byref it seems...
-            await _script.RunAsync(new ScriptGlobals<T> { Params = input });
+            await _script.RunAsync(
+                new ScriptGlobals<T> { Params = input },
+                cancellationToken: cancellationToken);
             return input;
         }
     }

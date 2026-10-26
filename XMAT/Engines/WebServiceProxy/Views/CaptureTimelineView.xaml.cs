@@ -6,12 +6,13 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using System.Linq;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -22,12 +23,21 @@ namespace XMAT.WebServiceCapture
     public partial class CaptureTimelineView : UserControl
     {
         private const double BarHeight = 14;
-        private const double BarGap = 2;
-        private const double RowHeight = BarHeight + BarGap;
-        private const double HostLabelHeight = 18;
-        private const double MinBarWidth = 3;
-        private const double PixelsPerMs = 0.5;
-        private const double MinCanvasWidth = 200;
+        private readonly CaptureTimelineLayout _layout = new();
+        private readonly HashSet<ProxyConnectionModel> _subscribedItems = new(ReferenceEqualityComparer.Instance);
+        private readonly List<CaptureTimelineLayout.Row> _visibleRows = new();
+        private readonly List<CaptureTimelineLayout.Tick> _visibleTicks = new();
+        private readonly List<BarVisual> _bars = new();
+        private readonly List<TextBlock> _hostLabels = new();
+        private readonly List<AxisVisual> _axis = new();
+        private readonly DispatcherTimer _refreshTimer;
+        private ObservableCollection<ProxyConnectionModel> _attachedSource;
+        private DispatcherOperation _pendingRender;
+        private bool _active;
+        private bool _dirty;
+        private bool _renderingViewport;
+        private bool _isWaterfall = true;
+        private static readonly Brush[] StatusBrushes = CreateStatusBrushes();
 
         public static readonly DependencyProperty ItemsSourceProperty =
             DependencyProperty.Register(nameof(ItemsSource),
@@ -45,7 +55,8 @@ namespace XMAT.WebServiceCapture
             DependencyProperty.Register(nameof(SelectedItem),
                 typeof(ProxyConnectionModel),
                 typeof(CaptureTimelineView),
-                new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
+                new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault,
+                    OnSelectionChanged));
 
         public ProxyConnectionModel SelectedItem
         {
@@ -53,160 +64,367 @@ namespace XMAT.WebServiceCapture
             set => SetValue(SelectedItemProperty, value);
         }
 
-        private bool _isWaterfall = true;
+        public static readonly DependencyProperty IsCaptureRunningProperty =
+            DependencyProperty.Register(nameof(IsCaptureRunning), typeof(bool), typeof(CaptureTimelineView),
+                new PropertyMetadata(false, OnCaptureRunningChanged));
+
+        public bool IsCaptureRunning
+        {
+            get => (bool)GetValue(IsCaptureRunningProperty);
+            set => SetValue(IsCaptureRunningProperty, value);
+        }
+
+        internal int RenderCount { get; private set; }
+        internal bool HasPendingRefresh => _refreshTimer.IsEnabled ||
+            _pendingRender?.Status == DispatcherOperationStatus.Pending;
 
         public CaptureTimelineView()
         {
+            _refreshTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(100)
+            };
+            _refreshTimer.Tick += RefreshTimerTick;
             InitializeComponent();
+            Loaded += ViewLoaded;
+            Unloaded += ViewUnloaded;
+            IsVisibleChanged += ViewVisibilityChanged;
         }
 
         private static void OnItemsSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
             var view = (CaptureTimelineView)d;
-            if (e.OldValue is INotifyCollectionChanged oldCol)
-                oldCol.CollectionChanged -= view.OnCollectionChanged;
-            if (e.NewValue is INotifyCollectionChanged newCol)
-                newCol.CollectionChanged += view.OnCollectionChanged;
-            view.RedrawTimeline();
+            view.DetachSource();
+            if (view._active)
+            {
+                view.AttachSource();
+                view.RequestRefresh(true);
+            }
+        }
+
+        private static void OnSelectionChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
+            ((CaptureTimelineView)d).RequestRefresh(true);
+
+        private static void OnCaptureRunningChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (!(bool)e.NewValue)
+            {
+                ((CaptureTimelineView)d).RequestRefresh(true);
+            }
+        }
+
+        private void ViewLoaded(object sender, RoutedEventArgs e) => UpdateActivity();
+        private void ViewUnloaded(object sender, RoutedEventArgs e) => Deactivate();
+        private void ViewVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e) => UpdateActivity();
+
+        private void UpdateActivity()
+        {
+            if (!IsLoaded || !IsVisible)
+            {
+                Deactivate();
+                return;
+            }
+            if (!_active)
+            {
+                _active = true;
+                AttachSource();
+            }
+            RequestRefresh(true);
+        }
+
+        private void Deactivate()
+        {
+            _active = false;
+            DetachSource();
+            TrimBars(0);
+            TrimLabels(0);
+            TrimAxis(0);
+        }
+
+        private void AttachSource()
+        {
+            _attachedSource = ItemsSource;
+            if (_attachedSource != null)
+            {
+                _attachedSource.CollectionChanged += OnCollectionChanged;
+                foreach (var model in _attachedSource)
+                {
+                    AttachItem(model);
+                }
+            }
+        }
+
+        private void DetachSource()
+        {
+            CancelRefresh();
+            if (_attachedSource != null)
+            {
+                _attachedSource.CollectionChanged -= OnCollectionChanged;
+                _attachedSource = null;
+            }
+            foreach (var model in _subscribedItems)
+            {
+                model.PropertyChanged -= ItemPropertyChanged;
+            }
+            _subscribedItems.Clear();
+            _layout.Reset(Array.Empty<ProxyConnectionModel>());
+            _visibleRows.Clear();
+            foreach (var bar in _bars)
+            {
+                bar.Model = null;
+                bar.Root.Tag = null;
+                bar.Root.ToolTip = null;
+            }
+        }
+
+        private void AttachItem(ProxyConnectionModel model)
+        {
+            if (_subscribedItems.Add(model))
+            {
+                _layout.Add(model);
+                model.PropertyChanged += ItemPropertyChanged;
+            }
+        }
+
+        private void DetachItem(ProxyConnectionModel model)
+        {
+            if (_subscribedItems.Remove(model))
+            {
+                model.PropertyChanged -= ItemPropertyChanged;
+                _layout.Remove(model);
+            }
         }
 
         private void OnCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
         {
-            Dispatcher.BeginInvoke(new Action(RedrawTimeline));
+            Dispatcher.VerifyAccess();
+            if (!ReferenceEquals(sender, _attachedSource))
+            {
+                return;
+            }
+            if (e.Action is NotifyCollectionChangedAction.Reset or NotifyCollectionChangedAction.Move or
+                    NotifyCollectionChangedAction.Replace ||
+                (e.Action == NotifyCollectionChangedAction.Add &&
+                    e.NewStartingIndex != _attachedSource.Count - e.NewItems.Count))
+            {
+                DetachSource();
+                AttachSource();
+            }
+            else
+            {
+                if (e.OldItems != null)
+                {
+                    foreach (ProxyConnectionModel model in e.OldItems)
+                    {
+                        DetachItem(model);
+                    }
+                }
+                if (e.NewItems != null)
+                {
+                    foreach (ProxyConnectionModel model in e.NewItems)
+                    {
+                        AttachItem(model);
+                    }
+                }
+            }
+            RequestRefresh(e.Action != NotifyCollectionChangedAction.Add);
+        }
+
+        private void ItemPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            Dispatcher.VerifyAccess();
+            if (_layout.Update((ProxyConnectionModel)sender))
+            {
+                RequestRefresh(false);
+            }
         }
 
         private void ViewMode_Changed(object sender, RoutedEventArgs e)
         {
-            _isWaterfall = WaterfallMode.IsChecked == true;
-            RedrawTimeline();
+            _isWaterfall = WaterfallMode.IsChecked is true;
+            RequestRefresh(true);
         }
 
-        private void RedrawTimeline()
+        private void TimelineScrollChanged(object sender, ScrollChangedEventArgs e)
         {
-            if (TimelineCanvas == null || TimeAxisCanvas == null)
-                return;
-
-            TimelineCanvas.Children.Clear();
-            TimeAxisCanvas.Children.Clear();
-
-            var items = ItemsSource;
-            if (items == null || items.Count == 0)
+            if (e.HorizontalChange != 0 || e.VerticalChange != 0 ||
+                e.ViewportWidthChange != 0 || e.ViewportHeightChange != 0)
             {
-                TimelineCanvas.Width = MinCanvasWidth;
-                TimelineCanvas.Height = 0;
-                TimeAxisCanvas.Width = MinCanvasWidth;
+                RefreshViewport();
+            }
+        }
+
+        private void TimelineSizeChanged(object sender, SizeChangedEventArgs e) => RefreshViewport();
+
+        private void RefreshViewport()
+        {
+            if (!_active)
+            {
+                return;
+            }
+            CancelRefresh();
+            _dirty = true;
+            // ScrollChanged is raised during layout; queued background work misses this composition frame.
+            RenderViewport();
+        }
+
+        private void RequestRefresh(bool immediate)
+        {
+            if (!_active)
+            {
+                return;
+            }
+            _dirty = true;
+            if (immediate || !IsCaptureRunning)
+            {
+                _refreshTimer.Stop();
+                if (_pendingRender?.Status != DispatcherOperationStatus.Pending)
+                {
+                    _pendingRender = Dispatcher.BeginInvoke(
+                        DispatcherPriority.Background, new Action(RenderPendingUpdate));
+                }
+            }
+            else if (_pendingRender?.Status != DispatcherOperationStatus.Pending && !_refreshTimer.IsEnabled)
+            {
+                _refreshTimer.Start();
+            }
+        }
+
+        private void RefreshTimerTick(object sender, EventArgs e)
+        {
+            _refreshTimer.Stop();
+            RequestRefresh(true);
+        }
+
+        private void CancelRefresh()
+        {
+            _refreshTimer.Stop();
+            _pendingRender?.Abort();
+            _pendingRender = null;
+            _dirty = false;
+        }
+
+        private void RenderPendingUpdate()
+        {
+            _pendingRender = null;
+            RenderViewport();
+        }
+
+        private void RenderViewport()
+        {
+            if (!_active || !_dirty || _renderingViewport)
+            {
+                return;
+            }
+            _renderingViewport = true;
+            try
+            {
+                RenderViewportCore();
+            }
+            finally
+            {
+                _renderingViewport = false;
+            }
+        }
+
+        private void RenderViewportCore()
+        {
+            var width = TimelineScrollViewer.ViewportWidth;
+            var height = TimelineScrollViewer.ViewportHeight;
+            if (width <= 0 || height <= 0 || !double.IsFinite(width) || !double.IsFinite(height))
+            {
+                TrimBars(0);
+                TrimLabels(0);
+                TrimAxis(0);
                 return;
             }
 
-            var valid = items.Where(i => i.RequestTime != DateTime.MinValue).ToList();
-            if (valid.Count == 0)
-                return;
+            _dirty = false;
+            RenderCount++;
+            var extentHeight = CaptureTimelineLayout.AxisHeight + _layout.GetHeight(_isWaterfall);
+            TimelineExtent.Width = _layout.Width;
+            TimelineExtent.Height = extentHeight;
+            var left = Math.Clamp(TimelineScrollViewer.HorizontalOffset, 0, Math.Max(0, _layout.Width - width));
+            var top = Math.Clamp(TimelineScrollViewer.VerticalOffset, 0, Math.Max(0, extentHeight - height));
+            var rowOffset = Math.Max(0, top - CaptureTimelineLayout.AxisHeight);
+            var rowHeight = Math.Max(0, height - Math.Max(0, CaptureTimelineLayout.AxisHeight - top));
+            Canvas.SetLeft(TimelineCanvas, left);
+            Canvas.SetTop(TimelineCanvas, rowOffset + CaptureTimelineLayout.AxisHeight);
+            TimelineCanvas.Width = width;
+            TimelineCanvas.Height = rowHeight;
+            Canvas.SetLeft(TimeAxisCanvas, left);
+            TimeAxisCanvas.Width = width;
+            _layout.GetVisibleRows(_isWaterfall, rowOffset, rowHeight, _visibleRows);
 
-            var firstTime = valid.Min(i => i.RequestTime);
-            var lastEnd = valid.Max(i => i.RequestTime + i.Duration);
-            double totalMs = Math.Max((lastEnd - firstTime).TotalMilliseconds, 1);
-            double canvasW = Math.Max(totalMs * PixelsPerMs, MinCanvasWidth);
-
-            if (_isWaterfall)
-                DrawWaterfall(valid, firstTime, canvasW, totalMs);
-            else
-                DrawByHost(valid, firstTime, canvasW, totalMs);
-
-            DrawTimeAxis(canvasW, totalMs);
-        }
-
-        #region Waterfall layout
-
-        private void DrawWaterfall(List<ProxyConnectionModel> items, DateTime firstTime, double canvasW, double totalMs)
-        {
-            double y = 0;
-            foreach (var item in items.OrderBy(i => i.RequestTime))
+            var barCount = 0;
+            var labelCount = 0;
+            foreach (var row in _visibleRows)
             {
-                AddBar(item, firstTime, canvasW, totalMs, y);
-                y += RowHeight;
+                if (row.Model == null)
+                {
+                    var label = GetHostLabel(labelCount++);
+                    label.Text = row.Host;
+                    Canvas.SetLeft(label, 4 - left);
+                    Canvas.SetTop(label, row.Top - rowOffset);
+                }
+                else
+                {
+                    var bounds = _layout.GetBarBounds(row);
+                    if (bounds.Left + bounds.Width >= left && bounds.Left <= left + width)
+                    {
+                        UpdateBar(GetBar(barCount++), row, bounds.Left - left, bounds.Width, row.Top - rowOffset);
+                    }
+                }
             }
-            TimelineCanvas.Width = canvasW;
-            TimelineCanvas.Height = y;
+            TrimBars(barCount);
+            TrimLabels(labelCount);
+            RenderAxis(left, width, top < CaptureTimelineLayout.AxisHeight);
         }
 
-        #endregion
-
-        #region By-Host layout
-
-        private void DrawByHost(List<ProxyConnectionModel> items, DateTime firstTime, double canvasW, double totalMs)
+        private BarVisual GetBar(int index)
         {
-            var groups = items.GroupBy(i => i.Host)
-                              .OrderBy(g => g.Min(i => i.RequestTime));
-            double y = 0;
-            var fgBrush = TryFindResource("PrimaryForegroundBrush") as Brush ?? Brushes.White;
-
-            foreach (var group in groups)
+            if (index == _bars.Count)
             {
                 var label = new TextBlock
                 {
-                    Text = group.Key,
-                    FontWeight = FontWeights.SemiBold,
-                    FontSize = 11,
-                    Foreground = fgBrush,
-                };
-                Canvas.SetLeft(label, 4);
-                Canvas.SetTop(label, y);
-                TimelineCanvas.Children.Add(label);
-                y += HostLabelHeight;
-
-                foreach (var item in group.OrderBy(i => i.RequestTime))
-                {
-                    AddBar(item, firstTime, canvasW, totalMs, y);
-                    y += RowHeight;
-                }
-                y += 4;
-            }
-            TimelineCanvas.Width = canvasW;
-            TimelineCanvas.Height = y;
-        }
-
-        #endregion
-
-        #region Bar rendering
-
-        private void AddBar(ProxyConnectionModel item, DateTime firstTime, double canvasW, double totalMs, double y)
-        {
-            double offsetMs = (item.RequestTime - firstTime).TotalMilliseconds;
-            double durMs = item.Duration.TotalMilliseconds;
-            double x = (offsetMs / totalMs) * canvasW;
-            double w = Math.Max((durMs / totalMs) * canvasW, MinBarWidth);
-
-            var bar = new Border
-            {
-                Width = w,
-                Height = BarHeight,
-                Background = new SolidColorBrush(StatusColor(item.Status)),
-                CornerRadius = new CornerRadius(2),
-                Cursor = Cursors.Hand,
-                ToolTip = $"{item.Method} {item.Host}{item.Path}\n" +
-                          $"Status: {item.Status}\n" +
-                          $"Time: {item.RequestTime:HH:mm:ss.fff}\n" +
-                          $"Duration: {item.Duration.TotalMilliseconds:F0} ms",
-                Tag = item,
-            };
-
-            if (w > 60)
-            {
-                bar.Child = new TextBlock
-                {
-                    Text = $"{item.Method} {item.Path}",
                     FontSize = 9,
                     Foreground = Brushes.White,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(3, 0, 3, 0),
+                    Margin = new Thickness(3, 0, 3, 0)
                 };
+                var border = new Border
+                {
+                    Height = BarHeight,
+                    CornerRadius = new CornerRadius(2),
+                    Cursor = Cursors.Hand,
+                    Child = label
+                };
+                border.MouseLeftButtonDown += Bar_Click;
+                _bars.Add(new BarVisual(border, label));
+                TimelineCanvas.Children.Add(border);
             }
+            return _bars[index];
+        }
 
-            bar.MouseLeftButtonDown += Bar_Click;
-            Canvas.SetLeft(bar, x);
-            Canvas.SetTop(bar, y);
-            TimelineCanvas.Children.Add(bar);
+        private static void UpdateBar(BarVisual visual, CaptureTimelineLayout.Row row, double left, double width, double top)
+        {
+            var model = row.Model;
+            if (!ReferenceEquals(visual.Model, model) || visual.Version != row.Version)
+            {
+                visual.Model = model;
+                visual.Version = row.Version;
+                visual.Root.Tag = model;
+                visual.Root.Background = StatusBrush(model.Status);
+                visual.Root.ToolTip = $"{model.Method} {model.Host}{model.Path}\n" +
+                    $"Status: {model.Status}\nTime: {row.Start:HH:mm:ss.fff}\n" +
+                    $"Duration: {row.Duration.TotalMilliseconds:F0} ms";
+                visual.Label.Text = $"{model.Method} {model.Path}";
+            }
+            visual.Root.Width = width;
+            visual.Label.Visibility = width > 60 ? Visibility.Visible : Visibility.Collapsed;
+            Canvas.SetLeft(visual.Root, left);
+            Canvas.SetTop(visual.Root, top);
         }
 
         private void Bar_Click(object sender, MouseButtonEventArgs e)
@@ -217,80 +435,127 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        #endregion
-
-        #region Time axis
-
-        private void DrawTimeAxis(double canvasW, double totalMs)
+        private TextBlock GetHostLabel(int index)
         {
-            TimeAxisCanvas.Width = canvasW;
-            var fgBrush = TryFindResource("SecondaryForegroundBrush") as Brush ?? Brushes.Gray;
-            double tickInterval = NiceTickInterval(totalMs, canvasW);
-
-            for (double ms = 0; ms <= totalMs; ms += tickInterval)
+            if (index == _hostLabels.Count)
             {
-                double x = (ms / totalMs) * canvasW;
+                var label = new TextBlock { FontWeight = FontWeights.SemiBold, FontSize = 11 };
+                label.SetResourceReference(TextBlock.ForegroundProperty, "PrimaryForegroundBrush");
+                _hostLabels.Add(label);
+                TimelineCanvas.Children.Add(label);
+            }
+            return _hostLabels[index];
+        }
 
+        private void RenderAxis(double offset, double width, bool visible)
+        {
+            _visibleTicks.Clear();
+            if (visible)
+            {
+                _layout.GetVisibleTicks(offset, width, _visibleTicks);
+            }
+            for (var index = 0; index < _visibleTicks.Count; index++)
+            {
+                var visual = GetAxisVisual(index);
+                var tick = _visibleTicks[index];
+                var left = tick.Left - offset;
+                visual.Tick.X1 = left;
+                visual.Tick.X2 = left;
+                visual.Label.Text = _layout.SpanMilliseconds > 60000
+                    ? TimeSpan.FromMilliseconds(tick.Milliseconds).ToString(@"m\:ss\.f")
+                    : _layout.SpanMilliseconds > 1000
+                        ? $"{tick.Milliseconds / 1000:F1}s"
+                        : $"{tick.Milliseconds:F0}ms";
+                Canvas.SetLeft(visual.Label, left + 2);
+            }
+            TrimAxis(_visibleTicks.Count);
+        }
+
+        private AxisVisual GetAxisVisual(int index)
+        {
+            if (index == _axis.Count)
+            {
                 var tick = new Line
                 {
-                    X1 = x,
                     Y1 = 14,
-                    X2 = x,
                     Y2 = 20,
-                    Stroke = fgBrush,
-                    StrokeThickness = 1,
+                    StrokeThickness = 1
                 };
+                tick.SetResourceReference(Shape.StrokeProperty, "SecondaryForegroundBrush");
+                var label = new TextBlock { FontSize = 9 };
+                label.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryForegroundBrush");
+                _axis.Add(new AxisVisual(tick, label));
                 TimeAxisCanvas.Children.Add(tick);
+                TimeAxisCanvas.Children.Add(label);
+            }
+            return _axis[index];
+        }
 
-                string text = totalMs > 60000
-                    ? TimeSpan.FromMilliseconds(ms).ToString(@"m\:ss\.f")
-                    : totalMs > 1000
-                        ? $"{ms / 1000:F1}s"
-                        : $"{ms:F0}ms";
-
-                var lbl = new TextBlock
-                {
-                    Text = text,
-                    FontSize = 9,
-                    Foreground = fgBrush,
-                };
-                Canvas.SetLeft(lbl, x + 2);
-                Canvas.SetTop(lbl, 0);
-                TimeAxisCanvas.Children.Add(lbl);
+        private void TrimBars(int count)
+        {
+            while (_bars.Count > count)
+            {
+                var bar = _bars[^1];
+                bar.Root.MouseLeftButtonDown -= Bar_Click;
+                bar.Root.Tag = null;
+                bar.Root.ToolTip = null;
+                TimelineCanvas.Children.Remove(bar.Root);
+                _bars.RemoveAt(_bars.Count - 1);
             }
         }
 
-        private static double NiceTickInterval(double totalMs, double canvasW)
+        private void TrimLabels(int count)
         {
-            double target = 80;
-            double raw = totalMs / (canvasW / target);
-            double[] nice = { 1, 2, 5, 10, 20, 50, 100, 200, 500,
-                              1000, 2000, 5000, 10000, 30000, 60000 };
-            foreach (var n in nice)
-                if (n >= raw)
-                    return n;
-            return raw;
-        }
-
-        #endregion
-
-        #region Status colors
-
-        private static Color StatusColor(string status)
-        {
-            if (string.IsNullOrEmpty(status) || !int.TryParse(status, out int code))
-                return Color.FromRgb(0x68, 0x68, 0x68);
-
-            return code switch
+            while (_hostLabels.Count > count)
             {
-                >= 200 and < 300 => Color.FromRgb(0x4C, 0xAF, 0x50),
-                >= 300 and < 400 => Color.FromRgb(0x21, 0x96, 0xF3),
-                >= 400 and < 500 => Color.FromRgb(0xFF, 0x98, 0x00),
-                >= 500 => Color.FromRgb(0xF4, 0x43, 0x36),
-                _ => Color.FromRgb(0x68, 0x68, 0x68),
-            };
+                TimelineCanvas.Children.Remove(_hostLabels[^1]);
+                _hostLabels.RemoveAt(_hostLabels.Count - 1);
+            }
         }
 
-        #endregion
+        private void TrimAxis(int count)
+        {
+            while (_axis.Count > count)
+            {
+                var visual = _axis[^1];
+                TimeAxisCanvas.Children.Remove(visual.Tick);
+                TimeAxisCanvas.Children.Remove(visual.Label);
+                _axis.RemoveAt(_axis.Count - 1);
+            }
+        }
+
+        private static Brush StatusBrush(string status)
+        {
+            var index = int.TryParse(status, out var code) ? code / 100 : 0;
+            return StatusBrushes[index >= 2 ? Math.Min(index, 5) - 1 : 0];
+        }
+
+        private static Brush[] CreateStatusBrushes()
+        {
+            var colors = new[]
+            {
+                Color.FromRgb(0x68, 0x68, 0x68), Color.FromRgb(0x4C, 0xAF, 0x50),
+                Color.FromRgb(0x21, 0x96, 0xF3), Color.FromRgb(0xFF, 0x98, 0x00),
+                Color.FromRgb(0xF4, 0x43, 0x36)
+            };
+            var brushes = new Brush[colors.Length];
+            for (var index = 0; index < colors.Length; index++)
+            {
+                var brush = new SolidColorBrush(colors[index]);
+                brush.Freeze();
+                brushes[index] = brush;
+            }
+            return brushes;
+        }
+
+        private sealed class BarVisual(Border root, TextBlock label)
+        {
+            internal Border Root { get; } = root;
+            internal TextBlock Label { get; } = label;
+            internal ProxyConnectionModel Model { get; set; }
+            internal long Version { get; set; }
+        }
+
+        private sealed record AxisVisual(Line Tick, TextBlock Label);
     }
 }

@@ -64,15 +64,25 @@ namespace XMAT
 
         internal void Log(int id, LogLevel level, string value)
         {
-            if (_lines == null)
+            var lines = _lines;
+            if (lines == null)
                 return;
 
-            _lines.Add($"{DateTime.Now:HH:mm:ss.fff} [{level}] ({id:D4}) {value.Substring(0, Math.Min(value.Length, MaxLoggingCharacters))}");
+            // CompleteAdding can run between any check and Add, so Add itself is the arbiter:
+            // a line logged while the log is closing is dropped rather than thrown.
+            try
+            {
+                lines.Add($"{DateTime.Now:HH:mm:ss.fff} [{level}] ({id:D4}) {value.Substring(0, Math.Min(value.Length, MaxLoggingCharacters))}");
+            }
+            catch (InvalidOperationException)
+            {
+                // By design: a line logged while the log is closing is dropped.
+            }
         }
 
         internal void CloseLog()
         {
-            _lines.CompleteAdding();
+            _lines?.CompleteAdding();
             _reset.WaitOne(500);
 
             if (_loggingSW != null)

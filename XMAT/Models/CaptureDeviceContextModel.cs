@@ -35,7 +35,7 @@ namespace XMAT.Models
 
         public Color DeviceColor { get => _deviceColor; set { _deviceColor = value; RaisePropertyChange(); } }
 
-        public IDeviceCaptureController CaptureController { get => _captureController; set { _captureController = value; RaisePropertyChange(); } }
+        public IDeviceCaptureController CaptureController { get => _captureController; internal set { _captureController = value; RaisePropertyChange(); } }
 
         public string CaptureTypeString
         {

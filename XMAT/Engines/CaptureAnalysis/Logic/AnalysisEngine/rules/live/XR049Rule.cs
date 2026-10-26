@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System;
 using System.Collections.Generic;
 using System.Text.Json;
 
@@ -21,20 +20,31 @@ namespace CaptureAnalysisEngine
 
         public override RuleResult Run(RulesEngine engine, IEnumerable<ServiceCallItem> items, ServiceCallStats stats)
         {
+            RuleResult result = InitializeResult(DisplayName, Description);
             bool richpresenceFound = false;
-            var richPresenceJsonObj = new { activity = new Object() };
             foreach (var call in items)
             {
-                var doc = JsonDocument.Parse(call.ReqBody);
-                JsonElement activityObject;
-                if (doc.RootElement.TryGetProperty(@"activity", out activityObject))
+                if (string.IsNullOrWhiteSpace(call.ReqBody))
                 {
-                    richpresenceFound = true;
-                    break;
+                    continue;
+                }
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(call.ReqBody);
+                    if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                        doc.RootElement.TryGetProperty(@"activity", out _))
+                    {
+                        richpresenceFound = true;
+                        break;
+                    }
+                }
+                catch (JsonException exception)
+                {
+                    result.AddViolation(ViolationLevel.Warning, exception.Message, call);
                 }
             }
 
-            RuleResult result = InitializeResult(DisplayName, Description);
             if (!richpresenceFound)
             {
                 result.Violations.Add(new RuleViolation());

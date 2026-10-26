@@ -10,16 +10,16 @@
         WindowStartupLocation="CenterOwner"
         WindowStyle="SingleBorderWindow"
         ResizeMode="NoResize"
-        x:Name="PreferencesWindowTitle" Title="Preferences" Height="250" Width="350">
+        x:Name="PreferencesWindowTitle" Title="Preferences" Height="300" Width="370">
     <Window.CommandBindings>
         <CommandBinding Command="Save" Executed="Save_Executed"/>
     </Window.CommandBindings>
-    <Grid>
+    <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition/>
-            <RowDefinition Height="30"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-        <TabControl Grid.Row="0">
+        <TabControl Grid.Row="0" Padding="10" Margin="0,0,0,12">
             <TabItem x:Name="ProxyTab" Header="Web Proxy">
                 <wscc:CaptureOptionsFull/>
             </TabItem>
@@ -28,9 +28,9 @@
             </TabItem>
         </TabControl>
 
-        <StackPanel Grid.Row="1" Orientation="Horizontal" FlowDirection="RightToLeft" HorizontalAlignment="Center">
-            <Button x:Name="Cancel" Content="_Close" Width="100" IsCancel="True" Margin="0,0,10,0"/>
-            <Button x:Name="Save"   Content="_Save"   Width="100" IsDefault="True" Command="Save"/>
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="Save" Content="_Save" Width="100" MinHeight="28" IsDefault="True" Command="Save" Margin="0,0,8,0"/>
+            <Button x:Name="Cancel" Content="_Close" Width="100" MinHeight="28" IsCancel="True"/>
         </StackPanel>
     </Grid>
 </Window>

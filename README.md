@@ -14,6 +14,7 @@ network requests and responses in real-time, decrypt and view SSL traffic, modif
 analyze Xbox services and network traffic for problems.
 
 The web proxy supports HTTP/1.1 and HTTP/2 over TLS using ALPN negotiation, with automatic HTTP/1.1 fallback.
+WebSocket traffic passing through the proxy is also captured and can be inspected alongside regular web requests.
 
 ## Basic Environment Requirements & Dependencies
 
@@ -26,10 +27,13 @@ The web proxy supports HTTP/1.1 and HTTP/2 over TLS using ALPN negotiation, with
 ## Table of Contents
 
 - **[Web Proxying with a Device](#web-proxying-with-a-device)**
+- **[Viewing WebSocket Messages](#viewing-websocket-messages)**
 - **[Scripting & Modification of Web Proxy Traffic](#scripting--modification-of-web-proxy-traffic)**
+- **[Saving, Loading, Importing & Exporting Captures](#saving-loading-importing--exporting-captures)**
 - **[Live Trace Analysis](#live-trace-analysis)**
 - **[Network Capture](#network-capture)**
 - **[Network Capture Analysis](#network-capture-analysis)**
+- **[Appearance](#appearance)**
 - **[Known Issues](#known-issues)**
 - **[Support](#support)**
 - **[Trademarks](#trademarks)**
@@ -75,8 +79,7 @@ _Screenshot of the ports being used for proxying web traffic._
 
 Note that once a port has been chosen for a particular device that is being captured (proxied), changing
 the available proxy ports from the preferences will not alter the designated port for the already added
-
-### device proxy session.
+device proxy session.
 
 
 ### Enabling/Starting Proxying
@@ -174,19 +177,38 @@ will dynamically update. Toggling between “ALL/NONE” allows for including or
 values in the connections list. Status codes that are equal to or above 400 are color coded (to red) as they
 indicate an error condition.
 
-WebSocket messages are displayed in the **WebSockets** tab for the active proxy capture. The message
-timeline can be filtered by direction and message type, and selected payloads can be inspected as text,
-JSON, or hexadecimal bytes.
-
 ![](./ReadmeImages/10.png)
 _Screenshot of filtering also by status to further prune connections._
 
+
+### Capture Timeline
+
+The Waterfall and By Host timeline views retain the complete capture history, including gaps between
+capture sessions. Only the visible request bars, host labels, and time-axis ticks are rendered, so
+scrolling through an older part of a capture does not require rebuilding the entire timeline.
+
+Incoming capture changes are combined into at most ten timeline refreshes per second. This affects
+only presentation; requests are still captured and stored without that limit. Scrolling, resizing,
+switching timeline modes, and stopping a capture refresh the visible timeline without waiting for the
+live-update cadence. Stopping also displays the final response status and duration, even if no further
+requests arrive.
 
 ### Stopping Proxying
 
 Proxying may be stopped from with Xbox Multiplayer Analysis Tool for a specific device by clicking on the “Stop Capturing”
 button on the tool bar. Disabling proxing for a device will cause the kit to reboot and no longer route
 web service traffic through the Xbox Multiplayer Analysis Tool proxy, thereby implicit stopping proxying.
+
+Stopping a capture cancels active proxy connections and prevents new requests from being forwarded.
+If stopping takes longer than half a second, a progress dialog shows the shutdown phase and pending
+capture callbacks or UI updates while the application remains responsive. Captured data is retained
+when stopping and restarting the capture.
+
+The **Edit > Preferences > Web Proxy > Prompt to disable Xbox proxy on close** setting applies immediately
+to existing capture tabs. When enabled, closing a device tab or exiting the application (including **File > Exit**
+and the window's close button) prompts for each reachable console whose proxy is still enabled. Choosing **Yes**
+disables the proxy and reboots the console; choosing **No** leaves its proxy settings unchanged. Imported,
+read-only captures do not trigger this prompt.
 
 If proxying remains enabled, but Xbox Multiplayer Analysis Tool is not proxying web traffic for that particular device, then the kit
 will fail to perform Xbox services status checks, as well as successfully execute other Xbox services related APIs or
@@ -201,6 +223,22 @@ connections list will be clear until proxying resumes for that device.
 
 ![](./ReadmeImages/12.png)
 _Screenshot when Xbox Multiplayer Analysis Tool is closed and reopened -- previous capture device is remembered._
+
+
+## Viewing WebSocket Messages
+
+WebSocket connections made through the proxy are captured automatically -- no extra setup is required.
+Messages are displayed in the **WebSockets** tab for the active proxy capture, in the order they were
+sent and received.
+
+- The message list can be filtered by **direction** (client to server, or server to client) and by **message type**
+  (text, binary, and close).
+- Selecting a message shows its payload, which can be viewed as **text**, formatted **JSON**, or **hexadecimal** bytes.
+
+To prevent long-running captures from using too much memory, only the most recent messages are kept (up to
+5,000 messages or 32 MB of payload data per capture, whichever is reached first), and individual message
+payloads are captured up to 1 MB. WebSocket messages are not currently included when captures are saved to
+an .XMATCAP file.
 
 
 ## Scripting & Modification of Web Proxy Traffic
@@ -251,6 +289,37 @@ There are several known issues and limitations with the scripting functionality:
 - The script editor does not have any syntax highlighting or IntelliSense/auto-completion – it is just
     a text box.
 - Not all .NET namespaces/objects are available in the scripting environment.
+
+
+## Saving, Loading, Importing & Exporting Captures
+
+Captures can be saved and shared using the **File** menu:
+
+| Menu option | What it does |
+|--|--|
+| **Save Captures** | Saves all open web proxy and network trace captures to an Xbox Multiplayer Analysis Tool (.XMATCAP) file. |
+| **Load Captures** | Opens a previously saved .XMATCAP file. Loaded captures open in read-only tabs. |
+| **Import** | Imports a Fiddler (.SAZ) archive, or a network trace (.ETL) captured with `netsh`, into a new read-only tab. |
+| **Export** | Exports the selected web proxy capture to a Fiddler (.SAZ) archive. |
+
+Files can also be dragged and dropped onto the main window -- .XMATCAP files are loaded, and .SAZ and .ETL
+files are imported.
+
+### Importing Network Traces from Another PC
+
+Network traces captured on a remote PC (for example, a test machine where Xbox Multiplayer Analysis Tool is not installed) can
+be imported and viewed just like a local capture. On the remote PC, run the following from an elevated
+command prompt, reproduce the issue, then stop the trace:
+
+```
+netsh trace start capture=yes
+netsh trace stop
+```
+
+`netsh` will print the location of the generated .ETL file when the trace stops. Copy that file to your machine
+and use **File > Import** (or drag the file onto the window) to open it. Only packet capture data
+(Microsoft-Windows-NDIS-PacketCapture) is imported -- other events in the trace are ignored. Traces captured
+with `pktmon` are not currently supported.
 
 
 ## Live Trace Analysis
@@ -360,10 +429,14 @@ if no longer needed once the Analysis results tab for that analysis run is close
 ### Introduction to Network Capture
 
 The network capture feature of Xbox Multiplayer Analysis Tool allows for the capture of packet-level network traffic from your
-Xbox development kit. It is similar in feature taking captures with xbtrace netcap and viewing them in
+Xbox development kit or local Windows PC. It is similar in feature to taking captures with xbtrace netcap and viewing them in
 NetMon. That process is still available and currently provides higher fidelity data. However, Xbox Multiplayer Analysis Tool can
 be used to capture, view console network traffic as well as perform some basic analysis and the entire
 process takes place inside the Xbox Multiplayer Analysis Tool UI.
+
+Capturing on a local Windows PC uses `netsh trace` and requires Xbox Multiplayer Analysis Tool to be run as an administrator.
+Traces captured on other PCs can also be imported -- see
+[Importing Network Traces from Another PC](#importing-network-traces-from-another-pc).
 
 ### Capturing Network Data
 
@@ -412,6 +485,12 @@ than (20) packets in a second and sending duplicate packets within a second. If 
 the report will show a red background in the list.
 
 
+## Appearance
+
+Xbox Multiplayer Analysis Tool supports light and dark themes. Toggle **Edit > Dark Mode** to switch between them -- the
+choice is remembered the next time the application starts.
+
+
 ## Known Issues
 
 **Enabling Proxying on a Device twice with a different port the second time will fail to proxy.**
@@ -426,7 +505,7 @@ _Workaround: Be sure to double check that your console device is ready to reboot
 **Potential Future Improvements:**
 
 - Keep alive handling needs further improvement.
-- WebSocket traffic is forwarded transparently and exposed through proxy lifecycle/message events. A dedicated WebSocket capture UI and persistence are not yet implemented.
+- WebSocket messages are not yet saved to or loaded from .XMATCAP files.
 - Root certificate(s) and analysis output(s) are not stored in a user specified location.
 - Additional Localization
 
