@@ -59,7 +59,8 @@ namespace XMAT.Tests
                     _failure = exception;
                     _ready.Set();
                 }
-            }) { IsBackground = true };
+            })
+            { IsBackground = true };
             _thread.SetApartmentState(ApartmentState.STA);
             _thread.Start();
             Assert.True(_ready.Wait(TimeSpan.FromSeconds(30)), "The WPF test application did not start.");
@@ -71,6 +72,10 @@ namespace XMAT.Tests
 
         internal void Run(Action<Window> test) =>
             _application.Dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
+
+        // Async UI tests share this application's dispatcher and lifetime instead of creating another Application.
+        internal Task RunAsync(Func<Task> test) =>
+            _application.Dispatcher.InvokeAsync(test).Task.Unwrap().WaitAsync(TimeSpan.FromSeconds(30));
 
         public void Dispose()
         {

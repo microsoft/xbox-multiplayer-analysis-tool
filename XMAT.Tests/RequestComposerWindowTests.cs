@@ -13,12 +13,28 @@ using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.Tests
 {
+    [Collection(CaptureUiApplicationCollection.Name)]
     public class RequestComposerWindowTests
     {
+        private readonly CaptureUiApplicationFixture _application;
+
+        public RequestComposerWindowTests(CaptureUiApplicationFixture application)
+        {
+            _application = application;
+        }
+
         static RequestComposerWindowTests()
         {
             Localization.LoadLanguage("en-us");
         }
+
+        [Fact]
+        public Task Window_UsesTheSharedApplicationDispatcher() => OnDispatcher(() =>
+        {
+            Assert.NotNull(Application.Current);
+            Assert.True(Application.Current.Dispatcher.CheckAccess());
+            return Task.CompletedTask;
+        });
 
         [Fact]
         public Task Window_PrefillsEditorsAndHonorsDeclinedConfirmation() => OnDispatcher(async () =>
@@ -289,42 +305,7 @@ namespace XMAT.Tests
         private static T Find<T>(Window window, string name) where T : class =>
             Assert.IsType<T>(window.FindName(name));
 
-        private static Task OnDispatcher(Func<Task> action)
-        {
-            // WPF needs an STA dispatcher that keeps pumping while asynchronous sends resume on the UI thread.
-            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var thread = new Thread(() =>
-            {
-                var dispatcher = Dispatcher.CurrentDispatcher;
-                if (Application.Current == null)
-                {
-                    var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                    application.Resources["appName"] = $"XMAT.RequestComposer.Tests-{Environment.ProcessId}";
-                }
-                SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
-                dispatcher.BeginInvoke(new Action(async () =>
-                {
-                    try
-                    {
-                        await action();
-                        completion.SetResult();
-                    }
-                    catch (Exception exception)
-                    {
-                        completion.SetException(exception);
-                    }
-                    finally
-                    {
-                        dispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
-                    }
-                }));
-                Dispatcher.Run();
-            })
-            { IsBackground = true };
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            return completion.Task.WaitAsync(TimeSpan.FromSeconds(20));
-        }
+        private Task OnDispatcher(Func<Task> action) => _application.RunAsync(action);
 
         private sealed class StubHandler(
             Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> callback) : HttpMessageHandler
