@@ -26,76 +26,105 @@ namespace XMAT
         private const int LoggingBufferSize = 4 * 1024;
         private const int MaxLoggingCharacters = LoggingBufferSize - 64;
 
-        private FileStream _loggingFS;
-        private StreamWriter _loggingSW;
+        private readonly object _lifetimeLock = new();
         private BlockingCollection<string> _lines;
-        private ManualResetEvent _reset = new(false);
+        private Task _writerTask;
 
         internal LogLevel CurrentLogLevel { get; set; }
 
         internal void InitLog(string nameOfLogFile, LogLevel level)
         {
-            _lines = new BlockingCollection<string>();
-            _reset.Reset();
-            CurrentLogLevel = level;
-
-            string logsPath = Path.Combine(PublicUtilities.StorageDirectoryPath, "Logs");
-            Directory.CreateDirectory(logsPath);
-            string finalPath = Path.Combine(logsPath, nameOfLogFile);
-            _loggingFS = new FileStream(finalPath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
-            _loggingSW = new StreamWriter(_loggingFS, Encoding.UTF8, LoggingBufferSize)
+            lock (_lifetimeLock)
             {
-                AutoFlush = true
-            };
+                EnsureCanInitialize();
+                string logsPath = Path.Combine(PublicUtilities.StorageDirectoryPath, "Logs");
+                Directory.CreateDirectory(logsPath);
+                string finalPath = Path.Combine(logsPath, nameOfLogFile);
+                InitLog(new FileStream(finalPath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite), level);
+            }
+        }
 
-            // this will fire and forget, but run forever due to GetConsumingEnumerable()
-            Task.Factory.StartNew(() =>
+        internal void InitLog(Stream stream, LogLevel level)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            lock (_lifetimeLock)
             {
-                foreach (string line in _lines.GetConsumingEnumerable())
+                EnsureCanInitialize();
+                var writer = new StreamWriter(stream, Encoding.UTF8, LoggingBufferSize);
+                try
                 {
-                    if (level < CurrentLogLevel || _loggingSW == null || _loggingFS == null)
-                        continue;
+                    writer.AutoFlush = true;
+                    CurrentLogLevel = level;
+                    var lines = new BlockingCollection<string>();
+                    _lines?.Dispose();
+                    _lines = lines;
 
-                    _loggingSW.WriteLine(line);
+                    // Only the consumer touches or disposes the writer; capture this lifetime's queue and stream.
+                    _writerTask = Task.Factory.StartNew(() =>
+                    {
+                        using (writer)
+                        {
+                            foreach (string line in lines.GetConsumingEnumerable())
+                            {
+                                if (level < CurrentLogLevel)
+                                    continue;
+                                writer.WriteLine(line);
+                            }
+                        }
+                    }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
                 }
-                _reset.Set();
-            }, TaskCreationOptions.LongRunning);
+                catch
+                {
+                    writer.Dispose();
+                    throw;
+                }
+            }
         }
 
         internal void Log(int id, LogLevel level, string value)
         {
-            var lines = _lines;
-            if (lines == null)
-                return;
-
-            // CompleteAdding can run between any check and Add, so Add itself is the arbiter:
-            // a line logged while the log is closing is dropped rather than thrown.
-            try
+            lock (_lifetimeLock)
             {
-                lines.Add($"{DateTime.Now:HH:mm:ss.fff} [{level}] ({id:D4}) {value.Substring(0, Math.Min(value.Length, MaxLoggingCharacters))}");
-            }
-            catch (InvalidOperationException)
-            {
-                // By design: a line logged while the log is closing is dropped.
+                // Calls made during or after shutdown are intentionally ignored, before the queue is touched.
+                if (_lines == null || _lines.IsAddingCompleted)
+                    return;
+                _lines.Add($"{DateTime.Now:HH:mm:ss.fff} [{level}] ({id:D4}) {value.Substring(0, Math.Min(value.Length, MaxLoggingCharacters))}");
             }
         }
 
         internal void CloseLog()
         {
-            _lines?.CompleteAdding();
-            _reset.WaitOne(500);
-
-            if (_loggingSW != null)
+            Task writerTask;
+            lock (_lifetimeLock)
             {
-                _loggingSW.Close();
-                _loggingSW = null;
+                _lines?.CompleteAdding();
+                writerTask = _writerTask;
             }
 
-            if (_loggingFS != null)
+            try
             {
-                _loggingFS.Close();
-                _loggingFS = null;
+                // A timeout cannot make disposal safe: drain and dispose on the consumer, then surface its errors.
+                writerTask?.GetAwaiter().GetResult();
             }
+            finally
+            {
+                lock (_lifetimeLock)
+                {
+                    // A new lifetime may have started while this caller waited for the previous consumer.
+                    if (ReferenceEquals(_writerTask, writerTask))
+                    {
+                        _lines?.Dispose();
+                        _lines = null;
+                    }
+                }
+            }
+        }
+
+        private void EnsureCanInitialize()
+        {
+            if (_writerTask != null && !_writerTask.IsCompleted)
+                throw new InvalidOperationException("Close the previous log before initializing another.");
+            _writerTask?.GetAwaiter().GetResult();
         }
 
         public void Dispose()

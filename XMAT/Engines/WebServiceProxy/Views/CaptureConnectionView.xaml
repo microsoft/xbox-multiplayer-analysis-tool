@@ -21,6 +21,7 @@
         </Style>
     </UserControl.Resources>
     <UserControl.CommandBindings>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.EditAndResend}" Executed="EditAndResend_Executed" CanExecute="EditAndResend_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.EnableDevice}"     Executed="EnableDevice_Executed"     CanExecute="Enable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DisableDevice}"    Executed="DisableDevice_Executed"    CanExecute="Disable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}" Executed="StartStopCapture_Executed" CanExecute="StartStopCapture_CanExecute"/>
@@ -134,7 +135,17 @@
                   d:ItemsSource="{d:SampleData}" 
                   ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"
-                  AutoGenerateColumns="False" GridLinesVisibility="None" ScrollViewer.ScrollChanged="ConnectionList_ScrollChanged">
+                  AutoGenerateColumns="False" GridLinesVisibility="None" ScrollViewer.ScrollChanged="ConnectionList_ScrollChanged"
+                  PreviewMouseRightButtonDown="ConnectionList_PreviewMouseRightButtonDown">
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <!-- Popups have a separate visual tree; route the command through the owning grid. -->
+                    <MenuItem x:Name="EditAndResendMenuItem" Header="Edit and resend"
+                              Command="{x:Static local:WebServiceProxyCommands.EditAndResend}"
+                              CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"
+                              CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"/>
+                </ContextMenu>
+            </DataGrid.ContextMenu>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="30"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
                 <DataGridTextColumn Header="STATUS" Binding="{Binding Status}"        Width="50"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
