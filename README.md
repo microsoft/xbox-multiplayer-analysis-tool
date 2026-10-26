@@ -139,6 +139,26 @@ response was received).
 _Screenshot of viewing individual request/response data for a connection._
 
 
+### Editing and Resending a Request
+
+Right-click an HTTP request in the connections list and select **Edit and resend**.
+The separate composer window lets you edit the method, URL, headers, and body, then
+**Send** and inspect a new response without modifying the original capture. This
+also works with imported captures. Binary, compressed, and non-UTF-8 request bodies
+are preserved as editable Base64; text bodies use UTF-8.
+
+Requests are sent directly from this PC, bypassing system proxies and capture scripts.
+HTTPS certificates are validated, redirects are not followed, and response cookies
+are not reused. Captured headers, including credentials, are sent to the edited URL.
+Host and Content-Length are regenerated, and connection-only headers are omitted.
+Methods other than GET, HEAD, and OPTIONS require confirmation, as does changing
+the captured origin. CONNECT and WebSocket handshakes cannot be replayed.
+
+Use **Cancel request** to stop waiting, or **Copy as cURL (PowerShell 7)** to copy
+a command for PowerShell 7 with `curl.exe` available. Copied commands can contain
+credentials and body data. Sending has a 30-second timeout and a 16 MiB response
+limit. Cancelling or timing out cannot undo changes already processed by the server.
+
 ### Filtering Displayed Requests & Responses
 
 On the tool bar on will notice that the connections list can be filtered according to checked values found

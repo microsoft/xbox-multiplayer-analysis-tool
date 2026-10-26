@@ -8,6 +8,9 @@ namespace XMAT.WebServiceCapture
 {
     public static class WebServiceProxyCommands
     {
+        public static readonly RoutedUICommand EditAndResend =
+            new("Edit and resend", "EditAndResend", typeof(WebServiceProxyCommands));
+
         public static readonly RoutedUICommand EnableDevice =
             new("Enable Device", "Enable Device", typeof(WebServiceProxyCommands));
 
