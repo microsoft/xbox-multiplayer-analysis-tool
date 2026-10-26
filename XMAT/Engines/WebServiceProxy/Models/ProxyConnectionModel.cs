@@ -25,7 +25,7 @@ namespace XMAT.WebServiceCapture.Models
         public readonly string UnknownStringValue = string.Empty;
         public const Int64 UnknownRowId = -1;
 
-        public Int64 RecordRowId { get; private set; }
+        public Int64 RecordRowId { get; internal set; }
 
         public Int64 RequestNumber { get; private set; }
         public Int64 Id { get; private set; }
@@ -174,12 +174,18 @@ namespace XMAT.WebServiceCapture.Models
 
         internal void AddToDataTable(string deviceName, IDataTable dataTable)
         {
+            RecordRowId = dataTable.AddRow(ToDataTableValues(deviceName));
+        }
+
+        internal object[] ToDataTableValues(string deviceName)
+        {
             var requestBodyAsBase64 = RequestBody != null && RequestBody.Length > 0 ? Convert.ToBase64String(RequestBody) : string.Empty;
             var responseBodyAsBase64 = ResponseBody != null && ResponseBody.Length > 0 ? Convert.ToBase64String(ResponseBody) : string.Empty;
 
             // see layout in WebServiceCaptureMethod.InitializeDataTables()
 
-            RecordRowId = dataTable.AddRow(
+            return new object[]
+            {
                 deviceName,
                 RequestNumber,
                 Id,
@@ -196,7 +202,7 @@ namespace XMAT.WebServiceCapture.Models
                 ResponseLineAndHeaders,
                 responseBodyAsBase64,
                 ClientIP
-            );
+            };
         }
 
         internal void UpdateFromDataRecord(IDataRecord dataRecord)

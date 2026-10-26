@@ -524,7 +524,32 @@ namespace XMAT.Models
             ActiveDatabase.SaveToFile(toFilePath);
         }
 
-        internal async Task ImportDataCapturesAsync(ImportType importType, string fromFilePath)
+        internal Task ImportDataCapturesAsync(
+            ImportType importType,
+            string fromFilePath)
+        {
+            return ImportDataCapturesAsync(
+                importType,
+                fromFilePath,
+                (path, context) =>
+                {
+                    var captureMethod =
+                        context.CaptureController.CaptureMethod as
+                            WebServiceCapture.WebServiceCaptureMethod;
+                    if (captureMethod == null)
+                    {
+                        throw new InvalidOperationException(
+                            "Fiddler imports require a web service capture method.");
+                    }
+
+                    return captureMethod.ImportFromFiddlerAsync(path, context);
+                });
+        }
+
+        internal async Task ImportDataCapturesAsync(
+            ImportType importType,
+            string fromFilePath,
+            Func<string, ICaptureDeviceContext, Task> importFromFiddlerAsync)
         {
             ICaptureDeviceContext captureDevice = null;
 
@@ -534,23 +559,69 @@ namespace XMAT.Models
                 // that will be read-only and imports this data...
                 case ImportType.Fiddler:
                 {
-                    captureDevice = AppModel.AddDeviceContext(
+                    var previousSelection = SelectedDeviceContext;
+                    string deviceName = $"{importType} - {Path.GetFileName(fromFilePath)}";
+                    var existingDevice = GetDeviceContext(
+                        DeviceType.Unknown, deviceName, CaptureType.WebProxy, true);
+                    captureDevice = AddDeviceContext(
                         DeviceType.Unknown,
-                        $"{importType} - {Path.GetFileName(fromFilePath)}",
+                        deviceName,
                         CaptureType.WebProxy,
                         true,
                         // NOTE: since this is a READONLY
                         // capture, we do not need parameters maybe?
                         null
                     );
-                    await (captureDevice.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ImportFromFiddlerAsync(fromFilePath, captureDevice);
+                    try
+                    {
+                        if (importFromFiddlerAsync == null)
+                        {
+                            throw new ArgumentNullException(
+                                nameof(importFromFiddlerAsync));
+                        }
+
+                        await importFromFiddlerAsync(
+                            fromFilePath,
+                            captureDevice);
+                    }
+                    catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                    {
+                        try
+                        {
+                            if (existingDevice == null)
+                            {
+                                try
+                                {
+                                    await RemoveDeviceContextAsync(captureDevice);
+                                }
+                                finally
+                                {
+                                    if (_captureDeviceContexts.Remove(captureDevice))
+                                    {
+                                        InvalidateCommands();
+                                    }
+
+                                    if (previousSelection == null ||
+                                        _captureDeviceContexts.Contains(previousSelection))
+                                    {
+                                        SelectedDeviceContext = previousSelection;
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception cleanupException) when (!ExceptionUtilities.IsFatal(cleanupException))
+                        {
+                            PublicUtilities.AppLog(LogLevel.ERROR, $"Failed to clean up Fiddler import: {cleanupException}");
+                        }
+                        throw;
+                    }
                 }
                 break;
 
                 // create a new read-only network trace tab and populate it from a netsh .etl file
                 case ImportType.NetTrace:
                 {
-                    captureDevice = AppModel.AddDeviceContext(
+                    captureDevice = AddDeviceContext(
                         DeviceType.Unknown,
                         $"{importType} - {Path.GetFileName(fromFilePath)}",
                         CaptureType.NetworkTrace,
@@ -578,7 +649,7 @@ namespace XMAT.Models
 
             if (captureDevice != null)
             {
-                AppModel.SelectedDeviceContext = captureDevice;
+                SelectedDeviceContext = captureDevice;
             }
         }
 
@@ -689,6 +760,41 @@ namespace XMAT.Models
         internal void RemoveAnalysisRun(AnalysisRunModel analysisRun)
         {
             _analysisRuns.Remove(analysisRun);
+        }
+
+        internal async Task<ECaptureAnalyzerResult> RunAnalysisAsync(
+            AnalysisRunModel analysisRun,
+            IDeviceCaptureController captureController,
+            Action<string> logError = null)
+        {
+            var result = ECaptureAnalyzerResult.UnknownError;
+            analysisRun.IsProcessing = true;
+            try
+            {
+                result = await analysisRun.SourceAnalyzer.RunAsync(analysisRun, captureController);
+                return result;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                string message = $"Capture analysis {analysisRun.Id} failed: {ex}";
+                if (logError != null)
+                {
+                    logError(message);
+                }
+                else
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, message);
+                }
+                return ECaptureAnalyzerResult.UnknownError;
+            }
+            finally
+            {
+                analysisRun.IsProcessing = false;
+                if (result != ECaptureAnalyzerResult.Success)
+                {
+                    RemoveAnalysisRun(analysisRun);
+                }
+            }
         }
 
         public event PropertyChangedEventHandler PropertyChanged;

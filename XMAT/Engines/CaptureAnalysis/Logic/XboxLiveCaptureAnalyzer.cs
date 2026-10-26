@@ -152,36 +152,27 @@ namespace XMAT.XboxLiveCaptureAnalysis
             // NOTE: for now we are just showing the reports for the first
             // console that we found in the data
 
-            try
-            {
-                var firstReports = perConsoleReports.First();
-
-                firstReports.Value.ToList().ForEach(
-                report =>
-                {
-                    ReportViewModel model = ReportViewModelFactory.CreateForDocument(
-                        _captureAppModel,
-                        sourceCaptureName,
-                        analysisRunStorageDirectory,
-                        report);
-                    if (model != null && model.Show)
-                    {
-                        analysisResultsModel.Reports.Add(model);
-                    }
-                });
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.Complete);
-                return ECaptureAnalyzerResult.Success;
-            }
-            catch (InvalidOperationException)
+            if (perConsoleReports.Count == 0)
             {
                 return ECaptureAnalyzerResult.NoSuitableData;
             }
-            catch (ArgumentNullException)
+
+            var firstReports = perConsoleReports.First();
+            foreach (var report in firstReports.Value)
             {
-                return ECaptureAnalyzerResult.UnknownError;
+                ReportViewModel model = ReportViewModelFactory.CreateForDocument(
+                    _captureAppModel,
+                    sourceCaptureName,
+                    analysisRunStorageDirectory,
+                    report);
+                if (model != null && model.Show)
+                {
+                    analysisResultsModel.Reports.Add(model);
+                }
             }
 
+            SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.Complete);
+            return ECaptureAnalyzerResult.Success;
         }
 
         public void Shutdown()
