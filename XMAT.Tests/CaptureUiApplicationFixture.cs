@@ -4,11 +4,9 @@
 
 using System.Reflection;
 using System.Runtime.ExceptionServices;
-using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Threading;
 
 namespace XMAT.Tests
 {
@@ -20,13 +18,26 @@ namespace XMAT.Tests
 
     public sealed class CaptureUiApplicationFixture : IDisposable
     {
+        private static readonly object HostLock = new();
+        private static CaptureUiApplicationFixture _host;
+        private readonly CaptureUiApplicationFixture _shared;
         private readonly Thread _thread;
         private readonly ManualResetEventSlim _ready = new();
         private Application _application;
         private Exception _failure;
 
-        public CaptureUiApplicationFixture()
+        public CaptureUiApplicationFixture() : this(false)
         {
+        }
+
+        private CaptureUiApplicationFixture(bool createHost)
+        {
+            if (!createHost)
+            {
+                _shared = GetOrCreateHost();
+                _ready.Dispose();
+                return;
+            }
             _thread = new Thread(() =>
             {
                 try
@@ -34,6 +45,8 @@ namespace XMAT.Tests
                     _application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
                     var appName = $"XMAT-UI-Tests-{Guid.NewGuid():N}";
                     _application.Resources["appName"] = appName;
+                    _application.Resources["BooleanToVisibilityConverter"] = new BooleanToVisibilityConverter();
+                    Localization.LoadLanguage("en-us");
                     _application.Resources[typeof(DataGridColumnHeader)] = new Style(typeof(DataGridColumnHeader));
                     _application.Resources.MergedDictionaries.Add(new ResourceDictionary
                     {
@@ -48,6 +61,9 @@ namespace XMAT.Tests
                     // Other test classes can still use the process-wide application log.
                     AppDomain.CurrentDomain.ProcessExit += (sender, args) =>
                     {
+                        _application.Dispatcher.Invoke(_application.Shutdown);
+                        _thread.Join(TimeSpan.FromSeconds(30));
+                        _ready.Dispose();
                         log.CloseLog();
                         Directory.Delete(storage, true);
                     };
@@ -59,7 +75,8 @@ namespace XMAT.Tests
                     _failure = exception;
                     _ready.Set();
                 }
-            }) { IsBackground = true };
+            })
+            { IsBackground = true };
             _thread.SetApartmentState(ApartmentState.STA);
             _thread.Start();
             Assert.True(_ready.Wait(TimeSpan.FromSeconds(30)), "The WPF test application did not start.");
@@ -69,17 +86,23 @@ namespace XMAT.Tests
             }
         }
 
+        private static CaptureUiApplicationFixture GetOrCreateHost()
+        {
+            lock (HostLock)
+            {
+                return _host ??= new CaptureUiApplicationFixture(true);
+            }
+        }
+
         internal void Run(Action<Window> test) =>
-            _application.Dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
+            (_shared ?? this)._application.Dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
 
         public void Dispose()
         {
-            _application.Dispatcher.Invoke(_application.Shutdown);
-            Assert.True(_thread.Join(TimeSpan.FromSeconds(30)), "The WPF test application did not stop.");
-            _ready.Dispose();
-            if (_failure != null)
+            var failure = (_shared ?? this)._failure;
+            if (failure != null)
             {
-                ExceptionDispatchInfo.Capture(_failure).Throw();
+                ExceptionDispatchInfo.Capture(failure).Throw();
             }
         }
     }

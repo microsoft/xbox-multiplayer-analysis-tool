@@ -11,6 +11,7 @@ using System.Windows.Input;
 using Microsoft.Win32;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT
 {
@@ -59,10 +60,26 @@ namespace XMAT
             CollectLogs.Header = Localization.GetLocalizedString("COLLECT_LOGS");
             ViewGDKXInfo.Header = Localization.GetLocalizedString("GDKX_INFO");
             ActionsMenu.Header = Localization.GetLocalizedString("ACTIONS_MENU");
+            ChangeProxyPort.Header = Localization.GetLocalizedString("PROXY_PORT_CHANGE");
+            ChangeProxyPort.ToolTip = Localization.GetLocalizedString("PROXY_PORT_CHANGE_TOOLTIP");
             ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
 
             // Sync dark mode checkbox with saved preference
             ToggleDarkMode.IsChecked = CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark";
+        }
+
+        private void ChangeProxyPort_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureConnectionView.CanChangeProxyPort(CaptureAppModel.AppModel.SelectedDeviceContext);
+        }
+
+        private async void ChangeProxyPort_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (CaptureConnectionView.TryGetCaptureContext(
+                CaptureAppModel.AppModel.SelectedDeviceContext, out var context, out var controller))
+            {
+                await CaptureConnectionView.ShowPortChangeAsync(context, controller);
+            }
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -122,9 +139,22 @@ namespace XMAT
                     return;
                 }
 
-                CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+                if (!CaptureAppSettings.Serialize(CaptureAppModel.AppModel))
+                {
+                    return;
+                }
                 _closeConfirmed = true;
                 Close();
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                _closeConfirmed = false;
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Failed to close the application: {ex}");
+                MessageBox.Show(
+                    Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_MESSAGE", ex.Message),
+                    Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_TITLE"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             }
             finally
             {
@@ -207,7 +237,8 @@ namespace XMAT
                 var context = CaptureAppModel.AppModel.GetDeviceContext(deviceSelector.SelectedDeviceType, deviceSelector.SelectedDeviceName, deviceSelector.SelectedCaptureType, false);
                 if (context != null)
                 {
-                    MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    CaptureAppModel.AppModel.SelectedDeviceContext = context;
+                    MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
                 else
@@ -329,7 +360,19 @@ namespace XMAT
                         ? ImportType.NetTrace
                         : ImportType.Fiddler;
 
-                    await CaptureAppModel.AppModel.ImportDataCapturesAsync(importType, filename);
+                    try
+                    {
+                        await CaptureAppModel.AppModel.ImportDataCapturesAsync(importType, filename);
+                    }
+                    catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                    {
+                        PublicUtilities.AppLog(LogLevel.ERROR, $"Capture import failed: {ex}");
+                        MessageBox.Show(
+                            Localization.GetLocalizedString("WEBCAP_IMPORT_ERROR", ex.Message),
+                            Localization.GetLocalizedString("WEBCAP_IMPORT_ERROR_TITLE"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error);
+                    }
                 }
             }
         }
@@ -515,7 +558,6 @@ namespace XMAT
                     CaptureErrorsPanel.AddedAnalysis(analysisRun);
                     await HandleAnalyzerChosen(
                         analysisRun,
-                        selected,
                         captureDeviceContext.CaptureController);
                 }
             }
@@ -523,50 +565,38 @@ namespace XMAT
 
         private async Task HandleAnalyzerChosen(
             AnalysisRunModel analysisRun,
-            ICaptureAnalyzer captureAnalyzer,
             IDeviceCaptureController captureController)
         {
-            analysisRun.IsProcessing = true;
-            try
+            ECaptureAnalyzerResult analyzerResult = await CaptureAppModel.AppModel.RunAnalysisAsync(
+                analysisRun, captureController);
+
+            void OnError(string strErrorMsg)
             {
-                ECaptureAnalyzerResult analyzerResult = await captureAnalyzer.RunAsync(analysisRun, captureController);
-
-                void OnError(string strErrorMsg)
-                {
-                    // remove entry
-                    CaptureAppModel.AppModel.RemoveAnalysisRun(analysisRun);
-
-                    // show error msg
-                    MessageBox.Show(
-                        strErrorMsg,
-                        Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_TITLE"),
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                }
-
-                switch (analyzerResult)
-                {
-                    case ECaptureAnalyzerResult.Success:
-                    {
-                        break;
-                    }
-
-                    case ECaptureAnalyzerResult.NoSuitableData:
-                    {
-                        OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
-                        break;
-                    }
-
-                    case ECaptureAnalyzerResult.UnknownError:
-                    {
-                        OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));
-                        break;
-                    }
-                }
+                MessageBox.Show(
+                    strErrorMsg,
+                    Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_TITLE"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             }
-            finally
+
+            switch (analyzerResult)
             {
-                analysisRun.IsProcessing = false;
+                case ECaptureAnalyzerResult.Success:
+                {
+                    break;
+                }
+
+                case ECaptureAnalyzerResult.NoSuitableData:
+                {
+                    OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
+                    break;
+                }
+
+                case ECaptureAnalyzerResult.UnknownError:
+                {
+                    OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));
+                    break;
+                }
             }
         }
 

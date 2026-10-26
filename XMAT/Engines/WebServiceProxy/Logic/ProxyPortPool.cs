@@ -3,94 +3,116 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 
 namespace XMAT.WebServiceCapture
 {
-    internal static class ProxyPortPool
+    internal sealed class ProxyPortPool
     {
-        private static bool _initialized = false;
+        internal static ProxyPortPool Shared { get; } = new();
+        public const UInt16 DefaultFirstPort = 8880;
+        public const UInt16 DefaultLastPort = 8889;
 
-        public static UInt16 FirstPort { get; set; }
-        public static UInt16 LastPort { get; set; }
+        private readonly object _lockObj = new();
+        private readonly Dictionary<UInt16, Reservation> _reservations = new();
+        private string _configurationError;
+        public UInt16 FirstPort { get; private set; } = DefaultFirstPort;
+        public UInt16 LastPort { get; private set; } = DefaultLastPort;
 
-        public static readonly UInt16 DefaultFirstPort = 8880;
-        public static readonly UInt16 DefaultLastPort = 8889;
-
-        private class PooledPort
+        internal void Initialize(UInt16 firstPort, UInt16 lastPort)
         {
-            public PooledPort(UInt16 port)
+            if (firstPort == 0 || lastPort < firstPort)
             {
-                Port = port;
+                throw new ArgumentOutOfRangeException(nameof(firstPort),
+                    Localization.GetLocalizedString("PROXY_PORT_RANGE_INVALID"));
             }
-
-            public UInt16 Port { get; private set; }
-            public bool InUse { get; set; }
-        }
-
-        private static PooledPort[] _pooledPorts = Array.Empty<PooledPort>();
-        private static readonly object _lockObj = new object();
-
-        internal static void Initialize(UInt16 firstPort, UInt16 lastPort)
-        {
-            if (_initialized && FirstPort == firstPort && LastPort == lastPort)
-            {
-                return;
-            }
-
-            FirstPort = firstPort;
-            LastPort = lastPort;
 
             lock (_lockObj)
             {
-                FirstPort = Math.Max((UInt16)0, FirstPort);
-                LastPort = Math.Max(FirstPort, LastPort);
-                var totalPorts = LastPort - FirstPort + 1;
+                FirstPort = firstPort;
+                LastPort = lastPort;
+                _configurationError = null;
+            }
+        }
 
-                _pooledPorts = new PooledPort[totalPorts];
-                for (var port = FirstPort; port <= LastPort; port++)
+        internal void RestoreRange(UInt16 firstPort, UInt16 lastPort)
+        {
+            try
+            {
+                Initialize(firstPort, lastPort);
+            }
+            catch (ArgumentOutOfRangeException ex)
+            {
+                lock (_lockObj)
                 {
-                    _pooledPorts[port - FirstPort] = new PooledPort(port);
+                    _configurationError = ex.Message;
                 }
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Invalid saved proxy allocation range: {ex}");
             }
-
-            _initialized = true;
         }
 
-        internal static UInt16 ObtainPort()
+        internal Reservation ObtainPort(string owner)
         {
-            if (!_initialized)
-            {
-                throw new InvalidOperationException("Please initialize the proxy port pool.");
-            }
-
             lock (_lockObj)
             {
-                foreach (var pooledPort in _pooledPorts)
+                if (_configurationError != null)
                 {
-                    if (!pooledPort.InUse)
+                    throw new InvalidOperationException(_configurationError);
+                }
+                for (var port = (int)FirstPort; port <= LastPort; port++)
+                {
+                    if (!_reservations.ContainsKey((UInt16)port))
                     {
-                        pooledPort.InUse = true;
-                        return pooledPort.Port;
+                        return ReservePort((UInt16)port, owner);
                     }
                 }
-                return 0;
+                throw new InvalidOperationException(
+                    Localization.GetLocalizedString("PROXY_PORT_EXHAUSTED", FirstPort, LastPort));
             }
         }
 
-        internal static void ReleasePort(int port)
+        internal Reservation ReservePort(UInt16 port, string owner)
         {
-            if (!_initialized)
+            if (port == 0)
             {
-                throw new InvalidOperationException("Please initialize the proxy port pool.");
+                throw new ArgumentOutOfRangeException(nameof(port));
             }
 
             lock (_lockObj)
             {
-                foreach (var pooledPort in _pooledPorts)
+                if (_reservations.TryGetValue(port, out var existing))
                 {
-                    if (pooledPort.Port == port && pooledPort.InUse)
+                    throw new InvalidOperationException(
+                        Localization.GetLocalizedString("PROXY_PORT_IN_USE", port, existing.Owner));
+                }
+
+                var reservation = new Reservation(this, port, owner);
+                _reservations.Add(port, reservation);
+                return reservation;
+            }
+        }
+
+        internal sealed class Reservation : IDisposable
+        {
+            private readonly ProxyPortPool _pool;
+            public UInt16 Port { get; }
+            internal string Owner { get; }
+
+            internal Reservation(ProxyPortPool pool, UInt16 port, string owner)
+            {
+                _pool = pool;
+                Port = port;
+                Owner = owner;
+            }
+
+            public void Dispose()
+            {
+                lock (_pool._lockObj)
+                {
+                    if (_pool._reservations.TryGetValue(Port, out var current) &&
+                        ReferenceEquals(current, this))
                     {
-                        pooledPort.InUse = false;
+                        _pool._reservations.Remove(Port);
                     }
                 }
             }

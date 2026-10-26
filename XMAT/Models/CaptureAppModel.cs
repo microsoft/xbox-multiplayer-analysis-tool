@@ -47,8 +47,19 @@ namespace XMAT.Models
                     return;
                 }
 
+                if (_selectedDeviceContext?.CaptureController is IDeviceCaptureController previousController)
+                {
+                    PropertyChangedEventManager.RemoveHandler(
+                        previousController, SelectedCaptureController_PropertyChanged, string.Empty);
+                }
                 _selectedDeviceContext = value;
+                if (_selectedDeviceContext?.CaptureController is IDeviceCaptureController currentController)
+                {
+                    PropertyChangedEventManager.AddHandler(
+                        currentController, SelectedCaptureController_PropertyChanged, string.Empty);
+                }
                 RaisePropertyChange();
+                RaiseCaptureStatusProperties();
                 InvalidateCommands();
             }
         }
@@ -63,9 +74,24 @@ namespace XMAT.Models
         private string _statusBarText2;
         private string _statusBarText3;
 
-        public string StatusBarText1 { get => _statusBarText1; set { _statusBarText1 = value; RaisePropertyChange("StatusBarText1"); } }
-        public string StatusBarText2 { get => _statusBarText2; set { _statusBarText2 = value; RaisePropertyChange("StatusBarText2"); } }
-        public string StatusBarText3 { get => _statusBarText3; set { _statusBarText3 = value; RaisePropertyChange("StatusBarText3"); } }
+        public string StatusBarText1
+        {
+            get => SelectedDeviceContext?.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController proxy
+                ? proxy.CaptureStatusText : _statusBarText1;
+            set { _statusBarText1 = value; RaisePropertyChange(); }
+        }
+        public string StatusBarText2
+        {
+            get => SelectedDeviceContext?.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController proxy
+                ? proxy.PortDescription : _statusBarText2;
+            set { _statusBarText2 = value; RaisePropertyChange(); }
+        }
+        public string StatusBarText3
+        {
+            get => SelectedDeviceContext?.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController proxy
+                ? proxy.PortStatus : _statusBarText3;
+            set { _statusBarText3 = value; RaisePropertyChange(); }
+        }
 
         internal static readonly CaptureAppModel AppModel = new();
 
@@ -264,6 +290,41 @@ namespace XMAT.Models
             }
 
             InvalidateCommands();
+        }
+
+        private void RaiseCaptureStatusProperties()
+        {
+            RaisePropertyChange(nameof(StatusBarText1));
+            RaisePropertyChange(nameof(StatusBarText2));
+            RaisePropertyChange(nameof(StatusBarText3));
+        }
+
+        private void SelectedCaptureController_PropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (!ReferenceEquals(sender, SelectedDeviceContext?.CaptureController) ||
+                sender is not WebServiceCapture.WebServiceDeviceCaptureController ||
+                (!string.IsNullOrEmpty(e.PropertyName) &&
+                 e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.CaptureStatusText) &&
+                 e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.PortDescription) &&
+                 e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.PortStatus)))
+            {
+                return;
+            }
+            void UpdateStatus()
+            {
+                if (ReferenceEquals(sender, SelectedDeviceContext?.CaptureController))
+                {
+                    RaiseCaptureStatusProperties();
+                }
+            }
+            if (_dispatcher.CheckAccess())
+            {
+                UpdateStatus();
+            }
+            else if (!_dispatcher.HasShutdownStarted && !_dispatcher.HasShutdownFinished)
+            {
+                _dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(UpdateStatus));
+            }
         }
 
         private void TrackCaptureController(IDeviceCaptureController controller)
@@ -472,7 +533,32 @@ namespace XMAT.Models
             ActiveDatabase.SaveToFile(toFilePath);
         }
 
-        internal async Task ImportDataCapturesAsync(ImportType importType, string fromFilePath)
+        internal Task ImportDataCapturesAsync(
+            ImportType importType,
+            string fromFilePath)
+        {
+            return ImportDataCapturesAsync(
+                importType,
+                fromFilePath,
+                (path, context) =>
+                {
+                    var captureMethod =
+                        context.CaptureController.CaptureMethod as
+                            WebServiceCapture.WebServiceCaptureMethod;
+                    if (captureMethod == null)
+                    {
+                        throw new InvalidOperationException(
+                            "Fiddler imports require a web service capture method.");
+                    }
+
+                    return captureMethod.ImportFromFiddlerAsync(path, context);
+                });
+        }
+
+        internal async Task ImportDataCapturesAsync(
+            ImportType importType,
+            string fromFilePath,
+            Func<string, ICaptureDeviceContext, Task> importFromFiddlerAsync)
         {
             ICaptureDeviceContext captureDevice = null;
 
@@ -482,23 +568,69 @@ namespace XMAT.Models
                 // that will be read-only and imports this data...
                 case ImportType.Fiddler:
                 {
-                    captureDevice = AppModel.AddDeviceContext(
+                    var previousSelection = SelectedDeviceContext;
+                    string deviceName = $"{importType} - {Path.GetFileName(fromFilePath)}";
+                    var existingDevice = GetDeviceContext(
+                        DeviceType.Unknown, deviceName, CaptureType.WebProxy, true);
+                    captureDevice = AddDeviceContext(
                         DeviceType.Unknown,
-                        $"{importType} - {Path.GetFileName(fromFilePath)}",
+                        deviceName,
                         CaptureType.WebProxy,
                         true,
                         // NOTE: since this is a READONLY
                         // capture, we do not need parameters maybe?
                         null
                     );
-                    await (captureDevice.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ImportFromFiddlerAsync(fromFilePath, captureDevice);
+                    try
+                    {
+                        if (importFromFiddlerAsync == null)
+                        {
+                            throw new ArgumentNullException(
+                                nameof(importFromFiddlerAsync));
+                        }
+
+                        await importFromFiddlerAsync(
+                            fromFilePath,
+                            captureDevice);
+                    }
+                    catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                    {
+                        try
+                        {
+                            if (existingDevice == null)
+                            {
+                                try
+                                {
+                                    await RemoveDeviceContextAsync(captureDevice);
+                                }
+                                finally
+                                {
+                                    if (_captureDeviceContexts.Remove(captureDevice))
+                                    {
+                                        InvalidateCommands();
+                                    }
+
+                                    if (previousSelection == null ||
+                                        _captureDeviceContexts.Contains(previousSelection))
+                                    {
+                                        SelectedDeviceContext = previousSelection;
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception cleanupException) when (!ExceptionUtilities.IsFatal(cleanupException))
+                        {
+                            PublicUtilities.AppLog(LogLevel.ERROR, $"Failed to clean up Fiddler import: {cleanupException}");
+                        }
+                        throw;
+                    }
                 }
                 break;
 
                 // create a new read-only network trace tab and populate it from a netsh .etl file
                 case ImportType.NetTrace:
                 {
-                    captureDevice = AppModel.AddDeviceContext(
+                    captureDevice = AddDeviceContext(
                         DeviceType.Unknown,
                         $"{importType} - {Path.GetFileName(fromFilePath)}",
                         CaptureType.NetworkTrace,
@@ -526,7 +658,7 @@ namespace XMAT.Models
 
             if (captureDevice != null)
             {
-                AppModel.SelectedDeviceContext = captureDevice;
+                SelectedDeviceContext = captureDevice;
             }
         }
 
@@ -567,7 +699,8 @@ namespace XMAT.Models
             string deviceName,
             CaptureType captureType,
             bool readOnly,
-            object serializedParameters)
+            object serializedParameters,
+            bool deferPortAllocation = false)
         {
             var newCaptureDeviceModel = GetDeviceContext(
                 deviceType,
@@ -582,7 +715,8 @@ namespace XMAT.Models
                     deviceName,
                     captureType,
                     readOnly,
-                    serializedParameters);
+                    serializedParameters,
+                    deferPortAllocation);
                 _captureDeviceContexts.Add(newCaptureDeviceModel);
 
                 if (!readOnly)
@@ -604,7 +738,9 @@ namespace XMAT.Models
             return (from cc in _captureDeviceContexts
                     where
                     cc.DeviceType == deviceType &&
-                    cc.DeviceName == deviceName &&
+                    (captureType == CaptureType.WebProxy && !readOnly
+                        ? SameProxyDevice(deviceType, cc.DeviceName, deviceName)
+                        : cc.DeviceName == deviceName) &&
                     cc.CaptureType == captureType &&
                     cc.IsReadOnly == readOnly
                     select cc
@@ -629,6 +765,15 @@ namespace XMAT.Models
             InvalidateCommands();
         }
 
+        internal static bool SameProxyDevice(DeviceType type, string first, string second) =>
+            type == DeviceType.LocalPC ||
+            (type == DeviceType.XboxConsole
+                ? string.Equals(
+                    XMAT.WebServiceCapture.ProxyEndpoint.NormalizeHost(first),
+                    XMAT.WebServiceCapture.ProxyEndpoint.NormalizeHost(second),
+                    StringComparison.OrdinalIgnoreCase)
+                : first == second);
+
         internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer)
         {
             var headerText = $"{analyzer.Description} [{DateTime.Now}]";
@@ -646,6 +791,41 @@ namespace XMAT.Models
         internal void RemoveAnalysisRun(AnalysisRunModel analysisRun)
         {
             _analysisRuns.Remove(analysisRun);
+        }
+
+        internal async Task<ECaptureAnalyzerResult> RunAnalysisAsync(
+            AnalysisRunModel analysisRun,
+            IDeviceCaptureController captureController,
+            Action<string> logError = null)
+        {
+            var result = ECaptureAnalyzerResult.UnknownError;
+            analysisRun.IsProcessing = true;
+            try
+            {
+                result = await analysisRun.SourceAnalyzer.RunAsync(analysisRun, captureController);
+                return result;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                string message = $"Capture analysis {analysisRun.Id} failed: {ex}";
+                if (logError != null)
+                {
+                    logError(message);
+                }
+                else
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, message);
+                }
+                return ECaptureAnalyzerResult.UnknownError;
+            }
+            finally
+            {
+                analysisRun.IsProcessing = false;
+                if (result != ECaptureAnalyzerResult.Success)
+                {
+                    RemoveAnalysisRun(analysisRun);
+                }
+            }
         }
 
         public event PropertyChangedEventHandler PropertyChanged;

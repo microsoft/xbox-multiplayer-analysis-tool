@@ -33,6 +33,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="..\XMAT\App.xaml" LogicalName="XMAT.Tests.App.xaml" />
     <EmbeddedResource Include="..\XMAT\Windows\MainWindow.xaml" LogicalName="XMAT.Tests.MainWindow.xaml" />
   </ItemGroup>
 

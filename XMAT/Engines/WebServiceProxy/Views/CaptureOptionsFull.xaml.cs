@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System.Windows;
+using System;
 using System.Windows.Controls;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
@@ -24,10 +24,16 @@ namespace XMAT.WebServiceCapture
             GeneralLabel.Text = Localization.GetLocalizedString("PROXY_PREFS_GENERAL");
         }
 
-        private void CaptureOptionsFull_Loaded(object sender, RoutedEventArgs e)
+        internal void CommitPortRange()
         {
-            var preferencesModel = DataContext as PreferencesModel;
-            ProxyPortPool.Initialize(preferencesModel.FirstPort, preferencesModel.LastPort);
+            if (!ProxyPortChangeWindow.TryParsePort(StartingPort.Text, out var first) ||
+                !ProxyPortChangeWindow.TryParsePort(EndingPort.Text, out var last) || last < first)
+            {
+                throw new ArgumentException(Localization.GetLocalizedString("PROXY_PORT_RANGE_INVALID"));
+            }
+            var preferences = (PreferencesModel)DataContext;
+            preferences.FirstPort = first;
+            preferences.LastPort = last;
         }
 
         // TODO: Do we need these and/or the ICaptureOptions interface?
