@@ -150,7 +150,7 @@ namespace XMAT.WebServiceCapture
     internal sealed class PcProxyDeviceConfiguration : IProxyDeviceConfiguration
     {
         public Task<ProxyConfiguration> ReadAsync() => Task.Run(InternetProxy.ReadConfiguration);
-        public Task DisableAsync() => Task.Run(InternetProxy.Disable);
+        public Task DisableAsync() => throw new NotSupportedException();
         public Task EnableAsync(ProxyEndpoint endpoint) =>
             Task.Run(() => InternetProxy.Enable(endpoint.Host, endpoint.Port));
 
@@ -246,7 +246,7 @@ namespace XMAT.WebServiceCapture
             Func<ProxyEndpoint, bool> ownsCurrent, ProxyEndpoint desired,
             CancellationToken cancellationToken)
         {
-            var current = await _device.ReadAsync();
+            var current = await WaitAsync(_ => true, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             current.RequireKnown();
             if (current.State == ProxyConfigurationState.Enabled &&
@@ -303,24 +303,38 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private async Task WaitAsync(Func<ProxyConfiguration, bool> predicate, CancellationToken cancellationToken)
+        private async Task<ProxyConfiguration> WaitAsync(
+            Func<ProxyConfiguration, bool> predicate, CancellationToken cancellationToken)
         {
             var stopwatch = Stopwatch.StartNew();
-            while (true)
+            ProxyConfiguration configuration = null;
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var configuration = await _device.ReadAsync();
-                cancellationToken.ThrowIfCancellationRequested();
-                if (predicate(configuration))
+                while (true)
                 {
-                    return;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var remaining = _timeout - stopwatch.Elapsed;
+                    configuration = await _device.ReadAsync().WaitAsync(
+                        remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (predicate(configuration))
+                    {
+                        return configuration;
+                    }
+                    remaining = _timeout - stopwatch.Elapsed;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        throw new TimeoutException();
+                    }
+                    await _delay(cancellationToken).WaitAsync(remaining, cancellationToken);
                 }
-                if (stopwatch.Elapsed >= _timeout)
-                {
-                    throw new TimeoutException(
-                        Localization.GetLocalizedString("PROXY_CONFIGURATION_TIMEOUT", configuration.Detail ?? configuration.State.ToString()));
-                }
-                await _delay(cancellationToken);
+            }
+            catch (TimeoutException ex)
+            {
+                throw new TimeoutException(
+                    Localization.GetLocalizedString("PROXY_CONFIGURATION_TIMEOUT",
+                        configuration?.Detail ?? (configuration?.State ?? ProxyConfigurationState.Unknown).ToString()),
+                    ex);
             }
         }
     }

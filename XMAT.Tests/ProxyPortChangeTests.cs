@@ -312,13 +312,162 @@ namespace XMAT.Tests
         {
             _application.Run(window =>
             {
-                var options = new CaptureOptionsFull
-                {
-                    DataContext = new XMAT.WebServiceCapture.Models.PreferencesModel()
-                };
-                ((TextBox)options.FindName("StartingPort")).Text = first;
-                ((TextBox)options.FindName("EndingPort")).Text = last;
+                var preferences = new XMAT.WebServiceCapture.Models.PreferencesModel();
+                var options = new CaptureOptionsFull { DataContext = preferences };
+                WpfTestHost.Show(window, options);
+                EditPortRange(options, first, last);
                 Assert.Throws<ArgumentException>(options.CommitPortRange);
+                Assert.Equal(ProxyPortPool.DefaultFirstPort, preferences.FirstPort);
+                Assert.Equal(ProxyPortPool.DefaultLastPort, preferences.LastPort);
+                preferences.Serialized();
+            });
+        }
+
+        [Theory]
+        [InlineData("9000", "8889")]
+        [InlineData("9000", "9010")]
+        public void Preferences_AbandonedPortEdits_DoNotChangeLiveRange(string first, string last)
+        {
+            _application.Run(window =>
+            {
+                var preferences = new XMAT.WebServiceCapture.Models.PreferencesModel();
+                var options = new CaptureOptionsFull { DataContext = preferences };
+                WpfTestHost.Show(window, options);
+                EditPortRange(options, first, last);
+                window.Content = null;
+                WpfTestHost.Pump();
+
+                Assert.Equal(ProxyPortPool.DefaultFirstPort, preferences.FirstPort);
+                Assert.Equal(ProxyPortPool.DefaultLastPort, preferences.LastPort);
+                preferences.Serialized();
+
+                var reopened = new CaptureOptionsFull { DataContext = preferences };
+                WpfTestHost.Show(window, reopened);
+                Assert.Equal(preferences.FirstPort.ToString(), ((TextBox)reopened.FindName("StartingPort")).Text);
+                Assert.Equal(preferences.LastPort.ToString(), ((TextBox)reopened.FindName("EndingPort")).Text);
+            });
+        }
+
+        [Fact]
+        public void Preferences_ValidPortDraft_IsCommittedOnlyOnSave()
+        {
+            _application.Run(window =>
+            {
+                var preferences = new XMAT.WebServiceCapture.Models.PreferencesModel();
+                var options = new CaptureOptionsFull { DataContext = preferences };
+                WpfTestHost.Show(window, options);
+                EditPortRange(options, "9000", "9010");
+                Assert.Equal(ProxyPortPool.DefaultFirstPort, preferences.FirstPort);
+                Assert.Equal(ProxyPortPool.DefaultLastPort, preferences.LastPort);
+
+                options.CommitPortRange();
+
+                Assert.Equal(9000, preferences.FirstPort);
+                Assert.Equal(9010, preferences.LastPort);
+            });
+        }
+
+        [Theory]
+        [InlineData(DeviceType.XboxConsole, false, false)]
+        [InlineData(DeviceType.XboxConsole, true, false)]
+        [InlineData(DeviceType.XboxConsole, false, true)]
+        public void DisableProxying_UpdatesSelectedStatusWithoutFalseConfirmation(
+            DeviceType deviceType, bool alreadyDisabled, bool fails)
+        {
+            _application.Run(window =>
+            {
+                var device = new Device(alreadyDisabled
+                    ? new(ProxyConfigurationState.Disabled)
+                    : new(ProxyConfigurationState.Enabled, new("127.0.0.1", 9000)))
+                {
+                    DisableFailure = fails ? new IOException("disable failed") : null
+                };
+                var controller = new WebServiceDeviceCaptureController(
+                    "127.0.0.1", deviceType, false, new ProxyPortPool(), device) { Port = 9000 };
+                var model = new CaptureAppModel { SelectedDeviceContext = new Context(controller) };
+                var disabling = controller.DisableProxying(_ => true);
+                if (fails)
+                {
+                    Assert.Throws<IOException>(() => Complete(disabling));
+                }
+                else
+                {
+                    Complete(disabling);
+                    Assert.True(disabling.GetAwaiter().GetResult());
+                }
+
+                var expected = fails ? "PROXY_DISABLE_FAILED" :
+                    alreadyDisabled ? "PROXY_DISABLED" : "PROXY_DISABLE_REQUESTED";
+                Assert.Equal(Localization.GetLocalizedString(expected), controller.PortStatus);
+                Assert.Equal(controller.PortStatus, model.StatusBarText3);
+                Assert.Equal(!alreadyDisabled, device.DisableStarted);
+                model.SelectedDeviceContext = null;
+            });
+        }
+
+        [Fact]
+        public void DisableProxying_ForeignXboxEndpoint_RequiresExplicitConfirmation()
+        {
+            _application.Run(window =>
+            {
+                var endpoint = new ProxyEndpoint("other.example", 8080);
+                var device = new Device(new(ProxyConfigurationState.Enabled, endpoint));
+                var controller = new WebServiceDeviceCaptureController(
+                    "127.0.0.1", DeviceType.XboxConsole, false, new ProxyPortPool(), device) { Port = 9000 };
+                string prompt = null;
+                var disabling = controller.DisableProxying(description =>
+                {
+                    prompt = description;
+                    return false;
+                });
+                Complete(disabling);
+
+                Assert.False(disabling.GetAwaiter().GetResult());
+                Assert.Equal(Localization.GetLocalizedString("PROXY_DISABLE_FOREIGN_CONFIRM", endpoint), prompt);
+                Assert.False(device.DisableStarted);
+            });
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void DisableProxying_UnverifiableXboxEndpoint_AllowsExplicitRecovery(bool confirmed)
+        {
+            _application.Run(window =>
+            {
+                var device = new Device(new(ProxyConfigurationState.Unknown, Detail: "malformed proxy setting"));
+                var controller = new WebServiceDeviceCaptureController(
+                    "127.0.0.1", DeviceType.XboxConsole, false, new ProxyPortPool(), device) { Port = 9000 };
+                string prompt = null;
+                var disabling = controller.DisableProxying(description =>
+                {
+                    prompt = description;
+                    return confirmed;
+                });
+                Complete(disabling);
+
+                Assert.Equal(confirmed, disabling.GetAwaiter().GetResult());
+                Assert.Equal(Localization.GetLocalizedString("PROXY_DISABLE_UNKNOWN_CONFIRM"), prompt);
+                Assert.Equal(confirmed, device.DisableStarted);
+                Assert.Equal(confirmed ? Localization.GetLocalizedString("PROXY_DISABLE_REQUESTED") : null,
+                    controller.PortStatus);
+            });
+        }
+
+        [Fact]
+        public void DisableProxying_UnreachableXbox_DoesNotWrite()
+        {
+            _application.Run(window =>
+            {
+                var device = new Device(new(ProxyConfigurationState.Unreachable));
+                var controller = new WebServiceDeviceCaptureController(
+                    "127.0.0.1", DeviceType.XboxConsole, false, new ProxyPortPool(), device) { Port = 9000 };
+
+                Assert.Throws<InvalidOperationException>(() => Complete(controller.DisableProxying(_ =>
+                    throw new InvalidOperationException("An unavailable device must not prompt to disable."))));
+
+                Assert.False(device.DisableStarted);
+                Assert.Equal(Localization.GetLocalizedString("PROXY_DISABLE_FAILED"), controller.PortStatus);
             });
         }
 
@@ -396,6 +545,17 @@ namespace XMAT.Tests
             task.GetAwaiter().GetResult();
         }
 
+        private static void EditPortRange(CaptureOptionsFull options, string first, string last)
+        {
+            var starting = (TextBox)options.FindName("StartingPort");
+            var ending = (TextBox)options.FindName("EndingPort");
+            starting.SetCurrentValue(TextBox.TextProperty, first);
+            starting.GetBindingExpression(TextBox.TextProperty).UpdateSource();
+            ending.SetCurrentValue(TextBox.TextProperty, last);
+            ending.GetBindingExpression(TextBox.TextProperty).UpdateSource();
+            WpfTestHost.Pump();
+        }
+
         private static void PumpUntil(Func<bool> predicate)
         {
             var watch = Stopwatch.StartNew();
@@ -412,6 +572,7 @@ namespace XMAT.Tests
             private ProxyConfiguration _configuration;
             internal Task DisableWrite { get; set; } = Task.CompletedTask;
             internal bool DisableStarted { get; private set; }
+            internal Exception DisableFailure { get; set; }
             internal Action OnEnable { get; set; }
             internal Device(ProxyConfiguration configuration) => _configuration = configuration;
             public Task<ProxyConfiguration> ReadAsync() => Task.FromResult(_configuration);
@@ -419,6 +580,10 @@ namespace XMAT.Tests
             {
                 DisableStarted = true;
                 await DisableWrite;
+                if (DisableFailure != null)
+                {
+                    throw DisableFailure;
+                }
                 _configuration = new(ProxyConfigurationState.Disabled);
             }
             public Task EnableAsync(ProxyEndpoint endpoint)

@@ -261,19 +261,21 @@ _Screenshot when Xbox Multiplayer Analysis Tool is closed and reopened -- previo
 ### If Xbox Multiplayer Analysis Tool Closes Unexpectedly
 
 Capturing the **Local PC** points the Windows proxy setting at Xbox Multiplayer Analysis Tool. If the tool ended
-without changing it back, apps that use the Windows proxy would lose internet access, so the tool protects it:
+without changing it back, apps that use the Windows proxy would lose internet access, so the tool records your
+settings and tries to put them back:
 
 - Before it changes the Windows proxy, the tool records your current proxy settings and starts a small helper
-  process. If the tool then crashes, is ended from Task Manager, or is stopped from a debugger, the helper restores
-  the recorded settings, which are usually a direct connection. If the helper cannot start, the Windows proxy is not
-  changed and the capture does not start.
-- Exiting normally, or an error that closes the tool, also restores the recorded settings.
-- If the helper stops unexpectedly during a capture, the tool restores your settings right away and tells you. Stop,
-  then start capture to resume.
-- The next start finishes any restore that is still pending. If the Windows proxy points at this PC (for example
-  `127.0.0.1:8880`) but nothing is listening there, and either the tool has no record of setting it, which an older
-  version can leave behind, or its settings were changed during the capture, the tool asks before turning that proxy
-  off.
+  process; if the helper cannot start, the Windows proxy is not changed and the capture does not start. If the tool
+  then crashes, is ended from Task Manager, or is stopped from a debugger, the helper tries to restore the recorded
+  settings, which are usually a direct connection.
+- Stopping the capture, exiting normally, or an error that closes the tool also tries to restore them.
+- A restore happens only while Windows still has the settings the tool applied. If it cannot complete, the record is
+  kept and the tool tries again later, for example when you stop the capture and at its next start.
+- If the helper stops unexpectedly during a capture, the tool tries to restore your settings right away and reports
+  the outcome, unless a newer capture has started since. Stop, then start capture to resume.
+- At the next start, if the Windows proxy points at this PC (for example `127.0.0.1:8880`) but nothing is listening
+  there, and either the tool has no record of setting it, which an older version can leave behind, or its settings
+  were changed during the capture, the tool asks before turning that proxy off.
 - If you change the Windows proxy settings yourself during a capture, the tool leaves your changes alone. Stopping
   the capture turns off only the tool's own proxy; if Windows uses a different proxy by then, the tool leaves it on
   and tells you.
@@ -281,9 +283,9 @@ without changing it back, apps that use the Windows proxy would lose internet ac
 Limits:
 
 - While the tool is paused in a debugger or not responding, the proxy stays on, because the tool has not ended.
-- If the PC restarts during a capture, the settings are restored the next time you start the tool.
-- If the tool and its helper are ended together, for example by ending the whole process tree, the settings are
-  restored the next time you start the tool.
+- If the PC restarts during a capture, the tool tries to restore the settings the next time you start it.
+- If the tool and its helper are ended together, for example by ending the whole process tree, the tool tries to
+  restore the settings the next time you start it.
 - The tool does not capture the Local PC when it runs inside a process group that could end the helper together
   with it, as some terminals and tools do. Start the tool directly instead.
 - Xbox consoles are never reset automatically. If the tool closed unexpectedly while capturing a console, the next
@@ -388,11 +390,16 @@ Captures can be saved and shared using the **File** menu:
 |--|--|
 | **Save Captures** | Saves all open web proxy and network trace captures to an Xbox Multiplayer Analysis Tool (.XMATCAP) file. |
 | **Load Captures** | Opens a previously saved .XMATCAP file. Loaded captures open in read-only tabs. |
-| **Import** | Imports a Fiddler (.SAZ) archive, or a network trace (.ETL) captured with `netsh`, into a new read-only tab. |
+| **Import** | Imports a Fiddler (.SAZ) archive, or a network trace (.ETL) captured with `netsh`, into a read-only tab. Re-importing the same-named .SAZ replaces that tab's data. |
 | **Export** | Exports the selected web proxy capture to a Fiddler (.SAZ) archive. |
 
 Files can also be dragged and dropped onto the main window -- .XMATCAP files are loaded, and .SAZ and .ETL
 files are imported.
+
+If a new .SAZ import fails, XMAT reports the error and removes only the tab created for that attempt.
+If re-importing a .SAZ with the same file name fails, the existing tab, its selection, and its previously imported data
+remain unchanged. You can retry the import without restarting XMAT. Error details are written to
+`application.log` in the application's `Logs` directory.
 
 ### Importing Network Traces from Another PC
 
@@ -445,8 +452,11 @@ _Screenshot of the Xbox Live Trace analysis in progress._
 
 The analysis will undergo many steps which includes the export of analysis related files placed in the
 **/AppRoaming/Microsoft/Xbox Multiplayer Analysis Tool** storage directory. The folder will have a prefix of “xlca_” and contain a
-timestamp for the executed analysis. Analysis can occur simultaneously with other captures and analysis
-occurring on other devices.
+timestamp for the executed analysis. Stop all captures before starting analysis; the disabled Analyze
+tooltip explains this requirement. Only one analysis or capture-data operation can run at a time.
+
+Recoverable analysis failures display an error and remove the failed result tab instead of closing XMAT.
+The capture remains available for another attempt, and exception details are written to `application.log`.
 
 ![](./ReadmeImages/17.png)
 _Screenshot of Xbox Multiplayer Analysis Tool Xbox Live Capture Analysis result output folders._

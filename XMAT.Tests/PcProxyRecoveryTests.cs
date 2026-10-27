@@ -196,12 +196,14 @@ namespace XMAT.Tests
         }
 
         // Without a lease, stopping capture turns off only the endpoint the caller expects, matched exactly by host
-        // and port; another proxy, or any proxy when no endpoint is expected, is kept and reported.
+        // and port; another proxy, one that cannot be parsed, or any proxy when no endpoint is expected, is kept and
+        // reported.
         [Theory]
         [InlineData("127.0.0.1:8880", true, true)]
         [InlineData("127.0.0.2:8880", true, false)]
         [InlineData("localhost:8880", true, false)]
         [InlineData("127.0.0.1:8881", true, false)]
+        [InlineData("http=127.0.0.1:8880;https=127.0.0.1:8880", true, false)]
         [InlineData("127.0.0.1:8880", false, false)]
         public void DisableWithoutALease_TurnsOffOnlyTheExpectedEndpoint(string server, bool expectedGiven, bool turnedOff)
         {
@@ -216,7 +218,7 @@ namespace XMAT.Tests
             }
             else
             {
-                var error = Assert.Throws<InvalidOperationException>(() => NewStart().Disable(expected));
+                var error = Assert.Throws<ProxyRecoveryException>(() => NewStart().Disable(expected));
                 Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_DISABLE_FOREIGN", server), error.Message);
                 Assert.Equal(settings, _environment.Store.Read());
             }
@@ -229,10 +231,140 @@ namespace XMAT.Tests
         {
             File.WriteAllText(_environment.Store.FilePath, "{");
 
-            var error = Assert.Throws<InvalidOperationException>(() => NewStart().Disable());
+            var error = Assert.Throws<ProxyRecoveryException>(() => NewStart().Disable());
 
             Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_DISABLE_FAILED_UNKNOWN"), error.Message);
             Assert.DoesNotContain("127.0.0.1", error.Message);
+        }
+
+        // Stopping capture with the proxy already off, even with XMAT's endpoint still filled in, changes nothing.
+        [Fact]
+        public void DisableWithoutALease_WithTheProxyAlreadyOff_ChangesNothing()
+        {
+            var settings = User with { Server = "127.0.0.1:8880" };
+            _environment.Store.Write(settings);
+
+            NewStart().Disable(ProxyRecoveryTestEnvironment.Endpoint);
+
+            Assert.Equal(settings, _environment.Store.Read());
+        }
+
+        // With a lease of this process's, stopping capture keeps a proxy setting that cannot be parsed, reports it,
+        // and ends the lease.
+        [Fact]
+        public void DisableWithALease_KeepsAnUnparseableProxyAndEndsTheLease()
+        {
+            _environment.WriteLease(ProcessIdentity.Current, User, applied: true);
+            var settings = User with { Flags = ProxySettings.Proxy, Server = "http=127.0.0.1:8880;https=127.0.0.1:8880" };
+            _environment.Store.Write(settings);
+
+            var error = Assert.Throws<ProxyRecoveryException>(
+                () => NewStart().Disable(ProxyRecoveryTestEnvironment.Endpoint));
+
+            Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_DISABLE_FOREIGN", settings.Server), error.Message);
+            Assert.Equal(settings, _environment.Store.Read());
+            Assert.False(File.Exists(_environment.JournalPath));
+        }
+
+        // Stopping capture with settings that cannot be read, as when the WinINet query fails, writes nothing and
+        // fails as an ordinary error: without a lease it names the expected endpoint, and a lease keeps its journal.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void DisableWithSettingsThatCannotBeRead_WritesNothing(bool journaled)
+        {
+            if (journaled)
+            {
+                _environment.WriteLease(ProcessIdentity.Current, User, applied: true);
+            }
+            var store = new UnreadableStore(_environment.Store.FilePath);
+            var recovery = _environment.Recovery(ProcessIdentity.Current, store: store);
+
+            var error = Assert.Throws<ProxyRecoveryException>(
+                () => recovery.Disable(ProxyRecoveryTestEnvironment.Endpoint));
+
+            Assert.Equal(
+                Localization.GetLocalizedString(
+                    journaled ? "PROXY_RECOVERY_UNRESTORED" : "PROXY_RECOVERY_DISABLE_FAILED", "127.0.0.1:8880"),
+                error.Message);
+            Assert.Equal(0, store.Writes);
+            Assert.Equal(journaled, File.Exists(_environment.JournalPath));
+        }
+
+        // An earlier session's lease that cannot be settled, because Windows still uses its endpoint with other
+        // changes, may be this capture's own endpoint: enabling fails as uncertain without writing anything, and the
+        // journal stays. Stopping capture is no activation, so it reports the same failure as an ordinary one.
+        [Fact]
+        public void EarlierSessionsLeaseThatCannotBeSettled_LeavesEnableUncertain()
+        {
+            var lease = _environment.WriteLease(_environment.DeadOwner(), User, applied: true);
+            var changed = lease.Intended with { Bypass = "<local>;*.example.com" };
+            _environment.Store.Write(changed);
+            var recovery = NewStart();
+
+            var error = Assert.Throws<ProxyActivationUncertainException>(
+                () => recovery.Enable(ProxyRecoveryTestEnvironment.Endpoint));
+
+            Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", "127.0.0.1:8880"), error.Message);
+            Assert.Equal(changed, _environment.Store.Read());
+            Assert.Equal(lease, LeaseJournal.TryRead(_environment.JournalPath));
+            Assert.Null(recovery.GuardProcessId);
+            Assert.Throws<ProxyRecoveryException>(() => recovery.Disable(ProxyRecoveryTestEnvironment.Endpoint));
+        }
+
+        // An earlier session's lease on another endpoint is settled, but its journal cannot be removed. If Windows may
+        // use the endpoint being enabled, through its address or another loopback name on its port, enabling is
+        // uncertain although that lease never used it; settings that are definitely elsewhere fail as an ordinary
+        // error. The journal stays for the pending cleanup either way.
+        [Theory]
+        [InlineData("127.0.0.1:8881", true)]
+        [InlineData("localhost:8881", true)]
+        [InlineData("other-proxy:3128", false)]
+        public void EarlierSessionsLeaseThatCannotBeCleanedUp_IsUncertainWhileTheEnabledEndpointMayBeInUse(
+            string server, bool uncertain)
+        {
+            var lease = _environment.WriteLease(_environment.DeadOwner(), User, applied: true);
+            var settings = User with { Flags = ProxySettings.Proxy, Server = server };
+            _environment.Store.Write(settings);
+            var recovery = NewStart();
+
+            InvalidOperationException error;
+            // Held open without sharing deletion, so the journal cannot be removed.
+            using (new FileStream(_environment.JournalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                error = Assert.ThrowsAny<InvalidOperationException>(() => recovery.Enable(new ProxyEndpoint("127.0.0.1", 8881)));
+            }
+
+            Assert.Equal(uncertain ? typeof(ProxyActivationUncertainException) : typeof(ProxyRecoveryException), error.GetType());
+            Assert.Equal(
+                Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", "127.0.0.1:8880, 127.0.0.1:8881"), error.Message);
+            Assert.IsAssignableFrom<IOException>(error.InnerException);
+            Assert.Equal(settings, _environment.Store.Read());
+            Assert.Equal(lease, LeaseJournal.TryRead(_environment.JournalPath));
+            Assert.Null(recovery.GuardProcessId);
+        }
+
+        // Enabling capture with settings that cannot be read, as when the WinINet query fails, changes nothing: no
+        // record is written or replaced, and one that already exists stays. Whether Windows still uses XMAT is
+        // unknown, so the activation is uncertain.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void EnableWithSettingsThatCannotBeRead_IsUncertainAndChangesNothing(bool journaled)
+        {
+            var lease = journaled ? _environment.WriteLease(ProcessIdentity.Current, User, applied: true) : null;
+            var store = new UnreadableStore(_environment.Store.FilePath);
+            var recovery = _environment.Recovery(ProcessIdentity.Current, store: store);
+
+            var error = Assert.Throws<ProxyActivationUncertainException>(
+                () => recovery.Enable(ProxyRecoveryTestEnvironment.Endpoint));
+
+            Assert.Equal(
+                Localization.GetLocalizedString("PROXY_RECOVERY_SETTINGS_UNREADABLE", "127.0.0.1:8880"), error.Message);
+            Assert.IsType<IOException>(error.InnerException);
+            Assert.Equal(0, store.Writes);
+            Assert.Equal(lease, LeaseJournal.TryRead(_environment.JournalPath));
+            Assert.Null(recovery.GuardProcessId);
         }
 
         // Only listeners that receive connections made to the proxy's own loopback address count.
@@ -288,5 +420,25 @@ namespace XMAT.Tests
         }
 
         private PcProxyRecovery NewStart() => _environment.Recovery(ProcessIdentity.Current);
+
+        // Fails every read, as a failed WinINet query does, and counts the writes it is asked for.
+        private sealed class UnreadableStore : FileProxySettingsStore
+        {
+            internal UnreadableStore(string path)
+                : base(path)
+            {
+            }
+
+            internal int Writes { get; private set; }
+
+            public override ProxySettings Read() =>
+                throw new IOException("Simulated failure while reading the Windows proxy settings.");
+
+            public override void Write(ProxySettings settings)
+            {
+                Writes++;
+                base.Write(settings);
+            }
+        }
     }
 }

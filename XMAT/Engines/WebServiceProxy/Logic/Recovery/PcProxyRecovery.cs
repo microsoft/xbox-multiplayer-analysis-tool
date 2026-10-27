@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
@@ -120,8 +121,20 @@ namespace XMAT.WebServiceCapture
         {
             using (AcquireLock(LockTimeout))
             {
-                var previous = ReadOwnLease() ?? _lease;
-                var current = _store.Read();
+                var previous = ReadOwnLease(endpoint) ?? _lease;
+                ProxySettings current;
+                try
+                {
+                    current = _store.Read();
+                }
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                {
+                    // Nothing is changed, and a lease that already protects the settings stays as it is. Whether
+                    // Windows still uses XMAT is unknown, so the caller keeps its listener.
+                    throw new ProxyActivationUncertainException(
+                        Localization.GetLocalizedString("PROXY_RECOVERY_SETTINGS_UNREADABLE", EndpointsOf(previous, endpoint)),
+                        ex);
+                }
                 var intended = current.WithProxy(endpoint);
                 // A generation is one guard: a re-enable keeps the guard only while it is still running for this
                 // lease, and a replacement always gets a new nonce, so a late exit of an earlier guard can never
@@ -165,8 +178,8 @@ namespace XMAT.WebServiceCapture
                         PublicUtilities.AppLog(
                             LogLevel.ERROR,
                             $"Could not undo a failed Windows proxy change; the recovery lease was kept. {settlement.Failure}");
-                        throw new InvalidOperationException(
-                            Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", EndpointsOf(lease)), ex);
+                        throw EnableFailure(
+                            "PROXY_RECOVERY_UNRESTORED", "PROXY_RECOVERY_UNRESTORED", lease, endpoint, settlement.Found, ex);
                     }
                     if (settlement.Result == RecoveryResult.SettingsChanged)
                     {
@@ -197,14 +210,14 @@ namespace XMAT.WebServiceCapture
             Settlement settlement;
             using (AcquireLock(LockTimeout))
             {
-                var lease = ReadOwnLease() ?? _lease;
+                var lease = ReadOwnLease(enabling: null) ?? _lease;
                 settlement = Settle(_store, JournalPath, lease, SettleMode.Disable, expected);
                 if (settlement.Result == RecoveryResult.Failed)
                 {
                     PublicUtilities.AppLog(
                         LogLevel.ERROR, $"Could not turn off the Windows proxy when capture stopped. {settlement.Failure}");
                     // Manual guidance names only an endpoint known to be XMAT's: the lease's, or the one the caller expects.
-                    throw new InvalidOperationException(
+                    throw new ProxyRecoveryException(
                         lease != null ? Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", EndpointsOf(lease))
                         : expected != null ? Localization.GetLocalizedString("PROXY_RECOVERY_DISABLE_FAILED", expected.ToString())
                         : Localization.GetLocalizedString("PROXY_RECOVERY_DISABLE_FAILED_UNKNOWN"));
@@ -220,7 +233,7 @@ namespace XMAT.WebServiceCapture
             }
             if (settlement.Result == RecoveryResult.SettingsChanged)
             {
-                throw new InvalidOperationException(
+                throw new ProxyRecoveryException(
                     Localization.GetLocalizedString("PROXY_RECOVERY_DISABLE_FOREIGN", settlement.Found.Server));
             }
         }
@@ -346,12 +359,48 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // The XMAT endpoints of `lease`, as shown to the user, for example "127.0.0.1:8880".
-        private static string EndpointsOf(ProxyLease lease) =>
-            string.Join(", ", new[] { lease.Intended, lease.Applied, lease.PreviousApplied }
-                .Where(settings => settings != null)
-                .Select(settings => settings.Server)
-                .Distinct(StringComparer.OrdinalIgnoreCase));
+        // The XMAT endpoints of `lease`, if any, and `attempted`, the one being enabled, if given.
+        private static List<ProxyEndpoint> XmatEndpoints(ProxyLease lease, ProxyEndpoint attempted = null)
+        {
+            var endpoints = new List<ProxyEndpoint>();
+            foreach (var server in new[]
+                { lease?.Intended.Server, lease?.Applied?.Server, lease?.PreviousApplied?.Server, attempted?.ToString() })
+            {
+                if (ProxyEndpoint.TryParse(server, out var endpoint) && !endpoints.Any(endpoint.Matches))
+                {
+                    endpoints.Add(endpoint);
+                }
+            }
+            return endpoints;
+        }
+
+        // The same endpoints as shown to the user, for example "127.0.0.1:8880".
+        private static string EndpointsOf(ProxyLease lease, ProxyEndpoint attempted = null) =>
+            string.Join(", ", XmatEndpoints(lease, attempted));
+
+        // Whether Windows may still send traffic to one of `endpoints` with `found`, the settings read last: they are
+        // unknown, their proxy server cannot be parsed, or it is one of those endpoints, or any loopback name or
+        // address on one of their ports, which can reach the same listener. Only no proxy at all, or a parsed one
+        // elsewhere, is definitely not XMAT's.
+        private static bool MayUseXmat(ProxySettings found, IReadOnlyCollection<ProxyEndpoint> endpoints) =>
+            found == null ||
+            (found.UsesProxy &&
+             (!ProxyEndpoint.TryParse(found.Server, out var server) ||
+              endpoints.Any(endpoint =>
+                  server.Matches(endpoint) || (server.Port == endpoint.Port && IsLoopback(server.Host)))));
+
+        // The error for an Enable that fails but keeps a lease, and its journal, for a later attempt. Unless the
+        // settings read last are definitely not XMAT's, the activation is uncertain, so the caller keeps its listener.
+        private static InvalidOperationException EnableFailure(
+            string uncertainKey, string ordinaryKey, ProxyLease lease, ProxyEndpoint attempted, ProxySettings found,
+            Exception inner)
+        {
+            var endpoints = XmatEndpoints(lease, attempted);
+            var shown = string.Join(", ", endpoints);
+            return MayUseXmat(found, endpoints)
+                ? new ProxyActivationUncertainException(Localization.GetLocalizedString(uncertainKey, shown), inner)
+                : new ProxyRecoveryException(Localization.GetLocalizedString(ordinaryKey, shown), inner);
+        }
 
         internal static bool LooksAbandoned(ProxySettings settings) =>
             settings.UsesProxy && ProxyEndpoint.TryParse(settings.Server, out var endpoint) && IsLoopback(endpoint.Host) &&
@@ -384,8 +433,9 @@ namespace XMAT.WebServiceCapture
             throw new TimeoutException(Localization.GetLocalizedString("PROXY_RECOVERY_BUSY"));
 
         // Returns this process's lease. A lease left by an XMAT that died is settled first; until that has
-        // worked, nothing else may change the settings.
-        private ProxyLease ReadOwnLease()
+        // worked, nothing else may change the settings. `enabling` is the endpoint being enabled, or null when
+        // stopping capture; while enabling, Windows may still use that lease's endpoint or this one.
+        private ProxyLease ReadOwnLease(ProxyEndpoint enabling)
         {
             var lease = LeaseJournal.TryRead(JournalPath);
             if (lease == null || lease.Owner == _owner)
@@ -394,13 +444,17 @@ namespace XMAT.WebServiceCapture
             }
             if (lease.Owner.GetState() != ProcessState.Dead)
             {
-                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_RECOVERY_OTHER_INSTANCE"));
+                throw new ProxyRecoveryException(Localization.GetLocalizedString("PROXY_RECOVERY_OTHER_INSTANCE"));
             }
             var settlement = Settle(_store, JournalPath, lease, SettleMode.Recover);
             if (settlement.Result == RecoveryResult.Failed)
             {
-                throw new InvalidOperationException(
-                    Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", EndpointsOf(lease)), settlement.Failure);
+                throw enabling != null
+                    ? EnableFailure(
+                        "PROXY_RECOVERY_UNRESTORED", "PROXY_RECOVERY_UNRESTORED", lease, enabling, settlement.Found,
+                        settlement.Failure)
+                    : new ProxyRecoveryException(
+                        Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", EndpointsOf(lease)), settlement.Failure);
             }
             return null;
         }
@@ -408,7 +462,7 @@ namespace XMAT.WebServiceCapture
         // Under the recovery lock, after Enable read back other settings than it wrote; returns the error it throws.
         // The lease is settled from a fresh read, so settings that are XMAT's by then are restored rather than left
         // unprotected; if that fails, or XMAT's endpoint is still in use with other changes, the lease and its guard
-        // stay.
+        // stay, and unless the settings are definitely not XMAT's, the caller keeps its listener.
         private Exception RejectReadBack(ProxyLease lease)
         {
             var settlement = Settle(_store, JournalPath, lease, SettleMode.Recover);
@@ -417,9 +471,9 @@ namespace XMAT.WebServiceCapture
                 PublicUtilities.AppLog(
                     LogLevel.ERROR,
                     $"Enabling capture did not change the Windows proxy settings, and the settings from before capture could not be restored; the recovery lease and its guard were kept. {settlement.Failure}");
-                return new InvalidOperationException(
-                    Localization.GetLocalizedString("PROXY_RECOVERY_NOT_APPLIED_UNRESTORED", EndpointsOf(lease)),
-                    settlement.Failure);
+                return EnableFailure(
+                    "PROXY_RECOVERY_NOT_APPLIED_UNRESTORED", "PROXY_RECOVERY_NOT_APPLIED_CLEANUP", lease, null,
+                    settlement.Found, settlement.Failure);
             }
             _lease = null;
             DisarmGuard(lease.Nonce);
@@ -429,7 +483,7 @@ namespace XMAT.WebServiceCapture
             PublicUtilities.AppLog(
                 LogLevel.WARN,
                 $"Capture of this PC was not enabled because the Windows proxy settings read back were not the ones written ({error}).");
-            return new InvalidOperationException(Localization.GetLocalizedString(error));
+            return new ProxyRecoveryException(Localization.GetLocalizedString(error));
         }
 
         // Undoes this process's lease at shutdown or after a fatal error.
@@ -518,7 +572,7 @@ namespace XMAT.WebServiceCapture
             {
                 if (WaitHandle.WaitAny(new WaitHandle[] { ready, session.Exit }, GuardReadyTimeout) != 0)
                 {
-                    throw new InvalidOperationException(Localization.GetLocalizedString(
+                    throw new ProxyRecoveryException(Localization.GetLocalizedString(
                         session.ExitCode == ProxyGuard.JobRefused ? "PROXY_RECOVERY_JOB_REFUSED" : "PROXY_RECOVERY_GUARD_FAILED"));
                 }
                 return session;
@@ -688,7 +742,7 @@ namespace XMAT.WebServiceCapture
             // let it outlive XMAT.
             if (requireIndependence && !ProcessJob.ImmediateJobIsSafe())
             {
-                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_RECOVERY_JOB_REFUSED"));
+                throw new ProxyRecoveryException(Localization.GetLocalizedString("PROXY_RECOVERY_JOB_REFUSED"));
             }
             return TryCreate(executable, commandLine, 0, out processId, out var failure) ?? throw new Win32Exception(failure);
         }

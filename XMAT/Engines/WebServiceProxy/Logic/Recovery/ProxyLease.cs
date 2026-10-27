@@ -195,7 +195,7 @@ namespace XMAT.WebServiceCapture
             }
             catch (Exception ex) when (ex is UnauthorizedAccessException or WaitHandleCannotBeOpenedException or IOException)
             {
-                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_RECOVERY_GUARD_FAILED"), ex);
+                throw new ProxyRecoveryException(Localization.GetLocalizedString("PROXY_RECOVERY_GUARD_FAILED"), ex);
             }
         }
 

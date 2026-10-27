@@ -9,6 +9,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
@@ -180,6 +181,9 @@ namespace XMAT.WebServiceCapture
             TimeSpan.FromSeconds(10);
         private static readonly TimeSpan DefaultScriptExecutionDeadline =
             TimeSpan.FromSeconds(60);
+        // A failure probe must not hold a transition indefinitely; late results are ignored.
+        private static readonly TimeSpan DefaultEnableFailureProbeTimeout =
+            TimeSpan.FromSeconds(3);
         private static readonly TimeSpan ProgressUpdateInterval =
             TimeSpan.FromMilliseconds(100);
 
@@ -188,6 +192,8 @@ namespace XMAT.WebServiceCapture
         private readonly DeviceType _deviceType;
         private readonly bool _readOnly;
         private readonly TimeSpan _scriptExecutionDeadline;
+        private readonly TimeSpan _enableFailureProbeTimeout;
+        private readonly Func<IEnumerable<IPAddress>> _getClassifierIp4Addresses;
         private IWebServiceProxy _webProxy;
         private IDataTable _dataTable;
         private IDataset _loadedCaptureDataset;
@@ -236,10 +242,13 @@ namespace XMAT.WebServiceCapture
         {
         }
 
+        // The optional classifier provider must return every assigned unicast IPv4 address and throw on failure.
         internal WebServiceDeviceCaptureController(
             string deviceName, DeviceType deviceType, bool readOnly, ProxyPortPool portPool,
             IProxyDeviceConfiguration deviceConfiguration = null,
-            TimeSpan? scriptExecutionDeadline = null)
+            TimeSpan? scriptExecutionDeadline = null,
+            Func<IEnumerable<IPAddress>> getClassifierIp4Addresses = null,
+            TimeSpan? enableFailureProbeTimeout = null)
         {
             _scriptExecutionDeadline =
                 scriptExecutionDeadline ?? DefaultScriptExecutionDeadline;
@@ -247,9 +256,17 @@ namespace XMAT.WebServiceCapture
             {
                 throw new ArgumentOutOfRangeException(nameof(scriptExecutionDeadline));
             }
+            _enableFailureProbeTimeout =
+                enableFailureProbeTimeout ?? DefaultEnableFailureProbeTimeout;
+            if (_enableFailureProbeTimeout <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(enableFailureProbeTimeout));
+            }
 
             _portPool = portPool;
             _deviceConfiguration = deviceConfiguration;
+            _getClassifierIp4Addresses =
+                getClassifierIp4Addresses ?? GetAssignedUnicastIp4Addresses;
             DeviceName = deviceName;
 
             _deviceType = deviceType;
@@ -431,11 +448,22 @@ namespace XMAT.WebServiceCapture
         }
 
         private bool OwnsEndpoint(ProxyEndpoint endpoint) =>
+            endpoint != null &&
             endpoint.Port == Port &&
             (string.Equals(ProxyEndpoint.NormalizeHost(endpoint.Host),
-                ProxyEndpoint.NormalizeHost(_parameters.ProxyHost), StringComparison.OrdinalIgnoreCase) ||
+               ProxyEndpoint.NormalizeHost(_parameters.ProxyHost), StringComparison.OrdinalIgnoreCase) ||
              (_deviceType == DeviceType.LocalPC && IPAddress.TryParse(endpoint.Host, out var address) && IPAddress.IsLoopback(address)) ||
              PublicUtilities.GetMyIp4Addresses().Any(ip => ip.ToString() == endpoint.Host));
+
+        // Unlike the UI address picker, classification must include gateway-less virtual, host-only and VPN adapters.
+        private static IEnumerable<IPAddress> GetAssignedUnicastIp4Addresses() =>
+            NetworkInterface.GetAllNetworkInterfaces()
+                .SelectMany(networkInterface =>
+                    networkInterface.GetIPProperties().UnicastAddresses)
+                .Select(address => address.Address)
+                .Where(address => address.AddressFamily ==
+                    System.Net.Sockets.AddressFamily.InterNetwork)
+                .ToArray();
 
         internal IProxyDeviceConfiguration CreateDeviceConfiguration() =>
             _deviceConfiguration ?? (_deviceType switch
@@ -468,7 +496,10 @@ namespace XMAT.WebServiceCapture
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                PortStatus = Localization.GetLocalizedString("PROXY_PORT_APPLY_FAILED", Port, ex.GetBaseException().Message);
+                PortStatus = Localization.GetLocalizedString(
+                    "PROXY_PORT_APPLY_FAILED",
+                    Port,
+                    CaptureUtilities.GetProxyOperationErrorMessage(ex));
                 throw;
             }
             finally
@@ -570,9 +601,14 @@ namespace XMAT.WebServiceCapture
             }
 
             var proxyCheckResult = await checkProxyEnabledAsync();
-            if (proxyCheckResult == EProxyEnabledCheckResult.ProxyEnabled && confirmDisableProxy() == true)
+            if (proxyCheckResult == EProxyEnabledCheckResult.ProxyEnabled)
             {
-                await disableProxyAsync();
+                var configuration = await CreateDeviceConfiguration().ReadAsync();
+                if (configuration.State == ProxyConfigurationState.Enabled &&
+                    OwnsEndpoint(configuration.Endpoint) && confirmDisableProxy() == true)
+                {
+                    await disableProxyAsync();
+                }
             }
 
             return true;
@@ -697,6 +733,8 @@ namespace XMAT.WebServiceCapture
                 var desired = new ProxyEndpoint(sourceAddress, Port);
                 if (configuration.Endpoint.Matches(desired))
                 {
+                    _parameters.ProxyHost = sourceAddress;
+                    PortStatus = Localization.GetLocalizedString("PROXY_PORT_APPLIED");
                     return true;
                 }
                 throw new InvalidOperationException(
@@ -745,70 +783,73 @@ namespace XMAT.WebServiceCapture
             return false;
         }
 
-        internal async Task<bool> DisableProxying()
+        internal Task<bool> DisableProxying() => DisableProxying(description =>
+            MessageBox.Show(
+                description,
+                Localization.GetLocalizedString("PROXY_ERROR_RESTART_REQUIRED"),
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Exclamation) == MessageBoxResult.OK);
+
+        internal async Task<bool> DisableProxying(Func<string, bool> confirmDisableXboxProxy)
         {
-            using var target = await ProxyDeviceOperations.AcquireAsync(_deviceType, DeviceName);
-            switch (_deviceType)
+            try
             {
-                case DeviceType.LocalPC:
-                    var configuration = await Task.Run(InternetProxy.ReadConfiguration);
-                    configuration.RequireKnown();
-                    if (configuration.State == ProxyConfigurationState.Enabled && !OwnsEndpoint(configuration.Endpoint))
-                    {
-                        throw new InvalidOperationException(Localization.GetLocalizedString(
-                            "PROXY_ENDPOINT_CONFLICT", configuration.Endpoint, new ProxyEndpoint("127.0.0.1", Port)));
-                    }
-                    await Task.Run(() => InternetProxy.Disable("127.0.0.1", Port));
-                    return true;
-
-                case DeviceType.GenericProxyDevice:
-                    return true;
-            }
-
-            if (!GDKXHelper.IsGDKXInstalled(true))
-            { return false; }
-
-            EProxyEnabledCheckResult proxyCheckResult = await IsProxyEnabled();
-            if (proxyCheckResult != EProxyEnabledCheckResult.ProxyEnabled)
-            {
-                if (proxyCheckResult == EProxyEnabledCheckResult.ProxyDisabled)
+                using var target = await ProxyDeviceOperations.AcquireAsync(_deviceType, DeviceName);
+                if (_deviceType == DeviceType.GenericProxyDevice)
                 {
+                    PortStatus = Localization.GetLocalizedString("PROXY_PORT_MANUAL");
                     return true;
                 }
-                throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_ERROR_CONNECTION_DESC"));
+
+                if (_deviceType == DeviceType.LocalPC)
+                {
+                    // Recovery must freshly classify and settle the lease even if an earlier snapshot appeared disabled or changed.
+                    await CreateDeviceConfiguration().DisableAsync(
+                        new ProxyEndpoint("127.0.0.1", Port));
+                    PortStatus = Localization.GetLocalizedString("PROXY_DISABLE_CONFIRMED");
+                    return true;
+                }
+
+                if (_deviceType == DeviceType.XboxConsole &&
+                    _deviceConfiguration == null && !GDKXHelper.IsGDKXInstalled(true))
+                {
+                    PortStatus = Localization.GetLocalizedString("PROXY_DISABLE_FAILED");
+                    return false;
+                }
+
+                var device = CreateDeviceConfiguration();
+                var current = await device.ReadAsync();
+                if (current.State == ProxyConfigurationState.Unreachable)
+                {
+                    current.RequireKnown();
+                }
+                if (current.State == ProxyConfigurationState.Disabled)
+                {
+                    PortStatus = Localization.GetLocalizedString("PROXY_DISABLED");
+                    return true;
+                }
+                if (_deviceType == DeviceType.XboxConsole)
+                {
+                    var description = current.State == ProxyConfigurationState.Unknown
+                        ? Localization.GetLocalizedString("PROXY_DISABLE_UNKNOWN_CONFIRM")
+                        : !OwnsEndpoint(current.Endpoint)
+                            ? Localization.GetLocalizedString("PROXY_DISABLE_FOREIGN_CONFIRM", current.Endpoint)
+                            : Localization.GetLocalizedString("PROXY_ERROR_RESTART_DESC");
+                    if (!confirmDisableXboxProxy(description))
+                    {
+                        return false;
+                    }
+                }
+
+                await device.DisableAsync();
+                PortStatus = Localization.GetLocalizedString("PROXY_DISABLE_REQUESTED");
+                return true;
             }
-            switch (_deviceType)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                case DeviceType.XboxConsole:
-                    var current = await CreateDeviceConfiguration().ReadAsync();
-                    var description = current.State == ProxyConfigurationState.Enabled && !OwnsEndpoint(current.Endpoint)
-                        ? Localization.GetLocalizedString("PROXY_DISABLE_FOREIGN_CONFIRM", current.Endpoint)
-                        : Localization.GetLocalizedString("PROXY_ERROR_RESTART_DESC");
-                    if (MessageBox.Show(
-                        description,
-                        Localization.GetLocalizedString("PROXY_ERROR_RESTART_REQUIRED"),
-                        MessageBoxButton.OKCancel,
-                        MessageBoxImage.Exclamation) != MessageBoxResult.OK)
-                    {
-                        return false;
-                    }
-
-                    // TODO: async this, it hangs the UI if the Xbox is not connected
-                    if (!await CaptureUtilities.DisableXboxProxyAsync(DeviceName))
-                    {
-                        MessageBox.Show(
-                           Localization.GetLocalizedString("PROXY_ERROR_CONNECTION_DESC"),
-                           Localization.GetLocalizedString("PROXY_ERROR_CONNECTION"),
-                           MessageBoxButton.OK,
-                           MessageBoxImage.Error);
-                        return false;
-                    }
-                    break;
-
-                default:
-                    throw new NotImplementedException($"Unimplemented device {DeviceName}");
+                PortStatus = Localization.GetLocalizedString("PROXY_DISABLE_FAILED");
+                throw;
             }
-            return true;
         }
 
         public void ShowGenericProxyDetails()
@@ -911,25 +952,169 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // Runs after the listener is confirmed. If the device cannot be pointed at the proxy,
-        // the listener is stopped again so nothing is left half-configured.
+        // Retain the listener when a device write may have succeeded despite a reported failure.
         internal async Task EnableDeviceProxyingOrRollBackAsync(Func<Task<bool>> enableDevice)
         {
             var enabled = false;
+            var activationPort = Port;
+            var activationProxyHost = _parameters.ProxyHost;
+            PortStatus = null;
             try
             {
                 enabled = await enableDevice();
             }
+            catch (ProxyActivationUncertainException ex)
+            {
+                PortStatus = ex.Message;
+                throw;
+            }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
+                if (_deviceType == DeviceType.LocalPC &&
+                    await LocalPcListenerMayStillBeUsedAsync(
+                        activationPort,
+                        activationProxyHost))
+                {
+                    PortStatus = Localization.GetLocalizedString(
+                        "PROXY_ENABLE_LISTENER_KEPT");
+                    throw;
+                }
                 await TryStopProxyAfterFailedDeviceSetupAsync();
+                PortStatus = Localization.GetLocalizedString("PROXY_ENABLE_FAILED");
                 throw;
             }
 
             if (!enabled)
             {
+                if (_deviceType == DeviceType.LocalPC &&
+                    await LocalPcListenerMayStillBeUsedAsync(
+                        activationPort,
+                        activationProxyHost))
+                {
+                    PortStatus = Localization.GetLocalizedString(
+                        "PROXY_ENABLE_LISTENER_KEPT");
+                    return;
+                }
                 await TryStopProxyAfterFailedDeviceSetupAsync();
+                PortStatus = Localization.GetLocalizedString("PROXY_ENABLE_FAILED");
             }
+        }
+
+        private async Task<bool> LocalPcListenerMayStillBeUsedAsync(
+            ushort activationPort,
+            string activationProxyHost)
+        {
+            var timeout = Stopwatch.StartNew();
+            Task probeTask = null;
+            try
+            {
+                Task<ProxyConfiguration> readTask =
+                    CreateDeviceConfiguration().ReadAsync();
+                probeTask = readTask;
+                ProxyConfiguration configuration = await readTask.WaitAsync(
+                    RemainingEnableFailureProbeTime(timeout));
+                if (configuration == null ||
+                    configuration.State is ProxyConfigurationState.Unknown or
+                        ProxyConfigurationState.Unreachable)
+                {
+                    return true;
+                }
+                if (configuration.State == ProxyConfigurationState.Disabled)
+                {
+                    return false;
+                }
+                if (configuration.Endpoint == null)
+                {
+                    return true;
+                }
+                if (configuration.Endpoint.Port != activationPort)
+                {
+                    return false;
+                }
+
+                string host = NormalizeClassifierHost(
+                    configuration.Endpoint.Host);
+                if (string.Equals(
+                        host,
+                        NormalizeClassifierHost(activationProxyHost),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+                if (!IPAddress.TryParse(
+                        configuration.Endpoint.Host?.Trim().Trim('[', ']'),
+                        out var address))
+                {
+                    return true;
+                }
+                if (address.IsIPv4MappedToIPv6)
+                {
+                    address = address.MapToIPv4();
+                }
+                if (IPAddress.IsLoopback(address))
+                {
+                    return true;
+                }
+                Task<IPAddress[]> addressesTask = Task.Run(
+                    () => _getClassifierIp4Addresses().ToArray());
+                probeTask = addressesTask;
+                IPAddress[] localAddresses = await addressesTask.WaitAsync(
+                    RemainingEnableFailureProbeTime(timeout));
+                return localAddresses.Any(local =>
+                    {
+                        if (local.IsIPv4MappedToIPv6)
+                        {
+                            local = local.MapToIPv4();
+                        }
+                        return local.Equals(address);
+                    });
+            }
+            catch (TimeoutException)
+            {
+                ObserveAbandonedFailureProbe(probeTask);
+                return true;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                return true;
+            }
+        }
+
+        private TimeSpan RemainingEnableFailureProbeTime(Stopwatch timeout)
+        {
+            TimeSpan remaining = _enableFailureProbeTimeout - timeout.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                throw new TimeoutException();
+            }
+            return remaining;
+        }
+
+        private static string NormalizeClassifierHost(string host)
+        {
+            if (IPAddress.TryParse(
+                    host?.Trim().Trim('[', ']'),
+                    out var address))
+            {
+                return (address.IsIPv4MappedToIPv6
+                    ? address.MapToIPv4()
+                    : address).ToString();
+            }
+            return ProxyEndpoint.NormalizeHost(host);
+        }
+
+        private static void ObserveAbandonedFailureProbe(Task readTask)
+        {
+            if (readTask == null)
+            {
+                return;
+            }
+            _ = readTask.ContinueWith(
+                completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously |
+                    TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
         }
 
         private async Task TryStopProxyAfterFailedDeviceSetupAsync()

@@ -318,7 +318,7 @@ namespace XMAT.Tests
             var live = ProxyRecoveryTestEnvironment.Identity(_environment.StartOwner());
             var recovery = _environment.Recovery(live with { CreationTime = live.CreationTime + 1 });
 
-            Assert.Throws<InvalidOperationException>(() => recovery.Enable(Endpoint));
+            Assert.Throws<ProxyRecoveryException>(() => recovery.Enable(Endpoint));
 
             Assert.Equal(User, _environment.Store.Read());
             Assert.False(File.Exists(_environment.JournalPath));
@@ -379,6 +379,34 @@ namespace XMAT.Tests
             Assert.Equal(User, _environment.Store.Read());
         }
 
+        // A failed write that leaves XMAT's endpoint with another bypass list cannot be rolled back without
+        // overwriting it, and Windows may still send traffic to XMAT: Enable fails as uncertain, so its caller keeps
+        // the listener, and the lease, journal and guard stay until stopping capture turns that endpoint off.
+        [Fact]
+        public void ProxyWriteThatFailsLeavingXmatsEndpointChanged_IsUncertainAndKeepsItsProtection()
+        {
+            var changed = Capturing with { Bypass = "<local>;*.example.com" };
+            var recovery = _environment.Recovery(
+                ProxyRecoveryTestEnvironment.Identity(_environment.StartOwner()),
+                store: new FailingStore(_environment.Store.FilePath, _ => changed));
+
+            var error = Assert.Throws<ProxyActivationUncertainException>(() => recovery.Enable(Endpoint));
+
+            Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", "127.0.0.1:8880"), error.Message);
+            Assert.IsType<IOException>(error.InnerException);
+            Assert.Equal(changed, _environment.Store.Read());
+            Assert.True(File.Exists(_environment.JournalPath));
+            var guard = _environment.Guard(recovery);
+            Assert.False(guard.HasExited);
+
+            recovery.Disable(Endpoint);
+
+            Assert.Equal(changed.WithoutProxy(), _environment.Store.Read());
+            Assert.False(File.Exists(_environment.JournalPath));
+            Assert.True(guard.WaitForExit(GuardTimeout));
+            Assert.Equal(ProxyGuard.Completed, guard.ExitCode);
+        }
+
         // A read-back of someone else's settings fails Enable without a rollback that could overwrite them, and
         // retires its generation.
         [Fact]
@@ -389,7 +417,7 @@ namespace XMAT.Tests
                 ProxyRecoveryTestEnvironment.Identity(_environment.StartOwner()),
                 store: new RewritingStore(_environment.Store.FilePath, _ => foreign));
 
-            var error = Assert.Throws<InvalidOperationException>(() => recovery.Enable(Endpoint));
+            var error = Assert.Throws<ProxyRecoveryException>(() => recovery.Enable(Endpoint));
 
             Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_FOREIGN_SETTINGS"), error.Message);
             Assert.Equal(foreign, _environment.Store.Read());
@@ -401,7 +429,8 @@ namespace XMAT.Tests
 
         // XMAT's endpoint read back with another direct-connection flag, a distinct connection type, is not what
         // Enable wrote, yet still sends traffic to XMAT, whether it was the new endpoint or the previous capture's.
-        // Enable fails; those settings are never overwritten automatically, and their lease, journal and guard stay.
+        // Enable fails as uncertain, so its caller keeps the listener; those settings are never overwritten
+        // automatically, and their lease, journal and guard stay.
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
@@ -417,7 +446,7 @@ namespace XMAT.Tests
             var changed = Capturing with { Flags = Capturing.Flags | ProxySettings.Direct };
             store.Rewrite = written => written.UsesProxy ? changed : written;
 
-            var error = Assert.Throws<InvalidOperationException>(() => recovery.Enable(reEnable ? OtherEndpoint : Endpoint));
+            var error = Assert.Throws<ProxyActivationUncertainException>(() => recovery.Enable(reEnable ? OtherEndpoint : Endpoint));
 
             Assert.Equal(
                 Localization.GetLocalizedString(
@@ -459,12 +488,58 @@ namespace XMAT.Tests
             var guard = _environment.Guard(recovery);
             store.Rewrite = written => written.UsesProxy ? Capturing : written;
 
-            var error = Assert.Throws<InvalidOperationException>(() => recovery.Enable(OtherEndpoint));
+            var error = Assert.Throws<ProxyRecoveryException>(() => recovery.Enable(OtherEndpoint));
 
             Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_NOT_APPLIED"), error.Message);
             Assert.Equal(User, _environment.Store.Read());
             Assert.False(File.Exists(_environment.JournalPath));
             Assert.Null(recovery.GuardProcessId);
+            Assert.True(guard.WaitForExit(GuardTimeout));
+            Assert.Equal(ProxyGuard.Completed, guard.ExitCode);
+        }
+
+        // The settings from before capture are restored and read back as such, but the journal cannot be removed.
+        // Windows is then known not to use XMAT, so Enable fails as an ordinary error, and the lease and its guard
+        // stay until a later attempt finishes the cleanup.
+        [Fact]
+        public void ReEnableRestoredButNotCleanedUp_FailsAsAnOrdinaryErrorAndKeepsTheLease()
+        {
+            var store = new RewritingStore(_environment.Store.FilePath);
+            var recovery = _environment.Recovery(
+                ProxyRecoveryTestEnvironment.Identity(_environment.StartOwner()), store: store);
+            recovery.Enable(Endpoint);
+            var guard = _environment.Guard(recovery);
+            store.Rewrite = written => written.UsesProxy ? Capturing : written;
+            FileStream journal = null;
+            recovery.SettingsWrite = written =>
+            {
+                if (written)
+                {
+                    // Held open without sharing deletion, so the journal cannot be removed.
+                    journal = new FileStream(_environment.JournalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                }
+            };
+
+            InvalidOperationException error;
+            try
+            {
+                error = Assert.Throws<ProxyRecoveryException>(() => recovery.Enable(OtherEndpoint));
+            }
+            finally
+            {
+                journal?.Dispose();
+            }
+
+            Assert.Equal(
+                Localization.GetLocalizedString("PROXY_RECOVERY_NOT_APPLIED_CLEANUP", "127.0.0.1:8881, 127.0.0.1:8880"),
+                error.Message);
+            Assert.IsAssignableFrom<IOException>(error.InnerException);
+            Assert.Equal(User, _environment.Store.Read());
+            Assert.True(File.Exists(_environment.JournalPath));
+            Assert.Equal(guard.Id, recovery.GuardProcessId);
+
+            Assert.Equal(RecoveryResult.NotNeeded, recovery.RestoreOnShutdown());
+            Assert.False(File.Exists(_environment.JournalPath));
             Assert.True(guard.WaitForExit(GuardTimeout));
             Assert.Equal(ProxyGuard.Completed, guard.ExitCode);
         }
@@ -485,7 +560,7 @@ namespace XMAT.Tests
                 ? Capturing
                 : throw new IOException("Simulated failure while writing the Windows proxy settings.");
 
-            var error = Assert.Throws<InvalidOperationException>(() => recovery.Enable(OtherEndpoint));
+            var error = Assert.Throws<ProxyActivationUncertainException>(() => recovery.Enable(OtherEndpoint));
 
             Assert.Equal(
                 Localization.GetLocalizedString("PROXY_RECOVERY_NOT_APPLIED_UNRESTORED", "127.0.0.1:8881, 127.0.0.1:8880"),
@@ -521,7 +596,7 @@ namespace XMAT.Tests
                 store.ScriptWrites(Capturing);
             }
 
-            var error = Assert.Throws<InvalidOperationException>(() => recovery.Enable(OtherEndpoint));
+            var error = Assert.Throws<ProxyRecoveryException>(() => recovery.Enable(OtherEndpoint));
 
             Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_NOT_APPLIED"), error.Message);
             Assert.Equal(User, _environment.Store.Read());
@@ -533,7 +608,8 @@ namespace XMAT.Tests
 
         // After the restore, the settings read back as neither the safe target nor XMAT's own. That is not a
         // restore, whether capture is stopping or a re-enable is being undone: the lease, its journal and its guard
-        // stay, and only a later attempt finds those settings someone else's and keeps them.
+        // stay, and only a later attempt finds those settings someone else's and keeps them. As those settings are
+        // definitely not XMAT's, either failure is an ordinary one.
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
@@ -550,19 +626,19 @@ namespace XMAT.Tests
             if (stoppingCapture)
             {
                 store.ScriptWrites(other);
-                error = Assert.Throws<InvalidOperationException>(recovery.Disable);
+                error = Assert.Throws<ProxyRecoveryException>(recovery.Disable);
             }
             else
             {
                 // The new settings do not take effect, and the restore then leaves other settings.
                 store.ScriptWrites(Capturing, other);
-                error = Assert.Throws<InvalidOperationException>(() => recovery.Enable(OtherEndpoint));
+                error = Assert.Throws<ProxyRecoveryException>(() => recovery.Enable(OtherEndpoint));
             }
 
             Assert.Equal(
                 stoppingCapture
                     ? Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", "127.0.0.1:8880")
-                    : Localization.GetLocalizedString("PROXY_RECOVERY_NOT_APPLIED_UNRESTORED", "127.0.0.1:8881, 127.0.0.1:8880"),
+                    : Localization.GetLocalizedString("PROXY_RECOVERY_NOT_APPLIED_CLEANUP", "127.0.0.1:8881, 127.0.0.1:8880"),
                 error.Message);
             Assert.Equal(other, _environment.Store.Read());
             Assert.Equal(User, LeaseJournal.TryRead(_environment.JournalPath).RestoreTarget);
@@ -612,7 +688,7 @@ namespace XMAT.Tests
             var other = Capturing with { Server = "127.0.0.2:8880" };
             _environment.Store.Write(other);
 
-            var error = Assert.Throws<InvalidOperationException>(() => recovery.Disable(expectedGiven ? Endpoint : null));
+            var error = Assert.Throws<ProxyRecoveryException>(() => recovery.Disable(expectedGiven ? Endpoint : null));
 
             Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_DISABLE_FOREIGN", other.Server), error.Message);
             Assert.Equal(other, _environment.Store.Read());
@@ -647,8 +723,8 @@ namespace XMAT.Tests
             StartCapture(_environment.StartOwner(), out _);
             var second = _environment.Recovery(ProxyRecoveryTestEnvironment.Identity(_environment.StartOwner()));
 
-            Assert.Throws<InvalidOperationException>(() => second.Enable(new ProxyEndpoint("127.0.0.1", 8881)));
-            Assert.Throws<InvalidOperationException>(second.Disable);
+            Assert.Throws<ProxyRecoveryException>(() => second.Enable(new ProxyEndpoint("127.0.0.1", 8881)));
+            Assert.Throws<ProxyRecoveryException>(second.Disable);
             Assert.Null(second.HealAtStartup());
 
             Assert.Equal(Capturing, _environment.Store.Read());
