@@ -495,6 +495,8 @@ namespace XMAT.Tests.Proxy
                 await capture.DisposeAsync();
                 capture = null;
 
+                // UnobservedTaskException is raised by finalization of a faulted, unobserved Task.
+                // Force bounded collection so this assertion cannot pass only because finalization never ran.
                 for (var attempt = 0; attempt < 3; attempt++)
                 {
                     GC.Collect();

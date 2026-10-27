@@ -253,7 +253,7 @@ namespace XMAT.Tests
         [Fact]
         public void Startup_AsksBeforeTurningOffAnUnjournaledLoopbackProxy()
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             var port = (ushort)((IPEndPoint)listener.LocalEndpoint).Port;
             var abandoned = User.WithProxy(new ProxyEndpoint("127.0.0.1", port));
@@ -280,20 +280,13 @@ namespace XMAT.Tests
         [Fact]
         public void Startup_TreatsAListenerOnlyOnAnotherAddressAsAbandoned()
         {
-            var listener = new TcpListener(IPAddress.IPv6Loopback, 0);
+            using var listener = new TcpListener(IPAddress.IPv6Loopback, 0);
             listener.Start();
-            try
-            {
-                var port = (ushort)((IPEndPoint)listener.LocalEndpoint).Port;
-                var abandoned = User.WithProxy(new ProxyEndpoint("127.0.0.1", port));
-                _environment.Store.Write(abandoned);
+            var port = (ushort)((IPEndPoint)listener.LocalEndpoint).Port;
+            var abandoned = User.WithProxy(new ProxyEndpoint("127.0.0.1", port));
+            _environment.Store.Write(abandoned);
 
-                Assert.Equal(abandoned, NewStart().HealAtStartup());
-            }
-            finally
-            {
-                listener.Stop();
-            }
+            Assert.Equal(abandoned, NewStart().HealAtStartup());
         }
 
         // A dead XMAT's endpoint whose other settings changed is never overwritten at startup: its journal stays,
@@ -301,7 +294,7 @@ namespace XMAT.Tests
         [Fact]
         public void Startup_AsksBeforeTurningOffAChangedXmatEndpointThatItsLeaseKeeps()
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             var port = (ushort)((IPEndPoint)listener.LocalEndpoint).Port;
             listener.Stop();

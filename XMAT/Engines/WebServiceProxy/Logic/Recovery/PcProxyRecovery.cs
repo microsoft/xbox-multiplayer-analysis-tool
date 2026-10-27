@@ -542,6 +542,7 @@ namespace XMAT.WebServiceCapture
             }
             catch (Exception)
             {
+                // Terminal boundary: fatal-error handlers and shutdown call this last-chance restore, so it never throws.
                 return RecoveryResult.Failed;
             }
         }
@@ -573,7 +574,8 @@ namespace XMAT.WebServiceCapture
         {
             lock (_guardSync)
             {
-                return lease != null && _guard?.Nonce == lease.Nonce && _guard.IsAlive;
+                var guard = _guard;
+                return lease != null && guard != null && guard.Nonce == lease.Nonce && guard.IsAlive;
             }
         }
 
@@ -678,7 +680,7 @@ namespace XMAT.WebServiceCapture
                     return RestoreLease(session.Nonce);
                 }
             }
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 return RecoveryResult.Failed;
             }

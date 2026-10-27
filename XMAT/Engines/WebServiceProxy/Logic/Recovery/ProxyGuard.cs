@@ -44,7 +44,8 @@ namespace XMAT.WebServiceCapture
             }
             catch (Exception)
             {
-                // No dialog or crash report from a headless helper; XMAT sees the exit.
+                // The helper's terminal boundary: whatever reaches here ends it at once with Faulted rather than letting
+                // it go on in a damaged state. A headless helper shows no dialog or crash report; XMAT sees the exit.
                 return Faulted;
             }
         }
@@ -57,7 +58,8 @@ namespace XMAT.WebServiceCapture
                 ? new FileProxySettingsStore(args[4])
                 : WinInetProxySettingsStore.Instance;
             var lease = LeaseJournal.TryRead(journalPath);
-            if (lease?.Nonce != nonce || !ProxyGuardSignals.TryOpen(ProxyGuardSignals.Disarm(nonce), out var disarm))
+            if (lease == null || lease.Nonce != nonce ||
+                !ProxyGuardSignals.TryOpen(ProxyGuardSignals.Disarm(nonce), out var disarm))
             {
                 return NotOwner;
             }
@@ -149,9 +151,10 @@ namespace XMAT.WebServiceCapture
                         }
                     }
                 }
-                catch (Exception)
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
                 {
-                    // Retried; after the last attempt the journal stays for the next start.
+                    // Retried; after the last attempt the journal stays for the next start. A fatal failure ends the
+                    // helper at its terminal boundary instead.
                 }
                 Thread.Sleep(RetryDelay);
             }

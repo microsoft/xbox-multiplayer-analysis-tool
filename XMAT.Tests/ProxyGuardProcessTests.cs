@@ -315,7 +315,7 @@ namespace XMAT.Tests
         // The guard dies while a new capture starts. Its recovery, which runs only after the new capture is in
         // place, must not undo that capture, disarm its guard or report a loss.
         [Fact]
-        public void GuardExitRecoveredAfterANewCapture_LeavesTheNewCaptureAlone()
+        public async Task GuardExitRecoveredAfterANewCapture_LeavesTheNewCaptureAlone()
         {
             var owner = _environment.StartOwner();
             var oldGuard = StartCapture(owner, out var recovery);
@@ -324,7 +324,7 @@ namespace XMAT.Tests
             recovery.GuardLost += (_, _) => Interlocked.Increment(ref reported);
             Process newGuard = null;
             Exception failure = null;
-            var recovered = new ManualResetEventSlim();
+            var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             recovery.AroundGuardExitRecovery = recover =>
             {
                 recovery.AroundGuardExitRecovery = null;
@@ -340,13 +340,13 @@ namespace XMAT.Tests
                 }
                 finally
                 {
-                    recovered.Set();
+                    recovered.TrySetResult();
                 }
             };
 
             oldGuard.Kill();
 
-            Assert.True(recovered.Wait(GuardTimeout));
+            await recovered.Task.WaitAsync(GuardTimeout);
             Assert.Null(failure);
             Assert.Equal(0, Volatile.Read(ref reported));
             Assert.True(recovery.IsSuperseded(oldNonce));
