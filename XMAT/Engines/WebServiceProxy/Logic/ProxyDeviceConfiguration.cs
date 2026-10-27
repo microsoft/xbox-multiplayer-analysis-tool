@@ -97,6 +97,14 @@ namespace XMAT.WebServiceCapture
         Task<ProxyConfiguration> ReadAsync();
         Task DisableAsync();
         Task EnableAsync(ProxyEndpoint endpoint);
+
+        // Turns off `previous`, the endpoint this tab configured, when the device can verify it.
+        Task DisableAsync(ProxyEndpoint previous) => DisableAsync();
+
+        // Whether `configuration`, read after DisableAsync(previous), shows that the device no longer uses `previous`.
+        // Unknown and unreachable configurations never do, so the caller keeps polling within its timeout.
+        bool IsDisableComplete(ProxyConfiguration configuration, ProxyEndpoint previous) =>
+            configuration.State == ProxyConfigurationState.Disabled;
     }
 
     internal sealed class XboxProxyDeviceConfiguration : IProxyDeviceConfiguration
@@ -142,9 +150,20 @@ namespace XMAT.WebServiceCapture
     internal sealed class PcProxyDeviceConfiguration : IProxyDeviceConfiguration
     {
         public Task<ProxyConfiguration> ReadAsync() => Task.Run(InternetProxy.ReadConfiguration);
-        public Task DisableAsync() => Task.Run(InternetProxy.Disable);
+        public Task DisableAsync() => throw new NotSupportedException();
         public Task EnableAsync(ProxyEndpoint endpoint) =>
             Task.Run(() => InternetProxy.Enable(endpoint.Host, endpoint.Port));
+
+        // XMAT configures this PC at 127.0.0.1, so only that exact endpoint on the previous port is turned off,
+        // even where nothing is journaled.
+        public Task DisableAsync(ProxyEndpoint previous) =>
+            Task.Run(() => InternetProxy.Disable("127.0.0.1", previous.Port));
+
+        // Disabling restores the settings from before capture, which may use another proxy, such as a corporate one.
+        public bool IsDisableComplete(ProxyConfiguration configuration, ProxyEndpoint previous) =>
+            configuration.State == ProxyConfigurationState.Disabled ||
+            (configuration.State == ProxyConfigurationState.Enabled && configuration.Endpoint != null &&
+             !configuration.Endpoint.Matches(previous));
     }
 
     internal static class ProxyDeviceOperations
@@ -252,8 +271,8 @@ namespace XMAT.WebServiceCapture
                     if (current.State == ProxyConfigurationState.Enabled)
                     {
                         _status("PROXY_PORT_DISABLING");
-                        await _device.DisableAsync();
-                        await WaitAsync(config => config.State == ProxyConfigurationState.Disabled, cancellationToken);
+                        await _device.DisableAsync(current.Endpoint);
+                        await WaitAsync(config => _device.IsDisableComplete(config, current.Endpoint), cancellationToken);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     _commit();

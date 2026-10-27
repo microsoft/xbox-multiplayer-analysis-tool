@@ -2,6 +2,9 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Net;
 using System.Reflection;
 using System.Text.Json;
 using XMAT.SharedInterfaces;
@@ -213,6 +216,63 @@ namespace XMAT.Tests
         }
 
         [Theory]
+        [InlineData((int)ProxyConfigurationState.Disabled)]
+        [InlineData((int)ProxyConfigurationState.Enabled)]
+        [InlineData((int)ProxyConfigurationState.Unknown)]
+        public async Task DisableProxying_LocalPcDelegatesEndpointClassificationToRecovery(
+            int configurationState)
+        {
+            var state = (ProxyConfigurationState)configurationState;
+            var configuration = state == ProxyConfigurationState.Enabled
+                ? new ProxyConfiguration(
+                    ProxyConfigurationState.Enabled,
+                    new ProxyEndpoint("foreign.example", 3128))
+                : new ProxyConfiguration(state);
+            var device = new TestDeviceConfiguration(configuration);
+            var controller = CreateController(
+                new PreferencesModel(),
+                deviceType: DeviceType.LocalPC,
+                deviceConfiguration: device);
+
+            Assert.True(await controller.DisableProxying(
+                _ => throw new InvalidOperationException("Local PC must not prompt.")));
+
+            Assert.Equal(0, device.ReadCount);
+            Assert.Equal(0, device.ParameterlessDisableCount);
+            Assert.Equal(1, device.EndpointDisableCount);
+            Assert.Equal(new ProxyEndpoint("127.0.0.1", 8080), device.DisabledEndpoint);
+            Assert.Equal(
+                Localization.GetLocalizedString("PROXY_DISABLE_CONFIRMED"),
+                controller.PortStatus);
+        }
+
+        [Fact]
+        public async Task DisableProxying_LocalPcFailureSetsStatusAndRethrows()
+        {
+            var expected = new InvalidOperationException("Recovery disable failed.");
+            var device = new TestDeviceConfiguration(
+                new ProxyConfiguration(ProxyConfigurationState.Unknown))
+            {
+                EndpointDisableFailure = expected
+            };
+            var controller = CreateController(
+                new PreferencesModel(),
+                deviceType: DeviceType.LocalPC,
+                deviceConfiguration: device);
+
+            var actual = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => controller.DisableProxying(_ => true));
+
+            Assert.Same(expected, actual);
+            Assert.Equal(0, device.ReadCount);
+            Assert.Equal(0, device.ParameterlessDisableCount);
+            Assert.Equal(1, device.EndpointDisableCount);
+            Assert.Equal(
+                Localization.GetLocalizedString("PROXY_DISABLE_FAILED"),
+                controller.PortStatus);
+        }
+
+        [Theory]
         [InlineData(false)]
         [InlineData(true)]
         public async Task EnableDeviceProxyingOrRollBackAsync_DeviceSetupFailure_StopsListener(bool throws)
@@ -250,6 +310,379 @@ namespace XMAT.Tests
             Assert.False(await CanConnectAsync(port));
             Assert.False(controller.IsRunning);
             Assert.Equal(Localization.GetLocalizedString("PROXY_ENABLE_FAILED"), controller.PortStatus);
+        }
+
+        [Fact]
+        public async Task EnableDeviceProxyingOrRollBackAsync_XboxFailureStopsWithoutProbe()
+        {
+            using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            ushort port = (ushort)((IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+            var device = new TestDeviceConfiguration(
+                new ProxyConfiguration(ProxyConfigurationState.Unknown));
+            var controller = new WebServiceDeviceCaptureController(
+                "xbox-fallback", DeviceType.XboxConsole, false, new ProxyPortPool(), device)
+            {
+                Port = port
+            };
+            SetProxy(controller, new WebServiceProxy());
+            var expected = new IOException("Xbox enable failed.");
+            try
+            {
+                await controller.StartProxyAsync(false);
+                Assert.True(await CanConnectAsync(port));
+
+                var actual = await Assert.ThrowsAsync<IOException>(
+                    () => controller.EnableDeviceProxyingOrRollBackAsync(
+                        () => Task.FromException<bool>(expected)));
+
+                Assert.Same(expected, actual);
+                Assert.Equal(0, device.ReadCount);
+                Assert.False(controller.IsRunning);
+                Assert.False(await CanConnectAsync(port));
+                Assert.Equal(
+                    Localization.GetLocalizedString("PROXY_ENABLE_FAILED"),
+                    controller.PortStatus);
+            }
+            finally
+            {
+                if (controller.IsRunning)
+                {
+                    await controller.CloseAsync();
+                }
+            }
+        }
+
+        [Fact]
+        public async Task EnableDeviceProxyingOrRollBackAsync_DeviceNeutralUncertaintyKeepsListener()
+        {
+            var device = new TestDeviceConfiguration(
+                new ProxyConfiguration(ProxyConfigurationState.Unknown));
+            var (controller, port) = await StartLocalPcControllerAsync(device);
+            var inner = new IOException("Windows proxy write may have succeeded.");
+            var expected = new ProxyActivationUncertainException(
+                "Windows proxy setup is uncertain.",
+                inner);
+            try
+            {
+                var actual = await Assert.ThrowsAsync<ProxyActivationUncertainException>(
+                    () => controller.EnableDeviceProxyingOrRollBackAsync(
+                        () => throw expected));
+
+                Assert.Same(expected, actual);
+                Assert.Same(inner, actual.InnerException);
+                Assert.True(controller.IsRunning);
+                Assert.True(await CanConnectAsync(port));
+                Assert.Equal(expected.Message, controller.PortStatus);
+                Assert.Equal(0, device.ReadCount);
+            }
+            finally
+            {
+                await controller.CloseAsync();
+            }
+        }
+
+        [Theory]
+        [InlineData((int)ProxyConfigurationState.Disabled, null, true, null, null, false)]
+        [InlineData((int)ProxyConfigurationState.Unknown, null, true, null, null, true)]
+        [InlineData((int)ProxyConfigurationState.Unreachable, null, true, null, null, true)]
+        [InlineData((int)ProxyConfigurationState.Enabled, null, true, null, null, true)]
+        [InlineData((int)ProxyConfigurationState.Enabled, "127.0.0.1", true, null, null, true)]
+        [InlineData((int)ProxyConfigurationState.Enabled, "192.0.2.10", true, null, "192.0.2.10", true)]
+        [InlineData((int)ProxyConfigurationState.Enabled, "::ffff:192.0.2.10", true, null, "192.0.2.10", true)]
+        [InlineData((int)ProxyConfigurationState.Enabled, "198.51.100.20", true, "198.51.100.20", null, true)]
+        [InlineData((int)ProxyConfigurationState.Enabled, "unresolved.example", true, null, null, true)]
+        [InlineData((int)ProxyConfigurationState.Enabled, "198.51.100.20", true, null, null, false)]
+        [InlineData((int)ProxyConfigurationState.Enabled, "127.0.0.1", false, null, null, false)]
+        public async Task EnableDeviceProxyingOrRollBackAsync_LocalPcClassifiesListenerUse(
+            int stateValue,
+            string host,
+            bool samePort,
+            string proxyHost,
+            string localAddress,
+            bool retainListener)
+        {
+            ProxyConfiguration configuration = (ProxyConfigurationState)stateValue ==
+                ProxyConfigurationState.Enabled
+                ? new ProxyConfiguration(
+                    ProxyConfigurationState.Enabled,
+                    host == null ? null : new ProxyEndpoint(host, 1))
+                : new ProxyConfiguration((ProxyConfigurationState)stateValue);
+            var device = new TestDeviceConfiguration(configuration);
+            IEnumerable<IPAddress> Addresses() => localAddress == null
+                ? Array.Empty<IPAddress>()
+                : new[] { IPAddress.Parse(localAddress) };
+            var (controller, port) = await StartLocalPcControllerAsync(
+                device,
+                Addresses,
+                proxyHost);
+            if (configuration.Endpoint != null)
+            {
+                configuration = configuration with
+                {
+                    Endpoint = configuration.Endpoint with
+                    {
+                        Port = samePort ? port : (ushort)(port == UInt16.MaxValue ? port - 1 : port + 1)
+                    }
+                };
+                device.Configuration = configuration;
+            }
+            var expected = new InvalidOperationException("Local PC enable failed.");
+            try
+            {
+                var actual = await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => controller.EnableDeviceProxyingOrRollBackAsync(
+                        () => Task.FromException<bool>(expected)));
+
+                Assert.Same(expected, actual);
+                Assert.Equal(1, device.ReadCount);
+                Assert.Equal(retainListener, controller.IsRunning);
+                Assert.Equal(retainListener, await CanConnectAsync(port));
+                Assert.Equal(
+                    Localization.GetLocalizedString(
+                        retainListener
+                            ? "PROXY_ENABLE_LISTENER_KEPT"
+                            : "PROXY_ENABLE_FAILED"),
+                    controller.PortStatus);
+            }
+            finally
+            {
+                if (controller.IsRunning)
+                {
+                    await controller.CloseAsync();
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("timeout")]
+        [InlineData("io")]
+        [InlineData("ownership")]
+        [InlineData("win32")]
+        [InlineData("recovery")]
+        [InlineData("false")]
+        public async Task EnableDeviceProxyingOrRollBackAsync_LocalPcRetainsForRepresentativeFailures(
+            string failureKind)
+        {
+            var device = new TestDeviceConfiguration(
+                new ProxyConfiguration(ProxyConfigurationState.Unknown));
+            var (controller, port) = await StartLocalPcControllerAsync(device);
+            Exception expected = failureKind switch
+            {
+                "timeout" => new TimeoutException("Enable timed out."),
+                "io" => new IOException("Settings could not be read."),
+                "ownership" => new InvalidOperationException("Another process owns the lease."),
+                "win32" => new Win32Exception(5, "Access denied."),
+                "recovery" => new ProxyRecoveryException("Recovery guidance.", new IOException("Recovery failed.")),
+                _ => null
+            };
+            try
+            {
+                if (expected == null)
+                {
+                    await controller.EnableDeviceProxyingOrRollBackAsync(
+                        () => Task.FromResult(false));
+                }
+                else
+                {
+                    Exception actual = await Record.ExceptionAsync(
+                        () => controller.EnableDeviceProxyingOrRollBackAsync(
+                            () => Task.FromException<bool>(expected)));
+                    Assert.Same(expected, actual);
+                }
+
+                Assert.Equal(1, device.ReadCount);
+                Assert.True(controller.IsRunning);
+                Assert.True(await CanConnectAsync(port));
+                Assert.Equal(
+                    Localization.GetLocalizedString("PROXY_ENABLE_LISTENER_KEPT"),
+                    controller.PortStatus);
+            }
+            finally
+            {
+                await controller.CloseAsync();
+            }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task EnableDeviceProxyingOrRollBackAsync_LocalPcProbeFailureRetainsListener(
+            bool addressFailure)
+        {
+            var device = new TestDeviceConfiguration(
+                new ProxyConfiguration(
+                    ProxyConfigurationState.Enabled,
+                    new ProxyEndpoint("198.51.100.20", 1)));
+            if (!addressFailure)
+            {
+                device.ReadAsyncOverride = () =>
+                    Task.FromException<ProxyConfiguration>(
+                        new IOException("Probe read failed."));
+            }
+            IEnumerable<IPAddress> Addresses() => addressFailure
+                ? throw new IOException("Address enumeration failed.")
+                : Array.Empty<IPAddress>();
+            var (controller, port) = await StartLocalPcControllerAsync(
+                device,
+                Addresses);
+            device.Configuration = device.Configuration with
+            {
+                Endpoint = device.Configuration.Endpoint with { Port = port }
+            };
+            var expected = new IOException("Enable failed.");
+            try
+            {
+                var actual = await Assert.ThrowsAsync<IOException>(
+                    () => controller.EnableDeviceProxyingOrRollBackAsync(
+                        () => Task.FromException<bool>(expected)));
+
+                Assert.Same(expected, actual);
+                Assert.Equal(1, device.ReadCount);
+                Assert.True(controller.IsRunning);
+                Assert.True(await CanConnectAsync(port));
+                Assert.Equal(
+                    Localization.GetLocalizedString("PROXY_ENABLE_LISTENER_KEPT"),
+                    controller.PortStatus);
+            }
+            finally
+            {
+                await controller.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task EnableDeviceProxyingOrRollBackAsync_LocalPcProbeTimeoutIgnoresLateResult()
+        {
+            var probe = new TaskCompletionSource<ProxyConfiguration>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var device = new TestDeviceConfiguration(
+                new ProxyConfiguration(ProxyConfigurationState.Unknown))
+            {
+                ReadAsyncOverride = () => probe.Task
+            };
+            var (controller, port) = await StartLocalPcControllerAsync(
+                device,
+                enableFailureProbeTimeout: TimeSpan.FromMilliseconds(100));
+            var expected = new IOException("Enable failed.");
+            var stopwatch = Stopwatch.StartNew();
+            try
+            {
+                var actual = await Assert.ThrowsAsync<IOException>(
+                    () => controller.EnableDeviceProxyingOrRollBackAsync(
+                        () => Task.FromException<bool>(expected)));
+                stopwatch.Stop();
+
+                Assert.Same(expected, actual);
+                Assert.Equal(1, device.ReadCount);
+                Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
+                Assert.True(controller.IsRunning);
+                Assert.True(await CanConnectAsync(port));
+                Assert.Equal(
+                    Localization.GetLocalizedString("PROXY_ENABLE_LISTENER_KEPT"),
+                    controller.PortStatus);
+
+                probe.SetResult(new ProxyConfiguration(
+                    ProxyConfigurationState.Disabled));
+                await Task.Delay(200);
+
+                Assert.True(controller.IsRunning);
+                Assert.True(await CanConnectAsync(port));
+                Assert.Equal(
+                    Localization.GetLocalizedString("PROXY_ENABLE_LISTENER_KEPT"),
+                    controller.PortStatus);
+            }
+            finally
+            {
+                await controller.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task EnableDeviceProxyingOrRollBackAsync_LocalPcAddressEnumerationTimeoutRetainsListener()
+        {
+            var addressStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseAddressEnumeration = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            IEnumerable<IPAddress> Addresses()
+            {
+                addressStarted.TrySetResult();
+                releaseAddressEnumeration.Task.GetAwaiter().GetResult();
+                return Array.Empty<IPAddress>();
+            }
+            var device = new TestDeviceConfiguration(
+                new ProxyConfiguration(
+                    ProxyConfigurationState.Enabled,
+                    new ProxyEndpoint("198.51.100.20", 1)));
+            var (controller, port) = await StartLocalPcControllerAsync(
+                device,
+                Addresses,
+                enableFailureProbeTimeout: TimeSpan.FromMilliseconds(500));
+            device.Configuration = device.Configuration with
+            {
+                Endpoint = device.Configuration.Endpoint with { Port = port }
+            };
+            var expected = new IOException("Enable failed.");
+            try
+            {
+                var stopwatch = Stopwatch.StartNew();
+                Task<Exception> failure = Record.ExceptionAsync(
+                    () => controller.EnableDeviceProxyingOrRollBackAsync(
+                        () => Task.FromException<bool>(expected)));
+                await addressStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                Exception actual = await failure.WaitAsync(TimeSpan.FromSeconds(2));
+                stopwatch.Stop();
+
+                Assert.Same(expected, actual);
+                Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
+                Assert.Equal(1, device.ReadCount);
+                Assert.True(controller.IsRunning);
+                Assert.True(await CanConnectAsync(port));
+                Assert.Equal(
+                    Localization.GetLocalizedString("PROXY_ENABLE_LISTENER_KEPT"),
+                    controller.PortStatus);
+
+                releaseAddressEnumeration.TrySetResult();
+                await Task.Delay(200);
+
+                Assert.True(controller.IsRunning);
+                Assert.True(await CanConnectAsync(port));
+                Assert.Equal(
+                    Localization.GetLocalizedString("PROXY_ENABLE_LISTENER_KEPT"),
+                    controller.PortStatus);
+            }
+            finally
+            {
+                releaseAddressEnumeration.TrySetResult();
+                await controller.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public void GetProxyOperationErrorMessage_PreservesRecoveryGuidance()
+        {
+            var inner = new IOException("Low-level failure.");
+
+            Assert.Equal(
+                "Activation guidance.",
+                CaptureUtilities.GetProxyOperationErrorMessage(
+                    new ProxyActivationUncertainException(
+                        "Activation guidance.",
+                        inner)));
+            Assert.Equal(
+                "Recovery guidance.",
+                CaptureUtilities.GetProxyOperationErrorMessage(
+                    new ProxyRecoveryException(
+                        "Recovery guidance.",
+                        inner)));
+            Assert.Equal(
+                inner.Message,
+                CaptureUtilities.GetProxyOperationErrorMessage(
+                    new InvalidOperationException(
+                        "Generic outer message.",
+                        inner)));
         }
 
         [Theory]
@@ -431,6 +864,9 @@ namespace XMAT.Tests
 
             public bool IsProxyEnabled => false;
             public BypassListModel BypassList { get; set; }
+            public Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> SslConnectionRequestPolicyAsync { get; set; }
+            public Func<HttpRequestEventArgs, CancellationToken, Task<bool>> WebRequestPolicyAsync { get; set; }
+            public Func<HttpResponseEventArgs, CancellationToken, Task<bool>> WebResponsePolicyAsync { get; set; }
 
             public Task StartProxyAsync(WebServiceProxyOptions options, CancellationToken cancellationToken = default)
                 => Task.FromException(_startFailure);
@@ -458,14 +894,52 @@ namespace XMAT.Tests
             }
         }
 
+        private static async Task<(WebServiceDeviceCaptureController Controller, ushort Port)>
+            StartLocalPcControllerAsync(
+                TestDeviceConfiguration device,
+                Func<IEnumerable<IPAddress>> getClassifierIp4Addresses = null,
+                string proxyHost = null,
+                TimeSpan? enableFailureProbeTimeout = null)
+        {
+            using var listener = new System.Net.Sockets.TcpListener(
+                IPAddress.Loopback,
+                0);
+            listener.Start();
+            ushort port = (ushort)((IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+            var controller = new WebServiceDeviceCaptureController(
+                "local-pc-fallback",
+                DeviceType.LocalPC,
+                false,
+                new ProxyPortPool(),
+                device,
+                getClassifierIp4Addresses: getClassifierIp4Addresses ??
+                    (() => Array.Empty<IPAddress>()),
+                enableFailureProbeTimeout: enableFailureProbeTimeout)
+            {
+                Port = port
+            };
+            if (proxyHost != null)
+            {
+                ((ICaptureMethodParameters)controller.Parameters).DeserializeFrom(
+                    JsonSerializer.SerializeToElement(new { ProxyHost = proxyHost }));
+            }
+            SetProxy(controller, new WebServiceProxy());
+            await controller.StartProxyAsync(false);
+            Assert.True(await CanConnectAsync(port));
+            return (controller, port);
+        }
+
         private static WebServiceDeviceCaptureController CreateController(
             PreferencesModel preferences, bool readOnly = false,
-            DeviceType deviceType = DeviceType.XboxConsole, ProxyConfiguration configuration = null)
+            DeviceType deviceType = DeviceType.XboxConsole, ProxyConfiguration configuration = null,
+            TestDeviceConfiguration deviceConfiguration = null)
         {
+            var device = deviceConfiguration ?? new TestDeviceConfiguration(configuration ??
+                new(ProxyConfigurationState.Enabled, new("proxy.example", 8080)));
             var controller = new WebServiceDeviceCaptureController(
                 "test-console", deviceType, readOnly, new ProxyPortPool(),
-                new TestDeviceConfiguration(configuration ??
-                    new(ProxyConfigurationState.Enabled, new("proxy.example", 8080))))
+                device)
             {
                 CaptureMethod = new TestCaptureMethod(preferences)
             };
@@ -476,8 +950,36 @@ namespace XMAT.Tests
 
         private sealed class TestDeviceConfiguration(ProxyConfiguration configuration) : IProxyDeviceConfiguration
         {
-            public Task<ProxyConfiguration> ReadAsync() => Task.FromResult(configuration);
-            public Task DisableAsync() => throw new NotSupportedException();
+            internal ProxyConfiguration Configuration { get; set; } = configuration;
+            internal Func<Task<ProxyConfiguration>> ReadAsyncOverride { get; set; }
+            internal int ReadCount { get; private set; }
+            internal int ParameterlessDisableCount { get; private set; }
+            internal int EndpointDisableCount { get; private set; }
+            internal ProxyEndpoint DisabledEndpoint { get; private set; }
+            internal Exception EndpointDisableFailure { get; init; }
+
+            public Task<ProxyConfiguration> ReadAsync()
+            {
+                ReadCount++;
+                return ReadAsyncOverride?.Invoke() ??
+                    Task.FromResult(Configuration);
+            }
+
+            public Task DisableAsync()
+            {
+                ParameterlessDisableCount++;
+                return Task.CompletedTask;
+            }
+
+            public Task DisableAsync(ProxyEndpoint previous)
+            {
+                EndpointDisableCount++;
+                DisabledEndpoint = previous;
+                return EndpointDisableFailure == null
+                    ? Task.CompletedTask
+                    : Task.FromException(EndpointDisableFailure);
+            }
+
             public Task EnableAsync(ProxyEndpoint endpoint) => throw new NotSupportedException();
         }
 
@@ -585,32 +1087,24 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void StoppedController_RejectsConnectionsRequestsAndResponses()
+        public async Task StoppedController_RejectsConnectionsRequestsAndResponses()
         {
             var controller = CreateController(new PreferencesModel());
-            var connection = new SslConnectionRequestEventArgs { AcceptConnection = true };
-            var request = new HttpRequestEventArgs { AcceptRequest = true };
-            var response = new HttpResponseEventArgs { SendResponse = true };
-
-            InvokeCaptureCallback(
+            Assert.False(await InvokeCapturePolicyAsync(
                 controller,
                 "WebProxy_ReceivedSslConnectionRequestAsync",
-                connection);
-            InvokeCaptureCallback(
+                new SslConnectionRequestEventArgs()));
+            Assert.False(await InvokeCapturePolicyAsync(
                 controller,
                 "WebProxy_ReceivedWebRequestAsync",
-                request);
-            InvokeCaptureCallback(
+                new HttpRequestEventArgs()));
+            Assert.False(await InvokeCapturePolicyAsync(
                 controller,
                 "WebProxy_ReceivedWebResponseAsync",
-                response);
-
-            Assert.False(connection.AcceptConnection);
-            Assert.False(request.AcceptRequest);
-            Assert.False(response.SendResponse);
+                new HttpResponseEventArgs()));
         }
 
-        private static void InvokeCaptureCallback<TEventArgs>(
+        private static Task<bool> InvokeCapturePolicyAsync<TEventArgs>(
             WebServiceDeviceCaptureController controller,
             string methodName,
             TEventArgs args) where TEventArgs : EventArgs
@@ -618,8 +1112,9 @@ namespace XMAT.Tests
             var method = typeof(WebServiceDeviceCaptureController).GetMethod(
                 methodName,
                 BindingFlags.Instance | BindingFlags.NonPublic);
-            var callback = method.CreateDelegate<EventHandler<TEventArgs>>(controller);
-            callback(controller, args);
+            var policy = method.CreateDelegate<
+                Func<TEventArgs, CancellationToken, Task<bool>>>(controller);
+            return policy(args, CancellationToken.None);
         }
 
         [Fact]

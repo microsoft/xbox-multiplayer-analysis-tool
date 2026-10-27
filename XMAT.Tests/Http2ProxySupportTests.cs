@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: MIT
 
 using System.Net;
+using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Connections;
@@ -14,6 +17,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using XMAT.Tests.Proxy;
 using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.Tests
@@ -311,6 +315,57 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task InvokeAsync_CancelsPendingRequestPolicyDuringClientAbort()
+        {
+            var proxy = new WebServiceProxy();
+            var registry = new InterceptedTunnelRegistry();
+            registry.Register(
+                53000,
+                new InterceptedTunnelContext(1000, new ClientRequest()));
+            var policyStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var policyCanceled = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.WebRequestPolicyAsync = async (_, cancellationToken) =>
+            {
+                policyStarted.TrySetResult();
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    return true;
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    policyCanceled.TrySetResult();
+                    throw;
+                }
+            };
+            var upstreamHandler = new RecordingHandler();
+            using var httpClient = new HttpClient(upstreamHandler);
+            var application = new InterceptedProxyApplication(
+                proxy,
+                httpClient,
+                registry);
+            using var requestAbort = new CancellationTokenSource();
+            var lifetime = new TrackingRequestLifetimeFeature
+            {
+                RequestAborted = requestAbort.Token
+            };
+            var context = CreateRequestContext();
+            context.Features.Set<IHttpRequestLifetimeFeature>(lifetime);
+
+            Task requestTask = application.InvokeAsync(context);
+            await policyStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await requestAbort.CancelAsync();
+            await requestTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(policyCanceled.Task.IsCompletedSuccessfully);
+            Assert.True(lifetime.Aborted);
+            Assert.Null(upstreamHandler.Request);
+        }
+
+        [Fact]
         public async Task InvokeAsync_DoesNotForwardNewRequestsAfterShutdownBegins()
         {
             var proxy = new WebServiceProxy();
@@ -598,6 +653,149 @@ namespace XMAT.Tests
             {
                 await forwardHost.StopAsync();
                 forwardHost.Dispose();
+            }
+        }
+
+        // A server that refuses the WebSocket upgrade (for example 401 for an expired token)
+        // must have its answer relayed to the client instead of escaping as an exception.
+        [Fact]
+        public async Task ForwardProxy_RelaysUpstreamWebSocketRefusal()
+        {
+            using var certificate = CreateCertificate();
+            await using var origin = new InterceptedHttpHost(
+                (_, _) => certificate,
+                context =>
+                {
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    context.Response.Headers.WWWAuthenticate = "Bearer realm=\"xmat-test\"";
+                    return Task.CompletedTask;
+                });
+            await origin.StartAsync(CancellationToken.None);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            await Assert.ThrowsAsync<WebSocketException>(() => client.ConnectAsync(
+                new Uri($"wss://127.0.0.1:{origin.Port}/socket"), timeout.Token));
+
+            Assert.Equal(HttpStatusCode.Unauthorized, client.HttpStatusCode);
+            Assert.Contains(client.HttpResponseHeaders, header =>
+                header.Key.Equals("WWW-Authenticate", StringComparison.OrdinalIgnoreCase) &&
+                header.Value.Contains("Bearer realm=\"xmat-test\""));
+        }
+
+        [Fact]
+        public async Task ForwardProxy_ReturnsBadGatewayWhenWebSocketUpstreamIsUnreachable()
+        {
+            using Socket reservedEndpoint = ReserveNonListeningSocket(out int closedPort);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            await Assert.ThrowsAsync<WebSocketException>(() => client.ConnectAsync(
+                new Uri($"wss://127.0.0.1:{closedPort}/socket"), timeout.Token));
+
+            Assert.Equal(HttpStatusCode.BadGateway, client.HttpStatusCode);
+        }
+
+        [Fact]
+        public async Task ForwardProxy_RelaysAcceptedWebSocketUpgrade()
+        {
+            using var certificate = CreateCertificate();
+            await using var origin = new InterceptedHttpHost(
+                (_, _) => certificate,
+                async context =>
+                {
+                    using WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+                        context.RequestAborted);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(10));
+                    var received = new byte[64];
+                    WebSocketReceiveResult message = await socket.ReceiveAsync(received, timeout.Token);
+                    await socket.SendAsync(
+                        new ArraySegment<byte>(received, 0, message.Count),
+                        WebSocketMessageType.Text,
+                        true,
+                        timeout.Token);
+                    WebSocketReceiveResult close = await socket.ReceiveAsync(
+                        received,
+                        timeout.Token);
+                    if (close.MessageType == WebSocketMessageType.Close)
+                    {
+                        await socket.CloseOutputAsync(
+                            close.CloseStatus ?? WebSocketCloseStatus.NormalClosure,
+                            close.CloseStatusDescription,
+                            timeout.Token);
+                    }
+                });
+            await origin.StartAsync(CancellationToken.None);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            using ClientWebSocket client = CreateProxiedWebSocket(proxy.Port);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            try
+            {
+                await client.ConnectAsync(new Uri($"wss://127.0.0.1:{origin.Port}/socket"), timeout.Token);
+                await client.SendAsync(Encoding.UTF8.GetBytes("ping"), WebSocketMessageType.Text, true, timeout.Token);
+                var buffer = new byte[64];
+                WebSocketReceiveResult echo = await client.ReceiveAsync(buffer, timeout.Token);
+
+                Assert.Equal(HttpStatusCode.SwitchingProtocols, client.HttpStatusCode);
+                Assert.Equal("ping", Encoding.UTF8.GetString(buffer, 0, echo.Count));
+            }
+            finally
+            {
+                await CloseWebSocketAsync(client);
+            }
+        }
+
+        private static ClientWebSocket CreateProxiedWebSocket(int proxyPort)
+        {
+            var client = new ClientWebSocket();
+            client.Options.Proxy = new WebProxy($"http://127.0.0.1:{proxyPort}");
+            client.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+            client.Options.CollectHttpResponseDetails = true;
+            return client;
+        }
+
+        private static Socket ReserveNonListeningSocket(out int port)
+        {
+            var socket = new Socket(
+                AddressFamily.InterNetwork,
+                SocketType.Stream,
+                ProtocolType.Tcp)
+            {
+                ExclusiveAddressUse = true
+            };
+            socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            port = ((IPEndPoint)socket.LocalEndPoint).Port;
+            return socket;
+        }
+
+        private static async Task CloseWebSocketAsync(ClientWebSocket client)
+        {
+            if (client.State is not (WebSocketState.Open or WebSocketState.CloseReceived))
+            {
+                return;
+            }
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                await client.CloseAsync(
+                    WebSocketCloseStatus.NormalClosure,
+                    "test complete",
+                    timeout.Token);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or WebSocketException)
+            {
+            }
+            finally
+            {
+                if (client.State != WebSocketState.Closed)
+                {
+                    client.Abort();
+                }
             }
         }
 

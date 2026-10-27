@@ -20,6 +20,11 @@ namespace XMAT.WebServiceCapture
                 "PROXY_ENABLE_UNCERTAIN", port, innerException.GetBaseException().Message), innerException)
         {
         }
+
+        internal ProxyActivationUncertainException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
     }
 
     internal static class CaptureUtilities
@@ -27,6 +32,11 @@ namespace XMAT.WebServiceCapture
         private static string CertFile = "XMATRoot.cer"; // Locally we use XMAT... but on the box we need to user FiddlerRoot
         private static string XboxCertPath = "xs:\\microsoft\\cert\\FiddlerRoot.cer";
         private static string XboxConfigPath = "xs:\\microsoft\\fiddler\\ProxyAddress.txt";
+
+        internal static string GetProxyOperationErrorMessage(Exception ex) =>
+            ex is ProxyActivationUncertainException or ProxyRecoveryException
+                ? ex.Message
+                : ex.GetBaseException().Message;
 
         internal static string GetPath(string file)
         {

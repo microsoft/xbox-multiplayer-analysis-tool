@@ -258,6 +258,45 @@ connections list will be clear until proxying resumes for that device.
 ![](./ReadmeImages/12.png)
 _Screenshot when Xbox Multiplayer Analysis Tool is closed and reopened -- previous capture device is remembered._
 
+### If Xbox Multiplayer Analysis Tool Closes Unexpectedly
+
+Capturing the **Local PC** points the Windows proxy setting at Xbox Multiplayer Analysis Tool. If the tool ended
+without changing it back, apps that use the Windows proxy would lose internet access, so the tool records your
+settings and tries to put them back:
+
+- Before it changes the Windows proxy, the tool records your current proxy settings and starts a small helper
+  process; if the helper cannot start, the Windows proxy is not changed and the capture does not start. If the tool
+  then crashes, is ended from Task Manager, or is stopped from a debugger, the helper tries to restore the recorded
+  settings, which are usually a direct connection.
+- Stopping the capture, exiting normally, or an error that closes the tool also tries to restore them.
+- A restore happens only while Windows still has the settings the tool applied. If it cannot complete, the record is
+  kept and the tool tries again later, for example when you stop the capture and at its next start.
+- If the helper stops unexpectedly during a capture, the tool tries to restore your settings right away and reports
+  the outcome, unless a newer capture has started since. Stop, then start capture to resume.
+- At the next start, if the Windows proxy points at this PC (for example `127.0.0.1:8880`) but nothing is listening
+  there, and either the tool has no record of setting it, which an older version can leave behind, or its settings
+  were changed during the capture, the tool asks before turning that proxy off.
+- If you change the Windows proxy settings yourself during a capture, the tool leaves your changes alone. Stopping
+  the capture turns off only the tool's own proxy; if Windows uses a different proxy by then, the tool leaves it on
+  and tells you. A capture started after such a change records your settings at that point, so the tool later tries
+  to restore those rather than older ones.
+
+Limits:
+
+- While the tool is paused in a debugger or not responding, the proxy stays on, because the tool has not ended.
+- If the PC restarts during a capture, the tool tries to restore the settings the next time you start it.
+- If the tool and its helper are ended together, for example by ending the whole process tree, the tool tries to
+  restore the settings the next time you start it.
+- If the tool cannot verify that the instance that changed the settings has ended, for example one running as
+  administrator, it leaves those settings alone and does not capture this PC.
+- A proxy change that fails partway can leave settings the tool cannot tell from yours, which you may need to
+  correct by hand; a proxy server address that is saved but not in use may not be changed back.
+- The tool does not capture the Local PC when it runs inside a process group that could end the helper together
+  with it, as some terminals and tools do. Start the tool directly instead.
+- Xbox consoles are never reset automatically. If the tool closed unexpectedly while capturing a console, the next
+  start offers to disable that console's proxy, which restarts the console; the offer is repeated at later starts
+  until you answer it.
+
 
 ## Viewing WebSocket Messages
 
@@ -293,7 +332,10 @@ forwarded to the server.
 **Web Response** – This script is called after the HTTP response is received by the server, but before it is
 forwarded to the client.
 
-Sample scripts are provided as you select each event type to get you started.
+Each event starts with a commented sample script that does nothing until you remove the `//` from the start of
+its example lines. An enabled script runs on every host that passes through that capture unless the script checks
+`Params.Request.Host`, and a **Web Response** script should also skip `CONNECT` requests, because their responses
+open the HTTPS connection. The script editor and the **Script Editor** tab show which scripts are active.
 
 All inspectable and modifiable properties are members of the **Params** object. **Params** contains the web
 **Request** and the web **Response** objects, as well as a Boolean named **Continue** which can be set to **_false_**
@@ -308,11 +350,31 @@ status to determine how your client/title code behaves in the case of an error. 
 **System.Text.Json** namespace is available to use in the scripting engine for easily parsing and
 manipulating JSON content.
 
-To enable a script, complete your code in the text editor, then click the **Enable** button. If any errors are
-detected in the script, the **Script Compilation Status** window will display these errors. Double-click on
-any error in the list to go to the source of the error in the script window. Once the script is enabled, all
-future requests and responses will pass through the script silently, and any modifications you have
-created in the script code will be applied.
+To enable a script, complete your code in the text editor, then click the **Enable** button. While the script
+compiles, the button shows **Compiling…** and can't be clicked again. The script turns on only after it compiles
+without errors. The **Script Compilation Status** window shows the result for the selected event's script. Errors
+are listed there, and the script stays off. Warnings do not prevent the script from turning on; they are listed
+there with the message "Script compiled successfully with warnings." Double-click an error or warning to go to
+its source in the script window. If compiling fails unexpectedly, the script stays off and the window shows
+"Could not compile; script remains disabled. See the app log." The app log has the details. Once enabled, all
+future requests and responses will pass through the script silently, and any modifications you created will be
+applied. Editing a script clears its compilation status: an enabled script turns off, and a script that is
+compiling stays off, until you click **Enable** again. **Load** and **Save** are unavailable while a script is
+compiling or enabled.
+
+Scripts may use `await`. XMAT waits for that event's script before it forwards the request or response.
+Each invocation has a 60-second deadline. If a script reaches the deadline, XMAT writes an error to the app
+log and drops that transaction without sending a response. Stopping capture while a script is running also
+cancels the wait and drops that transaction, but it is not reported as a deadline error. For a CONNECT
+request, the HTTPS tunnel is not opened. The deadline limits one script invocation, not the total time seen
+by the client. Some clients retry a dropped request, and every retry runs the script again.
+
+A **Web Response** script also runs for XMAT's CONNECT reply. Delaying that reply delays every HTTPS tunnel,
+so Web Response scripts should skip CONNECT unless changing tunnel behavior is intentional. Cancellation
+stops XMAT from waiting, but it cannot terminate arbitrary script code. Blocking code may continue running
+in the background after its request has been dropped and continue using worker threads. Later changes to
+`Params.Request` or `Params.Response` are not forwarded or captured, but other side effects performed by the
+script are not undone.
 
 You can also use the **Load** and **Save** buttons to load scripts you have already written and save new scripts
 to disk for later usage. The **Revert to Saved** button can also be used to undo any changes since the last

@@ -368,11 +368,8 @@ namespace XMAT.Tests
         }
 
         [Theory]
-        [InlineData(DeviceType.LocalPC, false, false)]
         [InlineData(DeviceType.XboxConsole, false, false)]
-        [InlineData(DeviceType.LocalPC, true, false)]
         [InlineData(DeviceType.XboxConsole, true, false)]
-        [InlineData(DeviceType.LocalPC, false, true)]
         [InlineData(DeviceType.XboxConsole, false, true)]
         public void DisableProxying_UpdatesSelectedStatusWithoutFalseConfirmation(
             DeviceType deviceType, bool alreadyDisabled, bool fails)
@@ -405,23 +402,6 @@ namespace XMAT.Tests
                 Assert.Equal(controller.PortStatus, model.StatusBarText3);
                 Assert.Equal(!alreadyDisabled, device.DisableStarted);
                 model.SelectedDeviceContext = null;
-            });
-        }
-
-        [Fact]
-        public void DisableProxying_ForeignPcEndpoint_IsNotModified()
-        {
-            _application.Run(window =>
-            {
-                var device = new Device(new(ProxyConfigurationState.Enabled, new("corporate.example", 8080)));
-                var controller = new WebServiceDeviceCaptureController(
-                    "local", DeviceType.LocalPC, false, new ProxyPortPool(), device) { Port = 9000 };
-
-                Assert.Throws<InvalidOperationException>(() => Complete(controller.DisableProxying(_ =>
-                    throw new InvalidOperationException("A PC proxy must not prompt to remove a foreign endpoint."))));
-
-                Assert.False(device.DisableStarted);
-                Assert.Equal(Localization.GetLocalizedString("PROXY_DISABLE_FAILED"), controller.PortStatus);
             });
         }
 
@@ -474,17 +454,14 @@ namespace XMAT.Tests
             });
         }
 
-        [Theory]
-        [InlineData(DeviceType.LocalPC, (int)ProxyConfigurationState.Unknown)]
-        [InlineData(DeviceType.LocalPC, (int)ProxyConfigurationState.Unreachable)]
-        [InlineData(DeviceType.XboxConsole, (int)ProxyConfigurationState.Unreachable)]
-        public void DisableProxying_UnknownPcOrUnreachableDevice_DoesNotWrite(DeviceType deviceType, int state)
+        [Fact]
+        public void DisableProxying_UnreachableXbox_DoesNotWrite()
         {
             _application.Run(window =>
             {
-                var device = new Device(new((ProxyConfigurationState)state));
+                var device = new Device(new(ProxyConfigurationState.Unreachable));
                 var controller = new WebServiceDeviceCaptureController(
-                    "127.0.0.1", deviceType, false, new ProxyPortPool(), device) { Port = 9000 };
+                    "127.0.0.1", DeviceType.XboxConsole, false, new ProxyPortPool(), device) { Port = 9000 };
 
                 Assert.Throws<InvalidOperationException>(() => Complete(controller.DisableProxying(_ =>
                     throw new InvalidOperationException("An unavailable device must not prompt to disable."))));
