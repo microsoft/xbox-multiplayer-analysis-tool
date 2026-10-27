@@ -27,6 +27,10 @@ namespace XMAT.Tests
 
         private static ProxyEndpoint OtherEndpoint => new("127.0.0.1", 8881);
 
+        // Settings the user chose during a capture: the proxy turned off, with another bypass list and setup script.
+        private static ProxySettings Newer =>
+            Capturing.WithoutProxy() with { Bypass = "<local>;*.example.com", AutoConfigUrl = "http://wpad/new.pac" };
+
         public void Dispose() => _environment.Dispose();
 
         [Fact]
@@ -143,6 +147,169 @@ namespace XMAT.Tests
             Assert.True(guard.WaitForExit(GuardTimeout));
             Assert.Equal(ProxyGuard.Completed, guard.ExitCode);
             Assert.Equal(User, _environment.Store.Read());
+        }
+
+        // A re-enable carries the restore baseline, and the guard protecting it, forward only while the settings are
+        // still all the capture's own. Once the user turned the proxy off and changed other settings, the earlier
+        // lease is settled first and those settings become the new baseline, so stopping capture restores them, not
+        // older ones.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ReEnable_KeepsTheRestoreBaselineOnlyWhileTheSettingsAreTheCapturesOwn(bool changed)
+        {
+            var guard = StartCapture(_environment.StartOwner(), out var recovery);
+            var first = LeaseJournal.TryRead(_environment.JournalPath);
+            if (changed)
+            {
+                _environment.Store.Write(Newer);
+            }
+
+            recovery.Enable(Endpoint);
+
+            var lease = LeaseJournal.TryRead(_environment.JournalPath);
+            Assert.Equal(changed ? Newer : User, lease.Prior);
+            Assert.Equal(!changed, lease.Nonce == first.Nonce);
+            if (changed)
+            {
+                Assert.True(guard.WaitForExit(GuardTimeout));
+                Assert.Equal(ProxyGuard.Completed, guard.ExitCode);
+                Assert.NotEqual(guard.Id, _environment.Guard(recovery).Id);
+            }
+            else
+            {
+                Assert.Equal(guard.Id, recovery.GuardProcessId);
+                Assert.False(guard.HasExited);
+            }
+
+            recovery.Disable();
+
+            Assert.Equal(changed ? Newer : User, _environment.Store.Read());
+        }
+
+        // Restarting capture after a stop that did not restore the settings: one that found another proxy, which ends
+        // the lease, or one whose restore failed, which keeps it. Once the user then turned the proxy off and changed
+        // other settings, stopping the new capture restores those, not the ones from before the first capture.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void RestartAfterAStopThatDidNotRestore_RestoresTheNewerSettings(bool stopFailed)
+        {
+            var store = new RewritingStore(_environment.Store.FilePath);
+            var recovery = _environment.Recovery(
+                ProxyRecoveryTestEnvironment.Identity(_environment.StartOwner()), store: store);
+            recovery.Enable(Endpoint);
+            var guard = _environment.Guard(recovery);
+            if (stopFailed)
+            {
+                store.Rewrite = written => written.UsesProxy
+                    ? written
+                    : throw new IOException("Simulated failure while writing the Windows proxy settings.");
+            }
+            else
+            {
+                _environment.Store.Write(User with { Flags = ProxySettings.Proxy, Server = "other-proxy:3128" });
+            }
+            Assert.Throws<ProxyRecoveryException>(() => recovery.Disable(Endpoint));
+            Assert.Equal(stopFailed, File.Exists(_environment.JournalPath));
+            store.Rewrite = null;
+            _environment.Store.Write(Newer);
+
+            recovery.Enable(Endpoint);
+
+            Assert.Equal(Newer, LeaseJournal.TryRead(_environment.JournalPath).Prior);
+            Assert.True(guard.WaitForExit(GuardTimeout));
+            Assert.Equal(ProxyGuard.Completed, guard.ExitCode);
+
+            recovery.Disable(Endpoint);
+
+            Assert.Equal(Newer, _environment.Store.Read());
+        }
+
+        // A re-enable after XMAT's endpoint was kept with other changes, here another bypass list, cannot settle the
+        // earlier lease, as such settings are never overwritten automatically. Enable fails as uncertain without
+        // writing, and the lease, its journal and its guard stay until stopping capture turns off that endpoint.
+        [Fact]
+        public void ReEnableAfterXmatsEndpointWasChanged_FailsAndKeepsItsProtection()
+        {
+            var guard = StartCapture(_environment.StartOwner(), out var recovery);
+            var lease = LeaseJournal.TryRead(_environment.JournalPath);
+            var changed = Capturing with { Bypass = "<local>;*.example.com" };
+            _environment.Store.Write(changed);
+
+            var error = Assert.Throws<ProxyActivationUncertainException>(() => recovery.Enable(Endpoint));
+
+            Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", "127.0.0.1:8880"), error.Message);
+            Assert.Equal(changed, _environment.Store.Read());
+            Assert.Equal(lease, LeaseJournal.TryRead(_environment.JournalPath));
+            Assert.Equal(guard.Id, recovery.GuardProcessId);
+            Assert.False(guard.HasExited);
+
+            recovery.Disable(Endpoint);
+
+            Assert.Equal(changed.WithoutProxy(), _environment.Store.Read());
+            Assert.True(guard.WaitForExit(GuardTimeout));
+            Assert.Equal(ProxyGuard.Completed, guard.ExitCode);
+        }
+
+        // A re-enable whose earlier lease cannot be settled, because its journal cannot be removed, keeps that lease's
+        // protection: Enable fails without writing, as an ordinary error since the settings are definitely not XMAT's,
+        // and the lease, its journal and its guard stay. The next attempt completes the cleanup and starts from the
+        // newer settings.
+        [Fact]
+        public void ReEnableWhoseEarlierLeaseCannotBeSettled_KeepsItsProtectionUntilTheNextAttempt()
+        {
+            var guard = StartCapture(_environment.StartOwner(), out var recovery);
+            var lease = LeaseJournal.TryRead(_environment.JournalPath);
+            _environment.Store.Write(Newer);
+
+            InvalidOperationException error;
+            // Held open without sharing deletion, so the journal cannot be removed.
+            using (new FileStream(_environment.JournalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                error = Assert.Throws<ProxyRecoveryException>(() => recovery.Enable(Endpoint));
+            }
+
+            Assert.Equal(Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", "127.0.0.1:8880"), error.Message);
+            Assert.IsAssignableFrom<IOException>(error.InnerException);
+            Assert.Equal(Newer, _environment.Store.Read());
+            Assert.Equal(lease, LeaseJournal.TryRead(_environment.JournalPath));
+            Assert.Equal(guard.Id, recovery.GuardProcessId);
+            Assert.False(guard.HasExited);
+
+            recovery.Enable(Endpoint);
+            recovery.Disable();
+
+            Assert.Equal(Newer, _environment.Store.Read());
+            Assert.True(guard.WaitForExit(GuardTimeout));
+            Assert.Equal(ProxyGuard.Completed, guard.ExitCode);
+        }
+
+        // Settings that cannot be read again once the earlier lease is settled leave nothing new behind: that lease and
+        // its guard have ended, no baseline is recorded or written, and since whether Windows still uses XMAT is
+        // unknown, Enable is uncertain.
+        [Fact]
+        public void ReEnableThatCannotReadTheSettingsAfterSettlingTheEarlierLease_RecordsNothing()
+        {
+            var store = new ScriptedStore(_environment.Store.FilePath);
+            var recovery = _environment.Recovery(
+                ProxyRecoveryTestEnvironment.Identity(_environment.StartOwner()), store: store);
+            recovery.Enable(Endpoint);
+            var guard = _environment.Guard(recovery);
+            _environment.Store.Write(Newer);
+            // Enable reads the settings, settling the earlier lease reads them again, and the read after that fails.
+            store.ScriptReads(Newer, Newer, null);
+
+            var error = Assert.Throws<ProxyActivationUncertainException>(() => recovery.Enable(Endpoint));
+
+            Assert.Equal(
+                Localization.GetLocalizedString("PROXY_RECOVERY_SETTINGS_UNREADABLE", "127.0.0.1:8880"), error.Message);
+            Assert.IsType<IOException>(error.InnerException);
+            Assert.Equal(Newer, _environment.Store.Read());
+            Assert.False(File.Exists(_environment.JournalPath));
+            Assert.Null(recovery.GuardProcessId);
+            Assert.True(guard.WaitForExit(GuardTimeout));
+            Assert.Equal(ProxyGuard.Completed, guard.ExitCode);
         }
 
         // The guard dies while a new capture starts. Its recovery, which runs only after the new capture is in
@@ -357,26 +524,32 @@ namespace XMAT.Tests
             Assert.Null(recovery.GuardProcessId);
         }
 
-        // Settings that are neither the previous nor the requested ones are not taken over just to roll
-        // them back. The lease keeps the settings from before capture, so a retry still restores those.
-        [Fact]
-        public void ProxyWriteThatFailsHalfway_KeepsTheSettingsAndTheLease()
+        // A failed write can leave a mix of the settings from before capture and the requested ones: here XMAT's server
+        // with the proxy still off, or the proxy turned on with the user's own server. Someone else could have made the
+        // same change, so XMAT cannot prove such a mix is its own: it is not rolled back, and it and the lease stay. A
+        // retry settles that lease first and records the mix as its new baseline, so stopping capture keeps the mix,
+        // which may need correcting by hand.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ProxyWriteThatFailsLeavingAMix_BecomesTheBaselineThatStopKeeps(bool proxyTurnedOn)
         {
-            var partial = User with { Server = Endpoint.ToString() };
+            var mixed = proxyTurnedOn ? User with { Flags = ProxySettings.Proxy } : User with { Server = Endpoint.ToString() };
             var recovery = _environment.Recovery(
                 ProxyRecoveryTestEnvironment.Identity(_environment.StartOwner()),
-                store: new FailingStore(_environment.Store.FilePath, _ => partial));
+                store: new FailingStore(_environment.Store.FilePath, _ => mixed));
 
             Assert.Throws<IOException>(() => recovery.Enable(Endpoint));
 
-            Assert.Equal(partial, _environment.Store.Read());
+            Assert.Equal(mixed, _environment.Store.Read());
             var lease = LeaseJournal.TryRead(_environment.JournalPath);
             Assert.Equal(User, lease.Prior);
             Assert.Null(lease.Applied);
 
             recovery.Enable(Endpoint);
+            Assert.Equal(mixed, LeaseJournal.TryRead(_environment.JournalPath).Prior);
             recovery.Disable();
-            Assert.Equal(User, _environment.Store.Read());
+            Assert.Equal(mixed, _environment.Store.Read());
         }
 
         // A failed write that leaves XMAT's endpoint with another bypass list cannot be rolled back without
@@ -722,9 +895,11 @@ namespace XMAT.Tests
         {
             StartCapture(_environment.StartOwner(), out _);
             var second = _environment.Recovery(ProxyRecoveryTestEnvironment.Identity(_environment.StartOwner()));
+            var running = Localization.GetLocalizedString("PROXY_RECOVERY_OTHER_INSTANCE");
 
-            Assert.Throws<ProxyRecoveryException>(() => second.Enable(new ProxyEndpoint("127.0.0.1", 8881)));
-            Assert.Throws<ProxyRecoveryException>(second.Disable);
+            var error = Assert.Throws<ProxyRecoveryException>(() => second.Enable(new ProxyEndpoint("127.0.0.1", 8881)));
+            Assert.Equal(running, error.Message);
+            Assert.Equal(running, Assert.Throws<ProxyRecoveryException>(second.Disable).Message);
             Assert.Null(second.HealAtStartup());
 
             Assert.Equal(Capturing, _environment.Store.Read());
@@ -857,9 +1032,9 @@ namespace XMAT.Tests
         }
 
         // Replaces the next reads and writes with scripted settings, in order: a scripted read returns them instead
-        // of the file's, and a scripted write stores them instead of the requested ones, as WinINet changing under
-        // XMAT would. Once a script is used up, the file is read and written as usual. Deriving from the file store
-        // keeps the guard on the same file, never on WinINet.
+        // of the file's, or fails when null, as a failed WinINet query does, and a scripted write stores them instead
+        // of the requested ones, as WinINet changing under XMAT would. Once a script is used up, the file is read and
+        // written as usual. Deriving from the file store keeps the guard on the same file, never on WinINet.
         private sealed class ScriptedStore : FileProxySettingsStore
         {
             private readonly Queue<ProxySettings> _reads = new();
@@ -874,7 +1049,10 @@ namespace XMAT.Tests
 
             internal void ScriptWrites(params ProxySettings[] writes) => Array.ForEach(writes, _writes.Enqueue);
 
-            public override ProxySettings Read() => _reads.TryDequeue(out var scripted) ? scripted : base.Read();
+            public override ProxySettings Read() =>
+                _reads.TryDequeue(out var scripted)
+                    ? scripted ?? throw new IOException("Simulated failure while reading the Windows proxy settings.")
+                    : base.Read();
 
             public override void Write(ProxySettings settings) =>
                 base.Write(_writes.TryDequeue(out var scripted) ? scripted : settings);

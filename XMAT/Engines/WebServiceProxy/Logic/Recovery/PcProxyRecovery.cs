@@ -122,18 +122,29 @@ namespace XMAT.WebServiceCapture
             using (AcquireLock(LockTimeout))
             {
                 var previous = ReadOwnLease(endpoint) ?? _lease;
-                ProxySettings current;
-                try
+                var current = ReadBeforeEnable(previous, endpoint);
+                // A capture's restore baseline is carried forward only while the settings are still all its own. Once
+                // they changed, its lease is settled first, as recovery would, and the settings read afterwards become
+                // the new baseline, so a later restore never brings back settings older than the user's.
+                if (previous != null && !previous.IsApplied(current))
                 {
-                    current = _store.Read();
-                }
-                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
-                {
-                    // Nothing is changed, and a lease that already protects the settings stays as it is. Whether
-                    // Windows still uses XMAT is unknown, so the caller keeps its listener.
-                    throw new ProxyActivationUncertainException(
-                        Localization.GetLocalizedString("PROXY_RECOVERY_SETTINGS_UNREADABLE", EndpointsOf(previous, endpoint)),
-                        ex);
+                    var settlement = Settle(_store, JournalPath, previous, SettleMode.Recover);
+                    if (settlement.Result == RecoveryResult.Failed)
+                    {
+                        PublicUtilities.AppLog(
+                            LogLevel.ERROR,
+                            $"Could not settle the previous capture's recovery lease before enabling capture; it and its guard were kept. {settlement.Failure}");
+                        throw EnableFailure(
+                            "PROXY_RECOVERY_UNRESTORED", "PROXY_RECOVERY_UNRESTORED", previous, endpoint, settlement.Found,
+                            settlement.Failure);
+                    }
+                    PublicUtilities.AppLog(
+                        LogLevel.INFO,
+                        $"The previous capture's recovery lease was settled ({settlement.Result}) because the Windows proxy settings were no longer all its own; the settings read next become the ones to restore.");
+                    _lease = null;
+                    DisarmGuard(previous.Nonce);
+                    previous = null;
+                    current = ReadBeforeEnable(null, endpoint);
                 }
                 var intended = current.WithProxy(endpoint);
                 // A generation is one guard: a re-enable keeps the guard only while it is still running for this
@@ -442,9 +453,12 @@ namespace XMAT.WebServiceCapture
             {
                 return lease;
             }
-            if (lease.Owner.GetState() != ProcessState.Dead)
+            var state = lease.Owner.GetState();
+            if (state != ProcessState.Dead)
             {
-                throw new ProxyRecoveryException(Localization.GetLocalizedString("PROXY_RECOVERY_OTHER_INSTANCE"));
+                // Only an owner known to be running is reported as such; one that cannot be verified may have ended.
+                throw new ProxyRecoveryException(Localization.GetLocalizedString(
+                    state == ProcessState.Alive ? "PROXY_RECOVERY_OTHER_INSTANCE" : "PROXY_RECOVERY_OWNER_UNVERIFIED"));
             }
             var settlement = Settle(_store, JournalPath, lease, SettleMode.Recover);
             if (settlement.Result == RecoveryResult.Failed)
@@ -457,6 +471,23 @@ namespace XMAT.WebServiceCapture
                         Localization.GetLocalizedString("PROXY_RECOVERY_UNRESTORED", EndpointsOf(lease)), settlement.Failure);
             }
             return null;
+        }
+
+        // Under the recovery lock: the settings Enable starts from. A failed read writes nothing more, and `lease`, if
+        // it already protects the settings, stays as it is; whether Windows still uses XMAT is then unknown, so the
+        // caller keeps its listener.
+        private ProxySettings ReadBeforeEnable(ProxyLease lease, ProxyEndpoint endpoint)
+        {
+            try
+            {
+                return _store.Read();
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                throw new ProxyActivationUncertainException(
+                    Localization.GetLocalizedString("PROXY_RECOVERY_SETTINGS_UNREADABLE", EndpointsOf(lease, endpoint)),
+                    ex);
+            }
         }
 
         // Under the recovery lock, after Enable read back other settings than it wrote; returns the error it throws.

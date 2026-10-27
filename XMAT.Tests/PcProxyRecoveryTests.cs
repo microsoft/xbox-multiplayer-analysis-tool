@@ -4,6 +4,7 @@
 
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using XMAT.Tests.Proxy;
 using XMAT.WebServiceCapture;
 
@@ -75,6 +76,133 @@ namespace XMAT.Tests
 
             Assert.Equal(lease.Intended, _environment.Store.Read());
             Assert.Equal(lease, LeaseJournal.TryRead(_environment.JournalPath));
+        }
+
+        // A process that cannot be opened, as a protected process that took over the recorded ID, is looked up in one
+        // snapshot of every process. It is gone only if a snapshot that shows this process as it is lacks its ID or
+        // shows that ID with another creation time; a snapshot that shows it unchanged, fails or cannot be trusted
+        // leaves it possibly running.
+        [Theory]
+        [InlineData("absent", true)]
+        [InlineData("reused", true)]
+        [InlineData("same", false)]
+        [InlineData("failed", false)]
+        [InlineData("without this process", false)]
+        [InlineData("with this process changed", false)]
+        public void InaccessibleProcess_IsGoneOnlyWhenATrustedSnapshotShowsIt(string snapshot, bool gone)
+        {
+            var self = ProcessIdentity.Current;
+            var process = new ProcessIdentity(self.ProcessId + 4, 1000);
+            _environment.MakeInaccessible(process, snapshot switch
+            {
+                "absent" => ProxyRecoveryTestEnvironment.Snapshot(),
+                "reused" => ProxyRecoveryTestEnvironment.Snapshot(process with { CreationTime = 1001 }),
+                "same" => ProxyRecoveryTestEnvironment.Snapshot(process),
+                "failed" => null,
+                "without this process" => new Dictionary<int, long>(),
+                _ => new Dictionary<int, long> { [self.ProcessId] = self.CreationTime + 1 }
+            });
+
+            Assert.Equal(gone ? ProcessState.Dead : ProcessState.Unknown, process.GetState());
+        }
+
+        // Wherever recovery checks an owner that cannot be opened, it acts only once that owner is known to be gone:
+        // its consoles are offered, startup restores its settings, a proxy the user confirmed is turned off, and
+        // stopping capture settles its lease. Otherwise nothing changes, and starting or stopping capture says that
+        // ownership could not be verified, not that the owner is running.
+        [Theory]
+        [InlineData("reused", true)]
+        [InlineData("same", false)]
+        [InlineData("failed", false)]
+        public void InaccessibleOwner_IsRecoveredOnlyOnceItIsKnownToBeGone(string snapshot, bool gone)
+        {
+            var owner = _environment.DeadOwner();
+            _environment.MakeInaccessible(owner, snapshot switch
+            {
+                "reused" => ProxyRecoveryTestEnvironment.Snapshot(owner with { CreationTime = owner.CreationTime + 1 }),
+                "same" => ProxyRecoveryTestEnvironment.Snapshot(owner),
+                _ => null
+            });
+            new XboxProxySessions(_environment.Folder, owner).SetCapturing("console-a", true);
+
+            Assert.Equal(
+                gone ? new[] { "console-a" } : Array.Empty<string>(),
+                XboxProxySessions.FindAbandoned(_environment.Folder).Consoles);
+
+            var lease = _environment.WriteLease(owner, User, applied: true);
+            Assert.Null(NewStart().HealAtStartup());
+            Assert.Equal(gone ? User : lease.Intended, _environment.Store.Read());
+            Assert.Equal(!gone, File.Exists(_environment.JournalPath));
+
+            lease = _environment.WriteLease(owner, User, applied: true);
+            Assert.Equal(gone, NewStart().DisableAbandonedProxy(lease.Intended));
+            Assert.Equal(gone ? User : lease.Intended, _environment.Store.Read());
+
+            lease = _environment.WriteLease(owner, User, applied: true);
+            var recovery = NewStart();
+            if (gone)
+            {
+                recovery.Disable(ProxyRecoveryTestEnvironment.Endpoint);
+                Assert.Equal(User, _environment.Store.Read());
+                Assert.False(File.Exists(_environment.JournalPath));
+                return;
+            }
+            var unverified = Localization.GetLocalizedString("PROXY_RECOVERY_OWNER_UNVERIFIED");
+            var endpoint = ProxyRecoveryTestEnvironment.Endpoint;
+            Assert.Equal(unverified, Assert.Throws<ProxyRecoveryException>(() => recovery.Enable(endpoint)).Message);
+            Assert.Equal(unverified, Assert.Throws<ProxyRecoveryException>(() => recovery.Disable(endpoint)).Message);
+            Assert.Equal(lease.Intended, _environment.Store.Read());
+            Assert.Equal(lease, LeaseJournal.TryRead(_environment.JournalPath));
+            Assert.Null(recovery.GuardProcessId);
+        }
+
+        // The same on a real process that this user cannot open, such as a protected or system process: a lease whose
+        // owner has its ID but another creation time, as when a restart reused the ID, is recovered at startup, and one
+        // with its exact creation time, an owner that may still be running, is left alone. A process that ends or is
+        // replaced while it is measured proves nothing and is skipped; this process, which can be opened, is tried
+        // last, as when every process can be opened because the tests run elevated.
+        [Fact]
+        public void LeaseOfAProcessThatCannotBeOpened_IsRecoveredOnlyOnceItsIdWasReused()
+        {
+            var snapshot = ProcessSnapshot.Take();
+            Assert.NotNull(snapshot);
+            var self = ProcessIdentity.Current;
+            var candidates = snapshot
+                .Where(process => process.Key != self.ProcessId && CannotOpen(process.Key))
+                .Take(10)
+                .Append(new KeyValuePair<int, long>(self.ProcessId, self.CreationTime));
+
+            foreach (var (id, created) in candidates)
+            {
+                var reused = new ProcessIdentity(id, created + 1);
+                var running = new ProcessIdentity(id, created);
+                var reusedState = reused.GetState();
+                var runningState = running.GetState();
+                _environment.WriteLease(reused, User, applied: true);
+                var reusedHealed = NewStart().HealAtStartup();
+                var reusedSettings = _environment.Store.Read();
+                var reusedJournal = File.Exists(_environment.JournalPath);
+                var lease = _environment.WriteLease(running, User, applied: true);
+                var runningHealed = NewStart().HealAtStartup();
+                var runningSettings = _environment.Store.Read();
+                var runningJournal = LeaseJournal.TryRead(_environment.JournalPath);
+                var after = ProcessSnapshot.Take();
+                if (after == null || !after.TryGetValue(id, out var stillCreated) || stillCreated != created)
+                {
+                    continue;
+                }
+
+                Assert.Equal(ProcessState.Dead, reusedState);
+                Assert.NotEqual(ProcessState.Dead, runningState);
+                Assert.Null(reusedHealed);
+                Assert.Equal(User, reusedSettings);
+                Assert.False(reusedJournal);
+                Assert.Null(runningHealed);
+                Assert.Equal(lease.Intended, runningSettings);
+                Assert.Equal(lease, runningJournal);
+                return;
+            }
+            Assert.Fail("No process stayed the same while it was measured.");
         }
 
         [Fact]
@@ -420,6 +548,12 @@ namespace XMAT.Tests
         }
 
         private PcProxyRecovery NewStart() => _environment.Recovery(ProcessIdentity.Current);
+
+        private static bool CannotOpen(int processId)
+        {
+            using var process = RecoveryNativeMethods.OpenProcess(ProcessIdentity.WaitAccess, false, processId);
+            return process.IsInvalid && Marshal.GetLastWin32Error() != RecoveryNativeMethods.ErrorInvalidParameter;
+        }
 
         // Fails every read, as a failed WinINet query does, and counts the writes it is asked for.
         private sealed class UnreadableStore : FileProxySettingsStore

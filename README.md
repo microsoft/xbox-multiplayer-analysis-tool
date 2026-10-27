@@ -278,7 +278,8 @@ settings and tries to put them back:
   were changed during the capture, the tool asks before turning that proxy off.
 - If you change the Windows proxy settings yourself during a capture, the tool leaves your changes alone. Stopping
   the capture turns off only the tool's own proxy; if Windows uses a different proxy by then, the tool leaves it on
-  and tells you.
+  and tells you. A capture started after such a change records your settings at that point, so the tool later tries
+  to restore those rather than older ones.
 
 Limits:
 
@@ -286,6 +287,10 @@ Limits:
 - If the PC restarts during a capture, the tool tries to restore the settings the next time you start it.
 - If the tool and its helper are ended together, for example by ending the whole process tree, the tool tries to
   restore the settings the next time you start it.
+- If the tool cannot verify that the instance that changed the settings has ended, for example one running as
+  administrator, it leaves those settings alone and does not capture this PC.
+- A proxy change that fails partway can leave settings the tool cannot tell from yours, which you may need to
+  correct by hand; a proxy server address that is saved but not in use may not be changed back.
 - The tool does not capture the Local PC when it runs inside a process group that could end the helper together
   with it, as some terminals and tools do. Start the tool directly instead.
 - Xbox consoles are never reset automatically. If the tool closed unexpectedly while capturing a console, the next

@@ -79,7 +79,7 @@ namespace XMAT.WebServiceCapture
             return reader.ReadToEnd();
         }
 
-        // Readers see either the old or the new content, never a partially written file.
+        // Writes a temporary file, then moves it over `path`, so the file at `path` is never one still being written.
         internal static void Replace(string path, string contents)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));

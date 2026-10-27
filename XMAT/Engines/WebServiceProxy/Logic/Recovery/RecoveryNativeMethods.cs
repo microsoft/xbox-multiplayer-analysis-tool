@@ -18,6 +18,8 @@ namespace XMAT.WebServiceCapture
         internal const uint CreateBreakawayFromJob = 0x01000000;
         internal const uint JobKillOnClose = 0x2000;
         internal const int JobExtendedLimitInformationClass = 9;
+        internal const int SystemProcessInformation = 5;
+        internal const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
 
         [StructLayout(LayoutKind.Sequential)]
         internal struct JobBasicLimitInformation
@@ -123,5 +125,10 @@ namespace XMAT.WebServiceCapture
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool CloseHandle(IntPtr handle);
+
+        // Returns an NTSTATUS; 0 is success.
+        [DllImport("ntdll.dll")]
+        internal static extern int NtQuerySystemInformation(
+            int informationClass, [Out] byte[] information, int length, out uint returnLength);
     }
 }

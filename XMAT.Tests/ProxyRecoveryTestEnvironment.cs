@@ -92,8 +92,30 @@ namespace XMAT.Tests
             return lease;
         }
 
+        // Until the test ends, `process` cannot be opened, as a protected process that took over its ID could not be,
+        // and `snapshot` stands in for the system snapshot, or a failed one when null.
+        internal void MakeInaccessible(ProcessIdentity process, IReadOnlyDictionary<int, long> snapshot)
+        {
+            ProcessIdentity.Inaccessible = id => id == process.ProcessId;
+            ProcessSnapshot.Replacement = () => snapshot;
+        }
+
+        // A snapshot of `processes` that can be trusted: it also shows this process as it is.
+        internal static Dictionary<int, long> Snapshot(params ProcessIdentity[] processes)
+        {
+            var self = ProcessIdentity.Current;
+            var snapshot = new Dictionary<int, long> { [self.ProcessId] = self.CreationTime };
+            foreach (var process in processes)
+            {
+                snapshot[process.ProcessId] = process.CreationTime;
+            }
+            return snapshot;
+        }
+
         public void Dispose()
         {
+            ProcessIdentity.Inaccessible = null;
+            ProcessSnapshot.Replacement = null;
             foreach (var recovery in _recoveries)
             {
                 recovery.RestoreOnShutdown();

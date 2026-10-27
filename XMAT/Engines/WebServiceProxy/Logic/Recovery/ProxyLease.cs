@@ -13,9 +13,10 @@ using Microsoft.Win32.SafeHandles;
 
 namespace XMAT.WebServiceCapture
 {
-    // Written before the proxy is enabled, so XMAT, its guard or the next start can undo it. A re-enable also
-    // keeps the previous capture's verified settings until the new ones are verified, so XMAT ending before or
-    // after it writes them is still undone, and keeps the safe restore target of the first capture.
+    // Written before the proxy is enabled, so XMAT, its guard or the next start can undo it. A re-enable while the
+    // settings are still all the capture's own also keeps the previous capture's verified settings until the new ones
+    // are verified, so XMAT ending before or after it writes them is still undone, and keeps the safe restore target
+    // of the first capture.
     internal sealed record ProxyLease(
         string Nonce, int OwnerProcessId, long OwnerCreationTime,
         ProxySettings Prior, ProxySettings Intended, ProxySettings Applied,
@@ -105,7 +106,7 @@ namespace XMAT.WebServiceCapture
             }
             catch (AbandonedMutexException)
             {
-                // The previous holder died; journal writes are atomic, so the state is still consistent.
+                // The previous holder died; whatever it left, even an unreadable journal, is handled as usual.
                 return new RecoveryLock(mutex);
             }
             mutex.Dispose();
@@ -134,6 +135,9 @@ namespace XMAT.WebServiceCapture
         internal static ProcessIdentity Current { get; } =
             TryGet(Environment.ProcessId, out var current) ? current : throw new InvalidOperationException();
 
+        // Test hook: process IDs that GetState treats as if opening them were denied, as for a protected process.
+        internal static Predicate<int> Inaccessible { get; set; }
+
         internal static bool TryGet(int processId, out ProcessIdentity identity)
         {
             using var process = RecoveryNativeMethods.OpenProcess(WaitAccess, false, processId);
@@ -146,19 +150,24 @@ namespace XMAT.WebServiceCapture
             return false;
         }
 
-        // Unknown (for example, access denied) must be treated as possibly alive.
+        // A process that cannot be opened or queried, for example a protected one that took over the ID, is looked up
+        // in a snapshot of every process instead. Unknown must be treated as possibly alive.
         internal ProcessState GetState()
         {
+            if (Inaccessible?.Invoke(ProcessId) == true)
+            {
+                return GetStateFromSnapshot();
+            }
             using var process = RecoveryNativeMethods.OpenProcess(WaitAccess, false, ProcessId);
             if (process.IsInvalid)
             {
                 return Marshal.GetLastWin32Error() == RecoveryNativeMethods.ErrorInvalidParameter
                     ? ProcessState.Dead
-                    : ProcessState.Unknown;
+                    : GetStateFromSnapshot();
             }
             if (!RecoveryNativeMethods.GetProcessTimes(process, out var created, out _, out _, out _))
             {
-                return ProcessState.Unknown;
+                return GetStateFromSnapshot();
             }
             if (created != CreationTime)
             {
@@ -166,6 +175,16 @@ namespace XMAT.WebServiceCapture
             }
             using var exited = new ProcessExitHandle(process);
             return exited.WaitOne(0) ? ProcessState.Dead : ProcessState.Alive;
+        }
+
+        // Gone once a snapshot that can be trusted lacks the ID or shows it with another creation time; otherwise,
+        // or if the snapshot fails, unknown.
+        private ProcessState GetStateFromSnapshot()
+        {
+            var snapshot = ProcessSnapshot.Take();
+            return snapshot == null || (snapshot.TryGetValue(ProcessId, out var created) && created == CreationTime)
+                ? ProcessState.Unknown
+                : ProcessState.Dead;
         }
     }
 
