@@ -16,6 +16,26 @@ analyze Xbox services and network traffic for problems.
 The web proxy supports HTTP/1.1 and HTTP/2 over TLS using ALPN negotiation, with automatic HTTP/1.1 fallback.
 WebSocket traffic passing through the proxy is also captured and can be inspected alongside regular web requests.
 
+### HTTP/2 capture scope
+
+For intercepted HTTPS, the device-to-XMAT and XMAT-to-origin connections negotiate independently.
+An HTTP/2 client can reach an HTTP/1.1 origin, and an HTTP/1.1 client can reach an HTTP/2 origin.
+The captured request version describes the client leg; the captured response version describes the
+origin leg. Request and response records share a request number and, for HTTP/2 clients, the client
+stream ID. Stream IDs are scoped to a connection, not globally unique.
+
+Requests and responses are buffered completely before their respective script callbacks run.
+Body edits are forwarded with a recalculated Content-Length, while received capture metadata remains
+available to scripts. Connection-specific headers, including fields named by a Connection header,
+are removed when forwarding regular intercepted requests and responses, without deleting them from
+the capture model.
+
+This is buffered HTTP capture, not a claim of complete HTTP/2 feature coverage. Trailers are not
+preserved or forwarded; long-lived streaming and streaming gRPC require additional work. Cleartext
+HTTP/2 (h2c) and HTTP/3/QUIC are not supported. HTTP/2 WebSocket extended CONNECT is not validated
+by the HTTP request/response test matrix.
+The plain-HTTP forwarding path is separate from the intercepted HTTPS path.
+
 ## Basic Environment Requirements & Dependencies
 
 |  |Web Proxy | Low Level Network Capture| Notes |

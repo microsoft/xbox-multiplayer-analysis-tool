@@ -97,19 +97,21 @@ namespace XMAT.WebServiceCapture.Proxy
                 Content = new ByteArrayContent(request.BodyBytes ?? Array.Empty<byte>())
             };
 
+            var connectionHeaderNames = ProxyHeaderUtilities.GetConnectionHeaderNames(request.Headers);
             foreach (KeyValuePair<string, IEnumerable<string>> header in request.Headers)
             {
-                if (!ProxyHeaderUtilities.IsHopByHopHeader(header.Key))
+                if (!ProxyHeaderUtilities.IsHopByHopHeader(header.Key, connectionHeaderNames))
                     message.Headers.TryAddWithoutValidation(header.Key, header.Value);
             }
             foreach (KeyValuePair<string, IEnumerable<string>> header in request.ContentHeaders)
             {
                 // ByteArrayContent calculates the length from the potentially
                 // script-modified body, so never forward a stale client value.
-                if (!string.Equals(
-                    header.Key,
-                    "Content-Length",
-                    StringComparison.OrdinalIgnoreCase))
+                if (!ProxyHeaderUtilities.IsHopByHopHeader(header.Key, connectionHeaderNames) &&
+                    !string.Equals(
+                        header.Key,
+                        "Content-Length",
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     message.Content.Headers.TryAddWithoutValidation(
                         header.Key,
@@ -496,8 +498,9 @@ namespace XMAT.WebServiceCapture.Proxy
             var statusCode = int.Parse(response.Status);
             context.Response.StatusCode = statusCode;
 
-            CopyHeaders(response.Headers, context.Response);
-            CopyHeaders(response.ContentHeaders, context.Response);
+            var connectionHeaderNames = ProxyHeaderUtilities.GetConnectionHeaderNames(response.Headers);
+            CopyHeaders(response.Headers, context.Response, connectionHeaderNames);
+            CopyHeaders(response.ContentHeaders, context.Response, connectionHeaderNames);
 
             if (statusCode < 200 || statusCode == StatusCodes.Status204NoContent)
             {
@@ -530,11 +533,12 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private static void CopyHeaders(
             HeaderCollection source,
-            HttpResponse response)
+            HttpResponse response,
+            ISet<string> connectionHeaderNames)
         {
             foreach (KeyValuePair<string, IEnumerable<string>> header in source)
             {
-                if (ProxyHeaderUtilities.IsHopByHopHeader(header.Key))
+                if (ProxyHeaderUtilities.IsHopByHopHeader(header.Key, connectionHeaderNames))
                     continue;
 
                 response.Headers[header.Key] = new Microsoft.Extensions.Primitives.StringValues(
@@ -690,8 +694,28 @@ namespace XMAT.WebServiceCapture.Proxy
             };
         }
 
-        internal static bool IsHopByHopHeader(string headerKey)
+        internal static ISet<string> GetConnectionHeaderNames(HeaderCollection headers)
         {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string value in headers.GetHeaderValuesAsList("Connection") ?? Array.Empty<string>())
+            {
+                foreach (string name in value.Split(','))
+                {
+                    string trimmed = name.Trim();
+                    if (trimmed.Length != 0)
+                        names.Add(trimmed);
+                }
+            }
+            return names;
+        }
+
+        internal static bool IsHopByHopHeader(
+            string headerKey,
+            ISet<string> connectionHeaderNames = null)
+        {
+            if (connectionHeaderNames?.Contains(headerKey) == true)
+                return true;
+
             return headerKey.ToLowerInvariant() switch
             {
                 "connection" or "keep-alive" or "proxy-authenticate" or
