@@ -683,24 +683,26 @@ namespace XMAT.Tests
             recovery.Enable(Endpoint);
             var guard = _environment.Guard(recovery);
             store.Rewrite = written => written.UsesProxy ? Capturing : written;
-            FileStream journal = null;
-            recovery.SettingsWrite = written =>
-            {
-                if (written)
-                {
-                    // Held open without sharing deletion, so the journal cannot be removed.
-                    journal = new FileStream(_environment.JournalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                }
-            };
 
             InvalidOperationException error;
-            try
+            using (var journal = new HeldOpen(_environment.JournalPath))
             {
-                error = Assert.Throws<ProxyRecoveryException>(() => recovery.Enable(OtherEndpoint));
-            }
-            finally
-            {
-                journal?.Dispose();
+                // Held open once the new settings are written, so the journal cannot be removed.
+                recovery.SettingsWrite = written =>
+                {
+                    if (written)
+                    {
+                        journal.Open();
+                    }
+                };
+                try
+                {
+                    error = Assert.Throws<ProxyRecoveryException>(() => recovery.Enable(OtherEndpoint));
+                }
+                finally
+                {
+                    recovery.SettingsWrite = null;
+                }
             }
 
             Assert.Equal(
@@ -1056,6 +1058,24 @@ namespace XMAT.Tests
 
             public override void Write(ProxySettings settings) =>
                 base.Write(_writes.TryDequeue(out var scripted) ? scripted : settings);
+        }
+
+        // Holds a file open without sharing deletion, so it cannot be removed, from Open() until disposed. Opening it
+        // again keeps the handle it has, and disposing it again does nothing.
+        private sealed class HeldOpen : IDisposable
+        {
+            private readonly string _path;
+            private FileStream _stream;
+
+            internal HeldOpen(string path) => _path = path;
+
+            internal void Open() => _stream ??= new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+
+            public void Dispose()
+            {
+                _stream?.Dispose();
+                _stream = null;
+            }
         }
 
         private sealed class TestJob : IDisposable
