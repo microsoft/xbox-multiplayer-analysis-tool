@@ -373,10 +373,11 @@ namespace XMAT.WebServiceCapture
             using Stream s = entry.Open();
             var headerBytes = Encoding.ASCII.GetBytes(headers);
             s.Write(headerBytes);
-            for (var offset = 0; offset < (body?.Length ?? 0); offset += 8192)
+            ReadOnlySpan<byte> bodySpan = body;
+            for (var offset = 0; offset < bodySpan.Length; offset += 8192)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                s.Write(body.AsSpan(offset, Math.Min(8192, body.Length - offset)));
+                s.Write(bodySpan.Slice(offset, Math.Min(8192, bodySpan.Length - offset)));
             }
         }
 
