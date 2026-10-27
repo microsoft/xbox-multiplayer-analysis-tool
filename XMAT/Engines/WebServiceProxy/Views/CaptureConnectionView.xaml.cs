@@ -531,7 +531,7 @@ namespace XMAT.WebServiceCapture
                         // The listener must be confirmed before the system proxy points at it.
                         await wsdcc.StartProxyAsync(false);
                         await wsdcc.EnableDeviceProxyingOrRollBackAsync(
-                            () => { wsdcc.EnableProxyingPC(); return Task.FromResult(true); });
+                            async () => { await Task.Run(wsdcc.EnableProxyingPC); return true; });
                         break;
                     }
 
@@ -689,7 +689,7 @@ namespace XMAT.WebServiceCapture
                         if (captureDeviceContext.DeviceType == DeviceType.LocalPC)
                         {
                             await wsdcc.EnableDeviceProxyingOrRollBackAsync(
-                                () => { wsdcc.EnableProxyingPC(); return Task.FromResult(true); });
+                                async () => { await Task.Run(wsdcc.EnableProxyingPC); return true; });
                         }
                     }
                 }
@@ -787,7 +787,7 @@ namespace XMAT.WebServiceCapture
         {
             PublicUtilities.AppLog(LogLevel.ERROR, $"Web proxy operation failed: {ex}");
             MessageBox.Show(
-                ex is ProxyActivationUncertainException ? ex.Message : ex.GetBaseException().Message,
+                CaptureUtilities.GetProxyOperationErrorMessage(ex),
                 Localization.GetLocalizedString("PROXY_CAPTURE_ERROR_TITLE"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);

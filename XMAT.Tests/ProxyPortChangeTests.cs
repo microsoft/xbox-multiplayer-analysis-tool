@@ -368,11 +368,8 @@ namespace XMAT.Tests
         }
 
         [Theory]
-        [InlineData(DeviceType.LocalPC, false, false)]
         [InlineData(DeviceType.XboxConsole, false, false)]
-        [InlineData(DeviceType.LocalPC, true, false)]
         [InlineData(DeviceType.XboxConsole, true, false)]
-        [InlineData(DeviceType.LocalPC, false, true)]
         [InlineData(DeviceType.XboxConsole, false, true)]
         public void DisableProxying_UpdatesSelectedStatusWithoutFalseConfirmation(
             DeviceType deviceType, bool alreadyDisabled, bool fails)
@@ -401,24 +398,24 @@ namespace XMAT.Tests
                 }
 
                 var expected = fails ? "PROXY_DISABLE_FAILED" :
-                    alreadyDisabled || deviceType == DeviceType.LocalPC ? "PROXY_DISABLED" : "PROXY_DISABLE_REQUESTED";
+                    alreadyDisabled ? "PROXY_DISABLED" : "PROXY_DISABLE_REQUESTED";
                 Assert.Equal(Localization.GetLocalizedString(expected), controller.PortStatus);
                 Assert.Equal(controller.PortStatus, model.StatusBarText3);
                 Assert.Equal(!alreadyDisabled, device.DisableStarted);
-                Assert.Equal(deviceType == DeviceType.LocalPC && !alreadyDisabled && !fails ? 2 : 1, device.ReadCount);
+                Assert.Equal(1, device.ReadCount);
                 model.SelectedDeviceContext = null;
             });
         }
 
         [Fact]
-        public void DisableProxying_LocalPc_WaitsForReadbackBeforeReportingDisabled()
+        public void DisableProxying_LocalPc_WaitsForRecoveryBeforeReportingConfirmed()
         {
             _application.Run(window =>
             {
-                var verification = new TaskCompletionSource<ProxyConfiguration>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var recovery = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 var device = new Device(new(ProxyConfigurationState.Enabled, new("127.0.0.1", 9000)))
                 {
-                    ReadAfterDisable = () => verification.Task
+                    DisableWrite = recovery.Task
                 };
                 var controller = new WebServiceDeviceCaptureController(
                     "local", DeviceType.LocalPC, false, new ProxyPortPool(), device)
@@ -430,56 +427,34 @@ namespace XMAT.Tests
                 {
                     Assert.True(device.DisableStarted);
                     Assert.False(disabling.IsCompleted);
-                    Assert.Equal(Localization.GetLocalizedString("PROXY_DISABLE_REQUESTED"), model.StatusBarText3);
-                    verification.SetResult(new(ProxyConfigurationState.Disabled));
+                    Assert.NotEqual(Localization.GetLocalizedString("PROXY_DISABLE_CONFIRMED"), model.StatusBarText3);
+                    Assert.Equal(0, device.ReadCount);
+                    recovery.SetResult();
                     Complete(disabling);
 
                     Assert.True(disabling.GetAwaiter().GetResult());
-                    Assert.Equal(Localization.GetLocalizedString("PROXY_DISABLED"), controller.PortStatus);
+                    Assert.Equal(Localization.GetLocalizedString("PROXY_DISABLE_CONFIRMED"), controller.PortStatus);
                     Assert.Equal(controller.PortStatus, model.StatusBarText3);
+                    Assert.Equal(0, device.ReadCount);
                 }
                 finally
                 {
-                    verification.TrySetResult(new(ProxyConfigurationState.Disabled));
+                    recovery.TrySetResult();
                     Complete(disabling);
                     model.SelectedDeviceContext = null;
                 }
             });
         }
 
-        [Theory]
-        [InlineData((int)ProxyConfigurationState.Enabled)]
-        [InlineData((int)ProxyConfigurationState.Unknown)]
-        [InlineData((int)ProxyConfigurationState.Unreachable)]
-        public void DisableProxying_LocalPc_UnconfirmedReadbackDoesNotReportSuccess(int state)
-        {
-            _application.Run(window =>
-            {
-                var device = new Device(new(ProxyConfigurationState.Enabled, new("127.0.0.1", 9000)))
-                {
-                    ReadAfterDisable = () => Task.FromResult(new ProxyConfiguration((ProxyConfigurationState)state))
-                };
-                var controller = new WebServiceDeviceCaptureController(
-                    "local", DeviceType.LocalPC, false, new ProxyPortPool(), device)
-                { Port = 9000 };
-                var exception = Assert.Throws<InvalidOperationException>(() => Complete(controller.DisableProxying(_ =>
-                    throw new InvalidOperationException("A PC proxy must not prompt to restart."))));
-
-                Assert.Equal(Localization.GetLocalizedString("PROXY_PC_DISABLE_UNCONFIRMED"), exception.Message);
-                Assert.True(device.DisableStarted);
-                Assert.Equal(Localization.GetLocalizedString("PROXY_DISABLE_FAILED"), controller.PortStatus);
-            });
-        }
-
         [Fact]
-        public void DisableProxying_LocalPc_ReadbackFailureDoesNotReportSuccess()
+        public void DisableProxying_LocalPc_RecoveryFailureDoesNotReportSuccess()
         {
             _application.Run(window =>
             {
-                var failure = new IOException("verification failed");
+                var failure = new IOException("recovery failed");
                 var device = new Device(new(ProxyConfigurationState.Enabled, new("127.0.0.1", 9000)))
                 {
-                    ReadAfterDisable = () => Task.FromException<ProxyConfiguration>(failure)
+                    DisableFailure = failure
                 };
                 var controller = new WebServiceDeviceCaptureController(
                     "local", DeviceType.LocalPC, false, new ProxyPortPool(), device)
@@ -489,23 +464,7 @@ namespace XMAT.Tests
 
                 Assert.Same(failure, exception);
                 Assert.True(device.DisableStarted);
-                Assert.Equal(Localization.GetLocalizedString("PROXY_DISABLE_FAILED"), controller.PortStatus);
-            });
-        }
-
-        [Fact]
-        public void DisableProxying_ForeignPcEndpoint_IsNotModified()
-        {
-            _application.Run(window =>
-            {
-                var device = new Device(new(ProxyConfigurationState.Enabled, new("corporate.example", 8080)));
-                var controller = new WebServiceDeviceCaptureController(
-                    "local", DeviceType.LocalPC, false, new ProxyPortPool(), device) { Port = 9000 };
-
-                Assert.Throws<InvalidOperationException>(() => Complete(controller.DisableProxying(_ =>
-                    throw new InvalidOperationException("A PC proxy must not prompt to remove a foreign endpoint."))));
-
-                Assert.False(device.DisableStarted);
+                Assert.Equal(0, device.ReadCount);
                 Assert.Equal(Localization.GetLocalizedString("PROXY_DISABLE_FAILED"), controller.PortStatus);
             });
         }
@@ -559,17 +518,14 @@ namespace XMAT.Tests
             });
         }
 
-        [Theory]
-        [InlineData(DeviceType.LocalPC, (int)ProxyConfigurationState.Unknown)]
-        [InlineData(DeviceType.LocalPC, (int)ProxyConfigurationState.Unreachable)]
-        [InlineData(DeviceType.XboxConsole, (int)ProxyConfigurationState.Unreachable)]
-        public void DisableProxying_UnknownPcOrUnreachableDevice_DoesNotWrite(DeviceType deviceType, int state)
+        [Fact]
+        public void DisableProxying_UnreachableXbox_DoesNotWrite()
         {
             _application.Run(window =>
             {
-                var device = new Device(new((ProxyConfigurationState)state));
+                var device = new Device(new(ProxyConfigurationState.Unreachable));
                 var controller = new WebServiceDeviceCaptureController(
-                    "127.0.0.1", deviceType, false, new ProxyPortPool(), device) { Port = 9000 };
+                    "127.0.0.1", DeviceType.XboxConsole, false, new ProxyPortPool(), device) { Port = 9000 };
 
                 Assert.Throws<InvalidOperationException>(() => Complete(controller.DisableProxying(_ =>
                     throw new InvalidOperationException("An unavailable device must not prompt to disable."))));
@@ -682,13 +638,12 @@ namespace XMAT.Tests
             internal bool DisableStarted { get; private set; }
             internal Exception DisableFailure { get; set; }
             internal Action OnEnable { get; set; }
-            internal Func<Task<ProxyConfiguration>> ReadAfterDisable { get; set; }
             internal int ReadCount { get; private set; }
             internal Device(ProxyConfiguration configuration) => _configuration = configuration;
             public Task<ProxyConfiguration> ReadAsync()
             {
                 ReadCount++;
-                return DisableStarted && ReadAfterDisable != null ? ReadAfterDisable() : Task.FromResult(_configuration);
+                return Task.FromResult(_configuration);
             }
             public async Task DisableAsync()
             {
