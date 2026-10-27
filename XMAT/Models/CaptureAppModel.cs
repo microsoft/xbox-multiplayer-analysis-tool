@@ -10,6 +10,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -672,7 +673,8 @@ namespace XMAT.Models
             }
         }
 
-        internal async Task<WebServiceCapture.SanitizedExportSummary> ExportSanitizedDataCapturesAsync(string toFilePath)
+        internal async Task<WebServiceCapture.SanitizedExportSummary> ExportSanitizedDataCapturesAsync(
+            string toFilePath, CancellationToken cancellationToken = default)
         {
             if (!CanExportSanitizedCaptures ||
                 !TryBeginCaptureDataOperation(out var operation, requireAllCapturesStopped: true))
@@ -684,13 +686,15 @@ namespace XMAT.Models
                 var controller = (WebServiceCapture.WebServiceDeviceCaptureController)SelectedDeviceContext.CaptureController;
                 IEnumerable<WebServiceCapture.Models.ProxyConnectionModel> Records()
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     foreach (var record in controller.GetCaptureRecords())
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         yield return new WebServiceCapture.Models.ProxyConnectionModel(record);
                     }
                 }
                 return await Task.Run(() => WebServiceCapture.FiddlerSazHandler.CreateSanitizedSazFile(toFilePath,
-                    Records()));
+                    Records(), cancellationToken));
             }
         }
 

@@ -475,6 +475,86 @@ namespace XMAT.Tests
             }
         }
 
+        [Fact]
+        public async Task Cancellation_KeepsTheOperationLeaseUntilReaderAndWorkerCleanupFinish()
+        {
+            var directory = Path.Join(Path.GetTempPath(), "XMAT-export-cancel-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                using var dataset = new ReaderDataset(Path.Join(directory, "source.sqlite"));
+                using var cancellation = new CancellationTokenSource();
+                using var releaseCleanup = new ManualResetEventSlim();
+                var cleanupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var destination = Path.Join(directory, "existing.saz");
+                FiddlerSazHandler.CreateSanitizedSazFile(destination, new[] { new ProxyConnectionModel(new DataRecord()) });
+                var original = File.ReadAllBytes(destination);
+                Task<SanitizedExportSummary> exporting = null;
+                CaptureAppModel model = null;
+                try
+                {
+                    _application.Run(window =>
+                    {
+                        var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
+                        controller.LoadCaptureDataset(dataset);
+                        var context = new Context(controller);
+                        model = new CaptureAppModel { SelectedDeviceContext = context };
+                        model.CaptureDeviceContexts.Add(context);
+                        dataset.BeforeRead = cancellation.Cancel;
+                        dataset.BeforeDispose = () =>
+                        {
+                            cleanupStarted.TrySetResult();
+                            if (!releaseCleanup.Wait(TimeSpan.FromSeconds(30)))
+                            {
+                                throw new TimeoutException("The test did not release reader cleanup.");
+                            }
+                        };
+                        exporting = model.ExportSanitizedDataCapturesAsync(destination, cancellation.Token);
+                    });
+                    await cleanupStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+                    Assert.True(cancellation.IsCancellationRequested);
+                    Assert.False(exporting.IsCompleted);
+                    Assert.Equal(1, dataset.OpenReaders);
+                    _application.Run(window =>
+                    {
+                        Assert.True(model.IsCaptureDataOperationRunning);
+                        Assert.False(model.CanExportSanitizedCaptures);
+                        Assert.False(model.CanModifyCaptureData);
+                        Assert.False(model.CanCloseAsync().GetAwaiter().GetResult());
+                        Assert.False(model.TryBeginCaptureDataOperation(out _));
+                    });
+                    Assert.Equal(original, File.ReadAllBytes(destination));
+                }
+                finally
+                {
+                    releaseCleanup.Set();
+                }
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => exporting);
+
+                Assert.Equal(0, dataset.OpenReaders);
+                Assert.Equal(original, File.ReadAllBytes(destination));
+                Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
+                Assert.Single(FiddlerSazHandler.ImportSazFile(destination, CancellationToken.None));
+                using var external = new SqliteConnection(dataset.ConnectionString);
+                external.Open();
+                using var command = external.CreateCommand();
+                command.CommandText = "DROP TABLE SourceRows";
+                command.ExecuteNonQuery();
+                _application.Run(window =>
+                {
+                    Assert.False(model.IsCaptureDataOperationRunning);
+                    Assert.True(model.CanCloseAsync().GetAwaiter().GetResult());
+                    Assert.True(model.CanExportSanitizedCaptures);
+                    model.SelectedDeviceContext = null;
+                });
+            }
+            finally
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+
         private static string Request(string type, string extra = "") =>
             "POST / HTTP/1.1\r\nContent-Type: " + type + "\r\n" + extra + "\r\n";
 
@@ -485,6 +565,8 @@ namespace XMAT.Tests
             private readonly List<SqliteCommand> _commands = new();
             internal int OpenReaders { get; private set; }
             internal string ConnectionString { get; }
+            internal Action BeforeRead { get; set; }
+            internal Action BeforeDispose { get; set; }
 
             internal ReaderDataset(string path)
             {
@@ -515,6 +597,7 @@ namespace XMAT.Tests
             {
                 try
                 {
+                    BeforeRead?.Invoke();
                     while (reader.Read())
                     {
                         yield return new DataRecord();
@@ -522,9 +605,16 @@ namespace XMAT.Tests
                 }
                 finally
                 {
-                    reader.Dispose();
-                    command.Dispose();
-                    OpenReaders--;
+                    try
+                    {
+                        BeforeDispose?.Invoke();
+                    }
+                    finally
+                    {
+                        reader.Dispose();
+                        command.Dispose();
+                        OpenReaders--;
+                    }
                 }
             }
 

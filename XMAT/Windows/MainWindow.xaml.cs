@@ -5,6 +5,7 @@
 using System;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -427,16 +428,30 @@ namespace XMAT
             {
                 return;
             }
+            using var cancellation = new CancellationTokenSource();
             try
             {
                 WebServiceCapture.SanitizedExportSummary summary;
                 using (PublicUtilities.BlockingOperation())
                 {
-                    summary = await CaptureAppModel.AppModel.ExportSanitizedDataCapturesAsync(dialog.FileName);
+                    var operation = CaptureAppModel.AppModel.ExportSanitizedDataCapturesAsync(dialog.FileName, cancellation.Token);
+                    if (await Task.WhenAny(operation, Task.Delay(250)) != operation && !operation.IsCompleted)
+                    {
+                        var progress = new SanitizedExportProgressWindow(operation, cancellation.Cancel) { Owner = this };
+                        progress.ShowDialog();
+                    }
+                    summary = await operation;
                 }
                 MessageBox.Show(
                     Localization.GetLocalizedString("SANITIZED_EXPORT_COMPLETE",
                         summary.Sessions, summary.RedactedValues, summary.OmittedBodies, summary.OmittedHeaders),
+                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                MessageBox.Show(
+                    Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLED"),
                     Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
