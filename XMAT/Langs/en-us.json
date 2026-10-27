@@ -231,6 +231,7 @@
 	"PROXY_DISABLE_REQUESTED": "Proxy disable was requested. The effective device configuration has not yet been confirmed.",
 	"PROXY_DISABLED": "The device reports proxying is disabled.",
 	"PROXY_DISABLE_FAILED": "Proxy disable did not complete. The effective device configuration has not been confirmed; check proxy status before retrying.",
+	"PROXY_PC_DISABLE_UNCONFIRMED": "Windows did not report proxying disabled after the disable request. Check Windows proxy settings before retrying.",
 	"PROXY_PORT_APPLIED": "The new proxy endpoint was confirmed.",
 	"PROXY_PORT_APPLY_FAILED": "Port {0} remains assigned. Applying the change did not complete: {1}. Check proxy status before retrying or disabling.",
 	"PROXY_PORT_BUSY_CLOSE": "A proxy operation is still running. Cancel applying and wait for it to finish before closing this capture.",

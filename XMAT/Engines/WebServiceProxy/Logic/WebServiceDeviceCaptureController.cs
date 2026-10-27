@@ -790,6 +790,15 @@ namespace XMAT.WebServiceCapture
 
                 await device.DisableAsync();
                 PortStatus = Localization.GetLocalizedString("PROXY_DISABLE_REQUESTED");
+                if (_deviceType == DeviceType.LocalPC)
+                {
+                    if ((await device.ReadAsync()).State != ProxyConfigurationState.Disabled)
+                    {
+                        throw new InvalidOperationException(
+                            Localization.GetLocalizedString("PROXY_PC_DISABLE_UNCONFIRMED"));
+                    }
+                    PortStatus = Localization.GetLocalizedString("PROXY_DISABLED");
+                }
                 return true;
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
