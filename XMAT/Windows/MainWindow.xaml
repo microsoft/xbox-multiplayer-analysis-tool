@@ -24,6 +24,7 @@
         <CommandBinding Command="{x:Static local:AppCommands.Exit}"             Executed="Exit_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ClearAllCaptures}" Executed="ClearAllCaptures_Executed" CanExecute="ClearAllCaptures_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.AnalyzeCaptures}"  Executed="AnalyzeCaptures_Executed" CanExecute="AnalyzeCaptures_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.ExportAnalysisReport}" Executed="ExportAnalysisReport_Executed" CanExecute="ExportAnalysisReport_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.CollectLogs}"      Executed="CollectLogs_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ViewGDKXInfo}"      Executed="ViewGDKXInfo_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ExportRootCert}"   Executed="ExportRootCert_Executed"/>
@@ -65,6 +66,9 @@
             <MenuItem x:Name="AnalysisMenu" HorizontalAlignment="Left" Header="_Analysis">
                 <MenuItem x:Name="ViewAnalyzeCaptures"
                           Command="{x:Static local:AppCommands.AnalyzeCaptures}"
+                          ToolTipService.ShowOnDisabled="True"/>
+                <MenuItem x:Name="AnalysisExportReport"
+                          Command="{x:Static local:AppCommands.ExportAnalysisReport}"
                           ToolTipService.ShowOnDisabled="True"/>
             </MenuItem>
             <MenuItem x:Name="ActionsMenu" HorizontalAlignment="Left" Header="_Actions">

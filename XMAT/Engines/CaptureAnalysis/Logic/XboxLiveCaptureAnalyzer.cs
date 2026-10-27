@@ -101,6 +101,9 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 PublicUtilities.StorageDirectoryPath,
                 $"xlca_{analysisRun.Id}");
 
+            analysisResultsModel.OutputDirectory =
+                analysisRunStorageDirectory;
+            analysisResultsModel.SourceCaptureName = sourceCaptureName;
             Directory.CreateDirectory(analysisRunStorageDirectory);
 
             // TODO: support cancellation of the analysis processing

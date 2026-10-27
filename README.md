@@ -633,6 +633,31 @@ synthesized telemetry) and `EndpointId` next to its `Uri`.
 Analysis report content present in its output folder within the Xbox Multiplayer Analysis Tool data storage folder can be removed
 if no longer needed once the Analysis results tab for that analysis run is closed.
 
+### Exporting an Analysis Report
+
+After an Xbox Live Trace analysis finishes, select its result tab and choose
+**Analysis > Export Analysis Report...** to copy the complete report folder to a directory you select.
+Inside that directory, XMAT creates a child folder named
+`XMAT Analysis - <capture> - <yyyy-MM-dd HHmmss>`. If that name already exists, XMAT appends
+` (2)`, ` (3)`, and so on without merging or overwriting earlier exports.
+The exported folder contains the browser-based Statistics report, JSON report data, rule findings in
+`_results.txt`, and the service-call diagnostic text files. The Statistics HTML and JSON reports describe
+the first eligible console in the capture; the diagnostic text files can contain data aggregated from all
+consoles.
+
+Analysis exports are not sanitized. They can contain request bodies and sign-in tokens, URLs, Xbox user
+IDs, console IP addresses, and telemetry. Review an export before sharing it or placing it in a
+cloud-synchronized folder. XMAT displays a confirmation describing this sensitive content before writing
+the export. For compatibility with Explorer and browsers, XMAT refuses exports when any generated path
+would reach 260 characters.
+**File > Export Sanitized Capture...** provides opt-in sanitization for .SAZ captures, not analysis
+reports; review exported content before sharing.
+
+An export failure leaves the AppData working report unchanged so the export can be retried. If XMAT
+cannot remove a temporary staging folder, the error identifies that folder for manual cleanup. Exporting
+does not move or automatically delete the working `xlca_*` folder in AppData; those folders may still be
+removed manually after their analysis tabs are closed.
+
 
 ## Network Capture
 
@@ -721,7 +746,7 @@ could not be confirmed.
 
 - Keep alive handling needs further improvement.
 - WebSocket messages are not yet saved to or loaded from .XMATCAP files.
-- Root certificate(s) and analysis output(s) are not stored in a user specified location.
+- Analysis outputs can be exported to a user-selected folder; working copies remain in AppData. Root certificate(s) are not stored in a user specified location.
 - Additional Localization
 
 ## Support

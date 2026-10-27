@@ -177,7 +177,14 @@ namespace CaptureAnalysisEngine
                 rulesEngine.AddRules(m_rules);
                 rulesEngine.RunRulesOnData(console.Key, console.Value);
 
-                var reports = RunReports(rulesEngine.GetResults(console.Key), serviceCallData, reportOutputDirectory);
+                string consoleReportOutputDirectory =
+                    perConsoleReports.Count == 0
+                        ? reportOutputDirectory
+                        : null;
+                var reports = RunReports(
+                    rulesEngine.GetResults(console.Key),
+                    serviceCallData,
+                    consoleReportOutputDirectory);
 
                 perConsoleReports.Add(console.Key, reports);
             }
