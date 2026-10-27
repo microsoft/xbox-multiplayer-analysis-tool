@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Drawing;
+using System.Globalization;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
@@ -69,6 +70,148 @@ namespace XMAT.Tests
             Assert.Equal("POST", reloaded.Method);
             Assert.Contains(SazSanitizer.Redacted, reloaded.RequestLineAndHeaders);
             Assert.Equal("keep", JsonDocument.Parse(reloaded.RequestBody).RootElement.GetProperty("visible").GetString());
+        }
+
+        [Fact]
+        public void Archive_MultipleSessionsPreserveEntriesMetadataAndReimportedMessages()
+        {
+            var first = Record();
+            first.RecordRowId = 101;
+            var second = new ProxyConnectionModel(
+                2, "403", first.RequestTime.AddSeconds(1), TimeSpan.FromMilliseconds(23),
+                "https", "second.test:443", "POST", "/blocked",
+                "POST https://second.test/blocked HTTP/1.1\r\nHost: second.test\r\n" +
+                "Content-Type: application/octet-stream\r\nX-Api-Key: second-key-canary\r\nX-Keep: visible\r\n\r\n",
+                Encoding.UTF8.GetBytes("opaque-request-canary"),
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nSet-Cookie: session=second-cookie-canary\r\n\r\n",
+                Encoding.UTF8.GetBytes("<p>opaque-response-canary</p>"), "198.51.100.20")
+            {
+                RecordRowId = 202
+            };
+            var third = new ProxyConnectionModel(
+                3, string.Empty, first.RequestTime.AddSeconds(2), TimeSpan.Zero,
+                "http", "third.test:80", "GET", "/ping",
+                "GET http://third.test/ping?token=third-query-canary HTTP/1.1\r\nHost: third.test\r\n\r\n",
+                Array.Empty<byte>(), string.Empty, Array.Empty<byte>(), "198.51.100.30")
+            {
+                RecordRowId = 303
+            };
+            var records = new[] { first, second, third };
+            var originals = records.Select(record => (
+                Request: record.RequestLineAndHeaders, Response: record.ResponseLineAndHeaders,
+                RequestBody: record.RequestBody.ToArray(), ResponseBody: record.ResponseBody.ToArray())).ToArray();
+            var path = Path.Join(_directory, "multiple.saz");
+
+            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, records);
+            var entries = Entries(path);
+
+            Assert.Equal(new[]
+            {
+                "raw/1_c.txt", "raw/1_m.xml", "raw/1_s.txt",
+                "raw/2_c.txt", "raw/2_m.xml", "raw/2_s.txt",
+                "raw/3_c.txt", "raw/3_m.xml"
+            }, entries.Keys.OrderBy(name => name, StringComparer.Ordinal));
+            Assert.Equal(3, summary.Sessions);
+            Assert.Equal(2, summary.OmittedBodies);
+            Assert.Equal(0, summary.OmittedHeaders);
+            var all = string.Join("\n", entries.Values.Select(Encoding.UTF8.GetString));
+            foreach (var canary in new[]
+            {
+                "header-canary", "cookie-canary", "query-canary", "body-canary",
+                "response-canary", "response-body-canary", "second-key-canary", "second-cookie-canary",
+                "opaque-request-canary", "opaque-response-canary", "third-query-canary",
+                "192.0.2.77", "198.51.100.20", "198.51.100.30"
+            })
+            {
+                Assert.DoesNotContain(canary, all);
+            }
+
+            var messages = new Dictionary<string, byte[]>();
+            foreach (var entry in entries.Where(entry => entry.Key.EndsWith(".txt", StringComparison.Ordinal)))
+            {
+                var separator = entry.Value.AsSpan().IndexOf(new byte[] { 13, 10, 13, 10 });
+                Assert.True(separator >= 0);
+                var headers = Encoding.ASCII.GetString(entry.Value, 0, separator);
+                var body = entry.Value.AsSpan(separator + 4).ToArray();
+                var length = headers.Split("\r\n").Single(line => line.StartsWith("Content-Length:", StringComparison.Ordinal));
+                Assert.Equal(body.Length, int.Parse(length.Substring("Content-Length:".Length), CultureInfo.InvariantCulture));
+                messages.Add(entry.Key, body);
+            }
+            Assert.Contains("keep=ok", Encoding.UTF8.GetString(entries["raw/1_c.txt"]));
+            Assert.Contains("X-Keep: visible", Encoding.UTF8.GetString(entries["raw/2_c.txt"]));
+            using (var request = JsonDocument.Parse(messages["raw/1_c.txt"]))
+            using (var response = JsonDocument.Parse(messages["raw/1_s.txt"]))
+            {
+                Assert.Equal(SazSanitizer.Redacted, request.RootElement.GetProperty("password").GetString());
+                Assert.Equal("keep", request.RootElement.GetProperty("visible").GetString());
+                Assert.Equal(SazSanitizer.Redacted, response.RootElement.GetProperty("access_token").GetString());
+                Assert.Equal(7, response.RootElement.GetProperty("count").GetInt32());
+            }
+            Assert.Empty(messages["raw/2_c.txt"]);
+            Assert.Empty(messages["raw/2_s.txt"]);
+            Assert.Empty(messages["raw/3_c.txt"]);
+
+            var reimported = FiddlerSazHandler.ImportSazFile(path, CancellationToken.None);
+            Assert.Equal(records.Length, reimported.Count);
+            for (var index = 0; index < records.Length; index++)
+            {
+                var record = records[index];
+                var metadata = XDocument.Parse(Encoding.UTF8.GetString(entries[$"raw/{record.RequestNumber}_m.xml"]));
+                var session = metadata.Element("Session");
+                Assert.Equal(record.RecordRowId.ToString(CultureInfo.InvariantCulture), (string)session.Attribute("SID"));
+                Assert.Equal("2100", (string)session.Attribute("BitFlags"));
+                Assert.Equal(2, session.Elements().Count());
+                var timers = session.Element("SessionTimers");
+                Assert.Equal(16, timers.Attributes().Count());
+                foreach (var timer in new[] { "ClientConnected", "ClientBeginRequest", "GotRequestHeaders", "ClientDoneRequest" })
+                {
+                    Assert.Equal(record.RequestTime, DateTime.Parse((string)timers.Attribute(timer),
+                        CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).ToUniversalTime());
+                }
+                foreach (var timer in new[]
+                {
+                    "ServerConnected", "FiddlerBeginRequest", "ServerGotRequest", "ServerBeginResponse",
+                    "GotResponseHeaders", "ServerDoneResponse", "ClientBeginResponse", "ClientDoneResponse"
+                })
+                {
+                    Assert.Equal(record.RequestTime + record.Duration, DateTime.Parse((string)timers.Attribute(timer),
+                        CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).ToUniversalTime());
+                }
+                foreach (var timer in new[] { "GatewayTime", "DNSTime", "TCPConnectTime", "HTTPSHandshakeTime" })
+                {
+                    Assert.Equal("0", (string)timers.Attribute(timer));
+                }
+                var flags = session.Element("SessionFlags").Elements("SessionFlag")
+                    .ToDictionary(flag => (string)flag.Attribute("N"), flag => (string)flag.Attribute("V"));
+                Assert.Equal(index == 1 ? 3 : 1, flags.Count);
+                Assert.Equal("0.0.0.0", flags["x-clientip"]);
+                if (index == 1)
+                {
+                    Assert.Equal("uninspectable", flags["x-xmat-request-body-omitted"]);
+                    Assert.Equal("uninspectable", flags["x-xmat-response-body-omitted"]);
+                }
+                var imported = Assert.Single(reimported, item => item.RequestNumber == record.RequestNumber);
+                Assert.Equal(record.Method, imported.Method);
+                Assert.Equal(record.Host, imported.Host);
+                Assert.Equal(record.Status, imported.Status);
+                Assert.Equal(record.RequestTime, imported.RequestTime.ToUniversalTime());
+                Assert.Equal(record.Duration, imported.Duration);
+                Assert.Equal("0.0.0.0", imported.ClientIP);
+                Assert.Equal(messages[$"raw/{record.RequestNumber}_c.txt"], imported.RequestBody);
+                if (index != 2)
+                {
+                    Assert.Equal(messages[$"raw/{record.RequestNumber}_s.txt"], imported.ResponseBody);
+                }
+                else
+                {
+                    Assert.Equal(string.Empty, imported.ResponseLineAndHeaders);
+                    Assert.True(imported.ResponseBody == null || imported.ResponseBody.Length == 0);
+                }
+                Assert.Equal(originals[index].Request, record.RequestLineAndHeaders);
+                Assert.Equal(originals[index].Response, record.ResponseLineAndHeaders);
+                Assert.Equal(originals[index].RequestBody, record.RequestBody);
+                Assert.Equal(originals[index].ResponseBody, record.ResponseBody);
+            }
         }
 
         [Theory]
