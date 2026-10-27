@@ -451,7 +451,7 @@ namespace XMAT.WebServiceCapture
             endpoint != null &&
             endpoint.Port == Port &&
             (string.Equals(ProxyEndpoint.NormalizeHost(endpoint.Host),
-               ProxyEndpoint.NormalizeHost(_parameters.ProxyHost), StringComparison.OrdinalIgnoreCase) ||
+                ProxyEndpoint.NormalizeHost(_parameters.ProxyHost), StringComparison.OrdinalIgnoreCase) ||
              (_deviceType == DeviceType.LocalPC && IPAddress.TryParse(endpoint.Host, out var address) && IPAddress.IsLoopback(address)) ||
              PublicUtilities.GetMyIp4Addresses().Any(ip => ip.ToString() == endpoint.Host));
 
@@ -970,34 +970,35 @@ namespace XMAT.WebServiceCapture
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                if (_deviceType == DeviceType.LocalPC &&
-                    await LocalPcListenerMayStillBeUsedAsync(
-                        activationPort,
-                        activationProxyHost))
-                {
-                    PortStatus = Localization.GetLocalizedString(
-                        "PROXY_ENABLE_LISTENER_KEPT");
-                    throw;
-                }
-                await TryStopProxyAfterFailedDeviceSetupAsync();
-                PortStatus = Localization.GetLocalizedString("PROXY_ENABLE_FAILED");
+                await HandleFailedDeviceSetupAsync(
+                    activationPort,
+                    activationProxyHost);
                 throw;
             }
 
             if (!enabled)
             {
-                if (_deviceType == DeviceType.LocalPC &&
-                    await LocalPcListenerMayStillBeUsedAsync(
-                        activationPort,
-                        activationProxyHost))
-                {
-                    PortStatus = Localization.GetLocalizedString(
-                        "PROXY_ENABLE_LISTENER_KEPT");
-                    return;
-                }
-                await TryStopProxyAfterFailedDeviceSetupAsync();
-                PortStatus = Localization.GetLocalizedString("PROXY_ENABLE_FAILED");
+                await HandleFailedDeviceSetupAsync(
+                    activationPort,
+                    activationProxyHost);
             }
+        }
+
+        private async Task HandleFailedDeviceSetupAsync(
+            ushort activationPort,
+            string activationProxyHost)
+        {
+            if (_deviceType == DeviceType.LocalPC &&
+                await LocalPcListenerMayStillBeUsedAsync(
+                    activationPort,
+                    activationProxyHost))
+            {
+                PortStatus = Localization.GetLocalizedString(
+                    "PROXY_ENABLE_LISTENER_KEPT");
+                return;
+            }
+            await TryStopProxyAfterFailedDeviceSetupAsync();
+            PortStatus = Localization.GetLocalizedString("PROXY_ENABLE_FAILED");
         }
 
         private async Task<bool> LocalPcListenerMayStillBeUsedAsync(
@@ -1032,8 +1033,17 @@ namespace XMAT.WebServiceCapture
                     return false;
                 }
 
-                string host = NormalizeClassifierHost(
-                    configuration.Endpoint.Host);
+                IPAddress address = null;
+                if (IPAddress.TryParse(
+                        configuration.Endpoint.Host?.Trim().Trim('[', ']'),
+                        out var parsedAddress))
+                {
+                    address = parsedAddress.IsIPv4MappedToIPv6
+                        ? parsedAddress.MapToIPv4()
+                        : parsedAddress;
+                }
+                string host = address?.ToString() ??
+                    ProxyEndpoint.NormalizeHost(configuration.Endpoint.Host);
                 if (string.Equals(
                         host,
                         NormalizeClassifierHost(activationProxyHost),
@@ -1041,15 +1051,9 @@ namespace XMAT.WebServiceCapture
                 {
                     return true;
                 }
-                if (!IPAddress.TryParse(
-                        configuration.Endpoint.Host?.Trim().Trim('[', ']'),
-                        out var address))
+                if (address == null)
                 {
                     return true;
-                }
-                if (address.IsIPv4MappedToIPv6)
-                {
-                    address = address.MapToIPv4();
                 }
                 if (IPAddress.IsLoopback(address))
                 {
@@ -1071,7 +1075,7 @@ namespace XMAT.WebServiceCapture
             }
             catch (TimeoutException)
             {
-                ObserveAbandonedFailureProbe(probeTask);
+                ObserveAbandonedTask(probeTask);
                 return true;
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
@@ -1101,20 +1105,6 @@ namespace XMAT.WebServiceCapture
                     : address).ToString();
             }
             return ProxyEndpoint.NormalizeHost(host);
-        }
-
-        private static void ObserveAbandonedFailureProbe(Task readTask)
-        {
-            if (readTask == null)
-            {
-                return;
-            }
-            _ = readTask.ContinueWith(
-                completed => _ = completed.Exception,
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously |
-                    TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default);
         }
 
         private async Task TryStopProxyAfterFailedDeviceSetupAsync()
@@ -1473,7 +1463,7 @@ namespace XMAT.WebServiceCapture
             }
             catch (OperationCanceledException) when (scriptCancellation.IsCancellationRequested)
             {
-                ObserveAbandonedScript(scriptTask);
+                ObserveAbandonedTask(scriptTask);
                 if (!cancellationToken.IsCancellationRequested)
                 {
                     PublicUtilities.AppLog(
@@ -1496,9 +1486,13 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private static void ObserveAbandonedScript(Task scriptTask)
+        private static void ObserveAbandonedTask(Task task)
         {
-            _ = scriptTask.ContinueWith(
+            if (task == null)
+            {
+                return;
+            }
+            _ = task.ContinueWith(
                 completed => _ = completed.Exception,
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously |

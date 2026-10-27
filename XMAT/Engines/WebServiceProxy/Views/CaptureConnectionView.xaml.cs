@@ -787,14 +787,11 @@ namespace XMAT.WebServiceCapture
         {
             PublicUtilities.AppLog(LogLevel.ERROR, $"Web proxy operation failed: {ex}");
             MessageBox.Show(
-                GetProxyOperationErrorMessage(ex),
+                CaptureUtilities.GetProxyOperationErrorMessage(ex),
                 Localization.GetLocalizedString("PROXY_CAPTURE_ERROR_TITLE"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
-
-        internal static string GetProxyOperationErrorMessage(Exception ex) =>
-            CaptureUtilities.GetProxyOperationErrorMessage(ex);
 
         private void ChangePort_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {

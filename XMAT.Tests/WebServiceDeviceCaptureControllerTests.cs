@@ -667,19 +667,19 @@ namespace XMAT.Tests
 
             Assert.Equal(
                 "Activation guidance.",
-                CaptureConnectionView.GetProxyOperationErrorMessage(
+                CaptureUtilities.GetProxyOperationErrorMessage(
                     new ProxyActivationUncertainException(
                         "Activation guidance.",
                         inner)));
             Assert.Equal(
                 "Recovery guidance.",
-                CaptureConnectionView.GetProxyOperationErrorMessage(
+                CaptureUtilities.GetProxyOperationErrorMessage(
                     new ProxyRecoveryException(
                         "Recovery guidance.",
                         inner)));
             Assert.Equal(
                 inner.Message,
-                CaptureConnectionView.GetProxyOperationErrorMessage(
+                CaptureUtilities.GetProxyOperationErrorMessage(
                     new InvalidOperationException(
                         "Generic outer message.",
                         inner)));
@@ -933,23 +933,18 @@ namespace XMAT.Tests
         private static WebServiceDeviceCaptureController CreateController(
             PreferencesModel preferences, bool readOnly = false,
             DeviceType deviceType = DeviceType.XboxConsole, ProxyConfiguration configuration = null,
-            TestDeviceConfiguration deviceConfiguration = null,
-            Func<IEnumerable<IPAddress>> getClassifierIp4Addresses = null,
-            TimeSpan? enableFailureProbeTimeout = null,
-            string proxyHost = "proxy.example")
+            TestDeviceConfiguration deviceConfiguration = null)
         {
             var device = deviceConfiguration ?? new TestDeviceConfiguration(configuration ??
                 new(ProxyConfigurationState.Enabled, new("proxy.example", 8080)));
             var controller = new WebServiceDeviceCaptureController(
                 "test-console", deviceType, readOnly, new ProxyPortPool(),
-                device,
-                getClassifierIp4Addresses: getClassifierIp4Addresses,
-                enableFailureProbeTimeout: enableFailureProbeTimeout)
+                device)
             {
                 CaptureMethod = new TestCaptureMethod(preferences)
             };
             ((ICaptureMethodParameters)controller.Parameters).DeserializeFrom(
-                JsonSerializer.SerializeToElement(new { Port = (ushort)8080, ProxyHost = proxyHost }));
+                JsonSerializer.SerializeToElement(new { Port = (ushort)8080, ProxyHost = "proxy.example" }));
             return controller;
         }
 
