@@ -142,6 +142,7 @@ namespace XMAT.Tests
         [Theory]
         [InlineData("0\r\n\r\n")]
         [InlineData("{\r\n\"visible\":\"keep\"\r\n}")]
+        [InlineData("{\r\n\"visible\":\"keep\",\r\n\"count\":\r\n0\r\n}")]
         public void EmptyChunksAndAlreadyDechunkedJson_DoNotCauseAnOmission(string body)
         {
             var evidence = Export("application/json", body, extraResponseHeaders: "Transfer-Encoding: chunked\r\n");
@@ -481,29 +482,302 @@ namespace XMAT.Tests
             Assert.Empty(Directory.GetFiles(_directory));
         }
 
+        [Fact]
+        public void RequestCredentials_AreRemovedFromThePairedResponseButNotTheNextSession()
+        {
+            const string canary = "PAIR-CREDENTIAL-CANARY";
+            var first = PairRecord(1, "{\"password\":\"" + canary + "\"}",
+                "{\"error\":\"invalid credential " + canary + "\"}");
+            var second = PairRecord(2, "{\"diagnostic\":\"" + canary + "\"}", "{\"keep\":\"visible\"}");
+            var evidence = ExportRecords(first, second);
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(canary, Encoding.UTF8.GetString(Body(evidence, true)));
+            Assert.DoesNotContain(canary, Encoding.UTF8.GetString(Body(evidence)));
+            Assert.Contains(canary, Encoding.UTF8.GetString(Body(evidence, true, 2)));
+            Assert.Contains("visible", Encoding.UTF8.GetString(Body(evidence, false, 2)));
+        }
+
+        [Theory]
+        [InlineData("Q7Z")]
+        [InlineData("1")]
+        [InlineData("200")]
+        public void ShortCredentialEchoes_UseBoundariesWithoutChangingProtocolOrUnrelatedValues(string code)
+        {
+            var evidence = Export("application/json",
+                JsonSerializer.Serialize(new { pin = code, message = "Enter PIN " + code + " now", port = "12345" }),
+                requestBody: true,
+                pairedResponse: JsonSerializer.Serialize(new { message = "Invalid PIN " + code + " supplied" }));
+            using var request = JsonDocument.Parse(Body(evidence, true));
+            using var response = JsonDocument.Parse(Body(evidence));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.Equal(SazSanitizer.Redacted, request.RootElement.GetProperty("pin").GetString());
+            Assert.Equal("Enter PIN " + SazSanitizer.Redacted + " now", request.RootElement.GetProperty("message").GetString());
+            Assert.Equal("Invalid PIN " + SazSanitizer.Redacted + " supplied", response.RootElement.GetProperty("message").GetString());
+            Assert.Equal("12345", request.RootElement.GetProperty("port").GetString());
+            Assert.StartsWith("HTTP/1.1 200 ", Encoding.ASCII.GetString(evidence.Entries["raw/1_s.txt"]));
+        }
+
+        [Theory]
+        [InlineData("1234", "12345")]
+        [InlineData("data", "metadata")]
+        [InlineData("a", "cat")]
+        public void LearnedSecrets_DoNotChangeLongerTokensOrJsonPropertyNames(string secret, string unrelated)
+        {
+            var evidence = Export("application/json",
+                JsonSerializer.Serialize(new Dictionary<string, object>
+                {
+                    ["secret"] = secret,
+                    ["metadata"] = 1,
+                    ["copy_" + unrelated] = unrelated,
+                    ["message"] = "value " + secret + " supplied"
+                }), requestBody: true);
+            using var document = JsonDocument.Parse(Body(evidence, true));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.Equal(1, document.RootElement.GetProperty("metadata").GetInt32());
+            Assert.Equal(unrelated, document.RootElement.GetProperty("copy_" + unrelated).GetString());
+            Assert.Equal("value " + SazSanitizer.Redacted + " supplied", document.RootElement.GetProperty("message").GetString());
+        }
+
+        [Theory]
+        [InlineData(32, 0)]
+        [InlineData(33, 1)]
+        public void RequestAndResponse_ShareTheBoundedCredentialCapacity(int responseCount, int omissions)
+        {
+            var request = JsonSerializer.Serialize(Enumerable.Range(0, 32).Select(index => new { secret = $"REQ-{index:D2}" }));
+            var response = JsonSerializer.Serialize(Enumerable.Range(0, responseCount).Select(index => new { secret = $"RESP-{index:D2}" }));
+            var evidence = Export("application/json", request, requestBody: true, pairedResponse: response);
+
+            Assert.Equal(omissions, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("REQ-", evidence.DecodedContent);
+            Assert.DoesNotContain("RESP-", evidence.DecodedContent);
+            if (omissions == 0)
+            {
+                using var document = JsonDocument.Parse(Body(evidence));
+                Assert.Equal(responseCount, document.RootElement.GetArrayLength());
+            }
+            else
+            {
+                Assert.Empty(Body(evidence));
+            }
+        }
+
+        [Fact]
+        public void RequestCredentialOverflow_OmitsThePairedEchoAndResetsBeforeTheNextSession()
+        {
+            var request = JsonSerializer.Serialize(Enumerable.Range(0, 65).Select(index => new { secret = $"CAP-{index:D3}" }));
+            var evidence = ExportRecords(
+                PairRecord(1, request, "{\"message\":\"CAP-064\"}"),
+                PairRecord(2, "{\"keep\":\"visible\"}", "{\"keep\":\"visible\"}"));
+
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("CAP-", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.Contains("visible", Encoding.UTF8.GetString(Body(evidence, true, 2)));
+            Assert.Contains("visible", Encoding.UTF8.GetString(Body(evidence, false, 2)));
+        }
+
+        [Fact]
+        public void AnOmittedResponseBody_DoesNotForgetRequestSecretsInResponseHeaders()
+        {
+            var evidence = Export("application/json", "{\"password\":\"REQUEST-ALIAS-CANARY\"}",
+                requestBody: true, pairedResponse: "{malformed",
+                extraResponseHeaders: "X-Echo: REQUEST-ALIAS-CANARY\r\n");
+
+            Assert.Equal(1, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("REQUEST-ALIAS-CANARY", evidence.DecodedContent);
+            Assert.Contains("X-Echo: " + SazSanitizer.Redacted, evidence.DecodedContent);
+        }
+
+        [Theory]
+        [InlineData("0;x=y\r\n\r\n")]
+        [InlineData("00;x=y\r\n\r\n")]
+        [InlineData("0;x=y")]
+        public void MalformedChunkingWithExtendedZeroTerminators_IsOmitted(string terminator)
+        {
+            var evidence = Export("text/plain",
+                "Z\r\n4\r\npass\r\n11\r\nword=extended-chunk-canary\r\n" + terminator,
+                requestBody: true, extraRequestHeaders: "Transfer-Encoding: chunked\r\n");
+
+            Assert.Equal(1, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("extended-chunk-canary", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+        }
+
+        [Theory]
+        [InlineData("form")]
+        [InlineData("path")]
+        [InlineData("query")]
+        [InlineData("referer")]
+        [InlineData("location")]
+        public void MixedValidAndInvalidEscapes_AreFullyInspectedWithinTheirComponent(string component)
+        {
+            const string encoded = "private%2540unit.example%ZZ";
+            var evidence = Export(
+                component == "form" ? "application/x-www-form-urlencoded" : "text/plain",
+                component == "form" ? "message=" + encoded + "&keep=visible" : "keep=visible",
+                requestBody: true,
+                target: component == "path" ? "/person/" + encoded + "?keep=visible" :
+                    component == "query" ? "/?message=" + encoded + "&keep=visible" : "/",
+                extraRequestHeaders: component == "referer" ? "Referer: https://example.test/?message=" + encoded + "&keep=visible\r\n" : "",
+                extraResponseHeaders: component == "location" ? "Location: https://example.test/?message=" + encoded + "&keep=visible\r\n" : "");
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("private@unit.example", evidence.DecodedContent);
+            Assert.Contains("keep=visible", evidence.DecodedContent);
+        }
+
+        [Theory]
+        [InlineData("form")]
+        [InlineData("path")]
+        [InlineData("query")]
+        [InlineData("name")]
+        [InlineData("flag")]
+        [InlineData("referer")]
+        [InlineData("location")]
+        public void InvalidUtf8Escapes_RedactTheirComponentWithoutAbortingTheArchive(string component)
+        {
+            var evidence = Export(
+                component == "form" ? "application/x-www-form-urlencoded" : "text/plain",
+                component == "form" ? "message=caf%E9&keep=visible" : "keep=visible",
+                requestBody: true,
+                target: component == "path" ? "/person/caf%E9?keep=visible" :
+                    component == "query" ? "/?message=caf%E9&keep=visible" :
+                    component == "name" ? "/?name%FF=invalid&keep=visible" :
+                    component == "flag" ? "/?caf%E9&keep=visible" : "/",
+                extraRequestHeaders: component == "referer" ? "Referer: https://example.test/?message=%FF&keep=visible\r\n" : "",
+                extraResponseHeaders: component == "location" ? "Location: https://example.test/?message=%25FF&keep=visible\r\n" : "");
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("%E9", evidence.DecodedContent, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("%FF", evidence.DecodedContent, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(SazSanitizer.Redacted, evidence.DecodedContent);
+            Assert.Contains("keep=visible", evidence.DecodedContent);
+        }
+
+        [Fact]
+        public void XmlPasswordInputs_RedactOnlyTheirValueAndItsEcho()
+        {
+            var evidence = Export("application/xml",
+                "<form><message>Invalid XML-INPUT-CANARY supplied</message>" +
+                "<input type=\"password\" value=\"XML-INPUT-CANARY\" id=\"login\"/>" +
+                "<input type=\"text\" value=\"visible\"/></form>", requestBody: true);
+            var root = XDocument.Parse(Encoding.UTF8.GetString(Body(evidence, true))).Root;
+            var inputs = root.Elements("input").ToArray();
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("XML-INPUT-CANARY", evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, (string)inputs[0].Attribute("value"));
+            Assert.Equal("password", (string)inputs[0].Attribute("type"));
+            Assert.Equal("login", (string)inputs[0].Attribute("id"));
+            Assert.Equal("visible", (string)inputs[1].Attribute("value"));
+        }
+
+        [Theory]
+        [InlineData("cache.")]
+        [InlineData("cache.prefix.")]
+        [InlineData("a.b.c.")]
+        [InlineData("longordinaryprefix.anotherlongprefix.")]
+        public void PrefixedJwtWindows_AreRedactedWithoutChangingSurroundingDottedText(string prefix)
+        {
+            var token = Jwt();
+            var evidence = Export("text/plain", prefix + token + ".tail a.b.c ab.cd.ef");
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(token, evidence.DecodedContent);
+            Assert.Equal(prefix + SazSanitizer.Redacted + ".tail a.b.c ab.cd.ef",
+                Encoding.UTF8.GetString(Body(evidence)));
+        }
+
+        [Fact]
+        public void PrefixedEncryptedJwtWindows_AreAlsoRecognized()
+        {
+            var header = Convert.ToBase64String(Encoding.UTF8.GetBytes("{\"alg\":\"dir\",\"enc\":\"A256GCM\"}"))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            var token = header + "..aabbccdd.ee001122.ffeeddcc";
+            var evidence = Export("text/plain", "cache.prefix." + token + ".tail a.b.c");
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(token, evidence.DecodedContent);
+            Assert.Equal("cache.prefix." + SazSanitizer.Redacted + ".tail a.b.c",
+                Encoding.UTF8.GetString(Body(evidence)));
+        }
+
+        [Fact]
+        public void OrdinaryDottedText_UsesTheFastNegativeJwtPath()
+        {
+            const string pattern = "ab.cd.ef ";
+            var body = string.Concat(Enumerable.Repeat(pattern, SazSanitizer.MaximumBodyBytes / pattern.Length));
+            var watch = Stopwatch.StartNew();
+            var evidence = Export("text/plain", body);
+            watch.Stop();
+
+            _output.WriteLine($"Dotted text, {body.Length} bytes: {watch.Elapsed.TotalMilliseconds:F1} ms");
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.True(body == Encoding.UTF8.GetString(Body(evidence)), "Ordinary dotted text changed.");
+        }
+
+        [Fact]
+        public void ExhaustedInspectionWorkBudget_OmitsTheBodyAndMarksTheActualArchive()
+        {
+            var nested = "https://public.test/?next=https://public.test/path/" +
+                new string('a', SazSanitizer.MaximumBodyBytes - 1024);
+            for (var pass = 0; pass < 7; pass++)
+            {
+                nested = Uri.EscapeDataString(nested);
+            }
+            var body = "next=" + nested;
+            Assert.True(Encoding.UTF8.GetByteCount(body) <= SazSanitizer.MaximumBodyBytes);
+            var evidence = Export("application/x-www-form-urlencoded", body, requestBody: true);
+
+            Assert.Equal(1, evidence.Summary.WorkBudgetOmissions);
+            Assert.Equal(1, evidence.Summary.OmittedBodies);
+            Assert.Empty(Body(evidence, true));
+        }
+
         private Evidence Export(string type, string body, bool requestBody = false, string target = "/",
-            string extraRequestHeaders = "", string extraResponseHeaders = "") =>
-            Export(type, Encoding.UTF8.GetBytes(body), requestBody, target, extraRequestHeaders, extraResponseHeaders);
+            string extraRequestHeaders = "", string extraResponseHeaders = "", string pairedResponse = null,
+            string status = "200") =>
+            Export(type, Encoding.UTF8.GetBytes(body), requestBody, target, extraRequestHeaders,
+                extraResponseHeaders, pairedResponse, status);
 
         private Evidence Export(string type, byte[] body, bool requestBody = false, string target = "/",
-            string extraRequestHeaders = "", string extraResponseHeaders = "")
+            string extraRequestHeaders = "", string extraResponseHeaders = "", string pairedResponse = null,
+            string status = "200")
         {
-            var path = Path.Join(_directory, Guid.NewGuid().ToString("N") + ".saz");
             var method = requestBody ? "POST" : "GET";
-            var record = new ProxyConnectionModel(1, "200",
+            var record = new ProxyConnectionModel(1, status,
                 new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), TimeSpan.FromMilliseconds(20),
                 "https", "example.test:443", method, target,
                 method + " " + target + " HTTP/1.1\r\nHost: example.test\r\n" + extraRequestHeaders +
                 (requestBody ? "Content-Type: " + type + "\r\n" : string.Empty) + "\r\n",
                 requestBody ? body : Array.Empty<byte>(),
-                "HTTP/1.1 200 OK\r\nContent-Type: " + type + "\r\n" + extraResponseHeaders + "\r\n",
-                requestBody ? Array.Empty<byte>() : body, "192.0.2.27")
+                "HTTP/1.1 " + status + " Synthetic\r\nContent-Type: " + type + "\r\n" + extraResponseHeaders + "\r\n",
+                pairedResponse != null ? Encoding.UTF8.GetBytes(pairedResponse) :
+                    requestBody ? Array.Empty<byte>() : body, "192.0.2.27")
             {
                 RecordRowId = 101
             };
-            var original = body.ToArray();
-            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, new[] { record });
-            Assert.Equal(original, requestBody ? record.RequestBody : record.ResponseBody);
+            return ExportRecords(record);
+        }
+
+        private Evidence ExportRecords(params ProxyConnectionModel[] records)
+        {
+            var path = Path.Join(_directory, Guid.NewGuid().ToString("N") + ".saz");
+            var originals = records.Select(record => (
+                Request: record.RequestBody.ToArray(), Response: record.ResponseBody.ToArray(),
+                RequestHeaders: record.RequestLineAndHeaders, ResponseHeaders: record.ResponseLineAndHeaders)).ToArray();
+            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, records);
+            for (var index = 0; index < records.Length; index++)
+            {
+                Assert.Equal(originals[index].Request, records[index].RequestBody);
+                Assert.Equal(originals[index].Response, records[index].ResponseBody);
+                Assert.Equal(originals[index].RequestHeaders, records[index].RequestLineAndHeaders);
+                Assert.Equal(originals[index].ResponseHeaders, records[index].ResponseLineAndHeaders);
+            }
             using var archive = ZipFile.OpenRead(path);
             var entries = archive.Entries.ToDictionary(entry => entry.FullName, entry =>
             {
@@ -512,7 +786,10 @@ namespace XMAT.Tests
                 input.CopyTo(buffer);
                 return buffer.ToArray();
             });
-            Assert.Equal(new[] { "raw/1_c.txt", "raw/1_m.xml", "raw/1_s.txt" },
+            Assert.Equal(records.SelectMany(record => new[]
+                {
+                    $"raw/{record.RequestNumber}_c.txt", $"raw/{record.RequestNumber}_m.xml", $"raw/{record.RequestNumber}_s.txt"
+                }).OrderBy(name => name, StringComparer.Ordinal),
                 entries.Keys.OrderBy(name => name, StringComparer.Ordinal));
             var bodies = new Dictionary<string, byte[]>();
             foreach (var entry in entries.Where(item => item.Key.EndsWith(".txt", StringComparison.Ordinal)))
@@ -527,27 +804,42 @@ namespace XMAT.Tests
                     int.Parse(length.Substring("Content-Length:".Length), CultureInfo.InvariantCulture));
                 bodies.Add(entry.Key, entry.Value.AsSpan(separator + 4).ToArray());
             }
-            var metadata = XDocument.Parse(Encoding.UTF8.GetString(entries["raw/1_m.xml"]));
-            Assert.Equal("101", (string)metadata.Root.Attribute("SID"));
-            Assert.Equal("2100", (string)metadata.Root.Attribute("BitFlags"));
-            Assert.Equal(16, metadata.Root.Element("SessionTimers").Attributes().Count());
-            Assert.Contains(metadata.Descendants("SessionFlag"), flag =>
-                (string)flag.Attribute("N") == "x-clientip" && (string)flag.Attribute("V") == "0.0.0.0");
-            var flags = metadata.Descendants("SessionFlag").ToArray();
-            Assert.Equal(summary.OmittedBodies,
-                flags.Count(flag => ((string)flag.Attribute("N")).EndsWith("-body-omitted", StringComparison.Ordinal)));
-            Assert.All(flags, flag => Assert.Contains((string)flag.Attribute("N"), new[]
+            var reimported = FiddlerSazHandler.ImportSazFile(path, CancellationToken.None);
+            Assert.Equal(records.Length, reimported.Count);
+            Assert.Equal(records.Length, summary.Sessions);
+            var omissions = 0;
+            foreach (var record in records)
             {
-                "x-clientip", "x-xmat-request-body-omitted", "x-xmat-response-body-omitted"
-            }));
-            var reimported = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
-            Assert.Equal("200", reimported.Status);
-            Assert.Equal(method, reimported.Method);
-            Assert.Equal("0.0.0.0", reimported.ClientIP);
-            Assert.Equal(record.RequestTime, reimported.RequestTime.ToUniversalTime());
-            Assert.Equal(record.Duration, reimported.Duration);
-            Assert.Equal(bodies["raw/1_c.txt"], reimported.RequestBody);
-            Assert.Equal(bodies["raw/1_s.txt"], reimported.ResponseBody);
+                var metadata = XDocument.Parse(Encoding.UTF8.GetString(entries[$"raw/{record.RequestNumber}_m.xml"]));
+                Assert.Equal(record.RecordRowId.ToString(CultureInfo.InvariantCulture), (string)metadata.Root.Attribute("SID"));
+                Assert.Equal("2100", (string)metadata.Root.Attribute("BitFlags"));
+                Assert.Equal(16, metadata.Root.Element("SessionTimers").Attributes().Count());
+                var flags = metadata.Descendants("SessionFlag").ToDictionary(flag => (string)flag.Attribute("N"),
+                    flag => (string)flag.Attribute("V"));
+                Assert.Equal("0.0.0.0", flags["x-clientip"]);
+                omissions += flags.Keys.Count(key => key.EndsWith("-body-omitted", StringComparison.Ordinal));
+                Assert.All(flags.Keys, key => Assert.Contains(key, new[]
+                {
+                    "x-clientip", "x-xmat-request-body-omitted", "x-xmat-response-body-omitted"
+                }));
+                if (flags.ContainsKey("x-xmat-request-body-omitted"))
+                {
+                    Assert.Empty(bodies[$"raw/{record.RequestNumber}_c.txt"]);
+                }
+                if (flags.ContainsKey("x-xmat-response-body-omitted"))
+                {
+                    Assert.Empty(bodies[$"raw/{record.RequestNumber}_s.txt"]);
+                }
+                var imported = Assert.Single(reimported, item => item.RequestNumber == record.RequestNumber);
+                Assert.Equal(record.Status, imported.Status);
+                Assert.Equal(record.Method, imported.Method);
+                Assert.Equal("0.0.0.0", imported.ClientIP);
+                Assert.Equal(record.RequestTime, imported.RequestTime.ToUniversalTime());
+                Assert.Equal(record.Duration, imported.Duration);
+                Assert.Equal(bodies[$"raw/{record.RequestNumber}_c.txt"], imported.RequestBody);
+                Assert.Equal(bodies[$"raw/{record.RequestNumber}_s.txt"], imported.ResponseBody);
+            }
+            Assert.Equal(summary.OmittedBodies, omissions);
             var all = string.Join("\n", entries.Values.Select(Encoding.UTF8.GetString));
             for (var pass = 0; pass < 12; pass++)
             {
@@ -561,11 +853,20 @@ namespace XMAT.Tests
             return new(all, summary, entries);
         }
 
-        private static byte[] Body(Evidence evidence, bool request = false)
+        private static byte[] Body(Evidence evidence, bool request = false, long number = 1)
         {
-            var message = evidence.Entries[request ? "raw/1_c.txt" : "raw/1_s.txt"];
+            var message = evidence.Entries[$"raw/{number}_{(request ? "c" : "s")}.txt"];
             return message.AsSpan(message.AsSpan().IndexOf("\r\n\r\n"u8) + 4).ToArray();
         }
+
+        private static ProxyConnectionModel PairRecord(long number, string request, string response) =>
+            new(number, "200", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), TimeSpan.FromMilliseconds(20),
+                "https", "example.test:443", "POST", "/",
+                "POST / HTTP/1.1\r\nHost: example.test\r\nContent-Type: application/json\r\n\r\n",
+                Encoding.UTF8.GetBytes(request),
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n",
+                Encoding.UTF8.GetBytes(response), "192.0.2.27")
+            { RecordRowId = number + 100 };
 
         private static string Jwt()
         {

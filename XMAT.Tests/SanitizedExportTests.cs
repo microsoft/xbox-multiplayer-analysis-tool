@@ -581,6 +581,69 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task CancellationAfterPublication_ReportsSuccessAndKeepsTheCompletedArchive()
+        {
+            using var cancellation = new CancellationTokenSource();
+            var path = Path.Join(_directory, "published.saz");
+            Task<SanitizedExportSummary> exporting = null;
+            CaptureAppModel model = null;
+            var cancelledAfterPublication = false;
+            _application.Run(window =>
+            {
+                var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
+                controller.LoadCaptureDataset(new Dataset(new DataRecord(1, "selected")));
+                var context = new Context(controller);
+                model = new CaptureAppModel { SelectedDeviceContext = context };
+                model.CaptureDeviceContexts.Add(context);
+                model.PropertyChanged += (sender, args) =>
+                {
+                    if (args.PropertyName == nameof(CaptureAppModel.IsCaptureDataOperationRunning) &&
+                        !model.IsCaptureDataOperationRunning)
+                    {
+                        Assert.True(File.Exists(path));
+                        Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
+                        Assert.True(exporting == null || !exporting.IsCompleted);
+                        cancelledAfterPublication = true;
+                        cancellation.Cancel();
+                    }
+                };
+                exporting = model.ExportSanitizedDataCapturesAsync(path, cancellation.Token);
+            });
+            var summary = await exporting;
+
+            Assert.True(cancelledAfterPublication);
+            Assert.True(cancellation.IsCancellationRequested);
+            Assert.False(exporting.IsCanceled);
+            Assert.Equal(1, summary.Sessions);
+            var entries = Entries(path);
+            Assert.Equal(new[] { "raw/1_c.txt", "raw/1_m.xml", "raw/1_s.txt" },
+                entries.Keys.OrderBy(name => name, StringComparer.Ordinal));
+            var all = string.Join("\n", entries.Values.Select(Encoding.UTF8.GetString));
+            Assert.DoesNotContain("body-canary", Uri.UnescapeDataString(all));
+            var metadata = XDocument.Parse(Encoding.UTF8.GetString(entries["raw/1_m.xml"]));
+            Assert.Contains(metadata.Descendants("SessionFlag"), flag =>
+                (string)flag.Attribute("N") == "x-clientip" && (string)flag.Attribute("V") == "0.0.0.0");
+            var reimported = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
+            foreach (var suffix in new[] { "c", "s" })
+            {
+                var message = entries[$"raw/1_{suffix}.txt"];
+                var separator = message.AsSpan().IndexOf("\r\n\r\n"u8);
+                Assert.True(separator >= 0);
+                var headers = Encoding.ASCII.GetString(message, 0, separator);
+                var length = headers.Split("\r\n").Single(line => line.StartsWith("Content-Length:", StringComparison.Ordinal));
+                var body = message.AsSpan(separator + 4).ToArray();
+                Assert.Equal(body.Length, int.Parse(length.Substring("Content-Length:".Length), CultureInfo.InvariantCulture));
+                Assert.Equal(body, suffix == "c" ? reimported.RequestBody : reimported.ResponseBody);
+            }
+            _application.Run(window =>
+            {
+                Assert.False(model.IsCaptureDataOperationRunning);
+                Assert.True(model.CanCloseAsync().GetAwaiter().GetResult());
+                model.SelectedDeviceContext = null;
+            });
+        }
+
+        [Fact]
         public void CommandEligibility_RejectsEmptyRunningAndBusyCapturesButAllowsReadOnlyWebCapture()
         {
             _application.Run(window =>
