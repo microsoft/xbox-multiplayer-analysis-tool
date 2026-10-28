@@ -417,8 +417,11 @@ The export redacts recognized credential/cookie headers, sensitive query and for
 URL credentials, sensitive JSON/XML fields (including OAuth device codes and private JWK
 members), and common token/private-key patterns in text.
 Credential discovery covers headers, URLs, forms and structured fields before either
-direction of a session is written. Sensitive JSON key content is scanned, but learned-value
-echo replacement does not rename schema keys.
+direction of a session is written, including decoded Basic/userinfo components, token
+parameters, and individual cookies from repeated or combined headers. JSON keys and
+query/form parameter names are inspected. Learned values in names are masked when long
+(at least eight characters) or numeric identifiers (at least four digits), while short and
+recognized schema labels are preserved. Renamed JSON keys use collision-safe names.
 Xbox profile IDs/display names, recognized structured-body credential echoes across each
 request/response pair, and client-IP metadata are also masked. JWT recognition does not
 depend on a particular encoded-header
@@ -433,17 +436,23 @@ malformed framing is omitted. Sensitive namespace URLs are remapped consistently
 Percent-encoded paths and nested URI/form values are inspected through at most eight
 decoding passes, preserving untouched values' original representation. Invalid UTF-8 or
 excessively nested URL/form components are redacted without discarding unrelated components
-or aborting the archive. Password-input values in inspected XML are also redacted.
+or aborting the archive. URL values are compared literally and with form decoding, preserving
+literal `+` and matching credentials that span path segments. Learned values in URL authorities
+use a valid replacement host; structural Host and generated Content-Type headers are not
+subject to echo replacement. Password-input values in inspected XML are also redacted.
 
 Unsupported content (including binary, HTML/XHTML and multipart bodies), malformed structured
 data, JSON/XML nesting exceeding 64 levels, unknown compression/character encodings and
 bodies exceeding the 4 MiB inspection limit are omitted rather than copied unchecked.
 Scanning also has a finite work budget and a limit of 64 distinct remembered sensitive
-scalar values of at most 4,096 characters each per request/response pair. Learned values
-are matched at token boundaries in values, not JSON property names, and reset before the
-next pair. Bodies exceeding inspection limits are omitted. If credential discovery exceeds
-capacity, the pair's original URLs, headers and bodies are replaced with minimal HTTP framing
-rather than allowing an unremembered credential to escape in another field.
+values or representations of at most 4,096 characters each per request/response pair.
+XML discovery includes both individual values and sensitive containers' combined text.
+Learned values are matched at token boundaries and reset before the next pair. Bodies
+exceeding format/size limits are omitted. If credential discovery exceeds capacity, or
+scanning exhausts its work budget or regex timeout in either pass, partial output is discarded
+and the pair's original URLs, headers and bodies are replaced with minimal HTTP framing.
+Large authorization values or profile batches can therefore lose diagnostic content;
+the limits are not a guarantee of diagnostic completeness.
 The completion dialog reports redactions and omissions; SAZ session metadata marks which
 request/response bodies were omitted.
 Longer exports show a cancellable progress window. Cancel, Escape, or closing that window
@@ -453,8 +462,13 @@ cancellation or failure.
 
 **Review the archive before sharing it.** This is best-effort detection, not a guarantee of
 anonymity: arbitrary unnamed secrets, custom encodings, and identifiers not recognized by the
-rules may remain. Service endpoints, nonsensitive paths/values, timing and request IDs are
+rules may remain. Nonsensitive service endpoints, paths/values, timing and request IDs are
 retained for diagnosis. The original capture data is not sanitized in place.
+HTTP header names, XML element/attribute names, and protocol method/version tokens are not
+identifier-scrubbed. Arbitrary percent-encoded text outside URL/form contexts, unrecognized
+identifier fields, and JWTs joined directly to ordinary letters can remain. Short learned
+values can also redact benign data. These exclusions still require manual review and an
+explicit decision about which identifiers a particular sharing scenario must remove.
 
 ### Importing Network Traces from Another PC
 

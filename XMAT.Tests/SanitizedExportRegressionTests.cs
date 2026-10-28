@@ -4,8 +4,10 @@
 
 using System.Drawing;
 using System.IO.Compression;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 using XMAT.Models;
@@ -552,6 +554,53 @@ namespace XMAT.Tests
             finally
             {
                 Directory.Delete(directory, true);
+            }
+        }
+
+        [Theory]
+        [InlineData("timeout")]
+        [InlineData("cancellation")]
+        [InlineData("malformed-http")]
+        public void RenderingFailureClassification_ContainsOnlySanitizerResourceFailures(string failure)
+        {
+            using var cancellation = new CancellationTokenSource();
+            var sanitizer = new SazSanitizer(cancellation.Token);
+            var headers = Request("text/plain", "X-Trace: " + new string('a', 8192) + "!\r\n");
+            var inspect = typeof(SazSanitizer).GetMethod("InspectMessage", BindingFlags.Instance | BindingFlags.NonPublic);
+            var render = typeof(SazSanitizer).GetMethod("RenderMessage", BindingFlags.Instance | BindingFlags.NonPublic);
+            var inspection = inspect.Invoke(sanitizer, new object[] { headers, Array.Empty<byte>(), true, "POST" });
+            typeof(SazSanitizer).GetField("_knownSecretPattern", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(sanitizer, new Regex("(a+)+$", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(1)));
+            if (failure == "cancellation")
+            {
+                cancellation.Cancel();
+            }
+            if (failure == "timeout")
+            {
+                var result = (SanitizedHttpMessage)render.Invoke(sanitizer,
+                    new object[] { headers, Array.Empty<byte>(), true, "POST", inspection });
+                Assert.Null(result.Headers);
+                Assert.True((bool)typeof(SazSanitizer).GetProperty("OpaqueSession",
+                    BindingFlags.Instance | BindingFlags.NonPublic).GetValue(sanitizer));
+            }
+            else
+            {
+                var exception = Assert.Throws<TargetInvocationException>(() => render.Invoke(sanitizer,
+                    new object[]
+                    {
+                        failure == "malformed-http" ? "malformed\r\n\r\n" : headers,
+                        Array.Empty<byte>(), true, "POST", inspection
+                    }));
+                if (failure == "cancellation")
+                {
+                    Assert.IsAssignableFrom<OperationCanceledException>(exception.InnerException);
+                }
+                else
+                {
+                    Assert.IsType<InvalidDataException>(exception.InnerException);
+                }
+                Assert.False((bool)typeof(SazSanitizer).GetProperty("OpaqueSession",
+                    BindingFlags.Instance | BindingFlags.NonPublic).GetValue(sanitizer));
             }
         }
 

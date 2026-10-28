@@ -769,7 +769,14 @@ namespace XMAT.Tests
             Assert.Equal(0, evidence.Summary.OmittedBodies);
             Assert.False(document.RootElement.GetProperty("members").TryGetProperty(key, out _));
             Assert.Equal("public-marker", document.RootElement.GetProperty("keep").GetString());
-            Assert.DoesNotContain(key, evidence.DecodedContent);
+            var planted = kind switch
+            {
+                "signed-url" => "KEY-SAS-CANARY",
+                "signature" => "KEY-SIGNED-CANARY",
+                "xuid" => "2533274900000027",
+                _ => key
+            };
+            Assert.DoesNotContain(planted, evidence.DecodedContent);
         }
 
         [Theory]
@@ -1046,18 +1053,17 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void XmlSensitiveContainers_DoNotApplyScalarLimitsToCombinedDescendantText()
+        public void XmlSensitiveContainers_FailClosedWhenTheirCombinedCredentialExceedsTheLimit()
         {
             var first = new string('A', 3000);
             var second = new string('B', 3000);
             var evidence = ExportRecords(PairRecord(1,
                 "<Signature><item>" + first + "</item><item>" + second + "</item></Signature>",
                 JsonSerializer.Serialize(new { echo = second, keep = "public-marker" }), "application/xml"));
-            using var response = JsonDocument.Parse(Body(evidence));
-
-            Assert.Equal(0, evidence.Summary.OmittedBodies);
-            Assert.Equal(SazSanitizer.Redacted, response.RootElement.GetProperty("echo").GetString());
-            Assert.Equal("public-marker", response.RootElement.GetProperty("keep").GetString());
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
             Assert.DoesNotContain(first, evidence.DecodedContent);
             Assert.DoesNotContain(second, evidence.DecodedContent);
         }
@@ -1142,6 +1148,300 @@ namespace XMAT.Tests
             using var next = JsonDocument.Parse(Body(evidence, true, 2));
             Assert.Equal("public-marker", next.RootElement.GetProperty("keep").GetString());
             Assert.Contains("public-marker", Encoding.UTF8.GetString(Body(evidence, false, 2)));
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void LearnedIdentifierKeys_AreRemovedInEitherDirection(bool inResponse)
+        {
+            const string xuid = "2535400000000001";
+            var request = inResponse ? "{\"xuids\":[\"" + xuid + "\"]}" :
+                "{\"xuid\":\"" + xuid + "\",\"scores\":{\"" + xuid + "\":10}}";
+            var response = inResponse ? "{\"presence\":{\"" + xuid + "\":\"online\"}}" : "{\"keep\":\"public-marker\"}";
+            var evidence = ExportRecords(PairRecord(1, request, response));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(xuid, evidence.DecodedContent);
+            using var document = JsonDocument.Parse(Body(evidence, !inResponse));
+            Assert.False(document.RootElement.GetProperty(inResponse ? "presence" : "scores").TryGetProperty(xuid, out _));
+        }
+
+        [Fact]
+        public void RenamedKeys_UseDistinctPlaceholdersWithoutOverwritingExistingNames()
+        {
+            var request = JsonSerializer.Serialize(new
+            {
+                secrets = new[] { "DICT-ALPHA-2478", "DICT-BETA-2479" },
+                values = new Dictionary<string, int>
+                {
+                    ["DICT-ALPHA-2478"] = 10,
+                    ["DICT-BETA-2479"] = 20,
+                    ["[REDACTED-KEY-1]"] = 30
+                }
+            });
+            var evidence = ExportRecords(PairRecord(1, request, "{\"keep\":\"public-marker\"}"));
+            using var document = JsonDocument.Parse(Body(evidence, true));
+            var values = document.RootElement.GetProperty("values").EnumerateObject().ToArray();
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.Equal(3, values.Length);
+            Assert.Equal(3, values.Select(value => value.Name).Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(new[] { 10, 20, 30 }, values.Select(value => value.Value.GetInt32()).Order());
+            Assert.Equal(30, document.RootElement.GetProperty("values").GetProperty("[REDACTED-KEY-1]").GetInt32());
+            Assert.DoesNotContain("DICT-ALPHA-2478", evidence.DecodedContent);
+            Assert.DoesNotContain("DICT-BETA-2479", evidence.DecodedContent);
+        }
+
+        [Theory]
+        [InlineData("metadata")]
+        [InlineData("properties")]
+        [InlineData("password")]
+        [InlineData("username")]
+        public void RecognizedLongSchemaLabels_ArePreservedEvenWhenTheyMatchALearnedValue(string name)
+        {
+            var evidence = ExportRecords(PairRecord(1,
+                JsonSerializer.Serialize(new Dictionary<string, string> { ["secret"] = name, [name] = "schema-marker" }),
+                "{\"keep\":\"public-marker\"}"));
+            using var document = JsonDocument.Parse(Body(evidence, true));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.True(document.RootElement.TryGetProperty(name, out _));
+        }
+
+        [Theory]
+        [InlineData("host")]
+        [InlineData("userid-host")]
+        [InlineData("plus")]
+        [InlineData("slash")]
+        public void LearnedValuesInsideUrls_AreMaskedUsingLosslessRepresentations(string kind)
+        {
+            var canary = kind switch
+            {
+                "plus" => "C146+PLUSCANARY",
+                "slash" => "C146/SLASHCANARY",
+                "userid-host" => "c146hostcanary",
+                _ => "r4hostcanary"
+            };
+            var url = kind switch
+            {
+                "plus" => "https://example.test/cb?ref=" + canary + "&keep=public-marker",
+                "slash" => "https://example.test/" + canary + "?keep=public-marker",
+                _ => "https://" + canary + ".example.test/x?keep=public-marker"
+            };
+            var evidence = ExportRecords(PairRecord(1,
+                JsonSerializer.Serialize(new Dictionary<string, string> { [kind == "userid-host" ? "userid" : "password"] = canary }),
+                JsonSerializer.Serialize(new { next = url })));
+            using var response = JsonDocument.Parse(Body(evidence));
+            var next = response.RootElement.GetProperty("next").GetString();
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.True(Uri.TryCreate(next, UriKind.Absolute, out _));
+            Assert.Contains("keep=public-marker", Uri.UnescapeDataString(next));
+            Assert.Contains("Host: example.test\r\n", Encoding.ASCII.GetString(evidence.Entries["raw/1_c.txt"]));
+        }
+
+        [Theory]
+        [InlineData("plus")]
+        [InlineData("slash")]
+        public void RequestTargets_UseLiteralAndCrossSegmentLearnedValueMatching(string kind)
+        {
+            var canary = kind == "plus" ? "C146+LINECANARY" : "R4SL/ASHCANARY";
+            var target = kind == "plus" ? "/login?hint=" + canary + "&keep=public-marker" :
+                "/files/" + canary + "/view?keep=public-marker";
+            var evidence = ExportRecords(PairRecord(1, JsonSerializer.Serialize(new { password = canary }),
+                "{\"keep\":\"public-marker\"}", target: target));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Contains("keep=public-marker", evidence.DecodedContent);
+        }
+
+        [Theory]
+        [InlineData("query")]
+        [InlineData("form")]
+        public void CredentialValuesWithLiteralPluses_AreLearnedBeforeFormDecoding(string source)
+        {
+            const string canary = "LITERAL+FORM-CANARY";
+            var evidence = ExportRecords(PairRecord(1,
+                source == "form" ? "password=" + canary + "&keep=public-marker" : "keep=public-marker",
+                JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" }),
+                source == "form" ? "application/x-www-form-urlencoded" : "text/plain",
+                source == "query" ? "/?access_token=" + canary : "/"));
+            using var response = JsonDocument.Parse(Body(evidence));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.Equal(SazSanitizer.Redacted, response.RootElement.GetProperty("echo").GetString());
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Equal("public-marker", response.RootElement.GetProperty("keep").GetString());
+        }
+
+        [Fact]
+        public void CombinedXmlCredentialText_IsLearnedAlongsideIndividualLeaves()
+        {
+            var evidence = ExportRecords(PairRecord(1,
+                "<root><password><a>R4LEFT</a><b>R4RIGHT</b></password></root>",
+                "{\"combined\":\"R4LEFTR4RIGHT\",\"leaf\":\"R4RIGHT\",\"keep\":\"public-marker\"}",
+                "application/xml"));
+            using var response = JsonDocument.Parse(Body(evidence));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("R4LEFTR4RIGHT", evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, response.RootElement.GetProperty("combined").GetString());
+            Assert.Equal(SazSanitizer.Redacted, response.RootElement.GetProperty("leaf").GetString());
+            Assert.Equal("public-marker", response.RootElement.GetProperty("keep").GetString());
+        }
+
+        [Theory]
+        [InlineData("basic")]
+        [InlineData("scheme")]
+        [InlineData("userinfo")]
+        [InlineData("undecodable-query")]
+        public void DecodedAndRawCredentialComponents_AreLearnedWithoutDroppingBenignData(string source)
+        {
+            var canary = source switch
+            {
+                "basic" => "R4BASIC:PASSWORD-CANARY",
+                "scheme" => "C146SCHEMECANARY",
+                "userinfo" => "R4USERINFOCANARY",
+                _ => "%FFR4-ENC-CANARY"
+            };
+            var header = source == "basic"
+                ? "Authorization: Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("alice:" + canary)) + "\r\n"
+                : source == "scheme" ? "Authorization: Token " + canary + "\r\n" : "";
+            var target = source == "userinfo" ? "http://alice:" + canary + "@example.test/login" :
+                source == "undecodable-query" ? "/api?access_token=" + canary : "/";
+            var evidence = ExportRecords(PairRecord(1, "{\"keep\":\"public-marker\"}",
+                JsonSerializer.Serialize(new { echo = canary, keep = "public-marker" }),
+                target: target, extraRequestHeaders: header));
+            using var response = JsonDocument.Parse(Body(evidence));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(canary, evidence.DecodedContent);
+            Assert.Equal(SazSanitizer.Redacted, response.RootElement.GetProperty("echo").GetString());
+            Assert.Equal("public-marker", response.RootElement.GetProperty("keep").GetString());
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ImportedRepeatedCookieHeaders_AreSplitWithoutTreatingExpiresDatesAsCookies(bool expires)
+        {
+            var original = Path.Join(_directory, "original-cookies.saz");
+            var source = PairRecord(1, "", "{\"debug\":\"sid IMPORT-SETCOOKIE-CANARY and IMPORT-COOKIE-CANARY\",\"keep\":\"public-marker\"}",
+                "text/plain", "/home",
+                "Cookie: a=1\r\nCookie: sid=IMPORT-COOKIE-CANARY\r\n",
+                "Set-Cookie: lang=en; Path=/\r\nSet-Cookie: sid=IMPORT-SETCOOKIE-CANARY" +
+                (expires ? "; Expires=Wed, 21 Oct 2037 07:28:00 GMT" : "") + "; HttpOnly\r\n");
+            FiddlerSazHandler.CreateSazFile(original, new[] { source });
+            var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(original, CancellationToken.None));
+            Assert.Contains("a=1,sid=", imported.RequestLineAndHeaders);
+            Assert.Contains("Path=/,sid=", imported.ResponseLineAndHeaders);
+            var evidence = ExportRecords(imported);
+            using var response = JsonDocument.Parse(Body(evidence));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("IMPORT-COOKIE-CANARY", evidence.DecodedContent);
+            Assert.DoesNotContain("IMPORT-SETCOOKIE-CANARY", evidence.DecodedContent);
+            Assert.Equal("public-marker", response.RootElement.GetProperty("keep").GetString());
+        }
+
+        [Theory]
+        [InlineData("query")]
+        [InlineData("encoded-query")]
+        [InlineData("form")]
+        public void SensitiveParameterNames_AreInspectedWithoutChangingUnrelatedParameters(string source)
+        {
+            const string email = "private-name@unit.example";
+            var name = source == "encoded-query" ? Uri.EscapeDataString(email) : email;
+            var evidence = ExportRecords(PairRecord(1,
+                source == "form" ? "members[" + email + "]=admin&keep=public-marker" : "keep=public-marker",
+                "{\"keep\":\"public-marker\"}",
+                source == "form" ? "application/x-www-form-urlencoded" : "text/plain",
+                source == "form" ? "/" : "/?" + name + "=1&keep=public-marker"));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain(email, evidence.DecodedContent);
+            Assert.Contains("keep=public-marker", evidence.DecodedContent);
+        }
+
+        [Fact]
+        public void DiscoveryBudgetFailure_DiscardsTheWholePairRatherThanPublishingAnUnlearnedEcho()
+        {
+            var value = "https://public.test/?next=https://public.test/path/" +
+                new string('a', SazSanitizer.MaximumBodyBytes - 1024 - 64);
+            for (var pass = 0; pass < 7; pass++)
+            {
+                value = Uri.EscapeDataString(value);
+            }
+            var request = "next=" + value + "&password=BUDGET-SECRET-CANARY";
+            Assert.True(Encoding.UTF8.GetByteCount(request) <= SazSanitizer.MaximumBodyBytes);
+            var evidence = ExportRecords(PairRecord(1, request, "{\"echo\":\"BUDGET-SECRET-CANARY\"}",
+                "application/x-www-form-urlencoded"));
+
+            Assert.Equal(1, evidence.Summary.WorkBudgetOmissions);
+            Assert.Equal(2, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("BUDGET-SECRET-CANARY", evidence.DecodedContent);
+            Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+            Assert.Empty(Body(evidence));
+        }
+
+        [Theory]
+        [InlineData(1, false)]
+        [InlineData(7, false)]
+        [InlineData(7, true)]
+        public void HeaderBudgetFailures_ProduceOpaqueFramingWithoutAbortingOrPublishingPartialOutput(
+            int megabytes, bool inResponse)
+        {
+            var header = "X-Trace: " + new string('a', megabytes * 1024 * 1024) + "\r\n";
+            var evidence = ExportRecords(PairRecord(1, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}",
+                extraRequestHeaders: inResponse ? "" : header,
+                extraResponseHeaders: inResponse ? header : ""));
+
+            if (megabytes == 1)
+            {
+                Assert.Equal(0, evidence.Summary.OmittedBodies);
+                Assert.Contains("public-marker", evidence.DecodedContent);
+            }
+            else
+            {
+                Assert.Equal(1, evidence.Summary.WorkBudgetOmissions);
+                Assert.Equal(2, evidence.Summary.OmittedBodies);
+                Assert.Empty(Body(evidence, true));
+                Assert.Empty(Body(evidence));
+                Assert.DoesNotContain("public-marker", evidence.DecodedContent);
+                Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
+            }
+        }
+
+        [Fact]
+        public void ZeroPaddedNonzeroChunkSizes_AreDetectedAfterAMalformedFirstLine()
+        {
+            var evidence = Export("text/plain",
+                "Z\r\n0000000004\r\npass\r\n0000000011\r\nword=ZERO-PAD-CANARY\r\n",
+                requestBody: true, extraRequestHeaders: "Transfer-Encoding: chunked\r\n");
+
+            Assert.Equal(1, evidence.Summary.OmittedBodies);
+            Assert.DoesNotContain("ZERO-PAD-CANARY", evidence.DecodedContent);
+            Assert.Empty(Body(evidence, true));
+        }
+
+        [Fact]
+        public void LosslessInspection_PreservesLiteralPlusesAndJsonEscapesInBenignControls()
+        {
+            const string value = "PUBLIC+PLUS/SLASH";
+            var evidence = ExportRecords(PairRecord(1,
+                JsonSerializer.Serialize(new { keep = value }),
+                JsonSerializer.Serialize(new { next = "https://example.test/?keep=" + value }),
+                target: "/?keep=" + value));
+
+            Assert.Equal(0, evidence.Summary.OmittedBodies);
+            Assert.Contains(value, evidence.DecodedContent);
+            Assert.Contains("\\u002B", Encoding.UTF8.GetString(Body(evidence)), StringComparison.OrdinalIgnoreCase);
+            using var response = JsonDocument.Parse(Body(evidence));
+            Assert.Contains(value, response.RootElement.GetProperty("next").GetString());
         }
 
         private Evidence Export(string type, string body, bool requestBody = false, string target = "/",
@@ -1240,23 +1540,74 @@ namespace XMAT.Tests
                 Assert.Equal(record.Status, imported.Status);
                 Assert.Equal(record.Method, imported.Method);
                 Assert.Equal("0.0.0.0", imported.ClientIP);
-                Assert.Equal(record.RequestTime, imported.RequestTime.ToUniversalTime());
+                Assert.Equal(record.RequestTime.ToUniversalTime(), imported.RequestTime.ToUniversalTime());
                 Assert.Equal(record.Duration, imported.Duration);
                 Assert.Equal(bodies[$"raw/{record.RequestNumber}_c.txt"], imported.RequestBody);
                 Assert.Equal(bodies[$"raw/{record.RequestNumber}_s.txt"], imported.ResponseBody);
             }
             Assert.Equal(summary.OmittedBodies, omissions);
-            var all = string.Join("\n", entries.Values.Select(Encoding.UTF8.GetString));
-            for (var pass = 0; pass < 12; pass++)
+            var views = new List<string>();
+            foreach (var entry in entries)
             {
-                var decoded = WebUtility.UrlDecode(WebUtility.HtmlDecode(all));
-                if (decoded == all)
+                views.Add(Encoding.UTF8.GetString(entry.Value));
+                if (!entry.Key.EndsWith(".txt", StringComparison.Ordinal))
                 {
-                    break;
+                    continue;
                 }
-                all = decoded;
+                var separator = entry.Value.AsSpan().IndexOf("\r\n\r\n"u8);
+                try
+                {
+                    using var document = JsonDocument.Parse(entry.Value.AsMemory(separator + 4));
+                    AddJsonViews(document.RootElement, views);
+                }
+                catch (JsonException)
+                {
+                }
             }
-            return new(all, summary, entries);
+            var decodedViews = new List<string>();
+            foreach (var view in views)
+            {
+                var text = view;
+                decodedViews.Add(text);
+                for (var pass = 0; pass < 16; pass++)
+                {
+                    var decoded = Uri.UnescapeDataString(WebUtility.HtmlDecode(text));
+                    decodedViews.Add(decoded);
+                    if (decoded == text)
+                    {
+                        break;
+                    }
+                    text = decoded;
+                }
+            }
+            return new(string.Join("\n", decodedViews), summary, entries);
+        }
+
+        private static void AddJsonViews(JsonElement element, List<string> views)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in element.EnumerateObject())
+                {
+                    views.Add(property.Name);
+                    AddJsonViews(property.Value, views);
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var child in element.EnumerateArray())
+                {
+                    AddJsonViews(child, views);
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.String)
+            {
+                views.Add(element.GetString());
+            }
+            else
+            {
+                views.Add(element.GetRawText());
+            }
         }
 
         private static byte[] Body(Evidence evidence, bool request = false, long number = 1)
