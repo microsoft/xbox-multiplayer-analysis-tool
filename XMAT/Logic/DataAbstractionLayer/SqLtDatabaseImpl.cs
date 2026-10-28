@@ -65,8 +65,13 @@ namespace XMAT.DataAbstractionLayer
         {
             File.Delete(filepath);
 
-            var connectionString = $"Data Source={filepath}";
-            var saveDbConnection = new SqliteConnection(connectionString);
+            var connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = filepath,
+                Pooling = false, // Dispose must close the file instead of returning it to the pool.
+            }.ToString();
+            using var saveDbConnection = new SqliteConnection(connectionString);
+            saveDbConnection.Open();
             _connection.BackupDatabase(saveDbConnection);
         }
 
