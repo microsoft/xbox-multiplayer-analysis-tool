@@ -156,11 +156,157 @@ namespace XMAT.Tests
         [Theory]
         [InlineData("Light")]
         [InlineData("Dark")]
+        public void ScriptEditorButtons_InheritThemeAndFollowThemeChanges(string theme)
+        {
+            _application.Run(window =>
+            {
+                window.Resources.Remove("PrimaryForegroundBrush");
+                window.Resources.Remove("SecondaryForegroundBrush");
+                var scripts = new Scripting.ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
+                foreach (var script in scripts)
+                {
+                    script.Filename = "contrast-test.cs";
+                    script.Script = "Params.Continue = true;";
+                }
+                var view = new ScriptEditorView { ScriptCollection = scripts };
+                WpfTestHost.Show(window, view);
+                var buttons = Descendants(view).OfType<Button>().Cast<ButtonBase>()
+                    .Append(view.ScriptEnabled).ToArray();
+                Assert.Equal(4, buttons.Length);
+
+                foreach (var name in new[] { theme, theme == "Dark" ? "Light" : "Dark" })
+                {
+                    window.Resources.MergedDictionaries.Clear();
+                    window.Resources.MergedDictionaries.Add(Theme(name));
+                    foreach (var button in buttons)
+                    {
+                        button.IsEnabled = true;
+                    }
+                    WpfTestHost.Pump();
+
+                    foreach (var button in buttons)
+                    {
+                        Assert.True(button.IsEnabled);
+                        var baseStyle = (Style)window.FindResource(button.GetType());
+                        Assert.Same(baseStyle, button.Style.BasedOn);
+                        var border = Assert.IsType<Border>(button.Template.FindName("Bd", button));
+                        Assert.Equal(BrushColor(window.FindResource("ButtonBackgroundBrush")), BrushColor(border.Background));
+                        Assert.Equal(BrushColor(window.FindResource("ButtonForegroundBrush")), BrushColor(button.Foreground));
+                        Assert.True(Contrast(button.Foreground, border.Background) >= 4.5);
+                    }
+
+                    view.ScriptEnabled.IsChecked = true;
+                    WpfTestHost.Pump();
+                    var checkedBorder = (Border)view.ScriptEnabled.Template.FindName("Bd", view.ScriptEnabled);
+                    Assert.Equal(BrushColor(window.FindResource("ButtonPressedBackgroundBrush")), BrushColor(checkedBorder.Background));
+                    Assert.All(Descendants(view.ScriptEnabled).OfType<TextBlock>(),
+                        text => Assert.True(Contrast(text.Foreground, checkedBorder.Background) >= 4.5));
+                    view.ScriptEnabled.IsChecked = false;
+
+                    foreach (var button in buttons)
+                    {
+                        button.IsEnabled = false;
+                    }
+                    WpfTestHost.Pump();
+                    foreach (var button in buttons)
+                    {
+                        Assert.Equal(BrushColor(window.FindResource("DisabledForegroundBrush")), BrushColor(button.Foreground));
+                        Assert.All(Descendants(button).OfType<TextBlock>(),
+                            text => Assert.Equal(BrushColor(button.Foreground), BrushColor(text.Foreground)));
+                    }
+                }
+            });
+        }
+
+        private static Color BrushColor(object brush) => Assert.IsType<SolidColorBrush>(brush).Color;
+
+        [Fact]
+        public void NetworkTraceControls_InheritTheSharedThemeStyles()
+        {
+            _application.Run(window =>
+            {
+                var view = new NetworkTraceCaptureControls.NetworkTraceCaptureView();
+                var header = (Style)view.Resources["CenterGridHeaderStyle"];
+                Assert.Same(window.FindResource(typeof(DataGridColumnHeader)), header.BasedOn);
+                var toolbar = ((Grid)view.Content).Children.OfType<ToolBar>().Single();
+                var toggle = toolbar.Items.OfType<ToggleButton>().Single();
+                Assert.Same(window.FindResource(ToolBar.ToggleButtonStyleKey), toggle.Style.BasedOn);
+            });
+        }
+
+        [Fact]
+        public void MenuShortcutText_InheritsTheMenuForeground()
+        {
+            _application.Run(window =>
+            {
+                AddButtonStyles(window.Resources);
+                window.Resources.MergedDictionaries.Add(Theme("Dark"));
+                var action = new MenuItem { Header = "Action", InputGestureText = "Ctrl+A" };
+                WpfTestHost.Show(window, action);
+                var shortcut = (TextBlock)action.Template.FindName("IGT", action);
+                Assert.Equal(BrushColor(action.Foreground), BrushColor(shortcut.Foreground));
+                action.IsEnabled = false;
+                WpfTestHost.Pump();
+                Assert.Equal(BrushColor(action.Foreground), BrushColor(shortcut.Foreground));
+            });
+        }
+
+        [Theory]
+        [InlineData("PrimaryForegroundBrush", "WindowBackgroundBrush")]
+        [InlineData("PrimaryForegroundBrush", "PanelBackgroundBrush")]
+        [InlineData("PrimaryForegroundBrush", "AltRowBackgroundBrush")]
+        [InlineData("PrimaryForegroundBrush", "ExpanderHeaderBrush")]
+        [InlineData("PrimaryForegroundBrush", "ExpanderSubHeaderBrush")]
+        [InlineData("PrimaryForegroundBrush", "ExpanderDetailBrush")]
+        [InlineData("SecondaryForegroundBrush", "PanelBackgroundBrush")]
+        [InlineData("SecondaryForegroundBrush", "AltRowBackgroundBrush")]
+        [InlineData("ButtonForegroundBrush", "ButtonBackgroundBrush")]
+        [InlineData("ButtonForegroundBrush", "ButtonHoverBackgroundBrush")]
+        [InlineData("ButtonForegroundBrush", "ButtonPressedBackgroundBrush")]
+        [InlineData("TextBoxForegroundBrush", "TextBoxBackgroundBrush")]
+        [InlineData("MenuForegroundBrush", "MenuBackgroundBrush")]
+        [InlineData("MenuForegroundBrush", "ButtonHoverBackgroundBrush")]
+        [InlineData("ToolBarForegroundBrush", "ToolBarBackgroundBrush")]
+        [InlineData("StatusBarForegroundBrush", "StatusBarBackgroundBrush")]
+        [InlineData("PrimaryForegroundBrush", "StatusBarBackgroundBrush")]
+        [InlineData("TabItemForegroundBrush", "TabItemBackgroundBrush")]
+        [InlineData("TabItemSelectedForegroundBrush", "TabItemSelectedBackgroundBrush")]
+        [InlineData("DataGridHeaderForegroundBrush", "DataGridHeaderBackgroundBrush")]
+        [InlineData("ActiveSelectionForegroundBrush", "ActiveSelectionBrush")]
+        public void DarkTheme_TextMeetsMinimumContrast(string foreground, string background)
+        {
+            _application.Run(_ =>
+            {
+                var theme = Theme("Dark");
+                double contrast = Contrast((Brush)theme[foreground], (Brush)theme[background]);
+                Assert.True(contrast >= 4.5, $"{foreground} on {background}: {contrast:F2}:1");
+            });
+        }
+
+        private static double Contrast(Brush foreground, Brush background)
+        {
+            static double Linear(byte component)
+            {
+                double value = component / 255.0;
+                return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+            }
+
+            static double Luminance(Color color) =>
+                0.2126 * Linear(color.R) + 0.7152 * Linear(color.G) + 0.0722 * Linear(color.B);
+
+            double first = Luminance(BrushColor(foreground));
+            double second = Luminance(BrushColor(background));
+            return (Math.Max(first, second) + 0.05) / (Math.Min(first, second) + 0.05);
+        }
+
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
         public void DisabledButtonsAndNestedText_AreGrayAndFollowThemeChanges(string theme)
         {
             _application.Run(window =>
             {
-                AddButtonStyles(window);
+                AddButtonStyles(window.Resources);
                 var dictionary = Theme(theme);
                 window.Resources.MergedDictionaries.Add(dictionary);
                 var text = new TextBlock { Text = "Explicit button text" };
@@ -264,7 +410,7 @@ namespace XMAT.Tests
             return (T)XamlReader.Parse(element.ToString());
         }
 
-        private static void AddButtonStyles(Window window)
+        internal static void AddButtonStyles(ResourceDictionary resources)
         {
             var styles = ProductMarkup("App.xaml").Descendants(Presentation + "ResourceDictionary").First()
                 .Elements(Presentation + "Style")
@@ -280,7 +426,7 @@ namespace XMAT.Tests
                     "{x:Static ToolBar.ToggleButtonStyleKey}" => ToolBar.ToggleButtonStyleKey,
                     _ => style.TargetType
                 };
-                window.Resources[resourceKey] = style;
+                resources[resourceKey] = style;
             }
         }
 

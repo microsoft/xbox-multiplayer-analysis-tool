@@ -53,6 +53,7 @@ namespace XMAT.Tests
                         Source = new Uri(
                             "pack://application:,,,/XboxMultiplayerAnalysisTool;component/Themes/LightTheme.xaml")
                     });
+                    CaptureChromeTests.AddButtonStyles(_application.Resources);
                     var storage = Path.Join(
                         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", appName);
                     Assert.Equal(storage, PublicUtilities.StorageDirectoryPath);
