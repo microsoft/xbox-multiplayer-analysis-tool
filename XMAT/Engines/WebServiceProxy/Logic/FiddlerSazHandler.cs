@@ -306,7 +306,9 @@ namespace XMAT.WebServiceCapture
                     foreach (var record in records)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        var request = sanitizer.SanitizeMessage(record.RequestLineAndHeaders, record.RequestBody, true);
+                        var (request, response) = sanitizer.SanitizeSession(
+                            record.RequestLineAndHeaders, record.RequestBody,
+                            record.ResponseLineAndHeaders, record.ResponseBody, record.Method);
                         AddEntry(archive, EntryType.Request, record.RequestNumber, request.Headers, request.Body, cancellationToken);
                         var metadata = new FiddlerMetaData(record.RecordRowId)
                         {
@@ -322,8 +324,6 @@ namespace XMAT.WebServiceCapture
                         {
                             metadata.SessionFlags["x-xmat-request-body-omitted"] = "uninspectable";
                         }
-                        SanitizedHttpMessage? response = string.IsNullOrEmpty(record.ResponseLineAndHeaders)
-                            ? null : sanitizer.SanitizeMessage(record.ResponseLineAndHeaders, record.ResponseBody, false, record.Method);
                         if (response?.BodyOmitted == true)
                         {
                             metadata.SessionFlags["x-xmat-response-body-omitted"] = "uninspectable";

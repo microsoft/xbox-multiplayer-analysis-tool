@@ -416,6 +416,9 @@ Loaded and imported web captures are supported. Only the selected capture is exp
 The export redacts recognized credential/cookie headers, sensitive query and form parameters,
 URL credentials, sensitive JSON/XML fields (including OAuth device codes and private JWK
 members), and common token/private-key patterns in text.
+Credential discovery covers headers, URLs, forms and structured fields before either
+direction of a session is written. Sensitive JSON key content is scanned, but learned-value
+echo replacement does not rename schema keys.
 Xbox profile IDs/display names, recognized structured-body credential echoes across each
 request/response pair, and client-IP metadata are also masked. JWT recognition does not
 depend on a particular encoded-header
@@ -428,8 +431,9 @@ framing, including bodyless HEAD/CONNECT/1xx/204/304 responses. Genuine chunk fr
 decoded before scanning, while already-dechunked captures remain supported; ambiguous or
 malformed framing is omitted. Sensitive namespace URLs are remapped consistently in XML.
 Percent-encoded paths and nested URI/form values are inspected through at most eight
-decoding passes, preserving untouched values' original representation. Invalid UTF-8 URL/form
-components are redacted without discarding unrelated components or aborting the archive.
+decoding passes, preserving untouched values' original representation. Invalid UTF-8 or
+excessively nested URL/form components are redacted without discarding unrelated components
+or aborting the archive. Password-input values in inspected XML are also redacted.
 
 Unsupported content (including binary, HTML/XHTML and multipart bodies), malformed structured
 data, JSON/XML nesting exceeding 64 levels, unknown compression/character encodings and
@@ -437,8 +441,9 @@ bodies exceeding the 4 MiB inspection limit are omitted rather than copied unche
 Scanning also has a finite work budget and a limit of 64 distinct remembered sensitive
 scalar values of at most 4,096 characters each per request/response pair. Learned values
 are matched at token boundaries in values, not JSON property names, and reset before the
-next pair. Bodies exceeding the limits are omitted; exceeding the credential capacity also
-omits remaining bodies in that pair rather than forgetting secrets.
+next pair. Bodies exceeding inspection limits are omitted. If credential discovery exceeds
+capacity, the pair's original URLs, headers and bodies are replaced with minimal HTTP framing
+rather than allowing an unremembered credential to escape in another field.
 The completion dialog reports redactions and omissions; SAZ session metadata marks which
 request/response bodies were omitted.
 Longer exports show a cancellable progress window. Cancel, Escape, or closing that window

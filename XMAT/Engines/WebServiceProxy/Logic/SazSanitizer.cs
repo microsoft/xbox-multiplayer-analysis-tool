@@ -42,6 +42,8 @@ namespace XMAT.WebServiceCapture
         private long _remainingWork;
         private Regex _knownSecretPattern;
         private bool _secretCapacityExceeded;
+        private bool _discovering;
+        private readonly record struct MessageInspection(long RemainingWork, bool OmitBody, bool WorkBudgetOmission);
         private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
         private static readonly TimeSpan PatternTimeout = TimeSpan.FromMilliseconds(250);
         private const RegexOptions PatternOptions = RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
@@ -95,13 +97,72 @@ namespace XMAT.WebServiceCapture
         internal SanitizedHttpMessage SanitizeMessage(
             string rawHeaders, byte[] body, bool request, string requestMethod = null)
         {
-            _remainingWork = MaximumInspectionWork;
             if (request)
             {
-                _knownSecrets.Clear();
-                _knownSecretPattern = null;
-                _secretCapacityExceeded = false;
+                ResetSession();
             }
+            var inspection = InspectMessage(rawHeaders, body, request, requestMethod);
+            PrepareKnownSecrets();
+            return RenderMessage(rawHeaders, body, request, requestMethod, inspection);
+        }
+
+        internal (SanitizedHttpMessage Request, SanitizedHttpMessage? Response) SanitizeSession(
+            string requestHeaders, byte[] requestBody, string responseHeaders, byte[] responseBody, string method)
+        {
+            ResetSession();
+            var request = InspectMessage(requestHeaders, requestBody, true, method);
+            MessageInspection? response = string.IsNullOrEmpty(responseHeaders)
+                ? null : InspectMessage(responseHeaders, responseBody, false, method);
+            PrepareKnownSecrets();
+            return (RenderMessage(requestHeaders, requestBody, true, method, request),
+                response is { } inspected
+                    ? RenderMessage(responseHeaders, responseBody, false, method, inspected) : null);
+        }
+
+        private void ResetSession()
+        {
+            _knownSecrets.Clear();
+            _knownSecretPattern = null;
+            _secretCapacityExceeded = false;
+        }
+
+        private MessageInspection InspectMessage(string rawHeaders, byte[] body, bool request, string method)
+        {
+            _remainingWork = MaximumInspectionWork;
+            if (_secretCapacityExceeded)
+            {
+                return new(_remainingWork, body?.Length > 0, false);
+            }
+            var before = (Summary.RedactedValues, Summary.OmittedBodies, Summary.OmittedHeaders, Summary.WorkBudgetOmissions);
+            _discovering = true;
+            try
+            {
+                // Reuse every detector without publishing its output or applying learned-value substitutions.
+                var inspected = SanitizeMessageCore(rawHeaders, body, request, method);
+                return new(_remainingWork, inspected.BodyOmitted, Summary.WorkBudgetOmissions != before.WorkBudgetOmissions);
+            }
+            catch (InvalidDataException) when (_secretCapacityExceeded)
+            {
+                return new(_remainingWork, body?.Length > 0, false);
+            }
+            finally
+            {
+                _discovering = false;
+                (Summary.RedactedValues, Summary.OmittedBodies, Summary.OmittedHeaders, Summary.WorkBudgetOmissions) = before;
+            }
+        }
+
+        private SanitizedHttpMessage RenderMessage(
+            string rawHeaders, byte[] body, bool request, string method, MessageInspection inspection)
+        {
+            _remainingWork = inspection.RemainingWork;
+            return SanitizeMessageCore(rawHeaders, body, request, method, inspection.OmitBody, inspection.WorkBudgetOmission);
+        }
+
+        private SanitizedHttpMessage SanitizeMessageCore(
+            string rawHeaders, byte[] body, bool request, string requestMethod,
+            bool omitBody = false, bool workBudgetOmission = false)
+        {
             SpendWork(rawHeaders?.Length ?? 0);
             using var reader = new StringReader(rawHeaders ?? string.Empty);
             var firstLine = reader.ReadLine() ?? string.Empty;
@@ -136,8 +197,9 @@ namespace XMAT.WebServiceCapture
                 canContinue = true;
             }
 
-            var startLine = SanitizeStartLine(firstLine, request);
             var status = request ? 0 : ParseStatusCode(firstLine);
+            var opaque = !_discovering && _secretCapacityExceeded;
+            var startLine = opaque ? OpaqueStartLine(firstLine, request, status) : SanitizeStartLine(firstLine, request);
             var headOrNotModified = !request &&
                 (status == 304 || string.Equals(requestMethod, "HEAD", StringComparison.OrdinalIgnoreCase));
             var successfulConnect = !request && status is >= 200 and < 300 &&
@@ -156,15 +218,36 @@ namespace XMAT.WebServiceCapture
                     Summary.OmittedBodies++;
                 }
             }
+            else if (omitBody || opaque)
+            {
+                outputBody = Array.Empty<byte>();
+                if (originalBody.Length > 0)
+                {
+                    Summary.OmittedBodies++;
+                    if (workBudgetOmission)
+                    {
+                        Summary.WorkBudgetOmissions++;
+                    }
+                }
+            }
             else
             {
                 outputBody = SanitizeBody(originalBody, headers, out contentType);
             }
             var bodyChanged = originalBody.Length > 0;
             var output = new StringBuilder(startLine).Append("\r\n");
+            if (opaque && request)
+            {
+                output.Append("Host: redacted.invalid\r\n");
+            }
             foreach (var header in headers)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
+                if (opaque)
+                {
+                    Summary.OmittedHeaders++;
+                    continue;
+                }
                 if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
                     header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) ||
                     header.Key.Equals("Trailer", StringComparison.OrdinalIgnoreCase) ||
@@ -180,13 +263,20 @@ namespace XMAT.WebServiceCapture
                 }
                 var rawValue = header.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) && contentType != null
                     ? contentType : header.Value;
-                var value = IsSensitiveName(header.Key) || SensitiveHeaders.Contains(header.Key)
-                    ? Redact(rawValue)
+                var sensitive = IsSensitiveName(header.Key) || SensitiveHeaders.Contains(header.Key);
+                if (_discovering && sensitive)
+                {
+                    RememberHeaderValue(header.Key, rawValue);
+                }
+                var value = sensitive
+                    ? Redact(rawValue, false)
                     : header.Key.Equals("Location", StringComparison.OrdinalIgnoreCase) ||
                       header.Key.Equals("Content-Location", StringComparison.OrdinalIgnoreCase) ||
                       header.Key.Equals("Referer", StringComparison.OrdinalIgnoreCase)
                         ? SanitizeUri(rawValue, 0)
-                        : SanitizeText(rawValue, 0);
+                        : SanitizeText(rawValue, 0,
+                            !header.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) &&
+                            !header.Key.Equals("Host", StringComparison.OrdinalIgnoreCase));
                 if (header.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) &&
                     !MediaTypeHeaderValue.TryParse(value, out _))
                 {
@@ -198,7 +288,7 @@ namespace XMAT.WebServiceCapture
             if (!forbiddenLength)
             {
                 string length;
-                if (headOrNotModified)
+                if (headOrNotModified && !opaque)
                 {
                     var lengths = headers.Where(header => header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
                         .Select(header => header.Value).Distinct(StringComparer.Ordinal).ToArray();
@@ -299,8 +389,10 @@ namespace XMAT.WebServiceCapture
                 if (mediaType == "application/json" || mediaType.EndsWith("+json", StringComparison.Ordinal))
                 {
                     using var document = JsonDocument.Parse(text, new JsonDocumentOptions { MaxDepth = MaximumStructuredDepth });
-                    CollectJsonSecrets(document.RootElement);
-                    PrepareKnownSecrets();
+                    if (_discovering)
+                    {
+                        CollectJsonSecrets(document.RootElement);
+                    }
                     using var buffer = new MemoryStream();
                     using (var writer = new Utf8JsonWriter(buffer))
                     {
@@ -337,8 +429,10 @@ namespace XMAT.WebServiceCapture
                     {
                         throw new InvalidDataException();
                     }
-                    CollectXmlSecrets(document.Root);
-                    PrepareKnownSecrets();
+                    if (_discovering)
+                    {
+                        CollectXmlSecrets(document.Root);
+                    }
                     SanitizeXmlNamespaces(document);
                     SanitizeXml(document.Root);
                     document.DescendantNodes().OfType<XComment>().Remove();
@@ -372,7 +466,6 @@ namespace XMAT.WebServiceCapture
                     Summary.WorkBudgetOmissions++;
                 }
                 _remainingWork = workBefore;
-                PrepareKnownSecrets();
                 Summary.OmittedBodies++;
                 return Array.Empty<byte>();
             }
@@ -405,7 +498,16 @@ namespace XMAT.WebServiceCapture
             var sizeText = extension < 0 ? firstLine : firstLine.Substring(0, extension);
             if (sizeText.Length == 0 || !sizeText.Trim().All(Uri.IsHexDigit))
             {
-                if (HasChunkTerminator(body))
+                var contentType = headers.FirstOrDefault(header =>
+                    header.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)).Value;
+                if (MediaTypeHeaderValue.TryParse(contentType, out var type) &&
+                    (type.MediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+                     type.MediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase)))
+                {
+                    // JSON parsing rejects malformed framing and preserves already-dechunked structured captures.
+                    return body;
+                }
+                if (HasChunkFraming(body))
                 {
                     throw new InvalidDataException();
                 }
@@ -468,12 +570,16 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private bool HasChunkTerminator(ReadOnlySpan<byte> body)
+        private bool HasChunkFraming(ReadOnlySpan<byte> body)
         {
             while (!body.IsEmpty)
             {
-                var newline = body.IndexOf("\r\n"u8);
+                var newline = body.IndexOf((byte)'\n');
                 var line = newline < 0 ? body : body.Slice(0, newline);
+                if (!line.IsEmpty && line[^1] == (byte)'\r')
+                {
+                    line = line.Slice(0, line.Length - 1);
+                }
                 SpendWork(line.Length);
                 var extension = line.IndexOf((byte)';');
                 var size = extension < 0 ? line : line.Slice(0, extension);
@@ -485,8 +591,9 @@ namespace XMAT.WebServiceCapture
                 {
                     size = size.Slice(0, size.Length - 1);
                 }
-                if (!size.IsEmpty && size.IndexOfAnyExcept((byte)'0') < 0 &&
-                    (newline < 0 || HasChunkTrailerSuffix(body.Slice(newline + 2))))
+                if (!size.IsEmpty && (size.IndexOfAnyExcept((byte)'0') < 0 ||
+                    (size.Length <= 8 && int.TryParse(Encoding.ASCII.GetString(size), NumberStyles.AllowHexSpecifier,
+                        CultureInfo.InvariantCulture, out _))))
                 {
                     return true;
                 }
@@ -494,33 +601,9 @@ namespace XMAT.WebServiceCapture
                 {
                     return false;
                 }
-                body = body.Slice(newline + 2);
+                body = body.Slice(newline + 1);
             }
             return false;
-        }
-
-        private bool HasChunkTrailerSuffix(ReadOnlySpan<byte> body)
-        {
-            while (!body.IsEmpty)
-            {
-                var newline = body.IndexOf("\r\n"u8);
-                var line = newline < 0 ? body : body.Slice(0, newline);
-                SpendWork(line.Length);
-                if (line.IsEmpty)
-                {
-                    return true;
-                }
-                if (line.IndexOf((byte)':') <= 0)
-                {
-                    return false;
-                }
-                if (newline < 0)
-                {
-                    return true;
-                }
-                body = body.Slice(newline + 2);
-            }
-            return true;
         }
 
         private byte[] Decompress(byte[] body, string encoding)
@@ -585,7 +668,7 @@ namespace XMAT.WebServiceCapture
             (rules.NamedSecret && name.Equals("value", StringComparison.OrdinalIgnoreCase)) ||
             (rules.ProfileUser && name.Equals("id", StringComparison.OrdinalIgnoreCase));
 
-        private void CollectJsonSecrets(JsonElement element, string context = null)
+        private void CollectJsonSecrets(JsonElement element, string context = null, bool sensitive = false)
         {
             SpendWork(1);
             if (element.ValueKind == JsonValueKind.Object)
@@ -593,26 +676,64 @@ namespace XMAT.WebServiceCapture
                 var rules = JsonRules(element, context);
                 foreach (var property in element.EnumerateObject())
                 {
-                    if (SensitiveJsonProperty(property.Name, rules) &&
-                        property.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number &&
-                        !(IsDescriptorName(property.Name) && property.Value.ValueKind == JsonValueKind.String &&
-                            IsSensitiveName(property.Value.GetString())))
+                    if (!sensitive && IsDescriptorName(property.Name) && property.Value.ValueKind == JsonValueKind.String &&
+                        IsSensitiveName(property.Value.GetString()))
                     {
-                        RememberSecret(property.Value.ValueKind == JsonValueKind.String
-                            ? property.Value.GetString() : property.Value.GetRawText());
+                        continue;
                     }
-                    else
-                    {
-                        CollectJsonSecrets(property.Value, property.Name);
-                    }
+                    CollectJsonSecrets(property.Value, property.Name, sensitive || SensitiveJsonProperty(property.Name, rules));
                 }
             }
             else if (element.ValueKind == JsonValueKind.Array)
             {
                 foreach (var child in element.EnumerateArray())
                 {
-                    CollectJsonSecrets(child, context);
+                    CollectJsonSecrets(child, context, sensitive);
                 }
+            }
+            else if (sensitive && element.ValueKind is JsonValueKind.String or JsonValueKind.Number)
+            {
+                RememberCredential(element.ValueKind == JsonValueKind.String ? element.GetString() : element.GetRawText());
+            }
+        }
+
+        private void RememberCredential(string value)
+        {
+            RememberSecret(value);
+            var space = value.AsSpan().IndexOfAny(' ', '\t');
+            if (space > 0 &&
+                (value.AsSpan(0, space).Equals("Bearer", StringComparison.OrdinalIgnoreCase) ||
+                 value.AsSpan(0, space).Equals("Basic", StringComparison.OrdinalIgnoreCase)))
+            {
+                RememberSecret(value.Substring(space + 1).Trim());
+            }
+            else if (value.StartsWith("XBL3.0 ", StringComparison.OrdinalIgnoreCase))
+            {
+                var separator = value.IndexOf(';');
+                if (separator > 0)
+                {
+                    RememberSecret(value.Substring(separator + 1));
+                }
+            }
+        }
+
+        private void RememberHeaderValue(string name, string value)
+        {
+            if (name.Equals("Cookie", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase))
+            {
+                var cookies = value.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                var count = name.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase) ? Math.Min(1, cookies.Length) : cookies.Length;
+                for (var index = 0; index < count; index++)
+                {
+                    var equals = cookies[index].IndexOf('=');
+                    var credential = equals >= 0 ? cookies[index].Substring(equals + 1) : cookies[index];
+                    RememberCredential(credential.Trim(' ', '\t', '"'));
+                }
+            }
+            else
+            {
+                RememberCredential(value);
             }
         }
 
@@ -643,7 +764,7 @@ namespace XMAT.WebServiceCapture
                 RegexOptions.CultureInvariant, PatternTimeout);
         }
 
-        private void CollectXmlSecrets(XElement element)
+        private void CollectXmlSecrets(XElement element, bool sensitive = false)
         {
             if (element == null)
             {
@@ -655,26 +776,56 @@ namespace XMAT.WebServiceCapture
                 element.Elements().Any(child => IsDescriptorName(child.Name.LocalName) &&
                     !child.HasElements && IsSensitiveName(child.Value));
             var passwordInput = IsPasswordInput(element);
-            if (IsSensitiveName(element.Name.LocalName) || namedSecret)
+            var sensitiveElement = sensitive || IsSensitiveName(element.Name.LocalName) || namedSecret;
+            if (sensitiveElement)
             {
-                RememberSecret(element.Value);
+                if (!element.HasElements)
+                {
+                    RememberXmlCredential(element.Value);
+                }
+                else
+                {
+                    foreach (var text in element.Nodes().OfType<XText>())
+                    {
+                        RememberXmlCredential(text.Value);
+                    }
+                }
             }
             foreach (var attribute in element.Attributes().Where(attribute => !attribute.IsNamespaceDeclaration))
             {
-                if ((passwordInput && attribute.Name.LocalName.Equals("value", StringComparison.OrdinalIgnoreCase)) ||
-                    IsSensitiveName(attribute.Name.LocalName) ||
-                    ((namedSecret || IsSensitiveName(element.Name.LocalName)) && !IsDescriptorName(attribute.Name.LocalName)))
+                if (attribute.Name == XNamespace.Xml + "space" ||
+                    (!sensitive && IsDescriptorName(attribute.Name.LocalName) && IsSensitiveName(attribute.Value)))
                 {
-                    RememberSecret(attribute.Value);
+                    continue;
+                }
+                if (sensitiveElement || IsSensitiveName(attribute.Name.LocalName) ||
+                    (passwordInput && attribute.Name.LocalName.Equals("value", StringComparison.OrdinalIgnoreCase)))
+                {
+                    RememberXmlCredential(attribute.Value);
                 }
             }
             foreach (var child in element.Elements())
             {
-                if (namedSecret && !child.HasElements && !IsDescriptorName(child.Name.LocalName))
+                if (!sensitive && namedSecret && IsDescriptorName(child.Name.LocalName) &&
+                    !child.HasElements && IsSensitiveName(child.Value))
                 {
-                    RememberSecret(child.Value);
+                    continue;
                 }
-                CollectXmlSecrets(child);
+                CollectXmlSecrets(child, sensitiveElement);
+            }
+        }
+
+        private void RememberXmlCredential(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+            RememberCredential(value);
+            var trimmed = value.Trim();
+            if (trimmed != value)
+            {
+                RememberCredential(trimmed);
             }
         }
 
@@ -730,7 +881,7 @@ namespace XMAT.WebServiceCapture
                     writer.WriteStartObject();
                     foreach (var property in element.EnumerateObject())
                     {
-                        writer.WritePropertyName(property.Name);
+                        writer.WritePropertyName(SanitizeText(property.Name, 0, false));
                         if (SensitiveJsonProperty(property.Name, rules))
                         {
                             if (property.Value.ValueKind == JsonValueKind.Null)
@@ -739,7 +890,7 @@ namespace XMAT.WebServiceCapture
                             }
                             else
                             {
-                                writer.WriteStringValue(Redact(property.Value.GetRawText()));
+                                writer.WriteStringValue(Redact(property.Value.GetRawText(), false));
                             }
                         }
                         else
@@ -759,6 +910,17 @@ namespace XMAT.WebServiceCapture
                     break;
                 case JsonValueKind.String:
                     writer.WriteStringValue(SanitizeText(element.GetString(), 0));
+                    break;
+                case JsonValueKind.Number:
+                    var number = element.GetRawText();
+                    if (!_discovering && _knownSecrets.Contains(number))
+                    {
+                        writer.WriteStringValue(Redact(number, false));
+                    }
+                    else
+                    {
+                        element.WriteTo(writer);
+                    }
                     break;
                 default:
                     element.WriteTo(writer);
@@ -787,11 +949,11 @@ namespace XMAT.WebServiceCapture
                 }
                 attribute.Value = sensitiveElement || IsSensitiveName(attribute.Name.LocalName) ||
                     (passwordInput && attribute.Name.LocalName.Equals("value", StringComparison.OrdinalIgnoreCase))
-                    ? Redact(attribute.Value) : SanitizeText(attribute.Value, 0);
+                    ? Redact(attribute.Value, false) : SanitizeText(attribute.Value, 0);
             }
             if (sensitiveElement)
             {
-                element.Value = Redact(element.Value);
+                element.Value = Redact(element.Value, false);
                 return;
             }
             foreach (var child in element.Elements().ToArray())
@@ -804,6 +966,23 @@ namespace XMAT.WebServiceCapture
             }
             element.Nodes().OfType<XComment>().Remove();
             element.Nodes().OfType<XProcessingInstruction>().Remove();
+        }
+
+        private static string OpaqueStartLine(string line, bool request, int status)
+        {
+            if (!request)
+            {
+                return "HTTP/1.1 " + status.ToString(CultureInfo.InvariantCulture) + " " + Redacted;
+            }
+            var space = line.IndexOf(' ');
+            if (space <= 0)
+            {
+                throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+            }
+            var method = line.Substring(0, space);
+            return method + " " +
+                (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase) ? "redacted.invalid:443" : "/%5BREDACTED%5D") +
+                " HTTP/1.1";
         }
 
         private string SanitizeStartLine(string line, bool request)
@@ -856,7 +1035,7 @@ namespace XMAT.WebServiceCapture
             return status;
         }
 
-        private string SanitizeUri(string value, int depth)
+        private string SanitizeUri(string value, int depth, bool replaceKnown = true)
         {
             if (depth > 4)
             {
@@ -892,7 +1071,7 @@ namespace XMAT.WebServiceCapture
                 {
                     if (at > authorityStart)
                     {
-                        Summary.RedactedValues++;
+                        _ = Redact(value.Substring(authorityStart, at - authorityStart));
                     }
                     value = string.Concat(value.AsSpan(0, authorityStart), value.AsSpan(at + 1));
                 }
@@ -911,26 +1090,30 @@ namespace XMAT.WebServiceCapture
             {
                 pathStart = prefix.Length;
             }
-            var path = SanitizePlainText(prefix.Substring(pathStart), true);
+            var path = SanitizePlainText(prefix.Substring(pathStart), true, false);
             var segments = path.Split('/');
             for (var index = 0; index < segments.Length; index++)
             {
                 try
                 {
                     var (decoded, _) = DecodeRepeated(segments[index], false);
-                    if (SanitizeText(decoded, depth + 1) != decoded)
+                    if (SanitizeText(decoded, depth + 1, replaceKnown) != decoded)
                     {
                         segments[index] = Uri.EscapeDataString(Redacted);
                     }
                 }
                 catch (DecoderFallbackException)
                 {
-                    segments[index] = Uri.EscapeDataString(Redact(segments[index]));
+                    segments[index] = Uri.EscapeDataString(Redact(segments[index], false));
                 }
             }
             path = string.Join("/", segments);
             path = PathSecret.Replace(path, match =>
-                match.Groups["prefix"].Value + Uri.EscapeDataString(Redact(match.Value)));
+            {
+                var pathPrefix = match.Groups["prefix"].Value;
+                var (secret, _) = DecodeRepeated(match.Value.Substring(pathPrefix.Length), false);
+                return pathPrefix + Uri.EscapeDataString(Redact(secret));
+            });
             prefix = string.Concat(prefix.AsSpan(0, pathStart), path.AsSpan());
             if (question < 0)
             {
@@ -938,11 +1121,11 @@ namespace XMAT.WebServiceCapture
             }
             var query = value.Substring(question + 1);
             var hash = query.IndexOf('#');
-            return prefix + "?" + SanitizeParameters(hash < 0 ? query : query.Substring(0, hash), depth) +
+            return prefix + "?" + SanitizeParameters(hash < 0 ? query : query.Substring(0, hash), depth, replaceKnown) +
                 (hash < 0 ? string.Empty : query.Substring(hash));
         }
 
-        private string SanitizeParameters(string text, int depth)
+        private string SanitizeParameters(string text, int depth, bool replaceKnown = true)
         {
             var parts = ParameterSeparator.Split(text);
             for (var index = 0; index < parts.Length; index += 2)
@@ -953,7 +1136,7 @@ namespace XMAT.WebServiceCapture
                     try
                     {
                         var (flagValue, flagPasses) = DecodeRepeated(parts[index], true);
-                        var flagOutput = SanitizeText(flagValue, depth + 1);
+                        var flagOutput = SanitizeText(flagValue, depth + 1, replaceKnown);
                         if (flagOutput != flagValue)
                         {
                             parts[index] = EncodeParameterValue(flagOutput, flagPasses);
@@ -961,7 +1144,7 @@ namespace XMAT.WebServiceCapture
                     }
                     catch (DecoderFallbackException)
                     {
-                        parts[index] = Uri.EscapeDataString(Redact(parts[index]));
+                        parts[index] = Uri.EscapeDataString(Redact(parts[index], false));
                     }
                     continue;
                 }
@@ -972,7 +1155,7 @@ namespace XMAT.WebServiceCapture
                 }
                 catch (DecoderFallbackException)
                 {
-                    parts[index] = Uri.EscapeDataString(Redact(parts[index]));
+                    parts[index] = Uri.EscapeDataString(Redact(parts[index], false));
                     continue;
                 }
                 var original = parts[index].Substring(equals + 1);
@@ -985,13 +1168,13 @@ namespace XMAT.WebServiceCapture
                 catch (DecoderFallbackException)
                 {
                     parts[index] = string.Concat(parts[index].AsSpan(0, equals + 1),
-                        Uri.EscapeDataString(Redact(original)).AsSpan());
+                        Uri.EscapeDataString(Redact(original, false)).AsSpan());
                     continue;
                 }
                 var sanitized = IsSensitiveName(name) || name.Contains('\uFFFD') ||
                     name.Equals("code", StringComparison.OrdinalIgnoreCase) ||
                     name.Equals("state", StringComparison.OrdinalIgnoreCase)
-                    ? Redact(decoded) : SanitizeText(decoded, depth + 1);
+                    ? Redact(decoded) : SanitizeText(decoded, depth + 1, replaceKnown);
                 if (!string.Equals(decoded, sanitized, StringComparison.Ordinal))
                 {
                     parts[index] = string.Concat(parts[index].AsSpan(0, equals + 1),
@@ -1011,7 +1194,7 @@ namespace XMAT.WebServiceCapture
             return value;
         }
 
-        private string SanitizeText(string text, int depth)
+        private string SanitizeText(string text, int depth, bool replaceKnown = true)
         {
             if (string.IsNullOrEmpty(text))
             {
@@ -1022,15 +1205,11 @@ namespace XMAT.WebServiceCapture
                 return Redact(text);
             }
             SpendWork(text.Length);
-            if (_knownSecretPattern != null)
-            {
-                text = _knownSecretPattern.Replace(text, match => match.Value == Redacted ? match.Value : Redact(match.Value));
-            }
             text = PrivateKey.Replace(text, match => Redact(match.Value));
             if ((UriAuthority.IsMatch(text) || text.StartsWith('/') || text.StartsWith("./", StringComparison.Ordinal) ||
                  text.StartsWith("../", StringComparison.Ordinal)) && !text.Any(char.IsWhiteSpace))
             {
-                return SanitizeUri(text, depth + 1);
+                return SanitizeUri(text, depth + 1, replaceKnown);
             }
             text = SanitizeAssignments(text, false, FindUrls(text));
             var protectedUrls = FindUrls(text);
@@ -1049,11 +1228,11 @@ namespace XMAT.WebServiceCapture
             var position = 0;
             foreach (var match in FindUrls(text))
             {
-                result.Append(SanitizePlainText(text.Substring(position, match.Index - position)));
-                result.Append(SanitizeUri(match.Value, depth + 1));
+                result.Append(SanitizePlainText(text.Substring(position, match.Index - position), false, replaceKnown));
+                result.Append(SanitizeUri(match.Value, depth + 1, replaceKnown));
                 position = match.Index + match.Length;
             }
-            result.Append(SanitizePlainText(text.Substring(position)));
+            result.Append(SanitizePlainText(text.Substring(position), false, replaceKnown));
             return result.ToString();
         }
 
@@ -1061,9 +1240,13 @@ namespace XMAT.WebServiceCapture
             Url.Matches(text).Cast<Match>().Where(match => match.Index == 0 ||
                 (!char.IsLetterOrDigit(text[match.Index - 1]) && !"_-+./".Contains(text[match.Index - 1]))).ToArray();
 
-        private string SanitizePlainText(string text, bool uri = false)
+        private string SanitizePlainText(string text, bool uri = false, bool replaceKnown = true)
         {
             SpendWork(text.Length);
+            if (!_discovering && replaceKnown && _knownSecretPattern != null)
+            {
+                text = _knownSecretPattern.Replace(text, match => match.Value == Redacted ? match.Value : Redact(match.Value));
+            }
             text = SanitizeAssignments(text, uri);
             text = PathIdentity.Replace(text, match => SanitizeIdentity(match, uri));
             text = SecretToken.Replace(text, match => SanitizeToken(match, uri));
@@ -1229,7 +1412,7 @@ namespace XMAT.WebServiceCapture
             }
             if (DecodePercentEscapes(value, false) != value)
             {
-                throw new InvalidDataException();
+                throw new DecoderFallbackException();
             }
             return (value, passes);
         }
@@ -1298,7 +1481,8 @@ namespace XMAT.WebServiceCapture
                     break;
                 }
                 SpendWork(dot - start + 1);
-                if (TryJwtWindow(value, start, dot, out var end))
+                var end = value.Length;
+                if (dot - start > 8192 || TryJwtWindow(value, start, dot, out end))
                 {
                     output ??= new StringBuilder();
                     output.Append(value, copied, start - copied);
@@ -1319,7 +1503,11 @@ namespace XMAT.WebServiceCapture
         {
             end = 0;
             var headerLength = firstDot - start;
-            if (headerLength < 12 || headerLength > 8192)
+            if (headerLength > 8192)
+            {
+                return false;
+            }
+            if (headerLength < 12)
             {
                 return false;
             }
@@ -1396,13 +1584,21 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private string Redact(string value)
+        private string Redact(string value, bool remember = true)
         {
             if (string.IsNullOrEmpty(value) || value == Redacted)
             {
                 return value;
             }
             SpendWork(value.Length);
+            if (_discovering)
+            {
+                if (remember)
+                {
+                    RememberCredential(value);
+                }
+                return Redacted;
+            }
             Summary.RedactedValues++;
             return Redacted;
         }
@@ -1432,7 +1628,7 @@ namespace XMAT.WebServiceCapture
             element.Name.LocalName.Equals("input", StringComparison.OrdinalIgnoreCase) &&
             element.Attributes().Any(attribute =>
                 attribute.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase) &&
-                attribute.Value.Equals("password", StringComparison.OrdinalIgnoreCase));
+                attribute.Value.Trim().Equals("password", StringComparison.OrdinalIgnoreCase));
 
         private static bool IsSensitiveName(string name)
         {
