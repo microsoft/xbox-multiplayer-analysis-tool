@@ -34,7 +34,7 @@ namespace XMAT.Tests
                 destinationParent);
 
             Assert.Equal(
-                Path.Combine(
+                Path.Join(
                     destinationParent,
                     AnalysisReportExporter.CreateFolderName(
                         source.SourceCaptureName,
@@ -57,12 +57,12 @@ namespace XMAT.Tests
                 ["index.html"] = indexBytes
             };
 
-            foreach (Match match in Regex.Matches(
+            foreach (string relativePath in Regex.Matches(
                 indexText,
                 "(?:href|src)=\"(?<path>[^\"]+)\"",
-                RegexOptions.CultureInvariant))
+                RegexOptions.CultureInvariant)
+                .Select(match => match.Groups["path"].Value))
             {
-                string relativePath = match.Groups["path"].Value;
                 Assert.False(Path.IsPathRooted(relativePath));
                 Assert.DoesNotContain("://", relativePath, StringComparison.Ordinal);
                 files[relativePath] = ReadXltaResource(relativePath);
@@ -79,14 +79,14 @@ namespace XMAT.Tests
                 destinationParent);
 
             string publishedIndex = File.ReadAllText(
-                Path.Combine(publishedPath, "index.html"));
+                Path.Join(publishedPath, "index.html"));
             foreach (Match match in Regex.Matches(
                 publishedIndex,
                 "(?:href|src)=\"(?<path>[^\"]+)\"",
                 RegexOptions.CultureInvariant))
             {
                 Assert.True(
-                    File.Exists(Path.Combine(
+                    File.Exists(Path.Join(
                         publishedPath,
                         match.Groups["path"].Value)),
                     $"Missing index.html dependency '{match.Groups["path"].Value}'.");
@@ -202,12 +202,12 @@ namespace XMAT.Tests
                 destinationParent);
 
             Assert.Equal(
-                Path.Combine(
+                Path.Join(
                     destinationParent,
                     $"XMAT Analysis - Team #50% 雪 - " +
                         $"{CompletionTime:yyyy-MM-dd HHmmss}"),
                 publishedPath);
-            Assert.True(File.Exists(Path.Combine(
+            Assert.True(File.Exists(Path.Join(
                 publishedPath,
                 "index.html")));
         }
@@ -228,7 +228,7 @@ namespace XMAT.Tests
                 source,
                 destinationParent);
             File.WriteAllText(
-                Path.Combine(firstPath, "recipient-note.txt"),
+                Path.Join(firstPath, "recipient-note.txt"),
                 "preserve");
             string secondPath = exporter.Export(
                 source,
@@ -237,9 +237,9 @@ namespace XMAT.Tests
             Assert.Equal(firstPath + " (2)", secondPath);
             Assert.Equal(
                 "preserve",
-                File.ReadAllText(Path.Combine(firstPath, "recipient-note.txt")));
+                File.ReadAllText(Path.Join(firstPath, "recipient-note.txt")));
             Assert.False(
-                File.Exists(Path.Combine(secondPath, "recipient-note.txt")));
+                File.Exists(Path.Join(secondPath, "recipient-note.txt")));
             AssertManifestMatches(source, secondPath);
         }
 
@@ -268,7 +268,7 @@ namespace XMAT.Tests
                 source,
                 destinationParent);
 
-            string basePath = Path.Combine(
+            string basePath = Path.Join(
                 destinationParent,
                 AnalysisReportExporter.CreateFolderName(
                     source.SourceCaptureName,
@@ -298,7 +298,7 @@ namespace XMAT.Tests
                     racedDirectory = path;
                     Directory.CreateDirectory(path);
                     File.WriteAllText(
-                        Path.Combine(path, "other-owner.txt"),
+                        Path.Join(path, "other-owner.txt"),
                         "preserve");
                 }
             };
@@ -311,7 +311,7 @@ namespace XMAT.Tests
             Assert.True(Directory.Exists(racedDirectory));
             Assert.Equal(
                 "preserve",
-                File.ReadAllText(Path.Combine(
+                File.ReadAllText(Path.Join(
                     racedDirectory,
                     "other-owner.txt")));
             AssertManifestMatches(source, publishedPath);
@@ -324,7 +324,7 @@ namespace XMAT.Tests
         {
             using var fixture = new TestDirectory();
             string sourceDirectory = fixture.CreateDirectory("source");
-            string destinationParent = Path.Combine(
+            string destinationParent = Path.Join(
                 fixture.Root,
                 "missing-parent");
             AnalysisExportSource source = CreateFullBundle(
@@ -378,7 +378,7 @@ namespace XMAT.Tests
         {
             using var fixture = new TestDirectory();
             string parent = fixture.CreateDirectory("deleted");
-            string child = Path.Combine(parent, "child");
+            string child = Path.Join(parent, "child");
             Directory.Delete(parent);
 
             Assert.Throws<DirectoryNotFoundException>(() =>
@@ -472,7 +472,7 @@ namespace XMAT.Tests
                 "Changed source",
                 CompletionTime);
             File.AppendAllText(
-                Path.Combine(sourceDirectory, "index.html"),
+                Path.Join(sourceDirectory, "index.html"),
                 "changed after completion");
 
             var exception = Assert.Throws<AnalysisReportExportException>(() =>
@@ -724,7 +724,7 @@ namespace XMAT.Tests
             string folderName = AnalysisReportExporter.CreateFolderName(
                 "Path guard",
                 CompletionTime);
-            string finalRoot = Path.Combine(destinationParent, folderName);
+            string finalRoot = Path.Join(destinationParent, folderName);
             int fileNameLength =
                 AnalysisReportExporter.MaximumCompatiblePathLength -
                 finalRoot.Length -
@@ -769,7 +769,7 @@ namespace XMAT.Tests
         {
             using var fixture = new TestDirectory();
             string sourceDirectory = fixture.CreateDirectory("source");
-            string destinationParent = Path.Combine(
+            string destinationParent = Path.Join(
                 sourceDirectory,
                 "exports");
             Directory.CreateDirectory(destinationParent);
@@ -819,7 +819,7 @@ namespace XMAT.Tests
         public void Export_MissingSourceDirectoryFailsBeforeStaging()
         {
             using var fixture = new TestDirectory();
-            string sourceDirectory = Path.Combine(
+            string sourceDirectory = Path.Join(
                 fixture.Root,
                 "missing-source");
             string destinationParent = fixture.CreateDirectory("destination");
@@ -889,7 +889,7 @@ namespace XMAT.Tests
             string destinationParent = fixture.CreateDirectory("destination");
             byte[] contents = Encoding.UTF8.GetBytes("index");
             File.WriteAllBytes(
-                Path.Combine(sourceDirectory, "index.html"),
+                Path.Join(sourceDirectory, "index.html"),
                 contents);
             AnalysisArtifact first = CreateArtifact(
                 "index.html",
@@ -922,13 +922,13 @@ namespace XMAT.Tests
             string callerRoot = CreateRepositoryRoot(
                 fixture,
                 "caller-root");
-            string callerDirectory = Path.Combine(
+            string callerDirectory = Path.Join(
                 callerRoot,
                 "XMAT.Tests");
             Directory.CreateDirectory(callerDirectory);
             AssertResolution(
                 callerRoot,
-                Path.Combine(callerDirectory, "FixtureSource.cs"),
+                Path.Join(callerDirectory, "FixtureSource.cs"),
                 @"Z:\external-output",
                 null,
                 null,
@@ -937,7 +937,7 @@ namespace XMAT.Tests
             string outputRoot = CreateRepositoryRoot(
                 fixture,
                 "output-root");
-            string baseDirectory = Path.Combine(
+            string baseDirectory = Path.Join(
                 outputRoot,
                 "artifacts",
                 "bin");
@@ -991,7 +991,7 @@ namespace XMAT.Tests
         {
             string root = fixture.CreateDirectory(name);
             File.WriteAllText(
-                Path.Combine(
+                Path.Join(
                     root,
                     "XboxMultiplayerAnalysisTool.sln"),
                 string.Empty);
@@ -1068,7 +1068,7 @@ namespace XMAT.Tests
             var artifacts = new List<AnalysisArtifact>();
             foreach (var file in files)
             {
-                string fullPath = Path.Combine(
+                string fullPath = Path.Join(
                     sourceDirectory,
                     file.Key);
                 string parent = Path.GetDirectoryName(fullPath);
@@ -1131,7 +1131,7 @@ namespace XMAT.Tests
                     .OrderBy(path => path, StringComparer.Ordinal));
             foreach (var file in snapshot)
             {
-                string fullPath = Path.Combine(directory, file.Key);
+                string fullPath = Path.Join(directory, file.Key);
                 Assert.Equal(file.Value.Bytes, File.ReadAllBytes(fullPath));
                 Assert.Equal(
                     file.Value.LastWriteTimeUtc,
@@ -1155,10 +1155,10 @@ namespace XMAT.Tests
                     .OrderBy(path => path, StringComparer.Ordinal));
             foreach (AnalysisArtifact artifact in source.ArtifactManifest)
             {
-                string sourcePath = Path.Combine(
+                string sourcePath = Path.Join(
                     source.SourceDirectory,
                     artifact.RelativePath);
-                string destinationPath = Path.Combine(
+                string destinationPath = Path.Join(
                     publishedPath,
                     artifact.RelativePath);
                 Assert.Equal(
@@ -1213,7 +1213,7 @@ namespace XMAT.Tests
 
             internal string CreateDirectory(string name)
             {
-                string path = Path.Combine(Root, name);
+                string path = Path.Join(Root, name);
                 Directory.CreateDirectory(path);
                 return path;
             }
@@ -1336,7 +1336,7 @@ namespace XMAT.Tests
                 out string resolution);
             for (int attempt = 0; attempt < 10; attempt++)
             {
-                string path = Path.Combine(
+                string path = Path.Join(
                     fixtureRoot,
                     $".{prefix}-{Guid.NewGuid():N}".Substring(
                         0,
@@ -1355,7 +1355,7 @@ namespace XMAT.Tests
                 {
                     Directory.CreateDirectory(path);
                     using (new FileStream(
-                        Path.Combine(path, ".owner"),
+                        Path.Join(path, ".owner"),
                         FileMode.CreateNew,
                         FileAccess.Write,
                         FileShare.None))
@@ -1364,8 +1364,9 @@ namespace XMAT.Tests
                     return path;
                 }
                 catch (IOException) when (
-                    File.Exists(Path.Combine(path, ".owner")))
+                    File.Exists(Path.Join(path, ".owner")))
                 {
+                    // Another fixture owns this name; retry a fresh candidate.
                 }
             }
 
@@ -1551,7 +1552,7 @@ namespace XMAT.Tests
         {
             return !string.IsNullOrEmpty(directory) &&
                 Directory.Exists(directory) &&
-                File.Exists(Path.Combine(
+                File.Exists(Path.Join(
                     directory,
                     "XboxMultiplayerAnalysisTool.sln"));
         }

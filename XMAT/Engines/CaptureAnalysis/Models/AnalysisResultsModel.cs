@@ -108,6 +108,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.Models
                 catch (Exception logException) when (
                     !ExceptionUtilities.IsFatal(logException))
                 {
+                    // Logging failure must not prevent analysis completion.
                 }
             }
         }

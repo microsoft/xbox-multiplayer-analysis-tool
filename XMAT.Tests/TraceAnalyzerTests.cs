@@ -45,17 +45,17 @@ namespace XMAT.Tests
                     report => Assert.Equal(1, ReportCallCount(report.ToJson())));
                 Assert.Equal(
                     1,
-                    ReportCallCount(File.ReadAllText(Path.Combine(
+                    ReportCallCount(File.ReadAllText(Path.Join(
                         outputDirectory,
                         "FirstJsonReport.json"))));
                 Assert.Equal(
                     1,
-                    ReportCallCount(File.ReadAllText(Path.Combine(
+                    ReportCallCount(File.ReadAllText(Path.Join(
                         outputDirectory,
                         "SecondJsonReport.json"))));
                 Assert.Equal(
                     1,
-                    ReportCallCount(File.ReadAllText(Path.Combine(
+                    ReportCallCount(File.ReadAllText(Path.Join(
                         outputDirectory,
                         "ThirdJsonReport.json"))));
             }

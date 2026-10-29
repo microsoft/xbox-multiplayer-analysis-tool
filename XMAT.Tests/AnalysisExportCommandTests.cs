@@ -94,15 +94,15 @@ namespace XMAT.Tests
         {
             string root = AnalysisReportTestPaths.CreateOwnedDirectory(
                 "xec");
-            string outputDirectory = Path.Combine(root, "output");
+            string outputDirectory = Path.Join(root, "output");
             Directory.CreateDirectory(outputDirectory);
             try
             {
                 File.WriteAllText(
-                    Path.Combine(outputDirectory, "index.html"),
+                    Path.Join(outputDirectory, "index.html"),
                     "index");
                 File.WriteAllText(
-                    Path.Combine(outputDirectory, "calls.js"),
+                    Path.Join(outputDirectory, "calls.js"),
                     "calls");
                 var results = new AnalysisResultsModel
                 {
@@ -137,7 +137,7 @@ namespace XMAT.Tests
 
                 Assert.True(observedComplete);
                 File.WriteAllText(
-                    Path.Combine(outputDirectory, "later.txt"),
+                    Path.Join(outputDirectory, "later.txt"),
                     "created after completion");
                 Assert.Equal(2, results.ArtifactManifest.Count);
             }
@@ -152,10 +152,10 @@ namespace XMAT.Tests
         {
             string root = AnalysisReportTestPaths.CreateOwnedDirectory(
                 "xmf");
-            string outputDirectory = Path.Combine(root, "locked");
+            string outputDirectory = Path.Join(root, "locked");
             Directory.CreateDirectory(outputDirectory);
             File.WriteAllText(
-                Path.Combine(outputDirectory, "index.html"),
+                Path.Join(outputDirectory, "index.html"),
                 "index");
             var report = new TestReportViewModel();
             var results = new AnalysisResultsModel

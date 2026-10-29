@@ -349,6 +349,7 @@ namespace XMAT
             catch (Exception exception) when (
                 !ExceptionUtilities.IsFatal(exception))
             {
+                // Best-effort logging must not disrupt export error handling.
             }
         }
     }

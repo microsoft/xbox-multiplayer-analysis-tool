@@ -568,7 +568,7 @@ namespace XMAT
                 string stagingName = string.Concat(
                     StagingDirectoryPrefix.AsSpan(),
                     identifier.AsSpan(0, 8));
-                string stagingPath = Path.Combine(
+                string stagingPath = Path.Join(
                     destinationDirectory,
                     stagingName);
                 try
@@ -803,7 +803,7 @@ namespace XMAT
                 string folderName = suffix == 1
                     ? baseFolderName
                     : $"{baseFolderName} ({suffix})";
-                string candidate = Path.Combine(
+                string candidate = Path.Join(
                     destinationDirectory,
                     folderName);
                 if (!PathExists(candidate))
@@ -868,7 +868,7 @@ namespace XMAT
             string rootPath,
             string relativePath)
         {
-            return Path.GetFullPath(Path.Combine(
+            return Path.GetFullPath(Path.Join(
                 rootPath,
                 relativePath));
         }
@@ -912,6 +912,7 @@ namespace XMAT
             }
             catch (DirectoryNotFoundException)
             {
+                // Staging is already absent; nothing remains to clean.
             }
             catch (Exception cleanupException) when (
                 !ExceptionUtilities.IsFatal(cleanupException))
