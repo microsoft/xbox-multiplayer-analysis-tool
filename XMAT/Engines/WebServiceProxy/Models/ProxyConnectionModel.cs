@@ -46,6 +46,10 @@ namespace XMAT.WebServiceCapture.Models
         public Dictionary<string, string> RequestHeaders { get; private set; }
         public Dictionary<string, string> ResponseHeaders { get; private set; }
 
+        // The host offered by host-list menus (DNS spelling kept, IP literals canonical), or
+        // null when the row has no valid host.
+        public string ActionableHost => HostAuthority.TryNormalizeHost(Host, out string host) ? host : null;
+
         public event PropertyChangedEventHandler PropertyChanged;
 
         internal ProxyConnectionModel(Int64 rowId, int requestNumber, int id)
@@ -94,9 +98,19 @@ namespace XMAT.WebServiceCapture.Models
             RequestTime = requestTime;
             Duration = duration;
             Scheme = scheme;
-            var hostAndPortSplit = hostAndPort.Split(':');
-            Host = hostAndPortSplit[0];
-            Port = hostAndPortSplit.Length > 1 ? hostAndPortSplit[1] : string.Empty;
+            if (HostAuthority.TryParse(hostAndPort, out string host, out int? port))
+            {
+                Host = host;
+                Port = port?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+            }
+            else
+            {
+                // Without a parsable authority, such as a SAZ frame with no Host header, keep the
+                // former split; a missing value gives an empty host and port.
+                var hostAndPortSplit = (hostAndPort ?? string.Empty).Split(':');
+                Host = hostAndPortSplit[0];
+                Port = hostAndPortSplit.Length > 1 ? hostAndPortSplit[1] : string.Empty;
+            }
             Method = method;
             // TODO: possibly remove the host & port?
             Path = call;

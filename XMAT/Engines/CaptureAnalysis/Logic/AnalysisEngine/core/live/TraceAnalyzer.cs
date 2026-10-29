@@ -33,7 +33,7 @@ namespace CaptureAnalysisEngine
         {
             foreach (var console in serviceCallData.m_perConsoleData.Values)
             {
-                if (console.m_servicesHistory.ContainsKey(endpoint))
+                if (console.m_servicesHistory.Keys.Any(key => key.LogicalName == endpoint))
                 {
                     return true;
                 }
@@ -211,7 +211,7 @@ namespace CaptureAnalysisEngine
             {
                 foreach (var endpointData in console.m_servicesHistory)
                 {
-                    var service = m_converter.GetService(endpointData.Key);
+                    var service = m_converter.GetService(endpointData.Key.LogicalName);
 
                     if (service != null)
                     {

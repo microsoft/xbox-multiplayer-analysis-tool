@@ -44,7 +44,9 @@ namespace XMAT.WebServiceCapture.Proxy
                 Version = request.Protocol,
                 StreamId = context.Features.Get<IHttp2StreamIdFeature>()?.StreamId,
                 Scheme = request.Scheme,
-                Host = request.Host.Host,
+                // Kestrel keeps IPv6 brackets; capture and policy use the bracket-free IP literal
+                // and the DNS spelling the client sent.
+                Host = HostAuthority.TryNormalizeHost(request.Host.Host, out string host) ? host : request.Host.Host,
                 Port = request.Host.Port ?? GetDefaultPort(request.Scheme),
                 Method = request.Method,
                 Path = request.PathBase + request.Path + request.QueryString

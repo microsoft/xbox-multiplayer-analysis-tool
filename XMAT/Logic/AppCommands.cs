@@ -37,5 +37,12 @@ namespace XMAT
 
         public static readonly RoutedUICommand ExportRootCert =
             new RoutedUICommand("Export Root Certificate", "ExportRootCert", typeof(AppCommands));
+
+        // Always available: the host lists are application-wide and need no selected capture.
+        public static readonly RoutedUICommand ManageHostLists =
+            new RoutedUICommand("Manage Host Lists", "ManageHostLists", typeof(AppCommands));
+
+        // Resolved when the menu markup loads, after the language has been loaded.
+        public static string ManageHostListsHeader => Localization.GetLocalizedString("HOST_LISTS_MANAGE_MENU");
     }
 }

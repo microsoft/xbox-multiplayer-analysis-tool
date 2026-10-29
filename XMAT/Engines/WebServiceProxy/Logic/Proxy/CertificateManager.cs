@@ -5,6 +5,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Windows;
@@ -179,7 +181,20 @@ if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(Ho
                 RSASignaturePadding.Pkcs1);
 
             SubjectAlternativeNameBuilder sanBuilder = new SubjectAlternativeNameBuilder();
-            sanBuilder.AddDnsName(hostname);
+            if (IPAddress.TryParse(hostname, out IPAddress address))
+            {
+                // Clients verify IP-literal hosts against IP address names; an IPv6 literal is
+                // not a valid DNS name. IPv4 keeps its existing DNS-style name as well.
+                sanBuilder.AddIpAddress(address);
+                if (address.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    sanBuilder.AddDnsName(hostname);
+                }
+            }
+            else
+            {
+                sanBuilder.AddDnsName(hostname);
+            }
             req.CertificateExtensions.Add(sanBuilder.Build());
             req.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
             req.CertificateExtensions.Add(new X509KeyUsageExtension(
@@ -221,7 +236,15 @@ if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(Ho
 
         private static string GetHostname(string path)
         {
-            string host = path;
+            // An IP literal (including a bracketed IPv6 authority) is never split at its colons.
+            if ((HostAuthority.TryNormalizeHost(path, out string host) ||
+                 HostAuthority.TryParse(path, out host, out _)) &&
+                IPAddress.TryParse(host, out _))
+            {
+                return host;
+            }
+
+            host = path;
             if (path.Contains(':'))
                 host = path.Split(':')[0];
             return host;
