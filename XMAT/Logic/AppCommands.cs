@@ -14,6 +14,9 @@ namespace XMAT
         public static readonly RoutedUICommand Export =
             new RoutedUICommand("_Export Captures...", "ExportCaptures", typeof(AppCommands));
 
+        public static readonly RoutedUICommand ExportSanitized =
+            new RoutedUICommand("Export Sanitized Capture...", "ExportSanitizedCapture", typeof(AppCommands));
+
         public static readonly RoutedUICommand Preferences =
             new RoutedUICommand("_Preferences", "Preferences", typeof(AppCommands));
 

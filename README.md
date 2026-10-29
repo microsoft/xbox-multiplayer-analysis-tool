@@ -397,6 +397,7 @@ Captures can be saved and shared using the **File** menu:
 | **Load Captures** | Opens a previously saved .XMATCAP file. Loaded captures open in read-only tabs. |
 | **Import** | Imports a Fiddler (.SAZ) archive, or a network trace (.ETL) captured with `netsh`, into a read-only tab. Re-importing the same-named .SAZ replaces that tab's data. |
 | **Export** | Exports the selected web proxy capture to a Fiddler (.SAZ) archive. |
+| **Export Sanitized Capture...** | Exports a sanitized .SAZ copy of the selected web proxy capture, without changing the original capture. Stop all captures first. |
 
 Files can also be dragged and dropped onto the main window -- .XMATCAP files are loaded, and .SAZ and .ETL
 files are imported.
@@ -405,6 +406,69 @@ If a new .SAZ import fails, XMAT reports the error and removes only the tab crea
 If re-importing a .SAZ with the same file name fails, the existing tab, its selection, and its previously imported data
 remain unchanged. You can retry the import without restarting XMAT. Error details are written to
 `application.log` in the application's `Logs` directory.
+
+### Sanitized Export
+
+Use **File > Export Sanitized Capture...** before sharing a web capture. This is a per-export
+command, not a preference: ordinary **Export** and native **Save Captures** remain unsanitized.
+Loaded and imported web captures are supported. Only the selected capture is exported.
+
+The export redacts recognized credential/cookie headers, sensitive query and form parameters,
+URL credentials, sensitive JSON/XML fields (including OAuth device codes and private JWK
+members), and common token/private-key patterns in text.
+Credential discovery covers headers, URLs, forms and structured fields before either
+direction of a session is written, including decoded Basic/userinfo components, token
+parameters, and individual cookies from repeated or combined headers. JSON keys and
+query/form parameter names are inspected. Learned values in names are masked when long
+(at least eight characters) or numeric identifiers (at least four digits), while short and
+recognized schema labels are preserved. Renamed JSON keys use collision-safe names.
+Xbox profile IDs/display names, recognized structured-body credential echoes across each
+request/response pair, and client-IP metadata are also masked. JWT recognition does not
+depend on a particular encoded-header
+prefix; standalone Xbox credentials and PGP private-key armor are recognized. Header names are
+matched without regard to case, and repeated headers are retained.
+
+JSON, XML, URL-encoded forms and plain text are inspected. Gzip, deflate and Brotli bodies
+and declared character encodings are supported; exported text is UTF-8 with updated HTTP
+framing, including bodyless HEAD/CONNECT/1xx/204/304 responses. Genuine chunk framing is
+decoded before scanning, while already-dechunked captures remain supported; ambiguous or
+malformed framing is omitted. Sensitive namespace URLs are remapped consistently in XML.
+Percent-encoded paths and nested URI/form values are inspected through at most eight
+decoding passes, preserving untouched values' original representation. Invalid UTF-8 or
+excessively nested URL/form components are redacted without discarding unrelated components
+or aborting the archive. URL values are compared literally and with form decoding, preserving
+literal `+` and matching credentials that span path segments. Learned values in URL authorities
+use a valid replacement host; structural Host and generated Content-Type headers are not
+subject to echo replacement. Password-input values in inspected XML are also redacted.
+
+Unsupported content (including binary, HTML/XHTML and multipart bodies), malformed structured
+data, JSON/XML nesting exceeding 64 levels, unknown compression/character encodings and
+bodies exceeding the 4 MiB inspection limit are omitted rather than copied unchecked.
+Scanning also has a finite work budget and a limit of 64 distinct remembered sensitive
+values or representations of at most 4,096 characters each per request/response pair.
+XML discovery includes both individual values and sensitive containers' combined text.
+Learned values are matched at token boundaries and reset before the next pair. Bodies
+exceeding format/size limits are omitted. If credential discovery exceeds capacity, or
+scanning exhausts its work budget or regex timeout in either pass, partial output is discarded
+and the pair's original URLs, headers and bodies are replaced with minimal HTTP framing.
+Large authorization values or profile batches can therefore lose diagnostic content;
+the limits are not a guarantee of diagnostic completeness.
+The completion dialog reports redactions and omissions; SAZ session metadata marks which
+request/response bodies were omitted.
+Longer exports show a cancellable progress window. Cancel, Escape, or closing that window
+requests cancellation and waits for the worker and cleanup to finish before releasing the
+operation guard. An existing destination is replaced only after a complete export, not on
+cancellation or failure.
+
+**Review the archive before sharing it.** This is best-effort detection, not a guarantee of
+anonymity: arbitrary unnamed secrets, custom encodings, and identifiers not recognized by the
+rules may remain. Nonsensitive service endpoints, paths/values, timing and request IDs are
+retained for diagnosis. The original capture data is not sanitized in place.
+HTTP header names, XML element/attribute names, and protocol method/version tokens are not
+identifier-scrubbed. Arbitrary percent-encoded text outside URL/form contexts, unrecognized
+identifier fields, and JWTs joined directly to ordinary letters can remain. Short learned
+values can also redact benign data. These exclusions still require manual review and an
+explicit decision about which identifiers a particular sharing scenario must remove.
 
 ### Importing Network Traces from Another PC
 
