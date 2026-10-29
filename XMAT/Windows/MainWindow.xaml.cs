@@ -27,6 +27,8 @@ namespace XMAT
         private readonly string XMATFilter = $"{PublicUtilities.AppName} files (*.{XMATCaptureFileExtension})|*.{XMATCaptureFileExtension}";
         private readonly string FiddlerFilter = $"Fiddler SAZ files (*.{FiddlerFileExtension})|*.{FiddlerFileExtension}";
         private readonly string NetTraceFilter = $"Network trace files (*.{NetTraceFileExtension})|*.{NetTraceFileExtension}";
+        private readonly AnalysisReportExportWorkflow
+            _analysisReportExportWorkflow;
 
         private Cursor _originalCursor;
         private bool _isCloseInProgress;
@@ -38,6 +40,12 @@ namespace XMAT
 
             // Apply theme after preferences are deserialized
             ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
+
+            _analysisReportExportWorkflow =
+                new AnalysisReportExportWorkflow(
+                    this,
+                    new WpfAnalysisReportExportDialogService(),
+                    ExportAnalysisReportAsync);
 
             InitializeComponent();
 
@@ -57,6 +65,8 @@ namespace XMAT
             AnalysisMenu.Header = Localization.GetLocalizedString("ANALYSIS_MENU");
             ViewAnalyzeCaptures.Header = Localization.GetLocalizedString("VIEW_ANALYZE_CAPTURES");
             ViewAnalyzeCaptures.ToolTip = Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
+            AnalysisExportReport.Header = Localization.GetLocalizedString("ANALYSIS_EXPORT_REPORT");
+            AnalysisExportReport.ToolTip = Localization.GetLocalizedString("ANALYSIS_EXPORT_REPORT_TOOLTIP");
             HelpMenu.Header = Localization.GetLocalizedString("HELP_MENU");
             CollectLogs.Header = Localization.GetLocalizedString("COLLECT_LOGS");
             ViewGDKXInfo.Header = Localization.GetLocalizedString("GDKX_INFO");
@@ -125,6 +135,11 @@ namespace XMAT
                 return;
             }
 
+            if (!await _analysisReportExportWorkflow.RequestCloseAsync())
+            {
+                return;
+            }
+
             _isCloseInProgress = true;
             var wasEnabled = IsEnabled;
             IsEnabled = false;
@@ -165,6 +180,10 @@ namespace XMAT
             }
             finally
             {
+                if (!_closeConfirmed)
+                {
+                    _analysisReportExportWorkflow.CancelClosing();
+                }
                 _isCloseInProgress = false;
                 IsEnabled = wasEnabled;
             }
@@ -655,6 +674,57 @@ namespace XMAT
             ThemeManager.ApplyTheme(theme);
             CaptureAppModel.AppModel.PreferencesModel.Theme = theme;
             CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+        }
+
+        private void ExportAnalysisReport_CanExecute(
+            object sender,
+            CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute =
+                !_analysisReportExportWorkflow.IsRunning &&
+                !_analysisReportExportWorkflow.ClosingStarted &&
+                AnalysisReportExportCommand.CanExecute(
+                    CaptureAppModel.AppModel.AnalysisRuns);
+        }
+
+        private async void ExportAnalysisReport_Executed(
+            object sender,
+            ExecutedRoutedEventArgs e)
+        {
+            try
+            {
+                AnalysisExportSource source =
+                    AnalysisReportExportCommand.SnapshotSelected(
+                    CaptureAppModel.AppModel.AnalysisRuns);
+                if (source == null ||
+                    _analysisReportExportWorkflow.ClosingStarted)
+                {
+                    return;
+                }
+
+                await _analysisReportExportWorkflow.RunAsync(
+                    source);
+            }
+            catch (Exception exception) when (
+                !ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"Analysis report export workflow failed: {exception}");
+            }
+        }
+
+        private async Task<string> ExportAnalysisReportAsync(
+            AnalysisExportSource source,
+            string destinationParent)
+        {
+            using (PublicUtilities.BlockingOperation())
+            {
+                return await Task.Run(() =>
+                    new AnalysisReportExporter().Export(
+                        source,
+                        destinationParent));
+            }
         }
     }
 }

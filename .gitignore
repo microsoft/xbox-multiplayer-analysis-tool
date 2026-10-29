@@ -399,3 +399,10 @@ FodyWeavers.xsd
 
 # Test results and coverage
 TestResults/
+
+# Owned analysis report test fixtures
+/.xec-*/
+/.xmf-*/
+/.xre-*/
+/.xtr-*/
+/.xmat-render-*/

@@ -26,6 +26,9 @@ namespace XMAT
         public static readonly RoutedUICommand AnalyzeCaptures =
             new RoutedUICommand("Analy_ze Current Capture", "Analyze Current Capture", typeof(AppCommands), new InputGestureCollection() { new KeyGesture(Key.A, ModifierKeys.Control) });
 
+        public static readonly RoutedUICommand ExportAnalysisReport =
+            new RoutedUICommand("Export Analysis Report...", "ExportAnalysisReport", typeof(AppCommands));
+
         public static readonly RoutedUICommand ClearAllCaptures =
             new RoutedUICommand("Clear _All Captures", "Clear All Captures", typeof(AppCommands), new InputGestureCollection() { new KeyGesture(Key.X, ModifierKeys.Control) });
 
