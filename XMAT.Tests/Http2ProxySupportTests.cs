@@ -1468,8 +1468,8 @@ namespace XMAT.Tests
                         connectionIds.Add(item.Value.ConnectionID);
                         Assert.Equal("HTTP/2", request.Version);
                         Assert.Equal("HTTP/2", response.Version);
-                        Assert.NotNull(request.StreamId);
-                        Assert.True(streamIds.Add(request.StreamId.Value));
+                        int streamId = Assert.IsType<int>(request.StreamId);
+                        Assert.True(streamIds.Add(streamId));
                         Assert.True(requestNumbers.Add(request.RequestNumber));
                         Assert.Equal(request.RequestNumber, response.RequestNumber);
                         Assert.Equal(request.StreamId, response.StreamId);

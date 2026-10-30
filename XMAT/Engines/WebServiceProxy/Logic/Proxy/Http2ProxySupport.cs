@@ -753,16 +753,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal static ISet<string> GetConnectionHeaderNames(HeaderCollection headers)
         {
-            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string value in headers.GetHeaderValuesAsList("Connection") ?? Array.Empty<string>())
-            {
-                foreach (string trimmed in value.Split(',').Select(name => name.Trim()))
-                {
-                    if (trimmed.Length != 0)
-                        names.Add(trimmed);
-                }
-            }
-            return names;
+            return (headers.GetHeaderValuesAsList("Connection") ?? Array.Empty<string>())
+                .SelectMany(value => value.Split(','))
+                .Select(name => name.Trim())
+                .Where(name => name.Length != 0)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
         internal static bool IsHopByHopHeader(
