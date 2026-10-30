@@ -118,7 +118,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 RequestUri = uri,
                 Version = HttpVersion.Version20,
                 VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
-                Content = new ByteArrayContent(request.BodyBytes ?? Array.Empty<byte>())
+                Content = new BufferedRequestContent(request.BodyBytes ?? Array.Empty<byte>())
             };
 
             var connectionHeaderNames = ProxyHeaderUtilities.GetConnectionHeaderNames(request.Headers);
@@ -129,7 +129,7 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             foreach (KeyValuePair<string, IEnumerable<string>> header in request.ContentHeaders)
             {
-                // ByteArrayContent calculates the length from the potentially
+                // Content calculates the length from the potentially
                 // script-modified body, so never forward a stale client value.
                 if (!ProxyHeaderUtilities.IsHopByHopHeader(header.Key, connectionHeaderNames) &&
                     !string.Equals(
@@ -143,6 +143,26 @@ namespace XMAT.WebServiceCapture.Proxy
                 }
             }
             return message;
+        }
+
+        // ByteArrayContent disables duplex HTTP/2 sending. An origin that
+        // responds while reading can then exhaust its response window before the
+        // upload finishes. Custom content allows HttpClient to drain both directions,
+        // while XMAT still captures and edits complete buffered bodies.
+        private sealed class BufferedRequestContent(byte[] body) : HttpContent
+        {
+            protected override bool TryComputeLength(out long length)
+            {
+                length = body.Length;
+                return true;
+            }
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext context) =>
+                SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+            protected override Task SerializeToStreamAsync(
+                Stream stream, TransportContext context, CancellationToken cancellationToken) =>
+                stream.WriteAsync(body, cancellationToken).AsTask();
         }
     }
 
