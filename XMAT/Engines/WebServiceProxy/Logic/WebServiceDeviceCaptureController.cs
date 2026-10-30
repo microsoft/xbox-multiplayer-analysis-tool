@@ -128,6 +128,7 @@ namespace XMAT.WebServiceCapture
         public UInt16 PendingPort => _parameters.PendingPort;
         public bool HasPendingPort => PendingPort != 0;
         public string PortStatus { get => _portStatus; private set { _portStatus = value; RaisePropertyChange(); } }
+        public string ImportNotice { get; private set; }
         public string CaptureStatusText => Localization.GetLocalizedString(
             _readOnly ? "PROXY_CAPTURE_READ_ONLY" : IsRunning ? "PROXY_CAPTURE_RUNNING" : "PROXY_CAPTURE_STOPPED");
         public string PortDescription => Localization.GetLocalizedString(
@@ -175,6 +176,17 @@ namespace XMAT.WebServiceCapture
                 _selectedWebSocketMessage = value;
                 RaisePropertyChange();
             }
+        }
+
+        internal void SetImportNotice(string notice)
+        {
+            if (ImportNotice == notice)
+            {
+                return;
+            }
+
+            ImportNotice = notice;
+            RaisePropertyChange(nameof(ImportNotice));
         }
 
         private const int LoadedCapturesPageBreakSize = 100;

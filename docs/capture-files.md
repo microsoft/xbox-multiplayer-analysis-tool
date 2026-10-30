@@ -34,6 +34,18 @@ for that attempt. If re-importing a same-named `.SAZ` fails, the existing tab,
 selection, and data stay unchanged. Retry without restarting XMAT; details are in
 `application.log` in the application's `Logs` directory.
 
+XMAT checks `.SAZ` archives before importing them and never changes them:
+
+- A `.SAZ` archive's directory is checked before it is read: an archive that lists
+  more than 750,064 files, has a directory larger than 80 MiB, spans several disks or
+  has an inconsistent directory is refused.
+- Each request or response in a `.SAZ` may have at most 16,384 header lines and 16 MiB
+  of header data (its first line, the header lines and the empty line that ends them);
+  a larger message stops the import rather than being truncated. Malformed header
+  lines and incomplete frames are skipped, and the status bar notes that data was
+  skipped. A request without a usable `Host` header is imported without a host;
+  analysis keeps its path, and the Block and Bypass actions do not apply to it.
+
 ## Export a sanitized capture
 
 1. Stop all captures and select the web proxy capture to share.
@@ -102,7 +114,9 @@ values or profile batches can therefore lose diagnostic content; these limits do
 guarantee diagnostic completeness.
 
 The completion dialog reports redactions and omissions, and SAZ session metadata
-identifies omitted request/response bodies.
+identifies omitted request/response bodies. Exports can retain headers exceeding the
+import limits (16,384 lines or 16 MiB, see above); XMAT refuses to import such an
+archive rather than truncating it.
 
 ### Cancellation and failures
 
