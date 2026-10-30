@@ -426,16 +426,27 @@ namespace XMAT.WebServiceCapture.Proxy
             string hostFull = request.Headers["Host"];
             if (!string.IsNullOrEmpty(hostFull))
             {
-                string[] hostSplit = hostFull.Split(':');
-                request.Host = hostSplit[0].Trim();
-                request.Port = hostSplit.Length > 1 ? int.Parse(hostSplit[1]) : -1;
+                // Only the authority's structure is checked: bracketed IPv6 is never split at its
+                // colons and other hosts keep the client's spelling. Malformed authorities end
+                // the connection through the explicit failed-request path.
+                if (!HostAuthority.TryParse(hostFull, out string host, out int? port))
+                {
+                    _logger.Log(connectionID, LogLevel.ERROR, $"Invalid Host authority: {hostFull}");
+                    return null;
+                }
+                request.Host = host;
+                request.Port = port ?? -1;
             }
             else if (request.Method == "CONNECT")
             {
-                // For CONNECT, the path is host:port
-                string[] pathSplit = request.Path.Split(':');
-                request.Host = pathSplit[0];
-                request.Port = pathSplit.Length > 1 ? int.Parse(pathSplit[1]) : 443;
+                // For CONNECT, the path is the host:port authority
+                if (!HostAuthority.TryParse(request.Path, out string host, out int? port))
+                {
+                    _logger.Log(connectionID, LogLevel.ERROR, $"Invalid CONNECT authority: {request.Path}");
+                    return null;
+                }
+                request.Host = host;
+                request.Port = port ?? 443;
             }
 
             return request;
@@ -463,42 +474,11 @@ namespace XMAT.WebServiceCapture.Proxy
             return -1;
         }
 
-        private static string GetHostFromPath(string path)
-        {
-            if (path.StartsWith('['))
-            {
-                int closingBracket = path.IndexOf(']');
-                if (closingBracket >= 0)
-                    return path[..(closingBracket + 1)];
-            }
-            int colon = path.IndexOf(':');
-            if (colon >= 0)
-                return path[..colon];
-            return path;
-        }
+        private static string GetHostFromPath(string path) =>
+            HostAuthority.TryParse(path, out string host, out _) ? host : path;
 
-        private static int GetPortFromPath(string path)
-        {
-            if (path.StartsWith('['))
-            {
-                int colonAfterBracket = path.IndexOf("]:");
-                if (colonAfterBracket >= 0)
-                {
-                    string portStr = path[(colonAfterBracket + 2)..];
-                    if (int.TryParse(portStr, out int port))
-                        return port;
-                }
-                return 443;
-            }
-            int colon = path.IndexOf(':');
-            if (colon >= 0)
-            {
-                string portStr = path[(colon + 1)..];
-                if (int.TryParse(portStr, out int port))
-                    return port;
-            }
-            return 443;
-        }
+        private static int GetPortFromPath(string path) =>
+            HostAuthority.TryParse(path, out _, out int? port) && port.HasValue ? port.Value : 443;
 
         private async Task TunnelConnectionAsync(int connectionID, Stream clientStream, string hostname, int port, CancellationToken ct)
         {

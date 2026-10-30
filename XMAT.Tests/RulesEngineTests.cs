@@ -148,8 +148,9 @@ namespace XMAT.Tests
                 ElapsedCallTimeMs = 100,
                 HttpStatusCode = 200
             });
-            consoleData.m_servicesHistory["test.host.com"] = callItems;
-            consoleData.m_servicesStats["test.host.com"] = new ServiceCallStats(callItems);
+            var endpoint = new EndpointKey(EndpointKind.Captured, "test.host.com");
+            consoleData.m_servicesHistory[endpoint] = callItems;
+            consoleData.m_servicesStats[endpoint] = new ServiceCallStats(callItems);
 
             engine.RunRulesOnData("Console1", consoleData);
 

@@ -163,8 +163,10 @@ namespace XMAT.WebServiceCapture
 
         public ScriptCollection Scripts { get; set; }
         public ScriptTypeCollection ScriptTypes { get; set; }
-        public BlockListModel BlockList { get; set; }
-        public BypassListModel BypassList { get; set; }
+        // The application's session host lists; stable for the controller's lifetime.
+        public HostListPolicy HostListPolicy { get; }
+        public BlockListModel BlockList => HostListPolicy.BlockList;
+        public BypassListModel BypassList => HostListPolicy.BypassList;
         public WebSocketMessageModel SelectedWebSocketMessage
         {
             get => _selectedWebSocketMessage;
@@ -206,6 +208,7 @@ namespace XMAT.WebServiceCapture
         private bool _initialized;
         private readonly ProxyPortPool _portPool;
         private readonly IProxyDeviceConfiguration _deviceConfiguration;
+        private readonly Func<IWebServiceProxy> _proxyFactory;
         private ProxyPortPool.Reservation _portReservation;
         private ProxyPortPool.Reservation _pendingPortReservation;
         private string _portStatus;
@@ -243,12 +246,16 @@ namespace XMAT.WebServiceCapture
         }
 
         // The optional classifier provider must return every assigned unicast IPv4 address and throw on failure.
+        // A null policy gives a standalone controller its own isolated lists; the application
+        // passes its shared policy so it is in place before Initialize wires the proxy.
         internal WebServiceDeviceCaptureController(
             string deviceName, DeviceType deviceType, bool readOnly, ProxyPortPool portPool,
             IProxyDeviceConfiguration deviceConfiguration = null,
             TimeSpan? scriptExecutionDeadline = null,
             Func<IEnumerable<IPAddress>> getClassifierIp4Addresses = null,
-            TimeSpan? enableFailureProbeTimeout = null)
+            TimeSpan? enableFailureProbeTimeout = null,
+            HostListPolicy hostListPolicy = null,
+            Func<IWebServiceProxy> proxyFactory = null)
         {
             _scriptExecutionDeadline =
                 scriptExecutionDeadline ?? DefaultScriptExecutionDeadline;
@@ -267,6 +274,8 @@ namespace XMAT.WebServiceCapture
             _deviceConfiguration = deviceConfiguration;
             _getClassifierIp4Addresses =
                 getClassifierIp4Addresses ?? GetAssignedUnicastIp4Addresses;
+            _proxyFactory = proxyFactory ?? (() => WebServiceProxy.CreateProxy());
+            HostListPolicy = hostListPolicy ?? new HostListPolicy();
             DeviceName = deviceName;
 
             _deviceType = deviceType;
@@ -281,8 +290,6 @@ namespace XMAT.WebServiceCapture
             WebSocketMessages = new WebSocketMessagesCollection();
             Scripts = new ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
             ScriptTypes = new ScriptTypeCollection(new Type[] { typeof(WebServiceCaptureScriptParams), typeof(ClientRequest), typeof(ServerResponse), typeof(HeaderCollection) });
-            BlockList = new BlockListModel();
-            BypassList = new BypassListModel();
             _uiUpdateQueue = new BatchedDispatcherQueue(
                 Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher,
                 UiUpdateBatchSize,
@@ -309,7 +316,7 @@ namespace XMAT.WebServiceCapture
 
                 try
                 {
-                    _webProxy = WebServiceProxy.CreateProxy();
+                    _webProxy = _proxyFactory();
                 }
                 catch
                 {
@@ -1306,7 +1313,7 @@ namespace XMAT.WebServiceCapture
 
         private bool IsRequestBlocked(ClientRequest request)
         {
-            if (BlockList == null || request == null)
+            if (request == null)
                 return false;
 
             string host = request.Host;
@@ -1320,15 +1327,15 @@ namespace XMAT.WebServiceCapture
                     host = absoluteUri.Host;
                     path = absoluteUri.PathAndQuery;
                 }
-                // Otherwise, assume CONNECT request where Path is "host:port"
+                // Otherwise, assume CONNECT request where Path is the "host:port" authority
                 else
                 {
-                    int colon = path.IndexOf(':');
-                    host = colon > 0 ? path.Substring(0, colon) : path;
+                    host = HostAuthority.TryParse(path, out string authorityHost, out _) ? authorityHost : path;
                     path = null;
                 }
             }
 
+            // The list model compares the host without its port (DNS spelling kept).
             return BlockList.IsBlocked(host, path);
         }
 

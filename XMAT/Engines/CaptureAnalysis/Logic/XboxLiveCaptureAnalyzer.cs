@@ -101,6 +101,9 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 PublicUtilities.StorageDirectoryPath,
                 $"xlca_{analysisRun.Id}");
 
+            analysisResultsModel.OutputDirectory =
+                analysisRunStorageDirectory;
+            analysisResultsModel.SourceCaptureName = sourceCaptureName;
             Directory.CreateDirectory(analysisRunStorageDirectory);
 
             // TODO: support cancellation of the analysis processing
@@ -202,7 +205,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
         }
 
         // TODO: move this to a more appropriate place
-        private WebHeaderCollection GetRequestHeadersForString(
+        private static WebHeaderCollection GetRequestHeadersForString(
             string requestLineAndHeaders)
         {
             var headers = new WebHeaderCollection();
@@ -223,7 +226,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         private static string[] AllowedNonAnalyzedHosts = { "playfab.com", "playfabapi.com" };
 
-        private ServiceCallItem ProxyConnectionModelToServiceCallItem(
+        internal static ServiceCallItem ProxyConnectionModelToServiceCallItem(
             IDataRecord dataRecord)
         {
             var requestNumber = dataRecord.Int(WebServiceCaptureMethod.FieldKey_RequestNumber);
@@ -283,6 +286,13 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 item.Host = requestHost.Split(':')[0];
             }
 
+            // The logical Host label above is unchanged; host-list actions use provenance: a
+            // structured capture host that is a host identity wins, otherwise the captured Host
+            // header parsed as an authority is used. Text that is not a host identity is kept
+            // but never actionable.
+            item.EndpointKind = EndpointKind.Captured;
+            item.PhysicalHost = GetPhysicalHost(requestHost, requestHeaders[HttpRequestHeader.Host]);
+
             // note: obtained from the .Scheme & .Call
             item.Uri = UriUtils.GetAbsoluteUri(
                 requestScheme,
@@ -307,6 +317,15 @@ namespace XMAT.XboxLiveCaptureAnalysis
             item.Method = requestMethod;
 
             return item;
+        }
+
+        private static string GetPhysicalHost(string structuredHost, string hostHeader)
+        {
+            if (HostAuthority.TryNormalizeHost(structuredHost, out string host))
+            {
+                return host;
+            }
+            return HostAuthority.TryParse(hostHeader, out host, out _) ? host : null;
         }
     }
 }

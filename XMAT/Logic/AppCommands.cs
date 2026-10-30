@@ -14,6 +14,9 @@ namespace XMAT
         public static readonly RoutedUICommand Export =
             new RoutedUICommand("_Export Captures...", "ExportCaptures", typeof(AppCommands));
 
+        public static readonly RoutedUICommand ExportSanitized =
+            new RoutedUICommand("Export Sanitized Capture...", "ExportSanitizedCapture", typeof(AppCommands));
+
         public static readonly RoutedUICommand Preferences =
             new RoutedUICommand("_Preferences", "Preferences", typeof(AppCommands));
 
@@ -22,6 +25,9 @@ namespace XMAT
 
         public static readonly RoutedUICommand AnalyzeCaptures =
             new RoutedUICommand("Analy_ze Current Capture", "Analyze Current Capture", typeof(AppCommands), new InputGestureCollection() { new KeyGesture(Key.A, ModifierKeys.Control) });
+
+        public static readonly RoutedUICommand ExportAnalysisReport =
+            new RoutedUICommand("Export Analysis Report...", "ExportAnalysisReport", typeof(AppCommands));
 
         public static readonly RoutedUICommand ClearAllCaptures =
             new RoutedUICommand("Clear _All Captures", "Clear All Captures", typeof(AppCommands), new InputGestureCollection() { new KeyGesture(Key.X, ModifierKeys.Control) });
@@ -34,5 +40,12 @@ namespace XMAT
 
         public static readonly RoutedUICommand ExportRootCert =
             new RoutedUICommand("Export Root Certificate", "ExportRootCert", typeof(AppCommands));
+
+        // Always available: the host lists are application-wide and need no selected capture.
+        public static readonly RoutedUICommand ManageHostLists =
+            new RoutedUICommand("Manage Host Lists", "ManageHostLists", typeof(AppCommands));
+
+        // Resolved when the menu markup loads, after the language has been loaded.
+        public static string ManageHostListsHeader => Localization.GetLocalizedString("HOST_LISTS_MANAGE_MENU");
     }
 }

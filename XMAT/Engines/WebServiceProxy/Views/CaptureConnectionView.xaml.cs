@@ -854,6 +854,28 @@ namespace XMAT.WebServiceCapture
                 CaptureAppModel.AppModel.CanStopCaptures;
         }
 
+        // Right-click and the menu key both open the context menu of the row that owns the
+        // event source; the target is snapshotted here instead of using the selected row.
+        private void ConnectionList_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+        {
+            if (HostListContextMenu.FindOwner(e.OriginalSource) is not DataGridRow row)
+            {
+                return;
+            }
+            if (!TryGetCaptureContext(DataContext, out _, out var controller))
+            {
+                e.Handled = true;
+                return;
+            }
+
+            HostListContextMenu.Populate(
+                row.ContextMenu,
+                controller.HostListPolicy,
+                (row.Item as ProxyConnectionModel)?.ActionableHost,
+                "HOST_LIST_NO_HOST",
+                row);
+        }
+
         internal static bool TryGetCaptureContext(
             object dataContext,
             out ICaptureDeviceContext captureDeviceContext,

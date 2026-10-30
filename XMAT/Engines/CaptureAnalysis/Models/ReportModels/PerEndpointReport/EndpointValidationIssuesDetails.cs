@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
 using XMAT.XboxLiveCaptureAnalysis.Models;
@@ -74,10 +75,18 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
     internal class EndpointValidationDetails
     {
         public string EndpointName { get; private set; }
+        // Shown text: EndpointName, qualified by its localized kind when another endpoint in
+        // the report shares the name. EndpointName itself stays the raw logical name.
+        public string DisplayName { get; private set; }
+        // Typed identity used for navigation; EndpointName is display text only.
+        public EndpointKey Key { get; private set; }
+        // Physical host offered by host-list actions, or null when not actionable.
+        public string ActionableHost { get; private set; }
         public List<EndpointValidationRuleDetails> ValidationRulesDetails { get; private set; }
 
-        public EndpointValidationDetails(EndpointReportData endpointReportData)
+        public EndpointValidationDetails(EndpointReportData endpointReportData, string displayName)
         {
+            DisplayName = displayName;
             ValidationRulesDetails = new();
             InitializeFrom(endpointReportData);
         }
@@ -85,6 +94,8 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
         private void InitializeFrom(EndpointReportData endpointReportData)
         {
             EndpointName = endpointReportData.UriService;
+            Key = endpointReportData.Key;
+            ActionableHost = endpointReportData.ActionableHost;
 
             ValidationRulesDetails.Clear();
             foreach (RuleReportData ruleReportData in endpointReportData.RuleReportData)
@@ -113,9 +124,11 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
         private void InitializeFrom(PerEndpointReportDocument reportDocument)
         {
             Endpoints.Clear();
+            Dictionary<EndpointKey, string> labels =
+                EndpointLabels.For(reportDocument.EndpointReportData.Select(data => data.Key));
             foreach (EndpointReportData endpointReportData in reportDocument.EndpointReportData)
             {
-                EndpointValidationDetails endpoint = new(endpointReportData);
+                EndpointValidationDetails endpoint = new(endpointReportData, labels[endpointReportData.Key]);
                 Endpoints.Add(endpoint);
             }
         }

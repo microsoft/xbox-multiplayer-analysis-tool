@@ -10,6 +10,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -95,6 +96,10 @@ namespace XMAT.Models
 
         internal static readonly CaptureAppModel AppModel = new();
 
+        // Session-only Block and Bypass lists shared by every capture and analysis view of this
+        // application instance. They are never saved with settings or captures.
+        internal WebServiceCapture.Models.HostListPolicy HostListPolicy { get; } = new();
+
         internal IDataTable CaptureDevicesTable { get; set; }
         internal IList<ICaptureAnalyzer> CaptureAnalyzers { get => _captureAnalyzers; }
         internal AppPreferencesModel PreferencesModel { get; set; }
@@ -140,6 +145,11 @@ namespace XMAT.Models
             CanModifyCaptureData &&
             !IsAnyCaptureRunning;
         internal bool CanStopCaptures => !IsAnalysisRunning;
+        internal bool CanExportSanitizedCaptures =>
+            CanBeginCaptureDataOperation &&
+            SelectedDeviceContext?.CaptureType == CaptureType.WebProxy &&
+            SelectedDeviceContext.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController controller &&
+            controller.ProxyConnections.Count > 0;
 
         private readonly ObservableCollection<ICaptureDeviceContext> _captureDeviceContexts = new();
         private ICaptureDeviceContext _selectedDeviceContext = null;
@@ -171,6 +181,10 @@ namespace XMAT.Models
 
         internal async Task<bool> CanCloseAsync()
         {
+            if (IsCaptureDataOperationRunning)
+            {
+                return false;
+            }
             var devices = CaptureDeviceContexts.Where(context => !context.IsReadOnly).ToList();
             foreach (var device in devices)
             {
@@ -663,6 +677,31 @@ namespace XMAT.Models
             }
         }
 
+        internal async Task<WebServiceCapture.SanitizedExportSummary> ExportSanitizedDataCapturesAsync(
+            string toFilePath, CancellationToken cancellationToken = default)
+        {
+            if (!CanExportSanitizedCaptures ||
+                !TryBeginCaptureDataOperation(out var operation, requireAllCapturesStopped: true))
+            {
+                throw new InvalidOperationException(Localization.GetLocalizedString("SANITIZED_EXPORT_UNAVAILABLE"));
+            }
+            using (operation)
+            {
+                var controller = (WebServiceCapture.WebServiceDeviceCaptureController)SelectedDeviceContext.CaptureController;
+                IEnumerable<WebServiceCapture.Models.ProxyConnectionModel> Records()
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    foreach (var record in controller.GetCaptureRecords())
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        yield return new WebServiceCapture.Models.ProxyConnectionModel(record);
+                    }
+                }
+                return await Task.Run(() => WebServiceCapture.FiddlerSazHandler.CreateSanitizedSazFile(toFilePath,
+                    Records(), cancellationToken));
+            }
+        }
+
         internal ICaptureDeviceContext AddDeviceContext(
             DeviceType deviceType,
             string deviceName,
@@ -685,7 +724,8 @@ namespace XMAT.Models
                     captureType,
                     readOnly,
                     serializedParameters,
-                    deferPortAllocation);
+                    deferPortAllocation,
+                    HostListPolicy);
                 _captureDeviceContexts.Add(newCaptureDeviceModel);
 
                 if (!readOnly)

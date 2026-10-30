@@ -247,6 +247,42 @@ switching timeline modes, and stopping a capture refresh the visible timeline wi
 live-update cadence. Stopping also displays the final response status and duration, even if no further
 requests arrive.
 
+### Blocking or Bypassing Hosts
+
+The **Block List** and **Bypass List** apply to every capture in the current session, including imported
+captures and captures created later. They are not saved: closing a capture tab keeps them, and exiting XMAT
+clears them. Each capture's Block and Bypass tabs edit these same lists, so any change there, including
+**Clear All**, applies to every capture.
+
+- **Right-click a host** in the connections list, on a timeline bar or By Host label, or on an analysis Per
+  Endpoint summary row or details header to add or remove that exact host. The menu key acts on the focused
+  row, not the selected one. **Remove** appears only when the exact entry exists, so each action undoes the
+  other, and the menu notes any wildcard that still matches.
+- **Actions > Manage Host Lists...** opens the list editors even when no capture is selected.
+- **Blocked** requests are captured but not forwarded. Block applies to new requests immediately and wins when
+  a host is in both lists, but a bypassed tunnel that is already open continues until it closes.
+- **Bypass** skips HTTPS decryption for new CONNECT tunnels; open connections keep their current mode.
+  Bypassed tunnels appear only as CONNECT rows, and scripts and path-based block patterns cannot see inside
+  them. Plain HTTP is never bypassed. This is not the Windows proxy bypass list.
+
+Entries follow these rules:
+
+- A host entry covers every port and no subdomains; use `*.example.com` for subdomains.
+- DNS names match regardless of case, but a final dot is significant: `example.com.` and `example.com` are
+  different entries.
+- IP addresses match by address, so `[::1]`, `::1`, and `0:0::1` are one entry. A complete IPv6 address such
+  as `2001:db8::1:443` is read as an address, not a host and port.
+- Entries can't include a port: `example.com:443`, `example.com:`, and `[::1]:443` are rejected with an
+  explanation.
+- Entries containing `*` or `/` are glob patterns, such as `example.com/api/*`. A colon inside a pattern is
+  matched literally and is not a port filter. Write IPv6 in patterns without brackets, such as `2001:db8::*`
+  or `::1/api/*`: an IPv6 pattern with brackets is accepted but never matches, including one that matched
+  HTTP/2 traffic in earlier versions.
+
+Analysis endpoints offer host actions only when every request in the endpoint was captured from the same
+host. Endpoints synthesized from telemetry (such as `inGameEvents`), endpoints that combine several hosts,
+and older data without recorded host provenance explain why no action is available.
+
 ### Stopping Proxying
 
 Proxying may be stopped from with Xbox Multiplayer Analysis Tool for a specific device by clicking on the “Stop Capturing”
@@ -417,6 +453,7 @@ Captures can be saved and shared using the **File** menu:
 | **Load Captures** | Opens a previously saved .XMATCAP file. Loaded captures open in read-only tabs. |
 | **Import** | Imports a Fiddler (.SAZ) archive, or a network trace (.ETL) captured with `netsh`, into a read-only tab. Re-importing the same-named .SAZ replaces that tab's data. |
 | **Export** | Exports the selected web proxy capture to a Fiddler (.SAZ) archive. |
+| **Export Sanitized Capture...** | Exports a sanitized .SAZ copy of the selected web proxy capture, without changing the original capture. Stop all captures first. |
 
 Files can also be dragged and dropped onto the main window -- .XMATCAP files are loaded, and .SAZ and .ETL
 files are imported.
@@ -425,6 +462,69 @@ If a new .SAZ import fails, XMAT reports the error and removes only the tab crea
 If re-importing a .SAZ with the same file name fails, the existing tab, its selection, and its previously imported data
 remain unchanged. You can retry the import without restarting XMAT. Error details are written to
 `application.log` in the application's `Logs` directory.
+
+### Sanitized Export
+
+Use **File > Export Sanitized Capture...** before sharing a web capture. This is a per-export
+command, not a preference: ordinary **Export** and native **Save Captures** remain unsanitized.
+Loaded and imported web captures are supported. Only the selected capture is exported.
+
+The export redacts recognized credential/cookie headers, sensitive query and form parameters,
+URL credentials, sensitive JSON/XML fields (including OAuth device codes and private JWK
+members), and common token/private-key patterns in text.
+Credential discovery covers headers, URLs, forms and structured fields before either
+direction of a session is written, including decoded Basic/userinfo components, token
+parameters, and individual cookies from repeated or combined headers. JSON keys and
+query/form parameter names are inspected. Learned values in names are masked when long
+(at least eight characters) or numeric identifiers (at least four digits), while short and
+recognized schema labels are preserved. Renamed JSON keys use collision-safe names.
+Xbox profile IDs/display names, recognized structured-body credential echoes across each
+request/response pair, and client-IP metadata are also masked. JWT recognition does not
+depend on a particular encoded-header
+prefix; standalone Xbox credentials and PGP private-key armor are recognized. Header names are
+matched without regard to case, and repeated headers are retained.
+
+JSON, XML, URL-encoded forms and plain text are inspected. Gzip, deflate and Brotli bodies
+and declared character encodings are supported; exported text is UTF-8 with updated HTTP
+framing, including bodyless HEAD/CONNECT/1xx/204/304 responses. Genuine chunk framing is
+decoded before scanning, while already-dechunked captures remain supported; ambiguous or
+malformed framing is omitted. Sensitive namespace URLs are remapped consistently in XML.
+Percent-encoded paths and nested URI/form values are inspected through at most eight
+decoding passes, preserving untouched values' original representation. Invalid UTF-8 or
+excessively nested URL/form components are redacted without discarding unrelated components
+or aborting the archive. URL values are compared literally and with form decoding, preserving
+literal `+` and matching credentials that span path segments. Learned values in URL authorities
+use a valid replacement host; structural Host and generated Content-Type headers are not
+subject to echo replacement. Password-input values in inspected XML are also redacted.
+
+Unsupported content (including binary, HTML/XHTML and multipart bodies), malformed structured
+data, JSON/XML nesting exceeding 64 levels, unknown compression/character encodings and
+bodies exceeding the 4 MiB inspection limit are omitted rather than copied unchecked.
+Scanning also has a finite work budget and a limit of 64 distinct remembered sensitive
+values or representations of at most 4,096 characters each per request/response pair.
+XML discovery includes both individual values and sensitive containers' combined text.
+Learned values are matched at token boundaries and reset before the next pair. Bodies
+exceeding format/size limits are omitted. If credential discovery exceeds capacity, or
+scanning exhausts its work budget or regex timeout in either pass, partial output is discarded
+and the pair's original URLs, headers and bodies are replaced with minimal HTTP framing.
+Large authorization values or profile batches can therefore lose diagnostic content;
+the limits are not a guarantee of diagnostic completeness.
+The completion dialog reports redactions and omissions; SAZ session metadata marks which
+request/response bodies were omitted.
+Longer exports show a cancellable progress window. Cancel, Escape, or closing that window
+requests cancellation and waits for the worker and cleanup to finish before releasing the
+operation guard. An existing destination is replaced only after a complete export, not on
+cancellation or failure.
+
+**Review the archive before sharing it.** This is best-effort detection, not a guarantee of
+anonymity: arbitrary unnamed secrets, custom encodings, and identifiers not recognized by the
+rules may remain. Nonsensitive service endpoints, paths/values, timing and request IDs are
+retained for diagnosis. The original capture data is not sanitized in place.
+HTTP header names, XML element/attribute names, and protocol method/version tokens are not
+identifier-scrubbed. Arbitrary percent-encoded text outside URL/form contexts, unrecognized
+identifier fields, and JWTs joined directly to ordinary letters can remain. Short learned
+values can also redact benign data. These exclusions still require manual review and an
+explicit decision about which identifiers a particular sharing scenario must remove.
 
 ### Importing Network Traces from Another PC
 
@@ -544,8 +644,39 @@ upper right corner of the graph indicates which hosts were called at specific po
 ![](./ReadmeImages/22.png)
 _Screenshot of the statistics report calls timeline and average call times table._
 
+Each bar, timeline series, and table row is one endpoint. When a captured host and endpoints synthesized
+from telemetry share a name (for example `inGameEvents`), they stay separate and are labeled with their
+source, such as `inGameEvents (captured host)` and `inGameEvents (synthesized telemetry)`. The Stats and Call
+report files in the analysis output folder record each endpoint's numeric `Kind` (0 unknown, 1 captured, 2
+synthesized telemetry) and `EndpointId` next to its `Uri`.
+
 Analysis report content present in its output folder within the Xbox Multiplayer Analysis Tool data storage folder can be removed
 if no longer needed once the Analysis results tab for that analysis run is closed.
+
+### Exporting an Analysis Report
+
+After an Xbox Live Trace analysis finishes, select its result tab and choose
+**Analysis > Export Analysis Report...** to copy the complete report folder to a directory you select.
+Inside that directory, XMAT creates a child folder named
+`XMAT Analysis - <capture> - <yyyy-MM-dd HHmmss>`. If that name already exists, XMAT appends
+` (2)`, ` (3)`, and so on without merging or overwriting earlier exports.
+The exported folder contains the browser-based Statistics report, JSON report data, rule findings in
+`_results.txt`, and the service-call diagnostic text files. The Statistics HTML and JSON reports describe
+the first eligible console in the capture; the diagnostic text files can contain data aggregated from all
+consoles.
+
+Analysis exports are not sanitized. They can contain request bodies and sign-in tokens, URLs, Xbox user
+IDs, console IP addresses, and telemetry. Review an export before sharing it or placing it in a
+cloud-synchronized folder. XMAT displays a confirmation describing this sensitive content before writing
+the export. For compatibility with Explorer and browsers, XMAT refuses exports when any generated path
+would reach 260 characters.
+**File > Export Sanitized Capture...** provides opt-in sanitization for .SAZ captures, not analysis
+reports; review exported content before sharing.
+
+An export failure leaves the AppData working report unchanged so the export can be retried. If XMAT
+cannot remove a temporary staging folder, the error identifies that folder for manual cleanup. Exporting
+does not move or automatically delete the working `xlca_*` folder in AppData; those folders may still be
+removed manually after their analysis tabs are closed.
 
 
 ## Network Capture
@@ -635,7 +766,7 @@ could not be confirmed.
 
 - Keep alive handling needs further improvement.
 - WebSocket messages are not yet saved to or loaded from .XMATCAP files.
-- Root certificate(s) and analysis output(s) are not stored in a user specified location.
+- Analysis outputs can be exported to a user-selected folder; working copies remain in AppData. Root certificate(s) are not stored in a user specified location.
 - Additional Localization
 
 ## Support

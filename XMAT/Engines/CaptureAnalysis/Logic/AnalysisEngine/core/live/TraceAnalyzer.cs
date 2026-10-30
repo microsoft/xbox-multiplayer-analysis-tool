@@ -33,7 +33,7 @@ namespace CaptureAnalysisEngine
         {
             foreach (var console in serviceCallData.m_perConsoleData.Values)
             {
-                if (console.m_servicesHistory.ContainsKey(endpoint))
+                if (console.m_servicesHistory.Keys.Any(key => key.LogicalName == endpoint))
                 {
                     return true;
                 }
@@ -177,7 +177,14 @@ namespace CaptureAnalysisEngine
                 rulesEngine.AddRules(m_rules);
                 rulesEngine.RunRulesOnData(console.Key, console.Value);
 
-                var reports = RunReports(rulesEngine.GetResults(console.Key), serviceCallData, reportOutputDirectory);
+                string consoleReportOutputDirectory =
+                    perConsoleReports.Count == 0
+                        ? reportOutputDirectory
+                        : null;
+                var reports = RunReports(
+                    rulesEngine.GetResults(console.Key),
+                    serviceCallData,
+                    consoleReportOutputDirectory);
 
                 perConsoleReports.Add(console.Key, reports);
             }
@@ -211,7 +218,7 @@ namespace CaptureAnalysisEngine
             {
                 foreach (var endpointData in console.m_servicesHistory)
                 {
-                    var service = m_converter.GetService(endpointData.Key);
+                    var service = m_converter.GetService(endpointData.Key.LogicalName);
 
                     if (service != null)
                     {

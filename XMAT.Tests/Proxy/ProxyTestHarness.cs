@@ -47,10 +47,12 @@ namespace XMAT.Tests.Proxy
             Port = port;
         }
 
-        public static async Task<ProxyTestHarness> StartAsync()
+        // Pass a proxy that a capture controller has already initialized to host its
+        // production policy wiring; otherwise a fresh proxy is used.
+        public static async Task<ProxyTestHarness> StartAsync(WebServiceProxy proxy = null)
         {
             X509Certificate2 certificate = CreateCertificate();
-            var proxy = new WebServiceProxy();
+            proxy ??= new WebServiceProxy();
             proxy.Reset();
 
             var tunnels = new InterceptedTunnelRegistry();

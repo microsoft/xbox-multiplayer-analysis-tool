@@ -44,7 +44,9 @@ namespace XMAT.WebServiceCapture.Proxy
                 Version = request.Protocol,
                 StreamId = context.Features.Get<IHttp2StreamIdFeature>()?.StreamId,
                 Scheme = request.Scheme,
-                Host = request.Host.Host,
+                // Kestrel keeps IPv6 brackets; capture and policy use the bracket-free IP literal
+                // and the DNS spelling the client sent.
+                Host = HostAuthority.TryNormalizeHost(request.Host.Host, out string host) ? host : request.Host.Host,
                 Port = request.Host.Port ?? GetDefaultPort(request.Scheme),
                 Method = request.Method,
                 Path = request.PathBase + request.Path + request.QueryString
@@ -54,10 +56,14 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 foreach (string value in header.Value)
                 {
+                    string storedValue = StoredHeaderValue(header.Key, value);
+                    if (storedValue == null)
+                        continue;
+
                     if (ProxyHeaderUtilities.IsContentHeader(header.Key))
-                        result.ContentHeaders.Add(header.Key, value);
+                        result.ContentHeaders.Add(header.Key, storedValue);
                     else
-                        result.Headers.Add(header.Key, value);
+                        result.Headers.Add(header.Key, storedValue);
                 }
             }
 
@@ -68,6 +74,23 @@ namespace XMAT.WebServiceCapture.Proxy
             result.BodyBytes = body.ToArray();
 
             return result;
+        }
+
+        // Kestrel already removed the final chunked coding from request.Body,
+        // so drop it from the stored header too; other codings stay as sent.
+        private static string StoredHeaderValue(string key, string value)
+        {
+            if (!string.Equals(key, "Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+                return value;
+
+            int separator = value.LastIndexOf(',');
+            if (!string.Equals(value[(separator + 1)..].Trim(), "chunked", StringComparison.OrdinalIgnoreCase))
+                return value;
+
+            string remaining = separator < 0
+                ? string.Empty
+                : value[..separator].TrimEnd(' ', '\t', ',');
+            return remaining.Length == 0 ? null : remaining;
         }
 
         private static int GetDefaultPort(string scheme)
@@ -478,9 +501,22 @@ namespace XMAT.WebServiceCapture.Proxy
                     cancellationToken).ConfigureAwait(false)
             };
 
+            // HttpClient de-chunks any body it reads but keeps the header, so drop
+            // that coding; bodyless responses keep their headers (nothing decoded).
+            if (HasMessageBody(request.Method, response.StatusCode))
+                response.Headers.TransferEncodingChunked = false;
             result.Headers.CopyFrom(response.Headers);
             result.ContentHeaders.CopyFrom(response.Content.Headers);
             return result;
+        }
+
+        // HEAD, 1xx, 204 and 304 responses have no message body to decode.
+        private static bool HasMessageBody(string method, HttpStatusCode statusCode)
+        {
+            return !HttpMethods.IsHead(method) &&
+                (int)statusCode >= 200 &&
+                statusCode != HttpStatusCode.NoContent &&
+                statusCode != HttpStatusCode.NotModified;
         }
 
         private static string GetProtocol(Version version)

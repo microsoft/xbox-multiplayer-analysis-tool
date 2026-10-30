@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Concurrent;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
@@ -58,6 +59,29 @@ namespace XMAT.Tests
             Assert.Equal("/sessions?include=members", request.Path);
             Assert.Equal(["199 first", "299 second"], request.Headers.GetHeaderValuesAsList("Warning"));
             Assert.Equal("payload", System.Text.Encoding.UTF8.GetString(request.BodyBytes));
+        }
+
+        [Theory]
+        [InlineData(new[] { "Chunked" }, null)]
+        [InlineData(new[] { "gzip ,\tchunked" }, new[] { "gzip" })]
+        [InlineData(new[] { "gzip", "chunked" }, new[] { "gzip" })]
+        public async Task CreateClientRequestAsync_DropsOnlyDecodedChunkedCoding(
+            string[] transferEncodingValues,
+            string[] expectedStoredValues)
+        {
+            DefaultHttpContext context = CreateRequestContext();
+            context.Request.Protocol = "HTTP/1.1";
+            foreach (string value in transferEncodingValues)
+                context.Request.Headers.Append("Transfer-Encoding", value);
+
+            ClientRequest request = await AspNetCoreRequestAdapter.CreateAsync(
+                context,
+                requestNumber: 1,
+                CancellationToken.None);
+
+            Assert.Equal(
+                expectedStoredValues,
+                request.Headers.GetHeaderValuesAsList("Transfer-Encoding"));
         }
 
         [Fact]
@@ -344,6 +368,54 @@ namespace XMAT.Tests
 
             Assert.Equal(statusCode, context.Response.StatusCode);
             Assert.Equal(expectedContentLength, context.Response.ContentLength);
+        }
+
+        [Theory]
+        [InlineData("GET", 103, null)]
+        [InlineData("GET", 204, null)]
+        [InlineData("GET", 304, 123L)]
+        [InlineData("HEAD", 200, 123L)]
+        public async Task InvokeAsync_KeepsChunkedCodingOfBodylessResponses(
+            string method,
+            int statusCode,
+            long? expectedContentLength)
+        {
+            var proxy = new WebServiceProxy();
+            var registry = new InterceptedTunnelRegistry();
+            registry.Register(
+                53000,
+                new InterceptedTunnelContext(1000, new ClientRequest()));
+            ServerResponse capturedResponse = null;
+            proxy.ReceivedWebResponse += (_, args) => capturedResponse = args.Response;
+            var upstreamHandler = new RecordingHandler
+            {
+                Response = new HttpResponseMessage((HttpStatusCode)statusCode)
+                {
+                    Content = new ByteArrayContent([])
+                }
+            };
+            // HttpClient decodes no body for these responses, so the header
+            // only describes the representation and must stay captured.
+            upstreamHandler.Response.Headers.TransferEncodingChunked = true;
+            upstreamHandler.Response.Content.Headers.ContentLength = 123;
+            using var httpClient = new HttpClient(upstreamHandler);
+            var application = new InterceptedProxyApplication(
+                proxy,
+                httpClient,
+                registry);
+            var context = CreateRequestContext();
+            context.Request.Method = method;
+            context.Response.Body = new BodylessResponseStream();
+
+            await application.InvokeAsync(context);
+
+            Assert.Equal(statusCode, context.Response.StatusCode);
+            Assert.Equal(expectedContentLength, context.Response.ContentLength);
+            Assert.False(context.Response.Headers.ContainsKey("Transfer-Encoding"));
+            Assert.NotNull(capturedResponse);
+            Assert.Equal(
+                ["chunked"],
+                capturedResponse.Headers.GetHeaderValuesAsList("Transfer-Encoding"));
         }
 
         [Fact]
@@ -640,6 +712,61 @@ namespace XMAT.Tests
             Assert.Equal(123, response.Content.Headers.ContentLength);
             Assert.Equal("\"version\"", response.Headers.ETag.Tag);
             Assert.Empty(await response.Content.ReadAsByteArrayAsync());
+        }
+
+        [Theory]
+        [InlineData("chunked", null)]
+        [InlineData("gzip, chunked", "gzip")]
+        public async Task InterceptedHttpHost_DropsDecodedChunkedCodingFromCapturedRequest(
+            string transferEncoding,
+            string expectedStoredCoding)
+        {
+            using var certificate = CreateCertificate();
+            var proxy = new WebServiceProxy();
+            var registry = new InterceptedTunnelRegistry();
+            var capturedRequest = new TaskCompletionSource<ClientRequest>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.ReceivedWebRequest += (_, args) => capturedRequest.TrySetResult(args.Request);
+            using var httpClient = new HttpClient(new RecordingHandler());
+            var application = new InterceptedProxyApplication(proxy, httpClient, registry);
+            string receivedTransferEncoding = null;
+            await using var host = new InterceptedHttpHost(
+                (_, _) => certificate,
+                context =>
+                {
+                    receivedTransferEncoding = context.Request.Headers.TransferEncoding.ToString();
+                    registry.TryRegister(
+                        context.Connection.RemotePort,
+                        new InterceptedTunnelContext(1000, new ClientRequest()));
+                    return application.InvokeAsync(context);
+                });
+            await host.StartAsync(CancellationToken.None);
+            using var handler = new HttpClientHandler
+            {
+                UseProxy = false,
+                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+            };
+            using var client = new HttpClient(handler);
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"https://127.0.0.1:{host.Port}/upload")
+            {
+                Version = HttpVersion.Version11,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                Content = new ByteArrayContent("request-body"u8.ToArray())
+            };
+            request.Headers.TryAddWithoutValidation("Transfer-Encoding", transferEncoding);
+
+            using HttpResponseMessage response = await client.SendAsync(request);
+
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+            ClientRequest captured = await capturedRequest.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // Kestrel passes the client's framing header through but de-chunks the body.
+            Assert.Contains("chunked", receivedTransferEncoding);
+            Assert.Equal("request-body", System.Text.Encoding.UTF8.GetString(captured.BodyBytes));
+            Assert.Equal(
+                expectedStoredCoding,
+                captured.Headers.GetHeaderValuesAsList("Transfer-Encoding")?.Single());
         }
 
         [Fact]
@@ -975,6 +1102,101 @@ namespace XMAT.Tests
             });
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ForwardProxy_DropsDecodedChunkedCodingFromCapturedResponse(
+            bool gzipEncoded)
+        {
+            string contentEncoding = gzipEncoded ? "gzip" : null;
+            byte[] body = "chunked-response-body"u8.ToArray();
+            if (gzipEncoded)
+                body = Gzip(body);
+            using var certificate = CreateCertificate();
+
+            var proxy = new WebServiceProxy();
+            proxy.Reset();
+            var capturedResponse = new TaskCompletionSource<ServerResponse>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.ReceivedWebResponse += (_, args) =>
+            {
+                if (args.Request.Path == "/chunked")
+                    capturedResponse.TrySetResult(args.Response);
+            };
+
+            var tunnels = new InterceptedTunnelRegistry();
+            var upstreamHandler = new ChunkedResponseRecorder(
+                WebServiceProxy.CreateUpstreamHandler());
+            using var upstreamClient = new HttpClient(upstreamHandler);
+            var application = new InterceptedProxyApplication(
+                proxy,
+                upstreamClient,
+                tunnels);
+            await using var intercepted = new InterceptedHttpHost(
+                (_, _) => certificate,
+                application.InvokeAsync);
+            await intercepted.StartAsync(CancellationToken.None);
+
+            using IHost origin = CreateHttp11OriginHost(
+                certificate,
+                async context =>
+                {
+                    if (contentEncoding != null)
+                        context.Response.Headers.ContentEncoding = contentEncoding;
+
+                    // Without a Content-Length, Kestrel sends this HTTP/1.1
+                    // response as chunks.
+                    await context.Response.Body.WriteAsync(body.AsMemory(0, body.Length / 2));
+                    await context.Response.Body.FlushAsync();
+                    await context.Response.Body.WriteAsync(body.AsMemory(body.Length / 2));
+                });
+            using IHost forwardHost = CreateForwardProxyHost(
+                proxy,
+                upstreamClient,
+                intercepted,
+                tunnels,
+                new Logger());
+
+            try
+            {
+                await origin.StartAsync();
+                await forwardHost.StartAsync();
+
+                using var clientHandler = new HttpClientHandler
+                {
+                    Proxy = new WebProxy($"http://127.0.0.1:{GetListeningPort(forwardHost)}"),
+                    UseProxy = true,
+                    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+                };
+                using var client = new HttpClient(clientHandler);
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Get,
+                    $"https://127.0.0.1:{GetListeningPort(origin)}/chunked")
+                {
+                    Version = HttpVersion.Version20,
+                    VersionPolicy = HttpVersionPolicy.RequestVersionExact
+                };
+
+                using HttpResponseMessage response = await client.SendAsync(request);
+
+                Assert.Equal(body, await response.Content.ReadAsByteArrayAsync());
+                ServerResponse captured = await capturedResponse.Task.WaitAsync(
+                    TimeSpan.FromSeconds(5));
+                Assert.True(upstreamHandler.ReceivedChunkedResponse);
+                Assert.Equal("HTTP/1.1", captured.Version);
+                Assert.Null(captured.Headers.GetHeaderValuesAsList("Transfer-Encoding"));
+                Assert.Equal(
+                    contentEncoding,
+                    captured.ContentHeaders.GetHeaderValuesAsList("Content-Encoding")?.Single());
+                Assert.Equal(body, captured.BodyBytes);
+            }
+            finally
+            {
+                await forwardHost.StopAsync();
+                await origin.StopAsync();
+            }
+        }
+
         // A server that refuses the WebSocket upgrade (for example 401 for an expired token)
         // must have its answer relayed to the client instead of escaping as an exception.
         [Fact]
@@ -1222,6 +1444,17 @@ namespace XMAT.Tests
                 X509KeyStorageFlags.Exportable);
         }
 
+        private static byte[] Gzip(byte[] content)
+        {
+            using var compressed = new MemoryStream();
+            using (var gzip = new GZipStream(compressed, CompressionLevel.Optimal, leaveOpen: true))
+            {
+                gzip.Write(content);
+            }
+
+            return compressed.ToArray();
+        }
+
         private sealed class Http2StreamIdFeature(int streamId) : IHttp2StreamIdFeature
         {
             public int StreamId { get; } = streamId;
@@ -1307,6 +1540,22 @@ namespace XMAT.Tests
             }
         }
 
+        // Records the origin framing before the proxy captures the response.
+        private sealed class ChunkedResponseRecorder(HttpMessageHandler innerHandler)
+            : DelegatingHandler(innerHandler)
+        {
+            public bool ReceivedChunkedResponse { get; private set; }
+
+            protected override async Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                HttpResponseMessage response = await base.SendAsync(request, cancellationToken);
+                ReceivedChunkedResponse = response.Headers.TransferEncodingChunked == true;
+                return response;
+            }
+        }
+
         private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
         {
             protected override Task<HttpResponseMessage> SendAsync(
@@ -1363,6 +1612,28 @@ namespace XMAT.Tests
                 throw new InvalidOperationException(
                     "A bodyless response must not write to the response stream, even for an empty body.");
             }
+        }
+
+        // HTTP/1.1 only: HTTP/2 has no chunked framing, and the proxy's
+        // upstream HttpClient would otherwise negotiate HTTP/2.
+        private static IHost CreateHttp11OriginHost(
+            X509Certificate2 certificate,
+            RequestDelegate application)
+        {
+            var builder = new HostBuilder();
+            builder.ConfigureWebHost(webBuilder =>
+            {
+                webBuilder.UseKestrel(options =>
+                {
+                    options.Listen(IPAddress.Loopback, 0, listenOptions =>
+                    {
+                        listenOptions.Protocols = HttpProtocols.Http1;
+                        listenOptions.UseHttps(certificate);
+                    });
+                });
+                webBuilder.Configure(app => app.Run(application));
+            });
+            return builder.Build();
         }
 
         private static IHost CreateForwardProxyHost(

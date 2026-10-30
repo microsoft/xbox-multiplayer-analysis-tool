@@ -287,24 +287,98 @@ namespace XMAT.WebServiceCapture
             archive.Dispose();
         }
 
-        private static void AddMetaEntry(ZipArchive archive, long id, FiddlerMetaData metaDataToSerialize)
+        internal static SanitizedExportSummary CreateSanitizedSazFile(
+            string filename, IEnumerable<ProxyConnectionModel> records, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!string.Equals(Path.GetExtension(filename), ".saz", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(Localization.GetLocalizedString("SANITIZED_EXPORT_SAZ_REQUIRED"), nameof(filename));
+            }
+            var destination = Path.GetFullPath(filename);
+            var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            var sanitizer = new SazSanitizer(cancellationToken);
+            try
+            {
+                using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+                {
+                    foreach (var record in records)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var (request, response) = sanitizer.SanitizeSession(
+                            record.RequestLineAndHeaders, record.RequestBody,
+                            record.ResponseLineAndHeaders, record.ResponseBody, record.Method);
+                        AddEntry(archive, EntryType.Request, record.RequestNumber, request.Headers, request.Body, cancellationToken);
+                        var metadata = new FiddlerMetaData(record.RecordRowId)
+                        {
+                            ClientBeginRequest = record.RequestTime,
+                            ClientDoneResponse = record.RequestTime + record.Duration
+                        };
+                        metadata.SetClientIP("0.0.0.0");
+                        if (!string.IsNullOrEmpty(record.ClientIP) && record.ClientIP != "0.0.0.0")
+                        {
+                            sanitizer.Summary.RedactedValues++;
+                        }
+                        if (request.BodyOmitted)
+                        {
+                            metadata.SessionFlags["x-xmat-request-body-omitted"] = "uninspectable";
+                        }
+                        if (response?.BodyOmitted == true)
+                        {
+                            metadata.SessionFlags["x-xmat-response-body-omitted"] = "uninspectable";
+                        }
+                        AddMetaEntry(archive, record.RequestNumber, metadata, cancellationToken);
+                        if (response is { } sanitizedResponse)
+                        {
+                            AddEntry(archive, EntryType.Response, record.RequestNumber,
+                                sanitizedResponse.Headers, sanitizedResponse.Body, cancellationToken);
+                        }
+                        sanitizer.Summary.Sessions++;
+                    }
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                File.Move(temporary, destination, true);
+                return sanitizer.Summary;
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(temporary);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, "Could not remove a sanitized export temporary file.");
+                }
+            }
+        }
+
+        private static void AddMetaEntry(ZipArchive archive, long id, FiddlerMetaData metaDataToSerialize,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             ZipArchiveEntry entry = archive.CreateEntry($"raw/{id}{EntryTypeMap[EntryType.Meta]}");
-            Stream s = entry.Open();
+            using Stream s = entry.Open();
             string xmlText = metaDataToSerialize.ToXmlString();
             var xmlTextBytes = Encoding.UTF8.GetBytes(xmlText);
             s.Write(xmlTextBytes);
-            s.Close();
         }
 
-        private static void AddEntry(ZipArchive archive, EntryType entryType, long id, string headers, byte[] body)
+        private static void AddEntry(ZipArchive archive, EntryType entryType, long id, string headers, byte[] body,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ZipArchiveEntry entry = archive.CreateEntry($"raw/{id}{EntryTypeMap[entryType]}");
-            Stream s = entry.Open();
+            using Stream s = entry.Open();
             var headerBytes = Encoding.ASCII.GetBytes(headers);
             s.Write(headerBytes);
-            s.Write(body);
-            s.Close();
+            ReadOnlySpan<byte> bodySpan = body;
+            for (var offset = 0; offset < bodySpan.Length; offset += 8192)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                s.Write(bodySpan.Slice(offset, Math.Min(8192, bodySpan.Length - offset)));
+            }
         }
 
         private class FiddlerMetaData
