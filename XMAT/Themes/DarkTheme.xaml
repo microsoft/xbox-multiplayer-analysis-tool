@@ -27,7 +27,7 @@
     <!-- Menu / toolbar -->
     <SolidColorBrush x:Key="MenuBackgroundBrush"            Color="#FF2D2D30"/>
     <SolidColorBrush x:Key="MenuForegroundBrush"            Color="#FFD4D4D4"/>
-    <SolidColorBrush x:Key="StatusBarBackgroundBrush"       Color="#FF007ACC"/>
+    <SolidColorBrush x:Key="StatusBarBackgroundBrush"       Color="#FF005A9E"/>
     <SolidColorBrush x:Key="StatusBarForegroundBrush"       Color="White"/>
     <SolidColorBrush x:Key="ToolBarBackgroundBrush"         Color="#FF2D2D30"/>
     <SolidColorBrush x:Key="ToolBarForegroundBrush"         Color="#FFD4D4D4"/>
@@ -43,7 +43,7 @@
     <SolidColorBrush x:Key="ButtonBackgroundBrush"          Color="#FF3F3F46"/>
     <SolidColorBrush x:Key="ButtonForegroundBrush"          Color="#FFD4D4D4"/>
     <SolidColorBrush x:Key="ButtonHoverBackgroundBrush"     Color="#FF505058"/>
-    <SolidColorBrush x:Key="ButtonPressedBackgroundBrush"   Color="#FF007ACC"/>
+    <SolidColorBrush x:Key="ButtonPressedBackgroundBrush"   Color="#FF005A9E"/>
 
     <!-- TextBox / Input -->
     <SolidColorBrush x:Key="TextBoxBackgroundBrush"         Color="#FF1E1E1E"/>

@@ -156,11 +156,85 @@ namespace XMAT.Tests
         [Theory]
         [InlineData("Light")]
         [InlineData("Dark")]
+        public void ScriptEditorButtons_EnabledTextMeetsMinimumContrast(string theme)
+        {
+            _application.Run(window =>
+            {
+                window.Resources.Remove("PrimaryForegroundBrush");
+                window.Resources.Remove("SecondaryForegroundBrush");
+                window.Resources.MergedDictionaries.Add(Theme(theme));
+                var scripts = new Scripting.ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
+                foreach (var script in scripts)
+                {
+                    script.Filename = "contrast-test.cs";
+                    script.Script = "Params.Continue = true;";
+                }
+                var view = new ScriptEditorView { ScriptCollection = scripts };
+                WpfTestHost.Show(window, view);
+                var buttons = Descendants(view).OfType<Button>().Cast<ButtonBase>()
+                    .Append(view.ScriptEnabled).ToArray();
+                Assert.Equal(4, buttons.Length);
+
+                foreach (var button in buttons)
+                {
+                    Assert.True(button.IsEnabled);
+                    AssertButtonTextContrast(button);
+                }
+                view.ScriptEnabled.IsChecked = true;
+                WpfTestHost.Pump();
+                AssertButtonTextContrast(view.ScriptEnabled);
+            });
+        }
+
+        private static void AssertButtonTextContrast(ButtonBase button)
+        {
+            var background = Descendants(button).OfType<Border>().First().Background;
+            Assert.True(Contrast(button.Foreground, background) >= 4.5, "Enabled button text must meet 4.5:1 contrast.");
+            Assert.All(Descendants(button).OfType<TextBlock>(),
+                text => Assert.True(Contrast(text.Foreground, background) >= 4.5, "Button label must meet 4.5:1 contrast."));
+        }
+
+        [Theory]
+        [InlineData("PrimaryForegroundBrush", "PanelBackgroundBrush")]
+        [InlineData("ButtonForegroundBrush", "ButtonBackgroundBrush")]
+        [InlineData("ButtonForegroundBrush", "ButtonHoverBackgroundBrush")]
+        [InlineData("ButtonForegroundBrush", "ButtonPressedBackgroundBrush")]
+        [InlineData("TextBoxForegroundBrush", "TextBoxBackgroundBrush")]
+        [InlineData("StatusBarForegroundBrush", "StatusBarBackgroundBrush")]
+        public void DarkTheme_TextMeetsMinimumContrast(string foreground, string background)
+        {
+            _application.Run(_ =>
+            {
+                var theme = Theme("Dark");
+                double contrast = Contrast((Brush)theme[foreground], (Brush)theme[background]);
+                Assert.True(contrast >= 4.5, $"{foreground} on {background}: {contrast:F2}:1");
+            });
+        }
+
+        private static double Contrast(Brush foreground, Brush background)
+        {
+            static double Linear(byte component)
+            {
+                double value = component / 255.0;
+                return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+            }
+
+            static double Luminance(Color color) =>
+                0.2126 * Linear(color.R) + 0.7152 * Linear(color.G) + 0.0722 * Linear(color.B);
+
+            double first = Luminance(Assert.IsType<SolidColorBrush>(foreground).Color);
+            double second = Luminance(Assert.IsType<SolidColorBrush>(background).Color);
+            return (Math.Max(first, second) + 0.05) / (Math.Min(first, second) + 0.05);
+        }
+
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
         public void DisabledButtonsAndNestedText_AreGrayAndFollowThemeChanges(string theme)
         {
             _application.Run(window =>
             {
-                AddButtonStyles(window);
+                AddButtonStyles(window.Resources);
                 var dictionary = Theme(theme);
                 window.Resources.MergedDictionaries.Add(dictionary);
                 var text = new TextBlock { Text = "Explicit button text" };
@@ -264,7 +338,7 @@ namespace XMAT.Tests
             return (T)XamlReader.Parse(element.ToString());
         }
 
-        private static void AddButtonStyles(Window window)
+        internal static void AddButtonStyles(ResourceDictionary resources)
         {
             var styles = ProductMarkup("App.xaml").Descendants(Presentation + "ResourceDictionary").First()
                 .Elements(Presentation + "Style")
@@ -280,7 +354,7 @@ namespace XMAT.Tests
                     "{x:Static ToolBar.ToggleButtonStyleKey}" => ToolBar.ToggleButtonStyleKey,
                     _ => style.TargetType
                 };
-                window.Resources[resourceKey] = style;
+                resources[resourceKey] = style;
             }
         }
 

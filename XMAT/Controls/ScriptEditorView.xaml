@@ -76,7 +76,7 @@
         </Grid>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
             <StackPanel.Resources>
-                <Style TargetType="Button">
+                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
                     <Setter Property="Padding" Value="5"/>
                     <Setter Property="Margin"  Value="5"/>
                     <Setter Property="Width"   Value="100"/>
@@ -86,7 +86,7 @@
             <ToggleButton x:Name="ScriptEnabled" Padding="5" Margin="5" Width="100" IsChecked="{Binding SelectedItem.IsEnabled, ElementName=EventSelector, Mode=OneWay}"
                                       Command="{x:Static local:ScriptCommands.ValidateScript}" CommandParameter="{Binding SelectedItem, ElementName=EventSelector}">
                 <ToggleButton.Style>
-                    <Style TargetType="{x:Type ToggleButton}">
+                    <Style TargetType="{x:Type ToggleButton}" BasedOn="{StaticResource {x:Type ToggleButton}}">
                         <Setter Property="Content">
                             <Setter.Value>
                                 <StackPanel Orientation="Horizontal">
