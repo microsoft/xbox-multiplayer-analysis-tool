@@ -38,6 +38,7 @@ namespace XMAT.SharedInterfaces
         int ColumnIndex { get; }
         FieldValueType ValueType { get; }
         string Name { get; }
+        bool IsExtension { get; }
     }
 
     public struct Field<T> : IField

@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: MIT
 
 using System.Drawing;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows.Input;
@@ -360,6 +362,279 @@ namespace XMAT.Tests
                 filter.Name == "CaptureType" &&
                 (long)filter.Value == (long)context.CaptureType);
             Assert.True(context.TestController.CloseCalled);
+        }
+
+        [Fact]
+        public async Task LoadDataCaptures_MultipleTabsReleaseDatabaseAfterLastClose()
+        {
+            string directory = Path.Combine(
+                AppContext.BaseDirectory,
+                "CaptureAppModelFixtures",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string path = SyntheticCaptures.WriteXmatcap(
+                directory,
+                "two-tabs.xmatcap",
+                new SyntheticXmatcapOptions(
+                    Devices: 2));
+            var model = new CaptureAppModel();
+            try
+            {
+                model.LoadDataCaptures(path);
+                var database =
+                    Assert.IsType<
+                        SqLtReadonlyDatabase>(
+                            model.LoadedDatabase);
+                Assert.Equal(
+                    2,
+                    LoadedCaptureDatabaseRegistry
+                        .ReferenceCount(database));
+                Assert.ThrowsAny<IOException>(
+                    () =>
+                    {
+                        using var locked =
+                            new FileStream(
+                                path,
+                                FileMode.Open,
+                                FileAccess.ReadWrite,
+                                FileShare.None);
+                    });
+
+                await model.RemoveDeviceContextAsync(
+                    model.CaptureDeviceContexts[0]);
+
+                Assert.Equal(
+                    1,
+                    LoadedCaptureDatabaseRegistry
+                        .ReferenceCount(database));
+                Assert.Same(
+                    database,
+                    LoadedCaptureDatabaseRegistry
+                        .DatabaseFor(
+                            Assert.Single(
+                                model.CaptureDeviceContexts)
+                                .CaptureController));
+
+                await model.RemoveDeviceContextAsync(
+                    Assert.Single(
+                        model.CaptureDeviceContexts));
+
+                Assert.Equal(
+                    0,
+                    LoadedCaptureDatabaseRegistry
+                        .ReferenceCount(database));
+                Assert.Null(model.LoadedDatabase);
+                using var writable =
+                    new FileStream(
+                        path,
+                        FileMode.Open,
+                        FileAccess.ReadWrite,
+                        FileShare.None);
+            }
+            finally
+            {
+                while (model.CaptureDeviceContexts.Count !=
+                    0)
+                {
+                    await model.RemoveDeviceContextAsync(
+                        model.CaptureDeviceContexts[^1]);
+                }
+                Directory.Delete(
+                    directory,
+                    true);
+            }
+        }
+
+        [Fact]
+        public async Task LoadDataCaptures_ReopeningSameFileDoesNotLeakPriorDatabase()
+        {
+            string directory = Path.Combine(
+                AppContext.BaseDirectory,
+                "CaptureAppModelFixtures",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string path = SyntheticCaptures.WriteXmatcap(
+                directory,
+                "reload.xmatcap",
+                new SyntheticXmatcapOptions(
+                    Devices: 2));
+            var model = new CaptureAppModel();
+            try
+            {
+                model.LoadDataCaptures(path);
+                var first =
+                    Assert.IsType<
+                        SqLtReadonlyDatabase>(
+                            model.LoadedDatabase);
+
+                model.LoadDataCaptures(path);
+
+                var second =
+                    Assert.IsType<
+                        SqLtReadonlyDatabase>(
+                            model.LoadedDatabase);
+                Assert.NotSame(first, second);
+                Assert.Equal(
+                    0,
+                    LoadedCaptureDatabaseRegistry
+                        .ReferenceCount(first));
+                Assert.Equal(
+                    2,
+                    LoadedCaptureDatabaseRegistry
+                        .ReferenceCount(second));
+            }
+            finally
+            {
+                while (model.CaptureDeviceContexts.Count !=
+                    0)
+                {
+                    await model.RemoveDeviceContextAsync(
+                        model.CaptureDeviceContexts[^1]);
+                }
+                Directory.Delete(
+                    directory,
+                    true);
+            }
+        }
+
+        [Fact]
+        public async Task RemoveReadOnlyContext_ReleasesDatabaseWhenCollectionNotificationThrows()
+        {
+            string directory = Path.Combine(
+                AppContext.BaseDirectory,
+                "CaptureAppModelFixtures",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string path =
+                SyntheticCaptures.WriteXmatcap(
+                    directory,
+                    "throwing-remove.xmatcap");
+            var model = new CaptureAppModel();
+            NotifyCollectionChangedEventHandler throwing =
+                (_, args) =>
+                {
+                    if (args.Action ==
+                        NotifyCollectionChangedAction.Remove)
+                    {
+                        throw new InvalidOperationException(
+                            "Injected collection notification failure.");
+                    }
+                };
+            try
+            {
+                model.LoadDataCaptures(path);
+                var database =
+                    Assert.IsType<
+                        SqLtReadonlyDatabase>(
+                            model.LoadedDatabase);
+                ICaptureDeviceContext context =
+                    Assert.Single(
+                        model.CaptureDeviceContexts);
+                model.CaptureDeviceContexts.CollectionChanged +=
+                    throwing;
+
+                await Assert.ThrowsAsync<
+                    InvalidOperationException>(
+                        () => model.RemoveDeviceContextAsync(
+                            context));
+
+                model.CaptureDeviceContexts.CollectionChanged -=
+                    throwing;
+                Assert.Empty(
+                    model.CaptureDeviceContexts);
+                Assert.Equal(
+                    0,
+                    LoadedCaptureDatabaseRegistry
+                        .ReferenceCount(database));
+                Assert.Null(model.LoadedDatabase);
+                using var exclusive =
+                    new FileStream(
+                        path,
+                        FileMode.Open,
+                        FileAccess.ReadWrite,
+                        FileShare.None);
+            }
+            finally
+            {
+                model.CaptureDeviceContexts.CollectionChanged -=
+                    throwing;
+                while (model.CaptureDeviceContexts.Count !=
+                    0)
+                {
+                    await model.RemoveDeviceContextAsync(
+                        model.CaptureDeviceContexts[^1]);
+                }
+                Directory.Delete(
+                    directory,
+                    true);
+            }
+        }
+
+        [Fact]
+        public async Task LoadDataCaptures_PartialEnumerationReleasesHandleImmediatelyOnLastClose()
+        {
+            string directory = Path.Combine(
+                AppContext.BaseDirectory,
+                "CaptureAppModelFixtures",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string path =
+                SyntheticCaptures.WriteXmatcap(
+                    directory,
+                    "partial-enumeration.xmatcap");
+            var model = new CaptureAppModel();
+            try
+            {
+                for (var iteration = 0;
+                    iteration < 50;
+                    iteration++)
+                {
+                    model.LoadDataCaptures(path);
+                    IEnumerator<IDataRecord> enumerator =
+                        model.LoadedDatabase
+                            .TableByName(
+                                WebServiceCaptureMethod
+                                    .TableName)
+                            .Dataset.DataRecords
+                            .GetEnumerator();
+                    Assert.True(
+                        enumerator.MoveNext());
+
+                    while (model.CaptureDeviceContexts.Count !=
+                        0)
+                    {
+                        await model.RemoveDeviceContextAsync(
+                            model.CaptureDeviceContexts[^1]);
+                    }
+
+                    Assert.Throws<
+                        ObjectDisposedException>(
+                            () => enumerator.MoveNext());
+                    using (var exclusive =
+                        new FileStream(
+                            path,
+                            FileMode.Open,
+                            FileAccess.ReadWrite,
+                            FileShare.None))
+                    {
+                        Assert.True(
+                            exclusive.Length > 0);
+                    }
+                    GC.KeepAlive(enumerator);
+                }
+            }
+            finally
+            {
+                while (model.CaptureDeviceContexts.Count !=
+                    0)
+                {
+                    await model.RemoveDeviceContextAsync(
+                        model.CaptureDeviceContexts[^1]);
+                }
+                Directory.Delete(
+                    directory,
+                    true);
+            }
         }
 
         [Theory]
@@ -999,6 +1274,348 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task LoadDataCaptures_ReloadReusesMatchingReadOnlyTab()
+        {
+            string directory = Path.Combine(
+                AppContext.BaseDirectory,
+                "CaptureAppModelFixtures",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string firstPath =
+                SyntheticCaptures.WriteXmatcap(
+                    directory,
+                    "first.xmatcap",
+                    new SyntheticXmatcapOptions(
+                        RequestsPerDevice: 1));
+            string secondPath =
+                SyntheticCaptures.WriteXmatcap(
+                    directory,
+                    "second.xmatcap",
+                    new SyntheticXmatcapOptions(
+                        RequestsPerDevice: 3,
+                        IncludeCanaries: true));
+            var model = new CaptureAppModel();
+            IReadonlyDatabase firstDatabase = null;
+            WebServiceDeviceCaptureController firstController =
+                null;
+            PropertyChangedEventHandler throwingHandler =
+                (_, _) =>
+                    throw new InvalidOperationException(
+                        "Test notification failure.");
+            try
+            {
+                model.LoadDataCaptures(firstPath);
+                ICaptureDeviceContext context =
+                    Assert.Single(
+                        model.CaptureDeviceContexts);
+                model.SelectedDeviceContext =
+                    context;
+                firstController =
+                    Assert.IsType<
+                        WebServiceDeviceCaptureController>(
+                            context.CaptureController);
+                firstDatabase =
+                    model.LoadedDatabase;
+                var deliveredNotifications =
+                    new List<string>();
+                firstController.PropertyChanged +=
+                    throwingHandler;
+                firstController.PropertyChanged += (_, args) =>
+                    deliveredNotifications.Add(
+                        args.PropertyName);
+
+                model.LoadDataCaptures(secondPath);
+
+                Assert.Same(
+                    context,
+                    Assert.Single(
+                        model.CaptureDeviceContexts));
+                Assert.Same(
+                    context,
+                    model.SelectedDeviceContext);
+                Assert.Same(
+                    firstController,
+                    context.CaptureController);
+                var replacement = firstController;
+                Assert.Equal(
+                    3,
+                    replacement.ProxyConnections.Count);
+                var visibleRows =
+                    replacement.ProxyConnections
+                        .Select(connection => (
+                            connection.RequestNumber,
+                            connection.Host,
+                            connection.Path))
+                        .ToArray();
+                var analyzedRows =
+                    replacement.GetCaptureRecords()
+                        .Select(record => (
+                            RequestNumber: record.Int(
+                                WebServiceCaptureMethod
+                                    .FieldKey_RequestNumber),
+                            Host: record.Str(
+                                WebServiceCaptureMethod
+                                    .FieldKey_RequestHost),
+                            Path: record.Str(
+                                WebServiceCaptureMethod
+                                    .FieldKey_RequestPath)))
+                        .ToArray();
+                Assert.Equal(visibleRows, analyzedRows);
+                Assert.Equal(
+                    visibleRows
+                        .Select(row => row.Host)
+                        .Distinct(),
+                    replacement.HostFilterList.Select(
+                        filter => filter.Text));
+                Assert.All(
+                    replacement.HostFilterList,
+                    filter => Assert.True(
+                        filter.IsChecked));
+                Assert.Contains(
+                    nameof(
+                        WebServiceDeviceCaptureController
+                            .ProxyConnections),
+                    deliveredNotifications);
+                Assert.NotSame(
+                    firstDatabase,
+                    model.LoadedDatabase);
+                Assert.Equal(
+                    0,
+                    LoadedCaptureDatabaseRegistry
+                        .ReferenceCount(
+                            Assert.IsType<
+                                SqLtReadonlyDatabase>(
+                                    firstDatabase)));
+                using var released =
+                    new FileStream(
+                        firstPath,
+                        FileMode.Open,
+                        FileAccess.ReadWrite,
+                        FileShare.None);
+            }
+            finally
+            {
+                if (firstController != null)
+                {
+                    firstController.PropertyChanged -=
+                        throwingHandler;
+                }
+                while (model.CaptureDeviceContexts.Count !=
+                    0)
+                {
+                    await model.RemoveDeviceContextAsync(
+                        model.CaptureDeviceContexts[^1]);
+                }
+                Directory.Delete(
+                    directory,
+                    true);
+            }
+        }
+
+        [Theory]
+        [InlineData("unsupported")]
+        [InlineData("limit")]
+        [InlineData("sidecar")]
+        [InlineData("location")]
+        public async Task LoadDataCaptures_OpenRefusalPreservesPriorStateAndClosesNewDatabase(
+            string kind)
+        {
+            string directory = Path.Combine(
+                AppContext.BaseDirectory,
+                "CaptureAppModelFixtures",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string originalPath =
+                SyntheticCaptures.WriteXmatcap(
+                    directory,
+                    "original.xmatcap");
+            string hostilePath =
+                HostileSqliteSchemas.CreateOrdinaryCapture(
+                    directory,
+                    "hostile.xmatcap");
+            if (kind == "unsupported")
+            {
+                HostileSqliteSchemas.CreateDatabase(
+                    directory,
+                    "extra.xmatcap",
+                    HostileSqliteSchemas.CaptureDevicesDdl,
+                    HostileSqliteSchemas.WebProxyConnectionsDdl,
+                    "CREATE TABLE XMATCANARY7f3c" +
+                    "(id INTEGER PRIMARY KEY,Value TEXT)");
+                File.Delete(hostilePath);
+                File.Move(
+                    Path.Combine(
+                        directory,
+                        "extra.xmatcap"),
+                    hostilePath);
+            }
+            else if (kind == "sidecar")
+            {
+                File.WriteAllBytes(
+                    hostilePath + "-journal",
+                    new byte[] { 1 });
+            }
+            else if (kind == "limit")
+            {
+                HostileSqliteSchemas.ReplaceSchemaSql(
+                    hostilePath,
+                    "WebProxyConnections",
+                    "CREATE TABLE WebProxyConnections(" +
+                    SyntheticCaptures.Canary +
+                    new string(
+                        'x',
+                        SqLtSchemaProfile
+                            .MaxSchemaRecordBytes *
+                        2) +
+                    ")");
+            }
+
+            byte[] hostileHash =
+                SHA256.HashData(
+                    File.ReadAllBytes(hostilePath));
+            var model = new CaptureAppModel();
+            try
+            {
+                model.LoadDataCaptures(originalPath);
+                model.SelectedDeviceContext =
+                    model.CaptureDeviceContexts.Last();
+                IReadonlyDatabase previousDatabase =
+                    model.LoadedDatabase;
+                ICaptureDeviceContext previousSelection =
+                    model.SelectedDeviceContext;
+                ICaptureDeviceContext[] previousContexts =
+                    model.CaptureDeviceContexts.ToArray();
+                var previousController =
+                    Assert.IsType<
+                        WebServiceDeviceCaptureController>(
+                            previousSelection
+                                .CaptureController);
+                var previousRows =
+                    previousController.ProxyConnections
+                        .Select(connection => (
+                            connection.RequestNumber,
+                            connection.Host,
+                            connection.Path))
+                        .ToArray();
+                string[] previousHosts =
+                    previousController.HostFilterList
+                        .Select(filter => filter.Text)
+                        .ToArray();
+
+                SqLtSchemaException exception =
+                    Assert.Throws<SqLtSchemaException>(
+                        () => model.LoadDataCaptures(
+                            hostilePath,
+                            path => kind == "location"
+                                ? new SqLtReadonlyDatabase(
+                                    path,
+                                    SqLtSchemaProfile.CreateGui(),
+                                    beforeSqliteOpens: null,
+                                    finalPathUnavailable: _ => true)
+                                : new SqLtReadonlyDatabase(path)));
+
+                (SqLtSchemaFailure expected, string expectedKey) =
+                    kind switch
+                    {
+                        "limit" => (
+                            SqLtSchemaFailure.Limit,
+                            "CAPTURE_OPEN_SCHEMA_LIMIT"),
+                        "sidecar" => (
+                            SqLtSchemaFailure.Sidecar,
+                            "CAPTURE_OPEN_SIDECAR"),
+                        "location" => (
+                            SqLtSchemaFailure.UnsupportedLocation,
+                            "CAPTURE_OPEN_LOCATION"),
+                        _ => (
+                            SqLtSchemaFailure.Unsupported,
+                            "CAPTURE_OPEN_SCHEMA_ERROR"),
+                    };
+                Assert.Equal(
+                    expected,
+                    exception.Failure);
+                Assert.DoesNotContain(
+                    SyntheticCaptures.Canary,
+                    exception.Message,
+                    StringComparison.Ordinal);
+                Assert.Same(
+                    previousDatabase,
+                    model.LoadedDatabase);
+                Assert.Same(
+                    previousSelection,
+                    model.SelectedDeviceContext);
+                Assert.Equal(
+                    previousContexts,
+                    model.CaptureDeviceContexts);
+                Assert.Same(
+                    previousController,
+                    previousSelection.CaptureController);
+                Assert.Equal(
+                    previousRows,
+                    previousController.ProxyConnections
+                        .Select(connection => (
+                            connection.RequestNumber,
+                            connection.Host,
+                            connection.Path))
+                        .ToArray());
+                Assert.Equal(
+                    previousHosts,
+                    previousController.HostFilterList
+                        .Select(filter => filter.Text)
+                        .ToArray());
+                Assert.NotEmpty(
+                    previousDatabase
+                        .TableByName(
+                            WebServiceCaptureMethod.TableName)
+                        .Dataset.DataRecords);
+                Localization.LoadLanguage("en-us");
+                Assert.Equal(
+                    expectedKey,
+                    MainWindow.CaptureOpenErrorKey(
+                        exception.Failure));
+                string message =
+                    Localization.GetLocalizedString(
+                        expectedKey);
+                Assert.DoesNotContain(
+                    "NO_IMPL_",
+                    message,
+                    StringComparison.Ordinal);
+                Assert.DoesNotContain(
+                    SyntheticCaptures.Canary,
+                    message,
+                    StringComparison.Ordinal);
+                Assert.Equal(
+                    hostileHash,
+                    SHA256.HashData(
+                        File.ReadAllBytes(hostilePath)));
+
+                File.Delete(hostilePath);
+                Assert.False(
+                    File.Exists(hostilePath));
+            }
+            finally
+            {
+                while (model.CaptureDeviceContexts.Count !=
+                    0)
+                {
+                    await model.RemoveDeviceContextAsync(
+                        model.CaptureDeviceContexts[^1]);
+                }
+                using (var exclusive =
+                    new FileStream(
+                        originalPath,
+                        FileMode.Open,
+                        FileAccess.ReadWrite,
+                        FileShare.None))
+                {
+                    Assert.True(
+                        exclusive.Length > 0);
+                }
+                DeleteDirectoryWithRetry(
+                    directory);
+            }
+        }
+
+        [Fact]
         public async Task ImportDataCapturesAsync_FailedFreshImportRemovesAttemptAndRestoresSelection()
         {
             string path = CreateRepositoryLocalSazPath();
@@ -1397,6 +2014,31 @@ namespace XMAT.Tests
                 "CaptureAppModelFixtures");
             Directory.CreateDirectory(directory);
             return Path.Combine(directory, $"{Guid.NewGuid():N}.saz");
+        }
+
+        private static void DeleteDirectoryWithRetry(
+            string path)
+        {
+            const int Attempts = 6;
+            for (var attempt = 1;
+                attempt <= Attempts;
+                attempt++)
+            {
+                try
+                {
+                    Directory.Delete(
+                        path,
+                        true);
+                    return;
+                }
+                catch (IOException) when (
+                    attempt < Attempts)
+                {
+                    // The exclusive-open assertion already proves XMAT released its handles; allow a bounded delay
+                    // only for transient external scanners touching a newly created fixture.
+                    Thread.Sleep(25);
+                }
+            }
         }
 
         private static void WriteSaz(

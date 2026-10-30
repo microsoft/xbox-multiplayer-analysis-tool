@@ -443,8 +443,17 @@ If re-importing a .SAZ with the same file name fails, the existing tab, its sele
 remain unchanged. You can retry the import without restarting XMAT. Error details are written to
 `application.log` in the application's `Logs` directory.
 
-XMAT checks .SAZ archives before importing them and never changes them:
+XMAT checks capture files before reading them and never changes them:
 
+- A .XMATCAP file may contain only the tables and columns that XMAT writes, plus extra untyped, TEXT or INTEGER
+  columns, which can be empty (NULL). A file with any other table, index, view, trigger, constraint or generated
+  column, or with a schema larger than XMAT supports, is refused. So is a file that another program has open for
+  writing, or one with SQLite journal or write-ahead log files next to it (`-journal`, `-wal` or `-shm`): open a
+  clean capture that has been closed or exported instead; XMAT leaves those files unchanged. A capture in a location
+  where Windows cannot report a normalized path, such as some network shares, is refused too; copy it to a local
+  folder first. If loading fails, the open tabs are unchanged. While a capture is open, XMAT reads only that file, and
+  other programs can read it but not change it. A loaded capture reuses the read-only tab of the same device instead
+  of opening a duplicate, and closing the last tab that shows a file releases the file.
 - A .SAZ archive's directory is checked before it is read: an archive that lists more than 750,064 files, has a
   directory larger than 80 MiB, spans several disks or has an inconsistent directory is refused.
 - Each request or response in a .SAZ may have at most 16,384 header lines and 16 MiB of header data (its first line,
