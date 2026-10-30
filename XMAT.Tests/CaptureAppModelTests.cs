@@ -15,6 +15,7 @@ using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 
 namespace XMAT.Tests
@@ -586,6 +587,410 @@ namespace XMAT.Tests
                     "/keep",
                     "unrelated");
                 Assert.Equal(2, table.Dataset.DataRecords.Count());
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public async Task ImportDataCapturesAsync_MalformedHeadersKeepFrameAndShowOneNotice()
+        {
+            string path = CreateRepositoryLocalSazPath();
+            using var database = CreateCaptureDatabase(out var table);
+            try
+            {
+                SyntheticCaptures.WriteMalformedHeaderSaz(
+                    Path.GetDirectoryName(path),
+                    Path.GetFileName(path));
+                var model = new CaptureAppModel();
+
+                await model.ImportDataCapturesAsync(
+                    ImportType.Fiddler,
+                    path,
+                    CreateFiddlerImporter(table));
+
+                var controller =
+                    (WebServiceDeviceCaptureController)
+                    model.SelectedDeviceContext.CaptureController;
+                var record =
+                    Assert.Single(controller.ProxyConnections);
+                Assert.Equal("200", record.Status);
+                Assert.Contains(
+                    "X-Xmat-Request-After-Malformed: retained",
+                    record.RequestLineAndHeaders,
+                    StringComparison.OrdinalIgnoreCase);
+                Assert.Contains(
+                    "X-Xmat-Response-After-Malformed: retained",
+                    record.ResponseLineAndHeaders,
+                    StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(
+                    "Malformed request header",
+                    record.RequestLineAndHeaders,
+                    StringComparison.Ordinal);
+                Assert.DoesNotContain(
+                    "Malformed response",
+                    record.ResponseLineAndHeaders,
+                    StringComparison.Ordinal);
+                Assert.DoesNotContain(
+                    SyntheticCaptures.Canary,
+                    record.RequestLineAndHeaders,
+                    StringComparison.Ordinal);
+                Assert.DoesNotContain(
+                    SyntheticCaptures.Canary,
+                    record.ResponseLineAndHeaders,
+                    StringComparison.Ordinal);
+                Assert.Equal(
+                    "{\"activity\":{}}",
+                    Encoding.ASCII.GetString(record.RequestBody));
+                Assert.Equal(
+                    "{\"ok\":true}",
+                    Encoding.ASCII.GetString(record.ResponseBody));
+                Assert.Equal(
+                    Localization.GetLocalizedString(
+                        "WEBCAP_IMPORT_SKIPPED_DATA_NOTICE"),
+                    controller.ImportNotice);
+                Assert.Equal(
+                    controller.ImportNotice,
+                    model.StatusBarText3);
+                Assert.DoesNotContain(
+                    SyntheticCaptures.Canary,
+                    model.StatusBarText3,
+                    StringComparison.Ordinal);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public async Task ImportDataCapturesAsync_NoticeSubscriberFailureKeepsCommittedRows()
+        {
+            string path = CreateRepositoryLocalSazPath();
+            using var database = CreateCaptureDatabase(out var table);
+            try
+            {
+                SyntheticCaptures.WriteMalformedHeaderSaz(
+                    Path.GetDirectoryName(path),
+                    Path.GetFileName(path));
+                var model = new CaptureAppModel();
+                var errors = new List<string>();
+                model.CaptureDeviceContexts.CollectionChanged += (_, args) =>
+                {
+                    if (args.NewItems == null)
+                    {
+                        return;
+                    }
+                    foreach (ICaptureDeviceContext context in args.NewItems)
+                    {
+                        if (context.CaptureController is
+                            WebServiceDeviceCaptureController controller)
+                        {
+                            controller.PropertyChanged += (_, property) =>
+                            {
+                                if (property.PropertyName ==
+                                    nameof(
+                                        WebServiceDeviceCaptureController
+                                            .ImportNotice))
+                                {
+                                    throw new InvalidOperationException(
+                                        "Injected import notice failure.");
+                                }
+                            };
+                        }
+                    }
+                };
+
+                await model.ImportDataCapturesAsync(
+                    ImportType.Fiddler,
+                    path,
+                    (file, target) =>
+                        WebServiceCaptureMethod.MethodInstance
+                            .ImportFromFiddlerAsync(
+                                file,
+                                target,
+                                table,
+                                errors.Add));
+
+                var controller =
+                    (WebServiceDeviceCaptureController)
+                    model.SelectedDeviceContext.CaptureController;
+                Assert.Single(controller.ProxyConnections);
+                Assert.Single(table.Dataset.DataRecords);
+                Assert.Equal(
+                    Localization.GetLocalizedString(
+                        "WEBCAP_IMPORT_SKIPPED_DATA_NOTICE"),
+                    controller.ImportNotice);
+                Assert.Contains(
+                    "Injected import notice failure.",
+                    Assert.Single(errors),
+                    StringComparison.Ordinal);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public async Task ImportDataCapturesAsync_MalformedStartLinesKeepSurvivorsAndShowOneNotice()
+        {
+            string path = CreateRepositoryLocalSazPath();
+            using var database = CreateCaptureDatabase(out var table);
+            try
+            {
+                SyntheticCaptures.WriteSazFrames(
+                    Path.GetDirectoryName(path),
+                    Path.GetFileName(path),
+                    new[]
+                    {
+                        SyntheticSazFrameKind.Valid,
+                        SyntheticSazFrameKind.MalformedRequestStartLine,
+                        SyntheticSazFrameKind.Valid,
+                        SyntheticSazFrameKind.MalformedResponseStartLine,
+                    });
+                var model = new CaptureAppModel();
+
+                await model.ImportDataCapturesAsync(
+                    ImportType.Fiddler,
+                    path,
+                    CreateFiddlerImporter(table));
+
+                var controller =
+                    (WebServiceDeviceCaptureController)
+                    model.SelectedDeviceContext.CaptureController;
+                Assert.Equal(
+                    new long[] { 1, 3 },
+                    controller.ProxyConnections.Select(
+                        record => record.RequestNumber));
+                Assert.Equal(
+                    new long[] { 1, 3 },
+                    table.Dataset.DataRecords.Select(
+                        record => record.Int(
+                            WebServiceCaptureMethod
+                                .FieldKey_RequestNumber)));
+                Assert.Equal(
+                    Localization.GetLocalizedString(
+                        "WEBCAP_IMPORT_SKIPPED_DATA_NOTICE"),
+                    controller.ImportNotice);
+                Assert.Equal(
+                    controller.ImportNotice,
+                    model.StatusBarText3);
+                Assert.DoesNotContain(
+                    SyntheticCaptures.Canary,
+                    model.StatusBarText3,
+                    StringComparison.Ordinal);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public async Task ImportDataCapturesAsync_HostlessFramesAreKeptAndMalformedHostShowsOneNotice()
+        {
+            string path = CreateRepositoryLocalSazPath();
+            using var database = CreateCaptureDatabase(out var table);
+            try
+            {
+                SyntheticCaptures.WriteSazFrames(
+                    Path.GetDirectoryName(path),
+                    Path.GetFileName(path),
+                    new[]
+                    {
+                        SyntheticSazFrameKind.Valid,
+                        SyntheticSazFrameKind.MissingHost,
+                        SyntheticSazFrameKind.Valid,
+                        SyntheticSazFrameKind.MalformedHost,
+                    });
+                var model = new CaptureAppModel();
+
+                await model.ImportDataCapturesAsync(
+                    ImportType.Fiddler,
+                    path,
+                    CreateFiddlerImporter(table));
+
+                var controller =
+                    (WebServiceDeviceCaptureController)
+                    model.SelectedDeviceContext.CaptureController;
+                Assert.Equal(
+                    new long[] { 1, 2, 3, 4 },
+                    controller.ProxyConnections.Select(
+                        record => record.RequestNumber));
+                Assert.Equal(
+                    new long[] { 1, 2, 3, 4 },
+                    table.Dataset.DataRecords.Select(
+                        record => record.Int(
+                            WebServiceCaptureMethod
+                                .FieldKey_RequestNumber)));
+                Assert.Equal(
+                    new[]
+                    {
+                        "userpresence.xboxlive.com",
+                        string.Empty,
+                        "userpresence.xboxlive.com",
+                        string.Empty,
+                    },
+                    controller.ProxyConnections.Select(
+                        record => record.Host));
+                Assert.Null(
+                    controller.ProxyConnections[1]
+                        .ActionableHost);
+                Assert.Null(
+                    controller.ProxyConnections[3]
+                        .ActionableHost);
+                Assert.Equal(
+                    Localization.GetLocalizedString(
+                        "WEBCAP_IMPORT_SKIPPED_DATA_NOTICE"),
+                    model.StatusBarText3);
+                Assert.DoesNotContain(
+                    SyntheticCaptures.Canary,
+                    model.StatusBarText3,
+                    StringComparison.Ordinal);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public async Task ImportDataCapturesAsync_HeaderLimitPreservesExistingCaptureAndReturnsDataFreeMessage()
+        {
+            string path = CreateRepositoryLocalSazPath();
+            using var database = CreateCaptureDatabase(out var table);
+            try
+            {
+                WriteSaz(
+                    path,
+                    "original.example",
+                    "/original",
+                    "original body");
+                var model = new CaptureAppModel();
+                var importer = CreateFiddlerImporter(table);
+                await model.ImportDataCapturesAsync(
+                    ImportType.Fiddler,
+                    path,
+                    importer);
+                ICaptureDeviceContext originalContext =
+                    model.SelectedDeviceContext;
+                var controller =
+                    (WebServiceDeviceCaptureController)
+                    originalContext.CaptureController;
+                var originalConnections =
+                    controller.ProxyConnections;
+                var originalRows =
+                    SnapshotRows(table);
+                SyntheticCaptures.WriteHeaderLimitSaz(
+                    Path.GetDirectoryName(path),
+                    Path.GetFileName(path),
+                    response: false);
+
+                InvalidDataException exception =
+                    await Assert.ThrowsAsync<InvalidDataException>(
+                        () => model.ImportDataCapturesAsync(
+                            ImportType.Fiddler,
+                            path,
+                            importer));
+
+                Assert.Equal(
+                    Localization.GetLocalizedString(
+                        "WEBCAP_IMPORT_HEADER_LIMIT"),
+                    exception.Message);
+                string guiMessage = Localization.GetLocalizedString(
+                    "WEBCAP_IMPORT_ERROR",
+                    exception.Message);
+                Assert.DoesNotContain(
+                    SyntheticCaptures.Canary,
+                    guiMessage,
+                    StringComparison.Ordinal);
+                Assert.Same(
+                    originalContext,
+                    model.SelectedDeviceContext);
+                Assert.Same(
+                    originalConnections,
+                    controller.ProxyConnections);
+                Assert.Equal(
+                    originalRows,
+                    SnapshotRows(table));
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ImportDataCapturesAsync_ArchiveDirectoryFailurePreservesExistingCapture(
+            bool overLimit)
+        {
+            string path = CreateRepositoryLocalSazPath();
+            using var database = CreateCaptureDatabase(out var table);
+            try
+            {
+                WriteSaz(
+                    path,
+                    "original.example",
+                    "/original",
+                    "original body");
+                var model = new CaptureAppModel();
+                var importer = CreateFiddlerImporter(table);
+                await model.ImportDataCapturesAsync(
+                    ImportType.Fiddler,
+                    path,
+                    importer);
+                ICaptureDeviceContext originalContext =
+                    model.SelectedDeviceContext;
+                var controller =
+                    (WebServiceDeviceCaptureController)
+                    originalContext.CaptureController;
+                var originalConnections =
+                    controller.ProxyConnections;
+                var originalRows =
+                    SnapshotRows(table);
+                if (overLimit)
+                {
+                    SyntheticCaptures.WriteZip64SazDeclaringEntries(
+                        Path.GetDirectoryName(path),
+                        Path.GetFileName(path),
+                        SazArchivePreflight.MaxArchiveEntries + 1);
+                }
+                else
+                {
+                    SyntheticCaptures.WriteUnderstatedEntryCountZip(
+                        Path.GetDirectoryName(path),
+                        Path.GetFileName(path));
+                }
+
+                InvalidDataException exception =
+                    await Assert.ThrowsAsync<InvalidDataException>(
+                        () => model.ImportDataCapturesAsync(
+                            ImportType.Fiddler,
+                            path,
+                            importer));
+
+                Assert.Equal(
+                    Localization.GetLocalizedString(
+                        overLimit
+                            ? "WEBCAP_IMPORT_ARCHIVE_LIMIT"
+                            : "WEBCAP_IMPORT_ARCHIVE_INVALID"),
+                    exception.Message);
+                Assert.IsType<SazArchiveException>(
+                    exception.InnerException);
+                Assert.Same(
+                    originalContext,
+                    model.SelectedDeviceContext);
+                Assert.Same(
+                    originalConnections,
+                    controller.ProxyConnections);
+                Assert.Equal(
+                    originalRows,
+                    SnapshotRows(table));
             }
             finally
             {

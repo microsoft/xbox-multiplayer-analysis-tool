@@ -35,6 +35,8 @@ namespace CaptureAnalysisEngine
 
         public static String DisplayName { get { return Localization.GetLocalizedString("LTA_FREQ_CALLS_TITLE"); } }
         public static String Description { get { return Localization.GetLocalizedString("LTA_FREQ_CALLS_DESC"); } }
+        private static readonly Uri RelativeUriBase =
+            new("https://xmat.invalid/");
 
         // Some service endpoints have multiple sets of limits depending on subpath. For example, presence.xboxlive.com
         // has seperate limits for reading and writing presence.
@@ -66,7 +68,7 @@ namespace CaptureAnalysisEngine
                     foreach (var subpath in limits.m_applicableSubpaths)
                     {
                         var subpathRegex = new Regex("^" + Regex.Escape(subpath).Replace("\\?", ".").Replace("\\*", ".*") + "$");
-                        if (subpathRegex.IsMatch(new Uri(serviceCall.Uri).AbsolutePath))
+                        if (subpathRegex.IsMatch(GetPath(serviceCall)))
                         {
                             return true;
                         }
@@ -128,6 +130,34 @@ namespace CaptureAnalysisEngine
             result.Results.Add(TimesBurstExceededDataKey, m_endpointBurstViolations);
 
             return result;
+        }
+
+        private static string GetPath(ServiceCallItem serviceCall)
+        {
+            if (string.IsNullOrEmpty(serviceCall.Host) &&
+                !HasScheme(serviceCall.Uri) &&
+                Uri.TryCreate(
+                    serviceCall.Uri,
+                    UriKind.Relative,
+                    out Uri relative))
+            {
+                // The base is used only to parse the path and is never retained as call provenance.
+                return new Uri(
+                    RelativeUriBase,
+                    relative).AbsolutePath;
+            }
+
+            return new Uri(serviceCall.Uri).AbsolutePath;
+        }
+
+        private static bool HasScheme(string value)
+        {
+            int separator = value?.IndexOf(':') ?? -1;
+            return separator > 0 &&
+                Uri.CheckSchemeName(
+                    value.Substring(
+                        0,
+                        separator));
         }
 
         // TODO: ignoring serialization for now

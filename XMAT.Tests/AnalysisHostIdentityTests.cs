@@ -139,6 +139,49 @@ namespace XMAT.Tests
             Assert.Equal(expected, item.PhysicalHost);
         }
 
+        // A capture row without a usable Host keeps its request path; analysis never invents an authority for it.
+        [Fact]
+        public void HostlessCapturedRecords_KeepTheirPathWithoutAHost()
+        {
+            const string RequestPath = "/users/xuid(2533274800000000)/devices/current/titles/current?index=1";
+
+            ServiceCallItem item = XboxLiveCaptureAnalyzer.ProxyConnectionModelToServiceCallItem(
+                new CaptureRecord(string.Empty, null, RequestPath));
+
+            Assert.NotNull(item);
+            Assert.Equal(string.Empty, item.Host);
+            Assert.Equal(RequestPath, item.Uri);
+            Assert.Null(item.PhysicalHost);
+        }
+
+        // The shipped rules, including the call-frequency rule that applies to every endpoint, analyze hostless rows.
+        [Fact]
+        public void HostlessCapturedRecords_AreAnalyzedWithTheShippedRules()
+        {
+            Localization.LoadLanguage("en-us");
+            List<ServiceCallItem> items = Enumerable.Range(0, 12)
+                .Select(index => XboxLiveCaptureAnalyzer.ProxyConnectionModelToServiceCallItem(
+                    new CaptureRecord(
+                        string.Empty,
+                        null,
+                        $"/users/xuid(253327480000000{index % 3})/devices/current/titles/current?index={index}")))
+                .ToList();
+            Assert.All(items, item => Assert.Equal(string.Empty, item.Host));
+            var data = new ServiceCallData(false);
+            data.CreateFromServiceCallItems(items);
+            var analyzer = new TraceAnalyzer();
+            analyzer.LoadURIMap(ShippedData("XboxLiveTraceAnalyzer.APIMap.csv"));
+            analyzer.LoadRules(ShippedData("XboxLiveTraceAnalyzer.Rules.json"));
+            analyzer.AddReports(new Report[] { new PerEndpointReport(), new CallReport(), new StatsReport() });
+            analyzer.RunUriConverterOnData(data);
+
+            Dictionary<string, IEnumerable<ReportDocument>> reports =
+                analyzer.Run(new RulesEngine(false), data, null);
+
+            Assert.Equal(new[] { ConsoleAddress }, reports.Keys);
+            Assert.Equal(3, reports[ConsoleAddress].Count());
+        }
+
         // A host captured in a legacy spelling is analyzed like any other, but it is not a host
         // identity, so its endpoint never offers host actions.
         [Fact]
@@ -230,6 +273,13 @@ namespace XMAT.Tests
             ReqBody = string.Empty
         };
 
+        private static string ShippedData(string fileName)
+        {
+            string path = Path.Combine(AppContext.BaseDirectory, "Data", fileName);
+            Assert.True(File.Exists(path), $"Shipped analysis data is missing: {path}");
+            return path;
+        }
+
         private static ServiceCallItem Legacy(uint id, string host)
         {
             ServiceCallItem item = Captured(id, host);
@@ -269,7 +319,10 @@ namespace XMAT.Tests
             $"{{\"name\":\"Microsoft.XboxLive.T12345678.{name}\",\"time\":\"{Start.AddSeconds(second):o}\",\"data\":{{\"baseData\":{{}}}}}}";
 
         // A captured proxy row as stored in the capture table.
-        private sealed class CaptureRecord(string structuredHost, string hostHeader) : IDataRecord
+        private sealed class CaptureRecord(
+            string structuredHost,
+            string hostHeader,
+            string requestPath = "https://api.example.com/users/me") : IDataRecord
         {
             public int RowId => 1;
 
@@ -283,10 +336,10 @@ namespace XMAT.Tests
                 WebServiceCaptureMethod.FieldKey_RequestHost => structuredHost,
                 WebServiceCaptureMethod.FieldKey_RequestPort => "443",
                 WebServiceCaptureMethod.FieldKey_RequestMethod => "GET",
-                WebServiceCaptureMethod.FieldKey_RequestPath => "https://api.example.com/users/me",
+                WebServiceCaptureMethod.FieldKey_RequestPath => requestPath,
                 WebServiceCaptureMethod.FieldKey_RequestStatus => "200",
                 WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders =>
-                    "GET https://api.example.com/users/me HTTP/1.1\r\n" +
+                    $"GET {requestPath} HTTP/1.1\r\n" +
                     (hostHeader == null ? string.Empty : $"Host: {hostHeader}\r\n") +
                     "x-xbl-api-build-version: adk\r\n",
                 WebServiceCaptureMethod.FieldKey_ClientIP => ConsoleAddress,

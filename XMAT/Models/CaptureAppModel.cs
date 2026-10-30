@@ -90,7 +90,7 @@ namespace XMAT.Models
         public string StatusBarText3
         {
             get => SelectedDeviceContext?.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController proxy
-                ? proxy.PortStatus : _statusBarText3;
+                ? proxy.ImportNotice ?? proxy.PortStatus : _statusBarText3;
             set { _statusBarText3 = value; RaisePropertyChange(); }
         }
 
@@ -311,7 +311,8 @@ namespace XMAT.Models
                 (!string.IsNullOrEmpty(e.PropertyName) &&
                  e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.CaptureStatusText) &&
                  e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.PortDescription) &&
-                 e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.PortStatus)))
+                 e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.PortStatus) &&
+                 e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.ImportNotice)))
             {
                 return;
             }

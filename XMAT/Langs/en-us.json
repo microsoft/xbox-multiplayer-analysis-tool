@@ -334,6 +334,10 @@
 	"WEBCAP_ANALYSIS_ERROR_TITLE": "Analyzer Error",
 	"WEBCAP_IMPORT_ERROR_TITLE": "Import Error",
 	"WEBCAP_IMPORT_ERROR": "The capture could not be imported.\n\n{0}",
+	"WEBCAP_IMPORT_HEADER_LIMIT": "The capture contains too many HTTP header lines or too much HTTP header data.",
+	"WEBCAP_IMPORT_SKIPPED_DATA_NOTICE": "Some incomplete frames or malformed HTTP header lines were skipped while importing the capture.",
+	"WEBCAP_IMPORT_ARCHIVE_LIMIT": "The capture archive lists more files, or has a larger directory, than XMAT can import.",
+	"WEBCAP_IMPORT_ARCHIVE_INVALID": "The capture archive is damaged or uses an unsupported ZIP layout.",
 	"WEBCAP_ANALYSIS_ERROR_NOSUITABLE": "The capture does not contain any endpoints which XMAT can analyze.",
 	"WEBCAP_ANALYSIS_ERROR_UNKNOWN": "An unknown error occurred",
 
