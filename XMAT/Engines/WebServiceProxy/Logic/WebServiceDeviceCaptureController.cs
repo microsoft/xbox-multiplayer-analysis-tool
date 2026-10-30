@@ -682,6 +682,46 @@ namespace XMAT.WebServiceCapture
                     ProxyConnections.AddFromDataRecord(record, true);
                 }
             }
+            StatusFilterList = UpdateFilter(
+                ProxyConnections
+                    .Select(connection => connection.Status)
+                    .Distinct()
+                    .ToList());
+            HostFilterList = UpdateFilter(
+                ProxyConnections
+                    .Select(connection => connection.Host)
+                    .Distinct()
+                    .ToList());
+            MethodFilterList = UpdateFilter(
+                ProxyConnections
+                    .Select(connection => connection.Method)
+                    .Distinct()
+                    .ToList());
+            NotifyPropertyChangesSafely(
+                nameof(StatusFilterList),
+                nameof(HostFilterList),
+                nameof(MethodFilterList));
+        }
+
+        internal void ReplaceLoadedCapturesFrom(
+            WebServiceDeviceCaptureController source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            _captureDataSource = source._captureDataSource;
+            _loadedCaptureDataset = source._loadedCaptureDataset;
+            ProxyConnections = source.ProxyConnections;
+            StatusFilterList = source.StatusFilterList;
+            HostFilterList = source.HostFilterList;
+            MethodFilterList = source.MethodFilterList;
+            _selectedConnectionModel = null;
+            _selectedWebSocketMessage = null;
+            NotifyPropertyChangesSafely(
+                nameof(ProxyConnections),
+                nameof(StatusFilterList),
+                nameof(HostFilterList),
+                nameof(MethodFilterList),
+                nameof(SelectedConnectionModel),
+                nameof(SelectedWebSocketMessage));
         }
 
         internal IEnumerable<IDataRecord> GetCaptureRecords()
@@ -1800,6 +1840,40 @@ namespace XMAT.WebServiceCapture
         public void RaisePropertyChange([CallerMemberName] string name = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        }
+
+        private void NotifyPropertyChangesSafely(
+            params string[] propertyNames)
+        {
+            Delegate[] subscribers =
+                PropertyChanged?.GetInvocationList();
+            if (subscribers == null)
+            {
+                return;
+            }
+            foreach (string propertyName in propertyNames)
+            {
+                var args =
+                    new PropertyChangedEventArgs(
+                        propertyName);
+                foreach (Delegate subscriber in subscribers)
+                {
+                    try
+                    {
+                        ((PropertyChangedEventHandler)subscriber)(
+                            this,
+                            args);
+                    }
+                    catch (Exception exception) when (
+                        !ExceptionUtilities.IsFatal(
+                            exception))
+                    {
+                        PublicUtilities.AppLog(
+                            LogLevel.ERROR,
+                            $"Capture reload notification failed: {exception}");
+                    }
+                }
+            }
         }
     }
 }

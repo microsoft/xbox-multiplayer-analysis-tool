@@ -16,10 +16,23 @@ namespace XMAT.DataAbstractionLayer
 
         internal static object GetFieldValue(
             SqliteDataReader reader,
-            int columnIndex,
-            FieldValueType fieldValueType)
+            IFieldDefinition fieldDefinition)
         {
-            switch (fieldValueType)
+            ArgumentNullException.ThrowIfNull(reader);
+            ArgumentNullException.ThrowIfNull(fieldDefinition);
+            int columnIndex =
+                fieldDefinition.ColumnIndex;
+            if (reader.IsDBNull(columnIndex))
+            {
+                if (!fieldDefinition.IsExtension)
+                {
+                    throw new InvalidOperationException(
+                        "A required capture field is NULL.");
+                }
+                return null;
+            }
+
+            switch (fieldDefinition.ValueType)
             {
                 case FieldValueType.Integer:
                     return reader.GetInt64(columnIndex);

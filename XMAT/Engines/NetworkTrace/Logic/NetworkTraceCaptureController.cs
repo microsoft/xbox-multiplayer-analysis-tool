@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -315,7 +316,134 @@ namespace XMAT.NetworkTrace
                     NetworkTracePackets.AddFromDataRecord(record);
                 }
 
-                RaisePropertyChange(nameof(NetworkTracePackets));
+                PidFilterList = CreateFilterList(
+                    NetworkTracePackets
+                        .OrderBy(packet => packet.ProcessId)
+                        .Select(packet =>
+                            packet.ProcessId.ToString(
+                                CultureInfo.InvariantCulture))
+                        .Distinct());
+                TidFilterList = CreateFilterList(
+                    NetworkTracePackets
+                        .OrderBy(packet => packet.ThreadId)
+                        .Select(packet =>
+                            packet.ThreadId.ToString(
+                                CultureInfo.InvariantCulture))
+                        .Distinct());
+                ProtocolFilterList = CreateFilterList(
+                    NetworkTracePackets
+                        .OrderBy(packet => packet.Protocol)
+                        .Select(packet =>
+                            ProtocolFilterName(
+                                packet.Protocol))
+                        .Distinct());
+                SourceIpFilterList = CreateFilterList(
+                    NetworkTracePackets
+                        .OrderBy(packet =>
+                            packet.SourceIpv4Address)
+                        .Select(packet =>
+                            packet.SourceIpv4Address)
+                        .Distinct());
+                DestIpFilterList = CreateFilterList(
+                    NetworkTracePackets
+                        .OrderBy(packet =>
+                            packet.DestinationIpv4Address)
+                        .Select(packet =>
+                            packet.DestinationIpv4Address)
+                        .Distinct());
+                NotifyPropertyChangesSafely(
+                    nameof(PidFilterList),
+                    nameof(TidFilterList),
+                    nameof(ProtocolFilterList),
+                    nameof(SourceIpFilterList),
+                    nameof(DestIpFilterList),
+                    nameof(NetworkTracePackets),
+                    nameof(HaveTraces),
+                    nameof(HaveNoTraces));
+            }
+        }
+
+        internal void ReplaceLoadedCapturesFrom(
+            NetworkTraceCaptureController source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            NetworkTracePackets =
+                source.NetworkTracePackets;
+            PidFilterList = source.PidFilterList;
+            TidFilterList = source.TidFilterList;
+            ProtocolFilterList =
+                source.ProtocolFilterList;
+            SourceIpFilterList =
+                source.SourceIpFilterList;
+            DestIpFilterList =
+                source.DestIpFilterList;
+            FilteredItems = null;
+            NotifyPropertyChangesSafely(
+                nameof(PidFilterList),
+                nameof(TidFilterList),
+                nameof(ProtocolFilterList),
+                nameof(SourceIpFilterList),
+                nameof(DestIpFilterList),
+                nameof(NetworkTracePackets),
+                nameof(HaveTraces),
+                nameof(HaveNoTraces));
+        }
+
+        private static ObservableCollection<CheckedListItem>
+            CreateFilterList(
+                IEnumerable<string> values) =>
+            new(
+                values.Select(value =>
+                    new CheckedListItem
+                    {
+                        IsChecked = true,
+                        Text = value,
+                    }));
+
+        private static string ProtocolFilterName(
+            int protocol) =>
+            Enum.IsDefined(
+                typeof(NetworkProtocol),
+                protocol)
+                ? protocol.ToString(
+                    CultureInfo.InvariantCulture) +
+                    " (" +
+                    ((NetworkProtocol)protocol).ToString() +
+                    ")"
+                : protocol.ToString(
+                    CultureInfo.InvariantCulture);
+
+        private void NotifyPropertyChangesSafely(
+            params string[] propertyNames)
+        {
+            Delegate[] subscribers =
+                PropertyChanged?.GetInvocationList();
+            if (subscribers == null)
+            {
+                return;
+            }
+            foreach (string propertyName in propertyNames)
+            {
+                var args =
+                    new PropertyChangedEventArgs(
+                        propertyName);
+                foreach (Delegate subscriber in subscribers)
+                {
+                    try
+                    {
+                        ((PropertyChangedEventHandler)subscriber)(
+                            this,
+                            args);
+                    }
+                    catch (Exception exception) when (
+                        !ExceptionUtilities.IsFatal(
+                            exception))
+                    {
+                        PublicUtilities.AppLog(
+                            LogLevel.ERROR,
+                            $"Capture reload notification failed: {exception}");
+                    }
+                }
             }
         }
     }
