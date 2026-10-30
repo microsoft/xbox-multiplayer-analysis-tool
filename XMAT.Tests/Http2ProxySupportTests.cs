@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
@@ -10,9 +11,10 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Connections;
+using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -20,6 +22,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using XMAT.Scripting;
 using XMAT.Tests.Proxy;
 using XMAT.WebServiceCapture.Proxy;
 
@@ -143,6 +146,72 @@ namespace XMAT.Tests
                 new Uri("https://example.com/"));
 
             Assert.Equal(7, message.Content.Headers.ContentLength);
+        }
+
+        [Fact]
+        public void CreateUpstreamRequest_RemovesConnectionNominatedHeaders()
+        {
+            var request = new ClientRequest { Method = "POST", BodyBytes = [0, 255, 42] };
+            request.Headers.Add("Connection", "keep-alive, X-First");
+            request.Headers.Add("Connection", " x-SECOND , Content-Type, ,");
+            request.Headers["X-First"] = "connection-only";
+            request.Headers["X-Second"] = "connection-only";
+            request.Headers["X-End-To-End"] = "retained";
+            request.ContentHeaders["Content-Type"] = "application/octet-stream";
+
+            using var message = ProxyHttpRequestFactory.Create(
+                request, new Uri("https://example.com/"));
+
+            Assert.False(message.Headers.Contains("Connection"));
+            Assert.False(message.Headers.Contains("X-First"));
+            Assert.False(message.Headers.Contains("X-Second"));
+            Assert.Null(message.Content.Headers.ContentType);
+            Assert.Equal("retained", message.Headers.GetValues("X-End-To-End").Single());
+            Assert.Equal(3, message.Content.Headers.ContentLength);
+            Assert.Equal("connection-only", request.Headers["X-First"]);
+            Assert.Equal("application/octet-stream", request.ContentHeaders["Content-Type"]);
+        }
+
+        [Fact]
+        public async Task InvokeAsync_RemovesConnectionNominatedResponseHeaders()
+        {
+            var proxy = new WebServiceProxy();
+            var registry = new InterceptedTunnelRegistry();
+            registry.Register(53000, new InterceptedTunnelContext(1000, new ClientRequest()));
+            var upstreamHandler = new RecordingHandler
+            {
+                Response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("response-body")
+                }
+            };
+            upstreamHandler.Response.Headers.TryAddWithoutValidation(
+                "Connection", new[] { " X-First ", "x-second, Content-Type" });
+            upstreamHandler.Response.Headers.TryAddWithoutValidation("X-First", "connection-only");
+            upstreamHandler.Response.Headers.TryAddWithoutValidation("X-Second", "connection-only");
+            upstreamHandler.Response.Headers.TryAddWithoutValidation("X-End-To-End", "retained");
+            ServerResponse captured = null;
+            proxy.ReceivedWebResponse += (_, args) => captured = args.Response;
+            using var client = new HttpClient(upstreamHandler);
+            var application = new InterceptedProxyApplication(proxy, client, registry);
+            var context = new DefaultHttpContext();
+            context.Connection.RemotePort = 53000;
+            context.Request.Scheme = "https";
+            context.Request.Method = "GET";
+            context.Request.Host = new HostString("example.com");
+            context.Response.Body = new MemoryStream();
+
+            await application.InvokeAsync(context);
+
+            Assert.False(context.Response.Headers.ContainsKey("Connection"));
+            Assert.False(context.Response.Headers.ContainsKey("X-First"));
+            Assert.False(context.Response.Headers.ContainsKey("X-Second"));
+            Assert.False(context.Response.Headers.ContainsKey("Content-Type"));
+            Assert.Equal("retained", context.Response.Headers["X-End-To-End"].ToString());
+            Assert.Equal("connection-only", captured.Headers["X-First"]);
+            Assert.Equal("text/plain; charset=utf-8", captured.ContentHeaders["Content-Type"]);
+            Assert.Equal("response-body", Encoding.UTF8.GetString(
+                ((MemoryStream)context.Response.Body).ToArray()));
         }
 
         [Fact]
@@ -786,6 +855,255 @@ namespace XMAT.Tests
         }
 
         [Theory]
+        [InlineData(1, 1, true, true)]
+        [InlineData(1, 1, false, true)]
+        [InlineData(1, 2, true, true)]
+        [InlineData(1, 2, false, true)]
+        [InlineData(2, 1, true, true)]
+        [InlineData(2, 1, false, true)]
+        [InlineData(2, 2, true, true)]
+        [InlineData(2, 2, false, true)]
+        [InlineData(1, 1, true, false)]
+        [InlineData(1, 1, false, false)]
+        [InlineData(1, 2, true, false)]
+        [InlineData(1, 2, false, false)]
+        [InlineData(2, 1, true, false)]
+        [InlineData(2, 1, false, false)]
+        [InlineData(2, 2, true, false)]
+        [InlineData(2, 2, false, false)]
+        public async Task ForwardProxy_PreservesBodiesAndScriptEditsAcrossProtocols(
+            int clientVersion, int originVersion, bool knownLength, bool editBodies)
+        {
+            byte[] originalBody = Enumerable.Range(0, 131073).Select(i => (byte)i).ToArray();
+            var proxy = new WebServiceProxy();
+            ClientRequest capturedRequest = null;
+            ServerResponse capturedResponse = null;
+            byte[] capturedRequestBody = null;
+            byte[] capturedResponseBody = null;
+            proxy.ReceivedWebRequest += (_, args) =>
+            {
+                capturedRequest = args.Request;
+                capturedRequestBody = args.Request.BodyBytes;
+            };
+            proxy.ReceivedWebResponse += (_, args) =>
+            {
+                capturedResponse = args.Response;
+                capturedResponseBody = args.Response.BodyBytes;
+            };
+            if (editBodies)
+            {
+                var script = new ScriptHost();
+                Assert.Empty(await script.CompileScriptAsync<WebServiceCaptureScriptParams>(
+                    """
+                    if (Params.Request.Method != "CONNECT")
+                    {
+                        if (Params.Response == null)
+                        {
+                            Params.Request.BodyBytes = System.Text.Encoding.UTF8.GetBytes("edited-request");
+                            Params.Request.Headers["Connection"] = "X-Request-Hop, Content-Type";
+                            Params.Request.Headers["X-Request-Hop"] = "remove";
+                        }
+                        else
+                        {
+                            Params.Response.BodyBytes = System.Text.Encoding.UTF8.GetBytes("edited-response");
+                            Params.Response.Headers["Connection"] = "X-Response-Hop, Content-Type";
+                            Params.Response.Headers["X-Response-Hop"] = "remove";
+                        }
+                    }
+                    """));
+                proxy.WebRequestPolicyAsync = async (args, token) =>
+                    (await script.RunScriptAsync(
+                        new WebServiceCaptureScriptParams { Request = args.Request }, token)).Continue;
+                proxy.WebResponsePolicyAsync = async (args, token) =>
+                    (await script.RunScriptAsync(
+                        new WebServiceCaptureScriptParams
+                        {
+                            Request = args.Request, Response = args.Response
+                        }, token)).Continue;
+            }
+            string observedProtocol = null;
+            byte[] observedBody = null;
+            long? observedLength = null;
+            string observedContentType = null;
+            string observedHop = null;
+            string observedEndToEnd = null;
+
+            await WithForwardProxyAsync(originVersion, proxy, async context =>
+            {
+                observedProtocol = context.Request.Protocol;
+                using var body = new MemoryStream();
+                await context.Request.Body.CopyToAsync(body, context.RequestAborted);
+                observedBody = body.ToArray();
+                observedLength = context.Request.ContentLength;
+                observedContentType = context.Request.ContentType;
+                observedHop = context.Request.Headers["X-Request-Hop"].ToString();
+                observedEndToEnd = context.Request.Headers["X-End-To-End"].ToString();
+                context.Response.ContentType = "application/octet-stream";
+                context.Response.Headers["X-End-To-End"] = "response-retained";
+                if (knownLength)
+                    context.Response.ContentLength = originalBody.Length;
+                await context.Response.Body.WriteAsync(originalBody, context.RequestAborted);
+            }, async (client, origin) =>
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(origin, "/edit"))
+                {
+                    Version = new Version(clientVersion, clientVersion == 1 ? 1 : 0),
+                    VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                    Content = knownLength
+                        ? new ByteArrayContent(originalBody)
+                        : new UnknownLengthContent(originalBody)
+                };
+                request.Content.Headers.ContentType =
+                    new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                request.Headers.Add("X-End-To-End", "request-retained");
+                using var response = await client.SendAsync(request);
+
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                Assert.Equal(request.Version, response.Version);
+                Assert.Equal($"HTTP/{(originVersion == 1 ? "1.1" : "2")}", observedProtocol);
+                Assert.Equal(editBodies ? "edited-request"u8.ToArray() : originalBody, observedBody);
+                Assert.Equal(observedBody.Length, observedLength);
+                Assert.Equal(editBodies ? null : "application/octet-stream", observedContentType);
+                Assert.Equal("", observedHop);
+                Assert.Equal("request-retained", observedEndToEnd);
+                Assert.Equal(originalBody, capturedRequestBody);
+                Assert.Equal(originalBody, capturedResponseBody);
+                Assert.Equal($"HTTP/{(clientVersion == 1 ? "1.1" : "2")}", capturedRequest.Version);
+                Assert.Equal(observedProtocol, capturedResponse.Version);
+                Assert.Equal(capturedRequest.RequestNumber, capturedResponse.RequestNumber);
+                Assert.Equal(capturedRequest.StreamId, capturedResponse.StreamId);
+                Assert.Equal(clientVersion == 2, capturedRequest.StreamId.HasValue);
+                Assert.False(response.Headers.Contains("X-Response-Hop"));
+                Assert.False(response.Headers.Contains("Connection"));
+                Assert.Equal(editBodies ? null : "application/octet-stream",
+                    response.Content.Headers.ContentType?.MediaType);
+                Assert.Equal("response-retained", response.Headers.GetValues("X-End-To-End").Single());
+                byte[] expectedResponse = editBodies ? "edited-response"u8.ToArray() : originalBody;
+                Assert.Equal(expectedResponse, await response.Content.ReadAsByteArrayAsync());
+                Assert.Equal(expectedResponse.Length, response.Content.Headers.ContentLength);
+            });
+        }
+
+        [Fact]
+        public async Task ForwardProxy_MultiplexesStreamsWithoutMixingCaptureData()
+        {
+            var proxy = new WebServiceProxy();
+            var requests = new ConcurrentDictionary<string, HttpRequestEventArgs>();
+            var responses = new ConcurrentDictionary<string, HttpResponseEventArgs>();
+            var originConnections = new ConcurrentDictionary<string, string>();
+            var bothArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.ReceivedWebRequest += (_, args) => requests[args.Request.Path] = args;
+            proxy.ReceivedWebResponse += (_, args) => responses[args.Request.Path] = args;
+            await WithForwardProxyAsync(2, proxy, async context =>
+            {
+                if (context.Request.Path == "/warmup")
+                    return;
+                originConnections[context.Request.Path] = context.Connection.Id;
+                if (originConnections.Count == 2)
+                    bothArrived.TrySetResult();
+                await release.Task.WaitAsync(context.RequestAborted);
+                await context.Request.Body.CopyToAsync(context.Response.Body, context.RequestAborted);
+            }, async (client, origin) =>
+            {
+                using var warmup = await client.GetAsync(new Uri(origin, "/warmup"));
+                using var firstContent = new StringContent("first-body");
+                using var secondContent = new StringContent("second-body");
+                Task<HttpResponseMessage> first = client.PostAsync(new Uri(origin, "/first"), firstContent);
+                Task<HttpResponseMessage> second = client.PostAsync(new Uri(origin, "/second"), secondContent);
+                try
+                {
+                    await bothArrived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.False(first.IsCompleted);
+                    Assert.False(second.IsCompleted);
+                    release.TrySetResult();
+                    using var firstResponse = await first;
+                    using var secondResponse = await second;
+                    Assert.Equal("first-body", await firstResponse.Content.ReadAsStringAsync());
+                    Assert.Equal("second-body", await secondResponse.Content.ReadAsStringAsync());
+                    Assert.Equal(HttpVersion.Version20, firstResponse.Version);
+                    Assert.Equal(HttpVersion.Version20, secondResponse.Version);
+                    Assert.Equal(requests["/first"].ConnectionID, requests["/second"].ConnectionID);
+                    Assert.NotEqual(requests["/first"].Request.StreamId, requests["/second"].Request.StreamId);
+                    Assert.NotEqual(requests["/first"].Request.RequestNumber, requests["/second"].Request.RequestNumber);
+                    Assert.Single(originConnections.Values.Distinct());
+                    foreach (string path in new[] { "/first", "/second" })
+                    {
+                        Assert.Equal("HTTP/2", requests[path].Request.Version);
+                        Assert.Equal("HTTP/2", responses[path].Response.Version);
+                        Assert.Equal(requests[path].Request.RequestNumber, responses[path].Response.RequestNumber);
+                        Assert.Equal(requests[path].Request.StreamId, responses[path].Response.StreamId);
+                        Assert.Equal(requests[path].Request.BodyBytes, responses[path].Response.BodyBytes);
+                    }
+                }
+                finally
+                {
+                    release.TrySetResult();
+                }
+            });
+        }
+
+        [Fact]
+        public async Task ForwardProxy_CancelingOneStreamLeavesOtherStreamsUsable()
+        {
+            var proxy = new WebServiceProxy();
+            var connections = new ConcurrentDictionary<string, int>();
+            var cancelStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var healthyStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var originCanceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseHealthy = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.ReceivedWebRequest += (_, args) => connections[args.Request.Path] = args.ConnectionID;
+            await WithForwardProxyAsync(2, proxy, async context =>
+            {
+                if (context.Request.Path == "/cancel")
+                {
+                    cancelStarted.TrySetResult();
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, context.RequestAborted);
+                    }
+                    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+                    {
+                        originCanceled.TrySetResult();
+                    }
+                    return;
+                }
+                if (context.Request.Path == "/healthy")
+                {
+                    healthyStarted.TrySetResult();
+                    await releaseHealthy.Task.WaitAsync(context.RequestAborted);
+                }
+                await context.Response.WriteAsync("still-usable", context.RequestAborted);
+            }, async (client, origin) =>
+            {
+                using var warmup = await client.GetAsync(new Uri(origin, "/warmup"));
+                using var cancellation = new CancellationTokenSource();
+                Task<HttpResponseMessage> canceled = client.GetAsync(new Uri(origin, "/cancel"), cancellation.Token);
+                Task<HttpResponseMessage> healthy = client.GetAsync(new Uri(origin, "/healthy"));
+                try
+                {
+                    await Task.WhenAll(cancelStarted.Task, healthyStarted.Task).WaitAsync(TimeSpan.FromSeconds(10));
+                    cancellation.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceled);
+                    await originCanceled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    releaseHealthy.TrySetResult();
+                    using var healthyResponse = await healthy;
+                    Assert.Equal("still-usable", await healthyResponse.Content.ReadAsStringAsync());
+                    using var later = await client.GetAsync(new Uri(origin, "/after"));
+                    Assert.Equal("still-usable", await later.Content.ReadAsStringAsync());
+                    Assert.Equal(HttpVersion.Version20, healthyResponse.Version);
+                    Assert.Equal(HttpVersion.Version20, later.Version);
+                    Assert.Single(connections.Values.Distinct());
+                }
+                finally
+                {
+                    cancellation.Cancel();
+                    releaseHealthy.TrySetResult();
+                }
+            });
+        }
+
+        [Theory]
         [InlineData(false)]
         [InlineData(true)]
         public async Task ForwardProxy_DropsDecodedChunkedCodingFromCapturedResponse(
@@ -878,6 +1196,293 @@ namespace XMAT.Tests
                 await forwardHost.StopAsync();
                 await origin.StopAsync();
             }
+        }
+
+        [Fact]
+        public async Task ForwardProxy_ReplacesGracefullyRetiredOriginConnection()
+        {
+            var proxy = new WebServiceProxy();
+            var requests = new ConcurrentDictionary<string, HttpRequestEventArgs>();
+            var originConnections = new ConcurrentDictionary<string, string>();
+            var connectionClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.ReceivedWebRequest += (_, args) => requests[args.Request.Path] = args;
+
+            await WithForwardProxyAsync(2, proxy, async context =>
+            {
+                originConnections[context.Request.Path] = context.Connection.Id;
+                if (context.Request.Path == "/retire")
+                {
+                    context.Features.Get<IConnectionLifetimeFeature>().ConnectionClosed.Register(
+                        () => connectionClosed.TrySetResult());
+                    context.Features.Get<IConnectionLifetimeNotificationFeature>().RequestClose();
+                }
+                await context.Response.WriteAsync("origin-ok", context.RequestAborted);
+            }, async (client, origin) =>
+            {
+                using var first = await client.GetAsync(new Uri(origin, "/retire"));
+                Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+                Assert.Equal("origin-ok", await first.Content.ReadAsStringAsync());
+                await connectionClosed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+                using var after = await client.GetAsync(new Uri(origin, "/after"));
+                Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+                Assert.Equal(HttpVersion.Version20, after.Version);
+                Assert.Equal("origin-ok", await after.Content.ReadAsStringAsync());
+                Assert.NotEqual(originConnections["/retire"], originConnections["/after"]);
+                Assert.Equal(requests["/retire"].ConnectionID, requests["/after"].ConnectionID);
+                Assert.NotEqual(requests["/retire"].Request.StreamId, requests["/after"].Request.StreamId);
+            });
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ForwardProxy_OriginResetDoesNotBreakOtherStreams(bool partialResponse)
+        {
+            var proxy = new WebServiceProxy();
+            var requests = new ConcurrentDictionary<string, HttpRequestEventArgs>();
+            var responses = new ConcurrentDictionary<string, ServerResponse>();
+            var healthyStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseHealthy = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.ReceivedWebRequest += (_, args) => requests[args.Request.Path] = args;
+            proxy.ReceivedWebResponse += (_, args) => responses[args.Request.Path] = args.Response;
+
+            await WithForwardProxyAsync(2, proxy, async context =>
+            {
+                if (context.Request.Path == "/reset")
+                {
+                    await healthyStarted.Task.WaitAsync(context.RequestAborted);
+                    if (partialResponse)
+                    {
+                        await context.Response.WriteAsync("incomplete-body", context.RequestAborted);
+                        await context.Response.Body.FlushAsync(context.RequestAborted);
+                    }
+                    context.Features.Get<IHttpResetFeature>().Reset(2);
+                    return;
+                }
+                if (context.Request.Path == "/healthy")
+                {
+                    healthyStarted.TrySetResult();
+                    await releaseHealthy.Task.WaitAsync(context.RequestAborted);
+                }
+                await context.Response.WriteAsync("origin-ok", context.RequestAborted);
+            }, async (client, origin) =>
+            {
+                using var warmup = await client.GetAsync(new Uri(origin, "/warmup"));
+                using var body = new StringContent("do-not-replay");
+                Task<HttpResponseMessage> reset = client.PostAsync(new Uri(origin, "/reset"), body);
+                Task<HttpResponseMessage> healthy = client.GetAsync(new Uri(origin, "/healthy"));
+                try
+                {
+                    using var failed = await reset;
+                    Assert.Equal(HttpStatusCode.BadGateway, failed.StatusCode);
+                    Assert.Empty(await failed.Content.ReadAsByteArrayAsync());
+                    Assert.False(responses.ContainsKey("/reset"));
+                    Assert.False(healthy.IsCompleted);
+
+                    releaseHealthy.TrySetResult();
+                    using var healthyResponse = await healthy;
+                    Assert.Equal(HttpStatusCode.OK, healthyResponse.StatusCode);
+                    Assert.Equal("origin-ok", await healthyResponse.Content.ReadAsStringAsync());
+                    using var after = await client.GetAsync(new Uri(origin, "/after"));
+                    Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+                    Assert.Equal(HttpVersion.Version20, after.Version);
+                    Assert.Equal("origin-ok", await after.Content.ReadAsStringAsync());
+                    Assert.Single(requests.Values.Select(args => args.ConnectionID).Distinct());
+                }
+                finally
+                {
+                    releaseHealthy.TrySetResult();
+                }
+            });
+        }
+
+        [Fact]
+        public async Task ForwardProxy_UpstreamTimeoutLeavesConnectionUsable()
+        {
+            var proxy = new WebServiceProxy();
+            var connections = new ConcurrentDictionary<string, int>();
+            var originCanceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.ReceivedWebRequest += (_, args) => connections[args.Request.Path] = args.ConnectionID;
+
+            await WithForwardProxyAsync(2, proxy, async context =>
+            {
+                if (context.Request.Path == "/timeout")
+                {
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, context.RequestAborted);
+                    }
+                    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+                    {
+                        originCanceled.TrySetResult();
+                    }
+                    return;
+                }
+                await context.Response.WriteAsync("origin-ok", context.RequestAborted);
+            }, async (client, origin) =>
+            {
+                using var warmup = await client.GetAsync(new Uri(origin, "/warmup"));
+                using var timedOut = await client.GetAsync(new Uri(origin, "/timeout"));
+                Assert.Equal(HttpStatusCode.GatewayTimeout, timedOut.StatusCode);
+                await originCanceled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                using var after = await client.GetAsync(new Uri(origin, "/after"));
+                Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+                Assert.Equal(HttpVersion.Version20, after.Version);
+                Assert.Equal("origin-ok", await after.Content.ReadAsStringAsync());
+                Assert.Single(connections.Values.Distinct());
+            }, upstreamTimeout: TimeSpan.FromSeconds(2));
+        }
+
+        [Fact]
+        public async Task ForwardProxy_CancelingIncompleteUploadDoesNotForwardPartialBody()
+        {
+            var proxy = new WebServiceProxy();
+            var requests = new ConcurrentDictionary<string, HttpRequestEventArgs>();
+            var originPaths = new ConcurrentQueue<string>();
+            proxy.ReceivedWebRequest += (_, args) => requests[args.Request.Path] = args;
+
+            await WithForwardProxyAsync(2, proxy, async context =>
+            {
+                originPaths.Enqueue(context.Request.Path);
+                await context.Response.WriteAsync("origin-ok", context.RequestAborted);
+            }, async (client, origin) =>
+            {
+                using var warmup = await client.GetAsync(new Uri(origin, "/warmup"));
+                using var cancellation = new CancellationTokenSource();
+                using var content = new IncompleteUploadContent();
+                Task<HttpResponseMessage> upload = client.PostAsync(
+                    new Uri(origin, "/incomplete"), content, cancellation.Token);
+                try
+                {
+                    await content.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    using var during = await client.GetAsync(new Uri(origin, "/during"));
+                    Assert.Equal(HttpStatusCode.OK, during.StatusCode);
+                    Assert.False(upload.IsCompleted);
+
+                    cancellation.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => upload);
+                    using var after = await client.GetAsync(new Uri(origin, "/after"));
+                    Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+                    Assert.Equal(HttpVersion.Version20, after.Version);
+                    Assert.Equal("origin-ok", await after.Content.ReadAsStringAsync());
+                    Assert.DoesNotContain("/incomplete", originPaths);
+                    Assert.False(requests.ContainsKey("/incomplete"));
+                    Assert.Single(requests.Values.Select(args => args.ConnectionID).Distinct());
+                }
+                finally
+                {
+                    cancellation.Cancel();
+                }
+            });
+        }
+
+        [Fact]
+        public async Task ForwardProxy_EarlyOriginRejectionDoesNotWaitForUploadToFinish()
+        {
+            var proxy = new WebServiceProxy();
+            var originRequests = new ConcurrentQueue<string>();
+            ServerResponse captured = null;
+            proxy.ReceivedWebResponse += (_, args) =>
+            {
+                if (args.Request.Path == "/reject")
+                    captured = args.Response;
+            };
+
+            await WithForwardProxyAsync(2, proxy, async context =>
+            {
+                originRequests.Enqueue(context.Request.Path);
+                if (context.Request.Path == "/reject")
+                {
+                    context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+                    await context.Response.WriteAsync("upload-rejected", context.RequestAborted);
+                    return;
+                }
+                await context.Response.WriteAsync("origin-ok", context.RequestAborted);
+            }, async (client, origin) =>
+            {
+                using var body = new ByteArrayContent(new byte[2097153]);
+                using var rejected = await client.PostAsync(new Uri(origin, "/reject"), body);
+                Assert.Equal(HttpStatusCode.RequestEntityTooLarge, rejected.StatusCode);
+                Assert.Equal("upload-rejected", await rejected.Content.ReadAsStringAsync());
+                Assert.NotNull(captured);
+                Assert.Equal("413", captured.Status);
+                Assert.Equal("upload-rejected", Encoding.UTF8.GetString(captured.BodyBytes));
+                using var after = await client.GetAsync(new Uri(origin, "/after"));
+                Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+                Assert.Equal(HttpVersion.Version20, after.Version);
+                Assert.Equal("origin-ok", await after.Content.ReadAsStringAsync());
+                Assert.Equal(new[] { "/reject", "/after" }, originRequests);
+            });
+        }
+
+        [Fact]
+        public async Task ForwardProxy_RepeatedConcurrentBinaryTransfersRetainCaptureCorrelation()
+        {
+            const int batchSize = 8;
+            const int batches = 3;
+            var proxy = new WebServiceProxy();
+            var requests = new ConcurrentDictionary<string, HttpRequestEventArgs>();
+            var responses = new ConcurrentDictionary<string, ServerResponse>();
+            var connectionIds = new HashSet<int>();
+            var streamIds = new HashSet<int>();
+            var requestNumbers = new HashSet<int>();
+            var originConnections = new ConcurrentDictionary<string, byte>();
+            proxy.ReceivedWebRequest += (_, args) => requests[args.Request.Path] = args;
+            proxy.ReceivedWebResponse += (_, args) => responses[args.Request.Path] = args.Response;
+            byte[] body = Enumerable.Range(0, 1048577).Select(i => (byte)i).ToArray();
+
+            await WithForwardProxyAsync(2, proxy, async context =>
+            {
+                originConnections.TryAdd(context.Connection.Id, 0);
+                context.Response.ContentType = "application/octet-stream";
+                await context.Request.Body.CopyToAsync(context.Response.Body, context.RequestAborted);
+            }, async (client, origin) =>
+            {
+                using var warmup = await client.GetAsync(new Uri(origin, "/warmup"));
+                requests.Clear();
+                responses.Clear();
+                for (int batch = 0; batch < batches; batch++)
+                {
+                    await Task.WhenAll(Enumerable.Range(0, batchSize).Select(async index =>
+                    {
+                        string path = $"/batch-{batch}/request-{index}";
+                        byte[] payload = (byte[])body.Clone();
+                        payload[0] = (byte)batch;
+                        payload[1] = (byte)index;
+                        using var content = new ByteArrayContent(payload);
+                        using var response = await client.PostAsync(new Uri(origin, path), content);
+                        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                        Assert.Equal(HttpVersion.Version20, response.Version);
+                        Assert.Equal(payload, await response.Content.ReadAsByteArrayAsync());
+                        Assert.Equal(payload, requests[path].Request.BodyBytes);
+                        Assert.Equal(payload, responses[path].BodyBytes);
+                    }));
+
+                    Assert.Equal(batchSize, requests.Count);
+                    Assert.Equal(batchSize, responses.Count);
+                    foreach (var item in requests)
+                    {
+                        ClientRequest request = item.Value.Request;
+                        ServerResponse response = responses[item.Key];
+                        connectionIds.Add(item.Value.ConnectionID);
+                        Assert.Equal("HTTP/2", request.Version);
+                        Assert.Equal("HTTP/2", response.Version);
+                        int streamId = Assert.IsType<int>(request.StreamId);
+                        Assert.True(streamIds.Add(streamId));
+                        Assert.True(requestNumbers.Add(request.RequestNumber));
+                        Assert.Equal(request.RequestNumber, response.RequestNumber);
+                        Assert.Equal(request.StreamId, response.StreamId);
+                        Assert.Equal(body.Length, request.BodyBytes.Length);
+                        Assert.Equal(request.BodyBytes, response.BodyBytes);
+                    }
+                    requests.Clear();
+                    responses.Clear();
+                }
+                Assert.Single(connectionIds);
+                Assert.Single(originConnections);
+                Assert.Equal(batchSize * batches, streamIds.Count);
+            });
         }
 
         // A server that refuses the WebSocket upgrade (for example 401 for an expired token)
@@ -1141,6 +1746,95 @@ namespace XMAT.Tests
         private sealed class Http2StreamIdFeature(int streamId) : IHttp2StreamIdFeature
         {
             public int StreamId { get; } = streamId;
+        }
+
+        private sealed class UnknownLengthContent(byte[] body) : HttpContent
+        {
+            protected override bool TryComputeLength(out long length)
+            {
+                length = 0;
+                return false;
+            }
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext context) =>
+                stream.WriteAsync(body).AsTask();
+        }
+
+        private sealed class IncompleteUploadContent : HttpContent
+        {
+            internal TaskCompletionSource Started { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            protected override bool TryComputeLength(out long length)
+            {
+                length = 0;
+                return false;
+            }
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext context) =>
+                SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+            protected override async Task SerializeToStreamAsync(
+                Stream stream, TransportContext context, CancellationToken cancellationToken)
+            {
+                await stream.WriteAsync(new byte[65537], cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                Started.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+        }
+
+        private static async Task WithForwardProxyAsync(
+            int originVersion,
+            WebServiceProxy proxy,
+            RequestDelegate originApplication,
+            Func<HttpClient, Uri, Task> test,
+            TimeSpan? upstreamTimeout = null)
+        {
+            using var certificate = CreateCertificate();
+            using var origin = new HostBuilder().ConfigureWebHost(webBuilder =>
+            {
+                webBuilder.UseKestrel(options => options.Listen(IPAddress.Loopback, 0, listen =>
+                {
+                    listen.Protocols = originVersion == 2 ? HttpProtocols.Http2 : HttpProtocols.Http1;
+                    listen.UseHttps(certificate);
+                }));
+                webBuilder.Configure(app => app.Run(originApplication));
+            }).Build();
+            var tunnels = new InterceptedTunnelRegistry();
+            using var upstreamHandler = WebServiceProxy.CreateUpstreamHandler();
+            using var upstream = new HttpClient(upstreamHandler)
+            {
+                Timeout = upstreamTimeout ?? TimeSpan.FromSeconds(20)
+            };
+            var application = new InterceptedProxyApplication(proxy, upstream, tunnels);
+            await using var intercepted = new InterceptedHttpHost((_, _) => certificate, application.InvokeAsync);
+            using var forward = CreateForwardProxyHost(proxy, upstream, intercepted, tunnels, new Logger());
+            try
+            {
+                await origin.StartAsync();
+                await intercepted.StartAsync(CancellationToken.None);
+                await forward.StartAsync();
+                using var handler = new HttpClientHandler
+                {
+                    Proxy = new WebProxy($"http://127.0.0.1:{GetListeningPort(forward)}"),
+                    UseProxy = true,
+                    MaxConnectionsPerServer = 1,
+                    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+                };
+                using var client = new HttpClient(handler)
+                {
+                    DefaultRequestVersion = HttpVersion.Version20,
+                    DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                    Timeout = TimeSpan.FromSeconds(20)
+                };
+                await test(client, new Uri($"https://localhost:{GetListeningPort(origin)}"));
+            }
+            finally
+            {
+                await forward.StopAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                await origin.StopAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
         }
 
         private sealed class RecordingHandler : HttpMessageHandler
