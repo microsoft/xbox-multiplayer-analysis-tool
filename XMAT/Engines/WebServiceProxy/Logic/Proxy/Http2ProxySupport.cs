@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.WebSockets;
@@ -735,9 +736,8 @@ namespace XMAT.WebServiceCapture.Proxy
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string value in headers.GetHeaderValuesAsList("Connection") ?? Array.Empty<string>())
             {
-                foreach (string name in value.Split(','))
+                foreach (string trimmed in value.Split(',').Select(name => name.Trim()))
                 {
-                    string trimmed = name.Trim();
                     if (trimmed.Length != 0)
                         names.Add(trimmed);
                 }
