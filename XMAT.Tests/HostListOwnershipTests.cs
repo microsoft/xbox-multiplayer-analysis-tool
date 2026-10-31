@@ -5,6 +5,7 @@
 using System.Text.Json;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Proxy;
 
@@ -75,6 +76,53 @@ namespace XMAT.Tests
             var laterController = Assert.IsType<WebServiceDeviceCaptureController>(later.CaptureController);
             Assert.Same(app.HostListPolicy.BlockList, laterController.BlockList);
             Assert.True(laterController.BlockList.IsBlocked("kept.example"));
+        }
+
+        [Fact]
+        public async Task LoadedCaptures_UseTheSessionPolicyAndKeepItWhenReloaded()
+        {
+            var app = new CaptureAppModel();
+            string directory = Path.Combine(
+                AppContext.BaseDirectory, "CaptureAppModelFixtures", Guid.NewGuid().ToString("N"));
+            string path = SyntheticCaptures.WriteXmatcap(
+                directory, "loaded-capture.xmatcap", new SyntheticXmatcapOptions(Devices: 2));
+            IDisposable firstDatabase = null;
+            try
+            {
+                ICaptureDeviceContext imported = app.AddDeviceContext(
+                    DeviceType.Unknown, "imported-capture", CaptureType.WebProxy, true, null);
+
+                app.LoadDataCaptures(path);
+                firstDatabase = app.LoadedDatabase as IDisposable;
+                ICaptureDeviceContext[] contexts = app.CaptureDeviceContexts.ToArray();
+                Assert.Equal(3, contexts.Length);
+                Assert.Same(imported, contexts[0]);
+                Assert.All(contexts, context => Assert.True(context.IsReadOnly));
+                Assert.All(contexts, context => Assert.Same(
+                    app.HostListPolicy,
+                    Assert.IsType<WebServiceDeviceCaptureController>(context.CaptureController).HostListPolicy));
+
+                app.LoadDataCaptures(path);
+
+                Assert.Equal(contexts, app.CaptureDeviceContexts);
+                Assert.All(contexts, context => Assert.Same(
+                    app.HostListPolicy,
+                    Assert.IsType<WebServiceDeviceCaptureController>(context.CaptureController).HostListPolicy));
+                var reloaded = Assert.IsType<WebServiceDeviceCaptureController>(contexts[2].CaptureController);
+                Assert.True(reloaded.BlockList.Add("loaded.example"));
+                Assert.True(Assert.IsType<WebServiceDeviceCaptureController>(imported.CaptureController)
+                    .BlockList.IsBlocked("loaded.example"));
+            }
+            finally
+            {
+                while (app.CaptureDeviceContexts.Count != 0)
+                {
+                    await app.RemoveDeviceContextAsync(app.CaptureDeviceContexts[^1]);
+                }
+                firstDatabase?.Dispose();
+                (app.LoadedDatabase as IDisposable)?.Dispose();
+                Directory.Delete(directory, true);
+            }
         }
 
         [Fact]

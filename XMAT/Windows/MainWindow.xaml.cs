@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
@@ -321,11 +322,61 @@ namespace XMAT
 
             if (!string.IsNullOrEmpty(filename))
             {
-                CaptureAppModel.AppModel.LoadDataCaptures(filename);
-                if (CaptureAppModel.AppModel.CaptureDeviceContexts.Any())
-                    CaptureAppModel.AppModel.SelectedDeviceContext = CaptureAppModel.AppModel.CaptureDeviceContexts.Last();
+                try
+                {
+                    CaptureAppModel.AppModel.LoadDataCaptures(
+                        filename);
+                    if (CaptureAppModel.AppModel
+                        .CaptureDeviceContexts.Any())
+                    {
+                        CaptureAppModel.AppModel
+                            .SelectedDeviceContext =
+                            CaptureAppModel.AppModel
+                                .CaptureDeviceContexts.Last();
+                    }
+                }
+                catch (SqLtSchemaException ex)
+                {
+                    PublicUtilities.AppLog(
+                        LogLevel.ERROR,
+                        $"Capture open rejected ({ex.Failure}).");
+                    MessageBox.Show(
+                        Localization.GetLocalizedString(
+                            CaptureOpenErrorKey(ex.Failure)),
+                        Localization.GetLocalizedString(
+                            "CAPTURE_OPEN_ERROR_TITLE"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
+                catch (Exception ex) when (
+                    !ExceptionUtilities.IsFatal(ex))
+                {
+                    PublicUtilities.AppLog(
+                        LogLevel.ERROR,
+                        $"Capture open failed ({ex.GetType().FullName}).");
+                    MessageBox.Show(
+                        Localization.GetLocalizedString(
+                            "CAPTURE_OPEN_ERROR"),
+                        Localization.GetLocalizedString(
+                            "CAPTURE_OPEN_ERROR_TITLE"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
             }
         }
+
+        internal static string CaptureOpenErrorKey(
+            SqLtSchemaFailure failure) =>
+            failure switch
+            {
+                SqLtSchemaFailure.Limit =>
+                    "CAPTURE_OPEN_SCHEMA_LIMIT",
+                SqLtSchemaFailure.Sidecar =>
+                    "CAPTURE_OPEN_SIDECAR",
+                SqLtSchemaFailure.UnsupportedLocation =>
+                    "CAPTURE_OPEN_LOCATION",
+                _ => "CAPTURE_OPEN_SCHEMA_ERROR",
+            };
 
         private void Save_Executed(object sender, RoutedEventArgs e)
         {

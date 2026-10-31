@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -129,9 +130,30 @@ namespace XMAT.WebServiceCapture
 
             var imported = await Task.Run(() =>
             {
-                var connections = FiddlerSazHandler.ImportSazFile(
-                    fromFilePath,
-                    CancellationToken.None);
+                FiddlerSazImportResult import;
+                try
+                {
+                    import = FiddlerSazHandler.ImportSazFileWithDiagnostics(
+                        fromFilePath,
+                        CancellationToken.None);
+                }
+                catch (FiddlerSazHeaderLimitException ex)
+                {
+                    throw new InvalidDataException(
+                        Localization.GetLocalizedString(
+                            "WEBCAP_IMPORT_HEADER_LIMIT"),
+                        ex);
+                }
+                catch (SazArchiveException ex)
+                {
+                    throw new InvalidDataException(
+                        Localization.GetLocalizedString(
+                            ex.Failure == SazArchiveFailure.Malformed
+                                ? "WEBCAP_IMPORT_ARCHIVE_INVALID"
+                                : "WEBCAP_IMPORT_ARCHIVE_LIMIT"),
+                        ex);
+                }
+                var connections = import.Records;
                 var hostFilters = captureController.UpdateFilter(
                     connections.Select(connection => connection.Host).Distinct().ToList());
                 var statusFilters = captureController.UpdateFilter(
@@ -148,7 +170,11 @@ namespace XMAT.WebServiceCapture
                     connections[index].RecordRowId = rowIds[index];
                 }
                 return (Connections: connections, HostFilters: hostFilters,
-                    StatusFilters: statusFilters, MethodFilters: methodFilters);
+                    StatusFilters: statusFilters, MethodFilters: methodFilters,
+                    SkippedIncompleteFrames:
+                        import.SkippedIncompleteFrames,
+                    SkippedMalformedHeaderLines:
+                        import.SkippedMalformedHeaderLines);
             });
 
             captureController.PrepareForActiveCaptureData();
@@ -156,6 +182,14 @@ namespace XMAT.WebServiceCapture
             captureController.HostFilterList = imported.HostFilters;
             captureController.StatusFilterList = imported.StatusFilters;
             captureController.MethodFilterList = imported.MethodFilters;
+            TryNotifyCaptureReplacement(
+                () => captureController.SetImportNotice(
+                    imported.SkippedIncompleteFrames > 0 ||
+                    imported.SkippedMalformedHeaderLines > 0
+                        ? Localization.GetLocalizedString(
+                            "WEBCAP_IMPORT_SKIPPED_DATA_NOTICE")
+                        : null),
+                logError);
             TryNotifyCaptureReplacement(
                 () => captureController.RaisePropertyChange(
                     nameof(WebServiceDeviceCaptureController.HostFilterList)),
