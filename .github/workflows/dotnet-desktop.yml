@@ -86,6 +86,26 @@ jobs:
         name: CoverageReport_${{ matrix.configuration }}
         path: TestResults/CoverageReport/
 
+    # Ship the command line (xmat.exe) next to the GUI and check that it runs from the artifact folder
+    - name: Add xmat.exe to the build artifact
+      run: |
+        $gui = "XMAT\bin\x64\$env:Configuration\net10.0-windows10.0.17763.0\win-x64"
+        $cli = "XMAT.Cli\bin\x64\$env:Configuration\net10.0-windows10.0.17763.0\win-x64"
+        foreach ($name in 'xmat.exe', 'xmat.dll', 'xmat.deps.json', 'xmat.runtimeconfig.json', 'xmat.pdb') {
+          $source = Join-Path $cli $name
+          if ($name -ne 'xmat.pdb' -or (Test-Path -LiteralPath $source)) {
+            Copy-Item -LiteralPath $source -Destination $gui -ErrorAction Stop
+          }
+        }
+        $xmat = Join-Path $gui 'xmat.exe'
+        $version = (& $xmat --version) -join "`n" | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or $version.schema -ne 'xmat-cli/1') { throw "xmat --version failed with exit code $LASTEXITCODE" }
+        $doctor = (& $xmat doctor --for analyze) -join "`n" | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or $doctor.status -ne 'succeeded') { throw "xmat doctor --for analyze failed with exit code $LASTEXITCODE" }
+        Write-Host "xmat $($version.version) runs from the artifact folder"
+      env:
+        Configuration: ${{ matrix.configuration }}
+
     # Upload build artifact
     - name: Upload Artifacts
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

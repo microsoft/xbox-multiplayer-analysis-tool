@@ -1,7 +1,12 @@
-# The xmat.exe Command Line
+# Command line
+
+[Back to README](../README.md)
 
 Xbox Multiplayer Analysis Tool includes a command-line tool, `xmat.exe`, that runs its capabilities without the GUI,
-for example from scripts or CI. Where the GUI and `xmat.exe` share a capability, such as Xbox Live analysis, it is
+for example from scripts or CI. It ships next to `XboxMultiplayerAnalysisTool.exe`: the CI build artifact contains both,
+and so does the build output of the `XMAT.Cli` project. Like the GUI, it needs x64 Windows with the .NET 10 Desktop
+Runtime and ASP.NET Core Runtime; without them the .NET loader fails before xmat runs, so there is no JSON output and
+none of the exit codes below. Where the GUI and `xmat.exe` share a capability, such as Xbox Live analysis, it is
 implemented once as a UI-free operation under `XMAT/Operations` and both are thin adapters over it, so a fix applies to
 both. Other capabilities move over time; the [capability table](#what-runs-headless) shows which ones run headless.
 
@@ -165,7 +170,7 @@ If xmat cannot produce this document (an internal error), it writes a fixed fall
 its artifacts, so its results are in `summary.json`. Only a run that published nothing and would have succeeded, such
 as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 
-## Exit Codes
+## Exit codes
 
 | Exit code | Meaning |
 |---|---|
@@ -193,7 +198,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
   `analysis.input.location-unsupported`, and writer sharing violations report `analysis.input.unreadable`; each is
   invalid input with exit code 3.
 
-## What Runs Headless
+## What runs headless
 
 The capability registry (`XMAT/Operations/Capabilities/CapabilityRegistry.cs`) classifies every GUI entry point as
 **Supported** (available in `xmat.exe`), **Planned** (with the delivery slice and its owner; it has no command line
