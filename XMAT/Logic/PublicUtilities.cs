@@ -23,11 +23,17 @@ namespace XMAT
     {
         private static readonly Logger _appLog = new();
         private const string DefaultAppName = "Xbox Multiplayer Analysis Tool";
+        private static readonly string _headlessStorageRoot;
         private static string _appName;
 
         static PublicUtilities()
         {
-            _appLog.InitLog("application.log", LogLevel.DEBUG);
+            // A headless run (xmat.exe) keeps no application log and never opens the GUI's (see HeadlessStorage).
+            _headlessStorageRoot = HeadlessStorage.Freeze();
+            if (_headlessStorageRoot == null)
+            {
+                _appLog.InitLog("application.log", LogLevel.DEBUG);
+            }
         }
 
         public static void AppLog(LogLevel level, string log)
@@ -64,7 +70,8 @@ namespace XMAT
         {
             get
             {
-                var storageDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", AppName);
+                var storageDirectory = _headlessStorageRoot ??
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", AppName);
                 Directory.CreateDirectory(storageDirectory);
                 return storageDirectory;
             }
@@ -338,6 +345,58 @@ namespace XMAT
             }
 
             return Encoding.ASCII.GetString(body);
+        }
+    }
+
+    // Where the legacy statics keep their files (logs, settings, analysis folders) during a headless run. xmat.exe
+    // points it at a private folder of the run before anything uses PublicUtilities, so the command line never opens,
+    // truncates or reads the GUI's logs and settings under %APPDATA%. The GUI never configures it. Once PublicUtilities
+    // is in use the location is fixed for the life of the process.
+    internal static class HeadlessStorage
+    {
+        private static readonly object _gate = new();
+        private static string _root;
+        private static bool _frozen;
+
+        internal static string Root
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _root;
+                }
+            }
+        }
+
+        internal static void Configure(string root)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(root);
+            if (!Path.IsPathFullyQualified(root))
+            {
+                throw new ArgumentException("The headless storage folder must be a full path.", nameof(root));
+            }
+
+            lock (_gate)
+            {
+                if (_frozen || _root != null)
+                {
+                    throw new InvalidOperationException(
+                        "Headless storage must be configured once, before PublicUtilities is used.");
+                }
+
+                _root = root;
+            }
+        }
+
+        // Called by PublicUtilities' static constructor: returns the configured folder (null for the GUI) and fixes it.
+        internal static string Freeze()
+        {
+            lock (_gate)
+            {
+                _frozen = true;
+                return _root;
+            }
         }
     }
 }
