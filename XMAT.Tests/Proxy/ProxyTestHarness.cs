@@ -27,6 +27,8 @@ namespace XMAT.Tests.Proxy
         private readonly X509Certificate2 _certificate;
 
         public WebServiceProxy Proxy { get; }
+        public ProxyRequestBufferBudget RequestBufferBudget { get; }
+        public ForwardProxyConnectionHandler ConnectionHandler { get; }
         public int Port { get; }
         public ConcurrentQueue<ClientRequest> CapturedRequests { get; } = new();
         public ConcurrentQueue<ServerResponse> CapturedResponses { get; } = new();
@@ -37,6 +39,8 @@ namespace XMAT.Tests.Proxy
             InterceptedHttpHost intercepted,
             HttpClient upstream,
             X509Certificate2 certificate,
+            ProxyRequestBufferBudget requestBufferBudget,
+            ForwardProxyConnectionHandler connectionHandler,
             int port)
         {
             Proxy = proxy;
@@ -44,20 +48,31 @@ namespace XMAT.Tests.Proxy
             _intercepted = intercepted;
             _upstream = upstream;
             _certificate = certificate;
+            RequestBufferBudget = requestBufferBudget;
+            ConnectionHandler = connectionHandler;
             Port = port;
         }
 
         // Pass a proxy that a capture controller has already initialized to host its
         // production policy wiring; otherwise a fresh proxy is used.
-        public static async Task<ProxyTestHarness> StartAsync(WebServiceProxy proxy = null)
+        public static async Task<ProxyTestHarness> StartAsync(
+            WebServiceProxy proxy = null,
+            ProxyRequestReadPolicy requestPolicy = null,
+            ProxyRequestBufferBudget requestBufferBudget = null,
+            bool registerRequestReader = true)
         {
             X509Certificate2 certificate = CreateCertificate();
             proxy ??= new WebServiceProxy();
             proxy.Reset();
+            requestPolicy ??=
+                ProxyRequestReadPolicy.Default;
 
             var tunnels = new InterceptedTunnelRegistry();
             var upstream = new HttpClient(WebServiceProxy.CreateUpstreamHandler());
             var logger = new Logger();
+            requestBufferBudget ??=
+                new ProxyRequestBufferBudget(
+                    requestPolicy);
             var application = new InterceptedProxyApplication(proxy, upstream, tunnels);
             var intercepted = new InterceptedHttpHost((_, _) => certificate, application.InvokeAsync);
             await intercepted.StartAsync(CancellationToken.None);
@@ -74,6 +89,14 @@ namespace XMAT.Tests.Proxy
                         s.AddSingleton(tunnels);
                         s.AddSingleton(logger);
                         s.AddSingleton(proxy);
+                        if (registerRequestReader)
+                        {
+                            WebServiceProxy
+                                .AddRequestReaderServices(
+                                    s,
+                                    requestPolicy,
+                                    requestBufferBudget);
+                        }
                         s.AddSingleton<ForwardProxyConnectionHandler>();
                     });
                     web.Configure(_ => { });
@@ -85,7 +108,20 @@ namespace XMAT.Tests.Proxy
                 .Features.Get<IServerAddressesFeature>();
             int port = new Uri(addresses.Addresses.Single()).Port;
 
-            var harness = new ProxyTestHarness(proxy, forwardHost, intercepted, upstream, certificate, port);
+            ForwardProxyConnectionHandler connectionHandler =
+                forwardHost.Services
+                    .GetRequiredService<
+                        ForwardProxyConnectionHandler>();
+            var harness = new ProxyTestHarness(
+                proxy,
+                forwardHost,
+                intercepted,
+                upstream,
+                certificate,
+                connectionHandler
+                    .RequestBufferBudget,
+                connectionHandler,
+                port);
             proxy.ReceivedWebRequest += (_, args) => harness.CapturedRequests.Enqueue(args.Request);
             proxy.ReceivedWebResponse += (_, args) => harness.CapturedResponses.Enqueue(args.Response);
             return harness;
