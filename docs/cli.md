@@ -1,7 +1,10 @@
 # The xmat.exe Command Line
 
 Xbox Multiplayer Analysis Tool includes a command-line tool, `xmat.exe`, that runs its capabilities without the GUI,
-for example from scripts or CI. Where the GUI and `xmat.exe` share a capability, such as Xbox Live analysis, it is
+for example from scripts or CI. It ships next to `XboxMultiplayerAnalysisTool.exe`: the CI build artifact contains both,
+and so does the build output of the `XMAT.Cli` project. Like the GUI, it needs x64 Windows with the .NET 10 Desktop
+Runtime and ASP.NET Core Runtime; without them the .NET loader fails before xmat runs, so there is no JSON output and
+none of the exit codes below. Where the GUI and `xmat.exe` share a capability, such as Xbox Live analysis, it is
 implemented once as a UI-free operation under `XMAT/Operations` and both are thin adapters over it, so a fix applies to
 both. Other capabilities move over time; the [capability table](#what-runs-headless) shows which ones run headless.
 
