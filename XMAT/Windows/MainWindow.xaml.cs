@@ -683,6 +683,13 @@ namespace XMAT
                     break;
                 }
 
+                case ECaptureAnalyzerResult.WorkLimit:
+                {
+                    OnError(Localization.GetLocalizedString(
+                        "WEBCAP_ANALYSIS_ERROR_WORK_LIMIT"));
+                    break;
+                }
+
                 case ECaptureAnalyzerResult.UnknownError:
                 {
                     OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));

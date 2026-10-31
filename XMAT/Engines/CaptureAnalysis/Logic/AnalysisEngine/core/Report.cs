@@ -4,6 +4,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
 
 namespace CaptureAnalysisEngine
 {
@@ -12,7 +14,29 @@ namespace CaptureAnalysisEngine
 
     public abstract class ReportDocument
     {
+        private static readonly Encoding Utf8NoBom =
+            new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true);
+
         public abstract string ToJson();
+
+        // Writes UTF-8 without a BOM and leaves the destination open.
+        public virtual void WriteJson(Stream output)
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            string json = ToJson();
+            if (string.IsNullOrEmpty(json))
+            {
+                return;
+            }
+            byte[] bytes =
+                Utf8NoBom.GetBytes(json);
+            output.Write(
+                bytes,
+                0,
+                bytes.Length);
+        }
     }
 
     // Interface for reporting the results of the analysis

@@ -30,15 +30,11 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.StatsReport
                 CopyResourceToAnalysisDirectory(resourceName, analysisStorageDirectory);
             }
 
-            // populate the newly copied "stats.js" file's token with
-            // the actual JSON from the report
-
-            string statsJsonText = reportDocument.ToJson();
-
             string templatefilepath = Path.Combine(analysisStorageDirectory, @"stats.js");
-            string templateText = File.ReadAllText(templatefilepath);
-            string replacedText = templateText.Replace(TemplateToken, statsJsonText);
-            File.WriteAllText(templatefilepath, replacedText);
+            WriteJsonTemplate(
+                templatefilepath,
+                TemplateToken,
+                reportDocument);
         }
 
         private string[] HtmlResourcesToCopy = new string[]

@@ -15,6 +15,7 @@ namespace XMAT.DataAbstractionLayer
         Limit,
         Sidecar,
         UnsupportedLocation,
+        WriteAheadLog,
     }
 
     internal sealed class SqLtSchemaException : Exception
@@ -31,6 +32,8 @@ namespace XMAT.DataAbstractionLayer
                         "The capture database has SQLite journal or write-ahead log files next to it.",
                     SqLtSchemaFailure.UnsupportedLocation =>
                         "The capture database's location has no normalized path and cannot be opened safely.",
+                    SqLtSchemaFailure.WriteAheadLog =>
+                        "The capture database uses write-ahead logging.",
                     _ => "The capture database schema is unsupported or invalid.",
                 },
                 innerException)
@@ -98,10 +101,14 @@ namespace XMAT.DataAbstractionLayer
         internal const int MaxSqlLength = 64 * 1024;
         internal const int MaxColumns = 81;
         internal const int MaxExpressionDepth = 16;
+        internal const int CliMaxDatabaseBytes = 512 * 1024 * 1024;
+        internal const int SqliteRowOverheadBytes = 1024 * 1024;
 
         private SqLtSchemaProfile(
             IReadOnlyCollection<string> requiredTables,
-            IReadOnlyCollection<string> materializedTables)
+            IReadOnlyCollection<string> materializedTables,
+            long? maxDatabaseBytes,
+            int? maxValueBytes)
         {
             RequiredTables = new HashSet<string>(
                 requiredTables,
@@ -109,11 +116,17 @@ namespace XMAT.DataAbstractionLayer
             MaterializedTables = new HashSet<string>(
                 materializedTables,
                 StringComparer.Ordinal);
+            MaxDatabaseBytes = maxDatabaseBytes;
+            MaxValueBytes = maxValueBytes;
         }
 
         internal IReadOnlySet<string> RequiredTables { get; }
 
         internal IReadOnlySet<string> MaterializedTables { get; }
+
+        internal long? MaxDatabaseBytes { get; }
+
+        internal int? MaxValueBytes { get; }
 
         internal static IReadOnlyDictionary<string, SqLtExpectedTable> KnownTables { get; } =
             new Dictionary<string, SqLtExpectedTable>(
@@ -157,11 +170,53 @@ namespace XMAT.DataAbstractionLayer
                     Text("Payload")),
             };
 
-        // The profile of a capture opened in XMAT: it needs only CaptureDevices and reads every known table.
+        // The profile of a capture opened in XMAT: it needs only CaptureDevices, reads every known table, and has
+        // no size limit of its own.
         internal static SqLtSchemaProfile CreateGui() =>
             new(
                 new[] { "CaptureDevices" },
-                KnownTables.Keys.ToArray());
+                KnownTables.Keys.ToArray(),
+                null,
+                null);
+
+        // The CLI profile at the default database size (512 MiB).
+        internal static SqLtSchemaProfile CreateCli(long maxRecordBytes) =>
+            CreateCli(
+                CliMaxDatabaseBytes,
+                maxRecordBytes);
+
+        // The CLI profile of xmat analyze: the database may be as large as the input limit (--max-input-mib), and
+        // SQLite's value limit (SQLITE_LIMIT_LENGTH, read back after it is set) is the record limit (--max-record-mib)
+        // plus SQLite's row overhead.
+        internal static SqLtSchemaProfile CreateCli(
+            long maxDatabaseBytes,
+            long maxRecordBytes)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+                maxDatabaseBytes);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+                maxRecordBytes);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(
+                maxRecordBytes,
+                (long)int.MaxValue -
+                    SqliteRowOverheadBytes);
+
+            return new SqLtSchemaProfile(
+                new[]
+                {
+                    "CaptureDevices",
+                    "WebProxyConnections",
+                },
+                new[]
+                {
+                    "CaptureDevices",
+                    "WebProxyConnections",
+                },
+                maxDatabaseBytes,
+                checked(
+                    (int)maxRecordBytes +
+                    SqliteRowOverheadBytes));
+        }
 
         internal static SqLtExpectedTable GetKnownTable(string name)
         {

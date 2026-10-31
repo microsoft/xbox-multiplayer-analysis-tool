@@ -9,7 +9,14 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtDataRecord : IDataRecord
+    internal interface INullableDataRecord
+    {
+        bool IsNull(string fieldName);
+    }
+
+    internal class SqLtDataRecord :
+        IDataRecord,
+        INullableDataRecord
     {
         public int RowId { get; private set; }
 
@@ -31,7 +38,7 @@ namespace XMAT.DataAbstractionLayer
         }
 
         // Only an extension column can hold NULL; reading one yields null text or a zero integer.
-        internal bool IsNull(string fieldName)
+        public bool IsNull(string fieldName)
         {
             return _fieldDefs.TryGetValue(
                     fieldName,

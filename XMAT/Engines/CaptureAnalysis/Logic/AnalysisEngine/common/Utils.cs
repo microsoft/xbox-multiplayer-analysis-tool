@@ -218,15 +218,17 @@ namespace CaptureAnalysisEngine
 
         public static void PrintCallIdRange(StringBuilder output, IEnumerable<ServiceCallItem> calls, UInt32 minRangeSize)
         {
-            if (calls.Count() == 0)
+            List<ServiceCallItem> orderedCalls =
+                calls.ToList();
+            if (orderedCalls.Count == 0)
             {
                 return;
             }
             List<UInt32> range = new List<UInt32>();
-            UInt32 prevId = calls.First().Id - 1;
-            for (int i = 0; i < calls.Count(); ++i)
+            UInt32 prevId = orderedCalls[0].Id - 1;
+            for (int i = 0; i < orderedCalls.Count; ++i)
             {
-                UInt32 localId = calls.ElementAt(i).Id;
+                UInt32 localId = orderedCalls[i].Id;
                 if (localId == prevId + 1)
                 {
                     range.Add(localId);
