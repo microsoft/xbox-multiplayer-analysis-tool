@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Windows;
@@ -16,8 +17,12 @@ namespace XMAT.Tests
         public const string Name = "Capture UI application";
     }
 
+    // The test process's WPF application, with its own storage folder under %APPDATA%\Microsoft. When the test assembly
+    // finishes, IsolatedApplicationTestFramework calls ShutDownHostAsync to stop it and delete that folder.
     public sealed class CaptureUiApplicationFixture : IDisposable
     {
+        internal const string StoragePrefix = "XMAT-UI-Tests-";
+
         private static readonly object HostLock = new();
         private static CaptureUiApplicationFixture _host;
         private readonly CaptureUiApplicationFixture _shared;
@@ -25,6 +30,9 @@ namespace XMAT.Tests
         private readonly ManualResetEventSlim _ready = new();
         private Application _application;
         private Exception _failure;
+        private string _storage;
+        private Logger _appLog;
+        private volatile bool _stopped;
 
         public CaptureUiApplicationFixture() : this(false)
         {
@@ -43,7 +51,7 @@ namespace XMAT.Tests
                 try
                 {
                     _application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                    var appName = $"XMAT-UI-Tests-{Guid.NewGuid():N}";
+                    var appName = $"{StoragePrefix}{Guid.NewGuid():N}";
                     _application.Resources["appName"] = appName;
                     _application.Resources["BooleanToVisibilityConverter"] = new BooleanToVisibilityConverter();
                     Localization.LoadLanguage("en-us");
@@ -53,20 +61,12 @@ namespace XMAT.Tests
                         Source = new Uri(
                             "pack://application:,,,/XboxMultiplayerAnalysisTool;component/Themes/LightTheme.xaml")
                     });
-                    var storage = Path.Join(
+                    _storage = Path.Join(
                         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", appName);
-                    Assert.Equal(storage, PublicUtilities.StorageDirectoryPath);
-                    var log = (Logger)typeof(PublicUtilities).GetField(
+                    Assert.Equal(_storage, PublicUtilities.StorageDirectoryPath);
+                    // Other test classes can still use the process-wide application log until the run ends.
+                    _appLog = (Logger)typeof(PublicUtilities).GetField(
                         "_appLog", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
-                    // Other test classes can still use the process-wide application log.
-                    AppDomain.CurrentDomain.ProcessExit += (sender, args) =>
-                    {
-                        _application.Dispatcher.Invoke(_application.Shutdown);
-                        _thread.Join(TimeSpan.FromSeconds(30));
-                        _ready.Dispose();
-                        log.CloseLog();
-                        Directory.Delete(storage, true);
-                    };
                     _ready.Set();
                     _application.Run();
                 }
@@ -79,30 +79,134 @@ namespace XMAT.Tests
             { IsBackground = true };
             _thread.SetApartmentState(ApartmentState.STA);
             _thread.Start();
-            Assert.True(_ready.Wait(TimeSpan.FromSeconds(30)), "The WPF test application did not start.");
+            // Only a fallback, for example after discovery alone: vstest can end the test host 100 ms after the session
+            // ends, which is too soon for anything slower.
+            AppDomain.CurrentDomain.ProcessExit += (sender, args) => DeleteStorageAtExit();
+            if (!_ready.Wait(TimeSpan.FromSeconds(30)))
+            {
+                _failure = new TimeoutException("The WPF test application did not start.");
+            }
+        }
+
+        // Stops the application, closes the application log and deletes this run's storage folder before the test
+        // assembly reports that it finished. Throws if the application does not stop or the folder cannot be deleted.
+        internal static async Task ShutDownHostAsync()
+        {
+            CaptureUiApplicationFixture host;
+            lock (HostLock)
+            {
+                host = _host;
+            }
+
+            if (host == null)
+            {
+                return;
+            }
+
+            host._stopped = true;
+            host._application?.Dispatcher.BeginInvoke(new Action(host._application.Shutdown));
+            var stopped = host._thread.Join(TimeSpan.FromSeconds(30));
+            host._appLog?.CloseLog();
+            if (host._storage != null && !await TryDeleteStorageAsync(host._storage, TimeSpan.FromSeconds(10)))
+            {
+                var stillOpen = Directory.EnumerateFiles(host._storage, "*", SearchOption.AllDirectories)
+                    .Select(path => Path.GetRelativePath(host._storage, path));
+                throw new IOException(
+                    $"The test application's storage folder {host._storage} could not be deleted. Files still open: " +
+                    string.Join(", ", stillOpen));
+            }
+
+            if (!stopped)
+            {
+                throw new TimeoutException("The WPF test application did not stop.");
+            }
+        }
+
+        // Deletes a test run's storage folder, retrying while its files are still being closed. Returns false if the
+        // folder is still there after the timeout. Refuses any folder that is not named like a run's storage folder.
+        internal static async Task<bool> TryDeleteStorageAsync(string folder, TimeSpan timeout)
+        {
+            if (!Path.GetFileName(folder).StartsWith(StoragePrefix, StringComparison.Ordinal))
+            {
+                throw new ArgumentException("Only a test run's storage folder can be deleted.", nameof(folder));
+            }
+
+            var clock = Stopwatch.StartNew();
+            while (true)
+            {
+                try
+                {
+                    if (Directory.Exists(folder))
+                    {
+                        Directory.Delete(folder, recursive: true);
+                    }
+
+                    return true;
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    if (clock.Elapsed >= timeout)
+                    {
+                        return false;
+                    }
+                }
+
+                await Task.Delay(100);
+            }
+        }
+
+        private static CaptureUiApplicationFixture GetOrCreateHost()
+        {
+            CaptureUiApplicationFixture host;
+            lock (HostLock)
+            {
+                // A host that failed to start is kept, so the run still cleans it up and never starts a second one.
+                host = _host ??= new CaptureUiApplicationFixture(true);
+            }
+
+            host.ThrowIfFailed();
+            return host;
+        }
+
+        internal void Run(Action<Window> test)
+        {
+            var host = _shared ?? this;
+            if (host._stopped)
+            {
+                // A stopped dispatcher would skip the test without running it.
+                throw new InvalidOperationException(
+                    "The WPF test application has stopped; run the tests in a new process.");
+            }
+
+            host._application.Dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
+        }
+
+        public void Dispose()
+        {
+            (_shared ?? this).ThrowIfFailed();
+        }
+
+        private void ThrowIfFailed()
+        {
             if (_failure != null)
             {
                 ExceptionDispatchInfo.Capture(_failure).Throw();
             }
         }
 
-        private static CaptureUiApplicationFixture GetOrCreateHost()
+        private void DeleteStorageAtExit()
         {
-            lock (HostLock)
+            try
             {
-                return _host ??= new CaptureUiApplicationFixture(true);
+                _appLog?.CloseLog();
+                if (_storage != null && Directory.Exists(_storage))
+                {
+                    Directory.Delete(_storage, recursive: true);
+                }
             }
-        }
-
-        internal void Run(Action<Window> test) =>
-            (_shared ?? this)._application.Dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
-
-        public void Dispose()
-        {
-            var failure = (_shared ?? this)._failure;
-            if (failure != null)
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
-                ExceptionDispatchInfo.Capture(failure).Throw();
+                // Nothing can report a failure while the process exits.
             }
         }
     }
