@@ -4,9 +4,7 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using XMAT;
 
 namespace CaptureAnalysisEngine
@@ -59,22 +57,18 @@ namespace CaptureAnalysisEngine
             m_endpointSustainedViolations = 0;
             m_endpointBurstViolations = 0;
 
+            List<ServiceCallItem>[] applicableCallsByLimits =
+                ClassifyApplicableCalls(items);
+
             // For set of limits, look through items to determine where excess calls occurred
-            foreach (var limits in m_rateLimits)
+            for (var limitIndex = 0;
+                limitIndex < m_rateLimits.Count;
+                limitIndex++)
             {
-                // Filter the full list of service calls to those which apply to this set of limits
-                List<ServiceCallItem> applicableCalls = items.Where(serviceCall =>
-                {
-                    foreach (var subpath in limits.m_applicableSubpaths)
-                    {
-                        var subpathRegex = new Regex("^" + Regex.Escape(subpath).Replace("\\?", ".").Replace("\\*", ".*") + "$");
-                        if (subpathRegex.IsMatch(GetPath(serviceCall)))
-                        {
-                            return true;
-                        }
-                    }
-                    return false;
-                }).ToList();
+                RateLimits limits =
+                    m_rateLimits[limitIndex];
+                List<ServiceCallItem> applicableCalls =
+                    applicableCallsByLimits[limitIndex];
 
                 var sustainedExcessCallsPerWindow = Utils.GetExcessCallsForTimeWindow(applicableCalls, limits.m_sustainedTimePeriodSeconds * 1000, limits.m_sustainedCallLimit);
                 var burstExcessCallsPerWindow = Utils.GetExcessCallsForTimeWindow(applicableCalls, limits.m_burstTimePeriodSeconds * 1000, limits.m_burstCallLimit);
@@ -130,6 +124,61 @@ namespace CaptureAnalysisEngine
             result.Results.Add(TimesBurstExceededDataKey, m_endpointBurstViolations);
 
             return result;
+        }
+
+        internal List<ServiceCallItem>[] ClassifyApplicableCalls(
+            IEnumerable<ServiceCallItem> items)
+        {
+            // Retain at most one 8-byte call reference per matching
+            // (limits set, item) pair; derived paths stay item-local.
+            var applicableCalls =
+                new List<ServiceCallItem>[
+                    m_rateLimits.Count];
+            if (applicableCalls.Length == 0)
+            {
+                return applicableCalls;
+            }
+            for (var index = 0;
+                index < applicableCalls.Length;
+                index++)
+            {
+                applicableCalls[index] =
+                    new List<ServiceCallItem>();
+            }
+
+            foreach (ServiceCallItem item in items)
+            {
+                AddApplicableCall(
+                    item,
+                    applicableCalls);
+            }
+            return applicableCalls;
+        }
+
+        private void AddApplicableCall(
+            ServiceCallItem item,
+            List<ServiceCallItem>[] applicableCalls)
+        {
+            string path = null;
+            for (var limitIndex = 0;
+                limitIndex < m_rateLimits.Count;
+                limitIndex++)
+            {
+                foreach (string subpath in
+                    m_rateLimits[limitIndex]
+                        .m_applicableSubpaths)
+                {
+                    path ??= GetPath(item);
+                    if (WildcardMatcher.IsMatch(
+                            subpath,
+                            path))
+                    {
+                        applicableCalls[limitIndex]
+                            .Add(item);
+                        break;
+                    }
+                }
+            }
         }
 
         private static string GetPath(ServiceCallItem serviceCall)

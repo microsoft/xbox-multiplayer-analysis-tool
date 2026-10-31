@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using XMAT;
 
 namespace CaptureAnalysisEngine
@@ -59,6 +58,9 @@ namespace CaptureAnalysisEngine
         public override RuleResult Run(RulesEngine engine, IEnumerable<ServiceCallItem> items, ServiceCallStats stats)
         {
             RuleResult result = InitializeResult(DisplayName, Description);
+            var patternCache =
+                new Dictionary<string, InputRegex>(
+                    StringComparer.Ordinal);
             //check invalid log versions (TODO: does this matter?)
             //if (items.Count(item => item.m_logVersion == Constants.Version1509) > 0)
             //{
@@ -67,21 +69,41 @@ namespace CaptureAnalysisEngine
             //}
 
             StringBuilder description = new StringBuilder();
+            List<ServiceCallItem> orderedItems = null;
 
             // Traverse through each pattern set found in rule parameter
             foreach (var pattern in m_MatchPatterns)
             {
+                orderedItems ??=
+                    items.ToList();
                 Dictionary<ServiceCallItem, int> matchesFoundDict = new Dictionary<ServiceCallItem, int>();
 
-                foreach (ServiceCallItem thisItem in items)
+                foreach (ServiceCallItem thisItem in
+                    orderedItems)
                 {
-                    Match match = Regex.Match(thisItem.Uri, pattern.Key);
-                    if (match.Success)
+                    if (!patternCache.TryGetValue(
+                            pattern.Key,
+                            out InputRegex regex))
+                    {
+                        regex = new InputRegex(
+                            pattern.Key);
+                        patternCache.Add(
+                            pattern.Key,
+                            regex);
+                    }
+                    if (regex.IsMatch(
+                            thisItem.Uri,
+                            engine.WorkBudget,
+                            engine.CancellationToken))
                     {
                         try
                         {
-                            var doc = JsonDocument.Parse(thisItem.ReqBody);
-                            var element = doc.SelectElement(pattern.Value);
+                            using var doc =
+                                JsonDocument.Parse(
+                                    thisItem.ReqBody);
+                            var element =
+                                doc.SelectElement(
+                                    pattern.Value);
 
                             if (element.HasValue && element.Value.ValueKind == JsonValueKind.Array)
                             {
@@ -102,19 +124,22 @@ namespace CaptureAnalysisEngine
                 int numDictItems = matchesFoundDict.Count;
                 if (numDictItems >= 2)
                 {
+                    KeyValuePair<ServiceCallItem, int>[] matches =
+                        matchesFoundDict.ToArray();
                     int startWindowIdx = 0;
                     List<ServiceCallItem> callsWithinWindow = new List<ServiceCallItem>();
                     int totalXUIDsForWindow = 0;
-                    totalXUIDsForWindow += matchesFoundDict.Values.ElementAt(startWindowIdx);
-                    callsWithinWindow.Add(matchesFoundDict.Keys.ElementAt(startWindowIdx));
-                    for (int endWindowIdx = 1; endWindowIdx < matchesFoundDict.Count(); ++endWindowIdx)
+                    totalXUIDsForWindow += matches[startWindowIdx].Value;
+                    callsWithinWindow.Add(matches[startWindowIdx].Key);
+                    for (int endWindowIdx = 1; endWindowIdx < matches.Length; ++endWindowIdx)
                     {
                         UInt64 timeElapsed = (UInt64)Math.Abs((float)
-                            (matchesFoundDict.Keys.ElementAt(endWindowIdx).ReqTimeUTC - matchesFoundDict.Keys.ElementAt(startWindowIdx).ReqTimeUTC) / TimeSpan.TicksPerMillisecond);
+                            (matches[endWindowIdx].Key.ReqTimeUTC - matches[startWindowIdx].Key.ReqTimeUTC) /
+                            TimeSpan.TicksPerMillisecond);
                         if (timeElapsed <= m_BatchSetDetectionWindowsMs)
                         {
-                            callsWithinWindow.Add(matchesFoundDict.Keys.ElementAt(endWindowIdx));
-                            totalXUIDsForWindow += matchesFoundDict.Values.ElementAt(endWindowIdx);
+                            callsWithinWindow.Add(matches[endWindowIdx].Key);
+                            totalXUIDsForWindow += matches[endWindowIdx].Value;
                         }
                         else //exceeded window
                         {

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Threading;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.WebServiceCapture.Models
@@ -43,8 +44,22 @@ namespace XMAT.WebServiceCapture.Models
         public byte[] ResponseBody { get; private set; }
         public string ClientIP { get; private set; }
 
-        public Dictionary<string, string> RequestHeaders { get; private set; }
-        public Dictionary<string, string> ResponseHeaders { get; private set; }
+        private Dictionary<string, string> _requestHeaders;
+        private Dictionary<string, string> _responseHeaders;
+
+        public Dictionary<string, string> RequestHeaders =>
+            GetOrCreateHeaders(
+                ref _requestHeaders,
+                RequestLineAndHeaders);
+
+        public Dictionary<string, string> ResponseHeaders =>
+            GetOrCreateHeaders(
+                ref _responseHeaders,
+                ResponseLineAndHeaders);
+
+        internal bool HeaderCollectionsMaterialized =>
+            _requestHeaders != null ||
+            _responseHeaders != null;
 
         // The host offered by host-list menus (DNS spelling kept, IP literals canonical), or
         // null when the row has no valid host.
@@ -69,8 +84,6 @@ namespace XMAT.WebServiceCapture.Models
             ResponseLineAndHeaders = UnknownStringValue;
             RequestBody = Array.Empty<byte>();
             ResponseBody = Array.Empty<byte>();
-            RequestHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            ResponseHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             ClientIP = UnknownStringValue;
 
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
@@ -120,9 +133,6 @@ namespace XMAT.WebServiceCapture.Models
             ResponseBody = responseBody;
             ClientIP = clientIP;
 
-            RequestHeaders = StringToHeaders(RequestLineAndHeaders);
-            ResponseHeaders = StringToHeaders(ResponseLineAndHeaders);
-
             // notify whoever is listening that all properties changed (null == all properties)
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
         }
@@ -147,13 +157,34 @@ namespace XMAT.WebServiceCapture.Models
             ResponseBody = model.ResponseBody;
             ClientIP = model.ClientIP;
 
-            RequestHeaders = model.RequestHeaders;
-            ResponseHeaders = model.ResponseHeaders;
+            _requestHeaders = model.RequestHeaders;
+            _responseHeaders = model.ResponseHeaders;
 
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
         }
 
-        private Dictionary<string, string> StringToHeaders(string firstLineAndHeaders)
+        private static Dictionary<string, string> GetOrCreateHeaders(
+            ref Dictionary<string, string> field,
+            string firstLineAndHeaders)
+        {
+            Dictionary<string, string> existing =
+                Volatile.Read(ref field);
+            if (existing != null)
+            {
+                return existing;
+            }
+
+            var parsed =
+                StringToHeaders(
+                    firstLineAndHeaders);
+            return Interlocked.CompareExchange(
+                    ref field,
+                    parsed,
+                    null) ??
+                parsed;
+        }
+
+        private static Dictionary<string, string> StringToHeaders(string firstLineAndHeaders)
         {
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -307,8 +338,8 @@ namespace XMAT.WebServiceCapture.Models
                 ClientIP = clientIP;
             }
 
-            RequestHeaders = StringToHeaders(RequestLineAndHeaders);
-            ResponseHeaders = StringToHeaders(ResponseLineAndHeaders);
+            _requestHeaders = null;
+            _responseHeaders = null;
 
             // notify whoever is listening that all properties changed (null == all properties)
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));

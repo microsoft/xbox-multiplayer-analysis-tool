@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using XMAT;
 
 namespace CaptureAnalysisEngine
@@ -73,6 +72,11 @@ namespace CaptureAnalysisEngine
         public override RuleResult Run(RulesEngine engine, IEnumerable<ServiceCallItem> items, ServiceCallStats stats)
         {
             RuleResult result = InitializeResult(DisplayName, Description);
+            // These counters describe one run; retaining them made clones and repeated runs contaminate each other.
+            m_patternInstancesFound.Clear();
+            var patternCache =
+                new Dictionary<string, InputRegex>(
+                    StringComparer.Ordinal);
             //check invalid log versions (TODO: does this matter?)
             //if (items.Count(item => item.m_logVersion == Constants.Version1509) > 0)
             //{
@@ -93,13 +97,27 @@ namespace CaptureAnalysisEngine
                 // This first section reports on violations which are from batch calls made with not enough XUIDs in the request body
                 foreach (ServiceCallItem thisItem in items)
                 {
-                    Match match = Regex.Match(thisItem.Uri, pattern.Key);
-                    if (match.Success)
+                    if (!patternCache.TryGetValue(
+                            pattern.Key,
+                            out InputRegex regex))
+                    {
+                        regex = new InputRegex(
+                            pattern.Key);
+                        patternCache.Add(
+                            pattern.Key,
+                            regex);
+                    }
+                    if (regex.IsMatch(
+                            thisItem.Uri,
+                            engine.WorkBudget,
+                            engine.CancellationToken))
                     {
                         patternInstancesFound++;
                         try
                         {
-                            var doc = JsonDocument.Parse(thisItem.ReqBody);
+                            using var doc =
+                                JsonDocument.Parse(
+                                    thisItem.ReqBody);
                             var element = doc.SelectElement(pattern.Value);
 
                             if (element.HasValue && element.Value.ValueKind == JsonValueKind.Array)
@@ -134,5 +152,19 @@ namespace CaptureAnalysisEngine
 
             return result;
         }
+
+        public override Rule Clone()
+        {
+            var clone =
+                (SmallBatchDetectionRule)base.Clone();
+            clone.m_MatchPatterns =
+                new Dictionary<string, string>(
+                    m_MatchPatterns,
+                    m_MatchPatterns.Comparer);
+            clone.m_patternInstancesFound =
+                new List<Tuple<int, int>>();
+            return clone;
+        }
+
     }
 }

@@ -179,17 +179,26 @@ namespace XMAT.Tests
                 exception.Failure);
         }
 
-        [Fact]
-        public void Preflight_TinyFilesAreInvalid()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Preflight_TinyFilesAreInvalid(
+            bool cliProfile)
         {
             using var stream =
                 new MemoryStream(new byte[100]);
 
+            // The CLI profile's database limit is smaller than the file, but a file too small to be a database is
+            // reported as invalid rather than as over the limit.
             SqLtSchemaException exception =
                 Assert.Throws<SqLtSchemaException>(
                     () => SqLtSchemaPreflight.Validate(
                         stream,
-                        SqLtSchemaProfile.CreateGui()));
+                        cliProfile
+                            ? SqLtSchemaProfile.CreateCli(
+                                64,
+                                1024 * 1024)
+                            : SqLtSchemaProfile.CreateGui()));
 
             Assert.Equal(
                 SqLtSchemaFailure.Invalid,
@@ -342,6 +351,56 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void CliProfile_MaterializesOnlyItsTablesAndReadsBackLimits()
+        {
+            using var directory = new TestDirectory();
+            string path = HostileSqliteSchemas.CreateOrdinaryCapture(
+                directory.Path,
+                "profiles.xmatcap",
+                HostileSqliteSchemas.LongExtensionDdl(
+                    SqLtSchemaProfile.MaxExtensionColumns),
+                includeNetworkTrace: true);
+
+            using var database =
+                new SqLtReadonlyDatabase(
+                    path,
+                    SqLtSchemaProfile.CreateCli(
+                        32L * 1024 * 1024));
+
+            Assert.Equal(
+                new[]
+                {
+                    "CaptureDevices",
+                    "WebProxyConnections",
+                },
+                database.TableNames().OrderBy(
+                    name => name,
+                    StringComparer.Ordinal));
+            Assert.Null(
+                database.TableByName(
+                    "NetworkTracePackets"));
+            Assert.Equal(
+                33 * 1024 * 1024,
+                database.AppliedLimits.Length);
+            Assert.Equal(
+                SqLtSchemaProfile.MaxSqlLength,
+                database.AppliedLimits.SqlLength);
+            Assert.Equal(
+                SqLtSchemaProfile.MaxColumns,
+                database.AppliedLimits.Columns);
+            Assert.Equal(
+                SqLtSchemaProfile.MaxExpressionDepth,
+                database.AppliedLimits.ExpressionDepth);
+
+            SqLtSchemaProfile gui =
+                SqLtSchemaProfile.CreateGui();
+            Assert.Null(
+                gui.MaxDatabaseBytes);
+            Assert.Null(
+                gui.MaxValueBytes);
+        }
+
+        [Fact]
         public void QuotedKeywordExtensionColumn_RemainsReadable()
         {
             using var directory = new TestDirectory();
@@ -465,8 +524,12 @@ namespace XMAT.Tests
                         SqLtSchemaProfile.CreateGui()));
 
             Assert.Equal(
-                SqLtSchemaFailure.Unsupported,
+                SqLtSchemaFailure.WriteAheadLog,
                 exception.Failure);
+            Assert.Equal(
+                "CAPTURE_OPEN_SCHEMA_ERROR",
+                MainWindow.CaptureOpenErrorKey(
+                    exception.Failure));
             Assert.Equal(
                 before,
                 DirectoryState(directory.Path));
@@ -793,6 +856,11 @@ namespace XMAT.Tests
                         .TableByName("WebProxyConnections")
                         .Dataset.DataRecords
                         .Count());
+                // The hash is taken through the guarded handle, not the path that now leads to the other capture.
+                Assert.Equal(
+                    SHA256.HashData(
+                        File.ReadAllBytes(checkedCapture)),
+                    database.ComputeSha256());
             }
             finally
             {
@@ -889,6 +957,84 @@ namespace XMAT.Tests
             File.Delete(path);
             Assert.False(
                 File.Exists(path));
+        }
+
+        [Fact]
+        public void Open_RefusesADatabaseLargerThanTheCliProfileAllows()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteXmatcap(
+                directory.Path,
+                "capture.xmatcap");
+            long length = new FileInfo(path).Length;
+
+            SqLtSchemaException exception =
+                Assert.Throws<SqLtSchemaException>(
+                    () => new SqLtReadonlyDatabase(
+                        path,
+                        SqLtSchemaProfile.CreateCli(
+                            length - 1,
+                            1024 * 1024)));
+
+            Assert.Equal(
+                SqLtSchemaFailure.Limit,
+                exception.Failure);
+            using var database =
+                new SqLtReadonlyDatabase(
+                    path,
+                    SqLtSchemaProfile.CreateCli(
+                        length,
+                        1024 * 1024));
+            Assert.NotNull(
+                database.TableByName(
+                    "WebProxyConnections"));
+        }
+
+        [Fact]
+        public void ComputeSha256_HashesTheGuardedFileWithoutDisturbingReads()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteXmatcap(
+                directory.Path,
+                "capture.xmatcap",
+                new SyntheticXmatcapOptions(
+                    RequestsPerDevice: 1000));
+            // Larger than one 64 KiB read, so the hash spans several reads.
+            Assert.True(
+                new FileInfo(path).Length > 64 * 1024);
+            byte[] expected =
+                SHA256.HashData(
+                    File.ReadAllBytes(path));
+            var database =
+                new SqLtReadonlyDatabase(path);
+            try
+            {
+                Assert.Equal(
+                    expected,
+                    database.ComputeSha256());
+                Assert.Equal(
+                    1000,
+                    database
+                        .TableByName("WebProxyConnections")
+                        .Dataset.DataRecords
+                        .Count());
+                Assert.Equal(
+                    expected,
+                    database.ComputeSha256());
+                using var cancellation =
+                    new CancellationTokenSource();
+                cancellation.Cancel();
+                Assert.Throws<OperationCanceledException>(
+                    () => database.ComputeSha256(
+                        cancellation.Token));
+            }
+            finally
+            {
+                database.Dispose();
+            }
+
+            Assert.Throws<ObjectDisposedException>(
+                () => database.ComputeSha256());
         }
 
         [Fact]

@@ -156,6 +156,12 @@ namespace XMAT.DataAbstractionLayer
                 {
                     throw Invalid();
                 }
+                if (_profile.MaxDatabaseBytes.HasValue &&
+                    _input.Length >
+                        _profile.MaxDatabaseBytes.Value)
+                {
+                    throw Limit();
+                }
 
                 var header = new byte[100];
                 ReadExactly(
@@ -184,6 +190,14 @@ namespace XMAT.DataAbstractionLayer
                     _input.Length % _pageSize != 0)
                 {
                     throw Invalid();
+                }
+                // Format version 2 means write-ahead logging, whose committed changes can still be in a -wal file
+                // that the immutable open never reads. Any other version but 1 (rollback journal) is unsupported.
+                if (header[18] == 2 ||
+                    header[19] == 2)
+                {
+                    throw new SqLtSchemaException(
+                        SqLtSchemaFailure.WriteAheadLog);
                 }
                 if (header[18] != 1 ||
                     header[19] != 1)

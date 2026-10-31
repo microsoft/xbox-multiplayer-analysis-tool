@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Resources;
 using CaptureAnalysisEngine;
@@ -13,6 +14,11 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
 {
     internal abstract class ReportViewModel
     {
+        private static readonly Encoding Utf8NoBom =
+            new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true);
+
         public abstract string ReportName { get; }
 
         public virtual bool Show { get { return true; } }
@@ -37,7 +43,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
         {
             var filename = Path.GetFileName(resourceName);
             var filepath = Path.Combine(destinationFolder, filename);
-            var embeddedResourceUri = string.Format("pack://application:,,,/{0}", resourceName);
+            var embeddedResourceUri = string.Format("pack://application:,,,/XboxMultiplayerAnalysisTool;component/{0}", resourceName);
             Uri uri = new Uri(embeddedResourceUri, UriKind.Absolute);
             StreamResourceInfo info = Application.GetResourceStream(uri);
             using (var resourceStream = info.Stream)
@@ -47,6 +53,77 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
                     resourceStream.Seek(0, SeekOrigin.Begin);
                     resourceStream.CopyTo(fileStream);
                 }
+            }
+        }
+
+        internal static void WriteJsonTemplate(
+            string templatePath,
+            string token,
+            ReportDocument reportDocument)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(
+                templatePath);
+            ArgumentException.ThrowIfNullOrEmpty(
+                token);
+            ArgumentNullException.ThrowIfNull(
+                reportDocument);
+
+            string templateText =
+                File.ReadAllText(templatePath);
+            string jsonBufferPath =
+                templatePath +
+                "." +
+                Guid.NewGuid().ToString("N") +
+                ".json.tmp";
+            using var jsonStream =
+                new FileStream(
+                    jsonBufferPath,
+                    FileMode.CreateNew,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 4096,
+                    FileOptions.DeleteOnClose);
+            reportDocument.WriteJson(
+                jsonStream);
+            jsonStream.Flush();
+
+            using var output =
+                new FileStream(
+                    templatePath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.Read);
+            using var writer =
+                new StreamWriter(
+                    output,
+                    Utf8NoBom,
+                    bufferSize: 4096,
+                    leaveOpen: true);
+            int start = 0;
+            while (true)
+            {
+                int tokenIndex =
+                    templateText.IndexOf(
+                        token,
+                        start,
+                        StringComparison.Ordinal);
+                if (tokenIndex < 0)
+                {
+                    writer.Write(
+                        templateText.AsSpan(start));
+                    break;
+                }
+
+                writer.Write(
+                    templateText.AsSpan(
+                        start,
+                        tokenIndex - start));
+                writer.Flush();
+                jsonStream.Position = 0;
+                jsonStream.CopyTo(output);
+                start =
+                    tokenIndex +
+                    token.Length;
             }
         }
     }
