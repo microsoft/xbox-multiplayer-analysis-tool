@@ -4,14 +4,64 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
+    internal enum CaptureSaveFailure
+    {
+        Refused,
+        DestinationLocked,
+        Failed,
+    }
+
+    internal sealed class CaptureSaveException :
+        IOException
+    {
+        internal CaptureSaveException(
+            CaptureSaveFailure failure,
+            Exception innerException = null)
+            : base(
+                failure switch
+                {
+                    CaptureSaveFailure.Refused =>
+                        "The save destination is currently loaded.",
+                    CaptureSaveFailure.DestinationLocked =>
+                        "The save destination is locked.",
+                    _ =>
+                        "The capture could not be saved.",
+                },
+                innerException)
+        {
+            Failure = failure;
+        }
+
+        internal CaptureSaveFailure Failure { get; }
+    }
+
     // Tracks which read-only capture tab owns each loaded capture database. Tabs reused by a reload share the newly
     // opened database, and the database (with its file handle) is disposed as soon as its last owning tab releases it.
     internal static class LoadedCaptureDatabaseRegistry
     {
+        private sealed class SaveDestinationLease :
+            IDisposable
+        {
+            private bool _disposed;
+
+            public void Dispose()
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+                _disposed = true;
+                Monitor.Exit(Sync);
+            }
+        }
+
         private sealed class Entry
         {
             internal Entry(
@@ -117,6 +167,65 @@ namespace XMAT.DataAbstractionLayer
                     out Entry entry)
                         ? entry.Database
                         : null;
+            }
+        }
+
+        internal static IDisposable AcquireSaveDestination(
+            string path)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            SqLtFileIdentity? identity;
+            try
+            {
+                identity = File.Exists(path)
+                    ? SqLtFileIdentity.FromPath(path)
+                    : null;
+            }
+            catch (Exception exception) when (
+                exception is IOException or
+                    UnauthorizedAccessException)
+            {
+                throw new CaptureSaveException(
+                    CaptureSaveFailure
+                        .DestinationLocked,
+                    exception);
+            }
+            Monitor.Enter(Sync);
+            try
+            {
+                if (identity.HasValue &&
+                    Databases.Keys.Any(
+                        database =>
+                            database.Identity ==
+                            identity.Value))
+                {
+                    throw new CaptureSaveException(
+                        CaptureSaveFailure.Refused);
+                }
+                return new SaveDestinationLease();
+            }
+            catch
+            {
+                Monitor.Exit(Sync);
+                throw;
+            }
+        }
+
+        internal static bool IsLoadedPath(
+            string path)
+        {
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+            SqLtFileIdentity identity =
+                SqLtFileIdentity.FromPath(path);
+            lock (Sync)
+            {
+                return Databases.Keys.Any(
+                    database =>
+                        database.Identity ==
+                        identity);
             }
         }
 

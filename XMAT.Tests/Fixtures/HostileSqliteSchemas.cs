@@ -100,6 +100,62 @@ namespace XMAT.Tests.Fixtures
             return path;
         }
 
+        internal static string CreateOversizedValueCapture(
+            string directory,
+            string fileName,
+            int valueBytes)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+                valueBytes);
+            string path =
+                CreateOrdinaryCapture(
+                    directory,
+                    fileName);
+            var connectionString =
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = path,
+                    Pooling = false,
+                }.ToString();
+            using var connection =
+                new SqliteConnection(
+                    connectionString);
+            connection.Open();
+            using (var device =
+                connection.CreateCommand())
+            {
+                device.CommandText =
+                    "INSERT INTO CaptureDevices" +
+                    "(DeviceType,DeviceName,CaptureType) " +
+                    "VALUES(1,'Large device',0)";
+                device.ExecuteNonQuery();
+            }
+            using (var capture =
+                connection.CreateCommand())
+            {
+                capture.CommandText =
+                    "INSERT INTO WebProxyConnections(" +
+                    "DeviceName,RequestNumber,ConnectionId," +
+                    "RequestTimestamp,ResponseTimestamp,RequestScheme," +
+                    "RequestHost,RequestPort,RequestMethod,RequestPath," +
+                    "RequestStatus,RequestLineAndHeaders,RequestBody," +
+                    "ResponseLineAndHeaders,ResponseBody,ClientIP) " +
+                    "VALUES('Large device',1,1," +
+                    "'2026-01-01T00:00:00.0000000Z'," +
+                    "'2026-01-01T00:00:00.1000000Z','https'," +
+                    "'example.test','443','GET','/','200'," +
+                    "'GET / HTTP/1.1',''," +
+                    "$large,'','10.0.0.1')";
+                capture.Parameters.AddWithValue(
+                    "$large",
+                    new string(
+                        'x',
+                        valueBytes));
+                capture.ExecuteNonQuery();
+            }
+            return path;
+        }
+
         // Returns the write-ahead log that SQLite writes when the statements run against a copy of the capture in WAL
         // mode. The capture itself is not changed.
         internal static byte[] CreateWriteAheadLog(

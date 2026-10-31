@@ -10,6 +10,10 @@
 	"CAPTURE_OPEN_SCHEMA_LIMIT": "The capture file's database schema exceeds the supported safety limits.",
 	"CAPTURE_OPEN_SIDECAR": "The capture file could not be opened because SQLite journal or write-ahead log files (-journal, -wal or -shm) are next to it, so it may still be open in another program or not completely saved. Open a clean capture that has been closed or exported by the program that wrote it. XMAT has not changed the capture or those files.",
 	"CAPTURE_OPEN_LOCATION": "The capture file could not be opened because its location cannot support safe opening: Windows cannot report a normalized path for it, as can happen on some network shares. Copy a closed, self-contained capture to an accessible local folder and open it there. XMAT has not changed the capture.",
+	"CAPTURE_SAVE_ERROR_TITLE": "Unable to Save Capture",
+	"CAPTURE_SAVE_ERROR_REFUSED": "The selected destination is a capture currently open in XMAT. Choose a different file.",
+	"CAPTURE_SAVE_ERROR_LOCKED": "The capture could not be saved because another program is using the selected file.",
+	"CAPTURE_SAVE_ERROR_FAILED": "The capture could not be saved.",
 	"FILE_IMPORT_CAPTURES": "Import",
 	"FILE_EXPORT_CAPTURES": "Export",
 	"FILE_EXPORT_SANITIZED": "Export Sanitized Capture...",
@@ -345,6 +349,7 @@
 	"WEBCAP_IMPORT_ARCHIVE_LIMIT": "The capture archive lists more files, or has a larger directory, than XMAT can import.",
 	"WEBCAP_IMPORT_ARCHIVE_INVALID": "The capture archive is damaged or uses an unsupported ZIP layout.",
 	"WEBCAP_ANALYSIS_ERROR_NOSUITABLE": "The capture does not contain any endpoints which XMAT can analyze.",
+	"WEBCAP_ANALYSIS_ERROR_WORK_LIMIT": "The capture requires too much rule-processing work to analyze safely.",
 	"WEBCAP_ANALYSIS_ERROR_UNKNOWN": "An unknown error occurred",
 
 	"PROXY_ERROR_DEVICE_TYPE_PC": "Device type must be PC.",

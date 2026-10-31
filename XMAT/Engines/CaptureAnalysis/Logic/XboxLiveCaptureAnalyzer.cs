@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: MIT
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
-using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using CaptureAnalysisEngine;
+using XMAT.Operations;
+using XMAT.Operations.Analysis;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.XboxLiveCaptureAnalysis.Models;
@@ -19,27 +19,34 @@ namespace XMAT.XboxLiveCaptureAnalysis
 {
     public class XboxLiveCaptureAnalyzer : ICaptureAnalyzer
     {
-        private static string ApiMapFilePath => CombineWithRelativeSegmentsOnly(PublicUtilities.InstallDirectoryPath, "data", "XboxLiveTraceAnalyzer.APIMap.csv");
-        private static string RulesFilePath => CombineWithRelativeSegmentsOnly(PublicUtilities.InstallDirectoryPath, "data", "XboxLiveTraceAnalyzer.Rules.json");
+        private readonly string _installDirectory;
+        private readonly Func<string> _outputRootProvider;
+        private readonly Action<Type, string> _exceptionObserver;
+        private readonly Func<AnalysisWorkBudget> _workBudgetFactory;
+        private ICaptureAppModel _captureAppModel;
+        private AnalyzeCaptureOperation _operation;
 
-        private static string CombineWithRelativeSegmentsOnly(string firstSegment, params string[] remainingSegments)
+        public XboxLiveCaptureAnalyzer()
+            : this(
+                AppContext.BaseDirectory,
+                () => PublicUtilities.StorageDirectoryPath,
+                null,
+                null)
         {
-            if (remainingSegments.Where(Path.IsPathRooted).Any())
-            {
-                throw new ArgumentException("Path segments after the first must be relative.", nameof(remainingSegments));
-            }
-
-            var combinedPath = firstSegment;
-            foreach (var segment in remainingSegments)
-            {
-                combinedPath = Path.Combine(combinedPath, segment);
-            }
-
-            return combinedPath;
         }
 
-        private ICaptureAppModel _captureAppModel;
-        private TraceAnalyzer _traceAnalyzer;
+        internal XboxLiveCaptureAnalyzer(
+            string installDirectory,
+            Func<string> outputRootProvider,
+            Action<Type, string> exceptionObserver = null,
+            Func<AnalysisWorkBudget> workBudgetFactory = null)
+        {
+            _installDirectory = installDirectory;
+            _outputRootProvider = outputRootProvider ??
+                throw new ArgumentNullException(nameof(outputRootProvider));
+            _exceptionObserver = exceptionObserver;
+            _workBudgetFactory = workBudgetFactory;
+        }
 
         public static ICaptureAnalyzer Analyzer { get { return AnalyzerInstance; } }
 
@@ -68,18 +75,19 @@ namespace XMAT.XboxLiveCaptureAnalysis
         public void Initialize(ICaptureAppModel appModel)
         {
             _captureAppModel = appModel;
-
-            _traceAnalyzer = new TraceAnalyzer();
-            _traceAnalyzer.LoadURIMap(ApiMapFilePath);
-            _traceAnalyzer.LoadRules(RulesFilePath);
-            // TODO: allow the user through the options UI for this analysis
-            // to specify the reports they want
-            _traceAnalyzer.AddReports(
-                new Report[] {
-                    new PerEndpointReport(),
-                    new CallReport(),
-                    new StatsReport()
-                });
+            _operation = null;
+            var assets = AnalysisAssets.Load(
+                _installDirectory,
+                AnalysisAssetLoadPolicy.GuiCompatible);
+            _operation = new AnalyzeCaptureOperation(assets)
+            {
+                ExceptionObserver = ObserveOperationException,
+            };
+            if (_workBudgetFactory != null)
+            {
+                _operation.WorkBudgetFactory =
+                    _workBudgetFactory;
+            }
         }
 
         public async Task<ECaptureAnalyzerResult> RunAsync(ICaptureAnalysisRun analysisRun, IDeviceCaptureController captureController)
@@ -89,83 +97,67 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
             WebServiceDeviceCaptureController controller =
                 captureController as WebServiceDeviceCaptureController;
-
-            var sourceCaptureName = controller.DeviceName;
-
-            // TODO: expose options for parameters
-            var isInternal = false;
-            var allEndpoints = false;
-            Dictionary<string, IEnumerable<ReportDocument>> perConsoleReports = null;
+            if (controller == null || _operation == null)
+            {
+                return ECaptureAnalyzerResult.UnknownError;
+            }
 
             string analysisRunStorageDirectory = Path.Combine(
-                PublicUtilities.StorageDirectoryPath,
+                _outputRootProvider(),
                 $"xlca_{analysisRun.Id}");
-
             analysisResultsModel.OutputDirectory =
                 analysisRunStorageDirectory;
-            analysisResultsModel.SourceCaptureName = sourceCaptureName;
-            Directory.CreateDirectory(analysisRunStorageDirectory);
-
-            // TODO: support cancellation of the analysis processing
-            await Task.Run(() =>
+            analysisResultsModel.SourceCaptureName = controller.DeviceName;
+            var progress = new Progress<OperationProgress>(update =>
             {
-                var rulesEngine = new RulesEngine(isInternal);
-                var serviceCallData = new ServiceCallData(allEndpoints);
-
-                // The application holds an analysis lease while converting these records,
-                // so writable capture data remains quiescent without a second full copy.
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.ConvertingProxyConnectionsToServiceCallItems);
-                List<ServiceCallItem> serviceCallItems =
-                    GetServiceCallItemsForProxyConnections(controller);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.CreatingServiceDataFromCallItems);
-                serviceCallData.CreateFromServiceCallItems(serviceCallItems);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.RunningUrlConverterOnData);
-                _traceAnalyzer.RunUriConverterOnData(serviceCallData);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.RunningValidationRules);
-                perConsoleReports = _traceAnalyzer.Run(
-                    rulesEngine,
-                    serviceCallData,
-                    analysisRunStorageDirectory);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.DumpingServiceCallData);
-                rulesEngine.DumpServiceCallData(
-                    Path.Combine(
-                        analysisRunStorageDirectory,
-                        $"xlca_{analysisRun.Id}_service_call_data.txt"),
-                    serviceCallData);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.DumpingServiceCallItems);
-                rulesEngine.DumpServiceCallItems(
-                    Path.Combine(
-                        analysisRunStorageDirectory,
-                        $"xlca_{analysisRun.Id}_service_call_items.txt"),
-                    serviceCallItems);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.DumpingRuleResults);
-                rulesEngine.DumpResultsToFile(
-                    Path.Combine(
-                        analysisRunStorageDirectory,
-                        $"xlca_{analysisRun.Id}_results.txt"));
+                if (TryGetProcessStep(update.Phase, out var processStep))
+                {
+                    SetProcessStatus(analysisResultsModel, processStep);
+                }
             });
+            var result = await _operation.ExecuteAsync(
+                new AnalyzeCaptureRequest(
+                    AnalysisInput.FromRecords(
+                        controller.GetCaptureRecords(),
+                        controller.DeviceName),
+                    new AnalysisOptions(
+                        ProduceLegacyReports: true)),
+                new OperationContext(
+                    workingDirectory: analysisRunStorageDirectory,
+                    progress: progress),
+                CancellationToken.None);
+            if (result.Diagnostics.Any(diagnostic =>
+                    diagnostic.Code ==
+                    AnalyzeCaptureOperation.WorkLimitCode))
+            {
+                return ECaptureAnalyzerResult.WorkLimit;
+            }
+            if (result.Outcome is OperationOutcome.InvalidInput or
+                OperationOutcome.NoAnalyzableData)
+            {
+                return ECaptureAnalyzerResult.NoSuitableData;
+            }
+            if (!result.Succeeded ||
+                result.Value?.Legacy?.PerConsoleReports == null)
+            {
+                return ECaptureAnalyzerResult.UnknownError;
+            }
 
             // at this point we should show any report views
             // NOTE: for now we are just showing the reports for the first
             // console that we found in the data
 
-            if (perConsoleReports.Count == 0)
+            if (result.Value.Legacy.PerConsoleReports.Count == 0)
             {
                 return ECaptureAnalyzerResult.NoSuitableData;
             }
 
-            var firstReports = perConsoleReports.First();
+            var firstReports = result.Value.Legacy.PerConsoleReports.First();
             foreach (var report in firstReports.Value)
             {
                 ReportViewModel model = ReportViewModelFactory.CreateForDocument(
                     _captureAppModel,
-                    sourceCaptureName,
+                    controller.DeviceName,
                     analysisRunStorageDirectory,
                     report);
                 if (model != null && model.Show)
@@ -180,7 +172,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         public void Shutdown()
         {
-            _traceAnalyzer = null;
+            _operation = null;
         }
 
         private void SetProcessStatus(AnalysisResultsModel model, AnalysisResultsModel.ProcessStep processStep)
@@ -188,142 +180,57 @@ namespace XMAT.XboxLiveCaptureAnalysis
             PublicUtilities.SafeInvoke(() => model.ActiveProcessStep = processStep);
         }
 
-        private List<ServiceCallItem> GetServiceCallItemsForProxyConnections(
-            WebServiceDeviceCaptureController controller)
+        private void ObserveOperationException(
+            Type type,
+            string stack)
         {
-            List<ServiceCallItem> items = new();
-
-            foreach (IDataRecord record in controller.GetCaptureRecords())
+            if (_exceptionObserver != null)
             {
-                ServiceCallItem item = ProxyConnectionModelToServiceCallItem(record);
-                if (item != null)
+                try
                 {
-                    items.Add(item);
+                    _exceptionObserver(type, stack);
                 }
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                {
+                    // GUI diagnostics are best effort.
+                }
+                return;
             }
-            return items;
+
+            PublicUtilities.AppLog(
+                LogLevel.ERROR,
+                $"Capture analysis failed ({type.FullName}).{Environment.NewLine}{stack}");
         }
 
-        // TODO: move this to a more appropriate place
-        private static WebHeaderCollection GetRequestHeadersForString(
-            string requestLineAndHeaders)
+        private static bool TryGetProcessStep(
+            string phase,
+            out AnalysisResultsModel.ProcessStep processStep)
         {
-            var headers = new WebHeaderCollection();
-            if (!string.IsNullOrEmpty(requestLineAndHeaders))
+            processStep = phase switch
             {
-                string[] lines = requestLineAndHeaders.Split("\r\n");
-                for (int i = 1; i < lines.Length; i++)
-                {
-                    string line = lines[i];
-                    if (!string.IsNullOrEmpty(line) && line.Contains(':'))
-                    {
-                        headers.Add(line);
-                    }
-                }
-            }
-            return headers;
+                "analysis.convert" =>
+                    AnalysisResultsModel.ProcessStep.ConvertingProxyConnectionsToServiceCallItems,
+                "analysis.group" =>
+                    AnalysisResultsModel.ProcessStep.CreatingServiceDataFromCallItems,
+                "analysis.convert-uris" =>
+                    AnalysisResultsModel.ProcessStep.RunningUrlConverterOnData,
+                "analysis.rules" =>
+                    AnalysisResultsModel.ProcessStep.RunningValidationRules,
+                "analysis.dump-data" =>
+                    AnalysisResultsModel.ProcessStep.DumpingServiceCallData,
+                "analysis.dump-items" =>
+                    AnalysisResultsModel.ProcessStep.DumpingServiceCallItems,
+                "analysis.dump-results" =>
+                    AnalysisResultsModel.ProcessStep.DumpingRuleResults,
+                _ => AnalysisResultsModel.ProcessStep.NotStarted,
+            };
+            return processStep != AnalysisResultsModel.ProcessStep.NotStarted;
         }
 
-        private static string[] AllowedNonAnalyzedHosts = { "playfab.com", "playfabapi.com" };
-
+        // The command line shares this conversion (WebServiceCaptureRecordConverter); the GUI analyzer keeps its
+        // entry point for existing callers.
         internal static ServiceCallItem ProxyConnectionModelToServiceCallItem(
-            IDataRecord dataRecord)
-        {
-            var requestNumber = dataRecord.Int(WebServiceCaptureMethod.FieldKey_RequestNumber);
-            var requestTimestamp = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestTimestamp);
-            var responseTimestamp = dataRecord.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp);
-            var requestScheme = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestScheme);
-            var requestHost = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestHost);
-            var requestPort = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestPort);
-            var requestMethod = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestMethod);
-            var requestPath = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestPath);
-            var requestStatus = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestStatus);
-            var requestLineAndHeaders = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders);
-            var requestBodyBase64 = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestBody);
-            var responseLineAndHeaders = dataRecord.Str(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders);
-            var responseBodyBase64 = dataRecord.Str(WebServiceCaptureMethod.FieldKey_ResponseBody);
-            var clientIP = dataRecord.Str(WebServiceCaptureMethod.FieldKey_ClientIP);
-
-            ServiceCallItem item = new ServiceCallItem((UInt32)requestNumber);
-
-            // we should ignore all CONNECT(s)
-            if (requestMethod == @"CONNECT")
-            {
-                return null;
-            }
-
-            // we should ignore empty timestamps
-            if (string.IsNullOrEmpty(requestTimestamp) || string.IsNullOrEmpty(responseTimestamp))
-            {
-                return null;
-            }
-
-            // TODO: we should ignore invalid protocols/calls
-            // eg. Fiddler test frames start with "http:///" and should be ignored
-
-            // finally ignore models based on rules
-            // TODO: LTA supports a "custom user agent" for filtering and we should expose
-            // that option as well
-            var requestHeaders = GetRequestHeadersForString(requestLineAndHeaders);
-            if (!Utils.IsAnalyzedService(requestHeaders, null))
-            {
-                if (!AllowedNonAnalyzedHosts.Any(host => requestHost.Contains(host)))
-                {
-                    return null;
-                }
-            }
-
-            var requestTime = DateTime.Parse(requestTimestamp);
-            var duration = DateTime.Parse(responseTimestamp) - requestTime;
-
-            // note: obtained from "Host" request header if possible. A stored hostless capture remains hostless.
-            item.Host = string.IsNullOrWhiteSpace(requestHost)
-                ? string.Empty
-                : requestHeaders[HttpRequestHeader.Host] ??
-                    requestHost.Split(':')[0];
-
-            // The logical Host label above keeps the captured-header behavior; host-list actions use provenance: a
-            // structured capture host that is a host identity wins, otherwise the captured Host header parsed as an
-            // authority is used. Text that is not a host identity is kept but never actionable.
-            item.EndpointKind = EndpointKind.Captured;
-            item.PhysicalHost = GetPhysicalHost(requestHost, requestHeaders[HttpRequestHeader.Host]);
-
-            // note: obtained from the .Scheme & .Call. A hostless capture keeps its request path without
-            // reconstructing an authority.
-            item.Uri = string.IsNullOrEmpty(item.Host)
-                ? requestPath ?? string.Empty
-                : UriUtils.GetAbsoluteUri(
-                    requestScheme,
-                    requestHost,
-                    requestPort,
-                    requestPath);
-
-            item.XboxUserId = Utils.GetXboxUserID(requestPath);
-            item.ReqHeader = requestLineAndHeaders;
-            item.ReqBody = Encoding.ASCII.GetString(
-                Convert.FromBase64String(requestBodyBase64));
-
-            item.RspHeader = responseLineAndHeaders;
-            item.RspBody = Encoding.ASCII.GetString(
-                Convert.FromBase64String(responseBodyBase64));
-
-            item.ConsoleIP = clientIP;
-            item.HttpStatusCode = String.IsNullOrEmpty(requestStatus) ? 0 : Convert.ToUInt32(requestStatus);
-            item.ReqBodyHash = (UInt64)item.ReqBody.GetHashCode();
-            item.ElapsedCallTimeMs = (ulong)duration.TotalMilliseconds;
-            item.ReqTimeUTC = (ulong)requestTime.ToFileTimeUtc();
-            item.Method = requestMethod;
-
-            return item;
-        }
-
-        private static string GetPhysicalHost(string structuredHost, string hostHeader)
-        {
-            if (HostAuthority.TryNormalizeHost(structuredHost, out string host))
-            {
-                return host;
-            }
-            return HostAuthority.TryParse(hostHeader, out host, out _) ? host : null;
-        }
+            IDataRecord dataRecord) =>
+            WebServiceCaptureRecordConverter.Convert(dataRecord);
     }
 }

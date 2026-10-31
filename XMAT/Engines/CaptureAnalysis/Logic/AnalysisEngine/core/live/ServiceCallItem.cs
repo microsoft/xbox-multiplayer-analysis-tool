@@ -25,6 +25,7 @@ namespace CaptureAnalysisEngine
         public string ConsoleIP { get; set; }
         public uint HttpStatusCode { get; set; }
         public ulong ReqBodyHash { get; set; }
+        internal RequestBodyIdentity BodyIdentity { get; set; }
         public ulong ElapsedCallTimeMs { get; set; }
         public ulong ReqTimeUTC { get; set; }
         public string Method { get; set; }
@@ -87,6 +88,7 @@ namespace CaptureAnalysisEngine
         {
             HttpStatusCode = 0;
             ReqBodyHash = 0;
+            BodyIdentity = null;
             ElapsedCallTimeMs = 0;
             ReqTimeUTC = 0;
 
@@ -112,6 +114,7 @@ namespace CaptureAnalysisEngine
             copy.ConsoleIP = ConsoleIP;
             copy.HttpStatusCode = HttpStatusCode;
             copy.ReqBodyHash = ReqBodyHash;
+            copy.BodyIdentity = BodyIdentity;
             copy.ElapsedCallTimeMs = ElapsedCallTimeMs;
             copy.ReqTimeUTC = ReqTimeUTC;
             copy.Method = Method;

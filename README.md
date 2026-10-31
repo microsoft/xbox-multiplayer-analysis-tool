@@ -33,6 +33,7 @@ WebSocket traffic passing through the proxy is also captured and can be inspecte
 - **[Live Trace Analysis](#live-trace-analysis)**
 - **[Network Capture](#network-capture)**
 - **[Network Capture Analysis](#network-capture-analysis)**
+- **[Headless Use and the Command Line](#headless-use-and-the-command-line)**
 - **[Appearance](#appearance)**
 - **[Known Issues](#known-issues)**
 - **[Support](#support)**
@@ -739,6 +740,15 @@ Analyze Capture. The results will open in a new tab below as seen here:
 The analysis checks for UDP packets sent in excess of the recommended Xbox MTU (1384), sending more
 than (20) packets in a second and sending duplicate packets within a second. If any of these are detected,
 the report will show a red background in the list.
+
+
+## Headless Use and the Command Line
+
+Xbox Multiplayer Analysis Tool includes a command-line tool, `xmat.exe`, that runs its capabilities without the GUI,
+for example from scripts or CI. It ships next to `XboxMultiplayerAnalysisTool.exe` in the CI build artifact. Today it
+analyzes Fiddler archives (`.saz`) and XMAT captures (`.xmatcap`) with the Xbox Live service call rules, and
+`xmat doctor` checks its installation; capture and conversion are planned. See [docs/cli.md](docs/cli.md) for its
+commands, JSON output, exit codes and compatibility, and for what runs headless today.
 
 
 ## Appearance

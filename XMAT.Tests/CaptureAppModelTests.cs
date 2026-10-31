@@ -7,6 +7,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -414,6 +415,9 @@ namespace XMAT.Tests
                             Assert.Single(
                                 model.CaptureDeviceContexts)
                                 .CaptureController));
+                Assert.True(
+                    LoadedCaptureDatabaseRegistry
+                        .IsLoadedPath(path));
 
                 await model.RemoveDeviceContextAsync(
                     Assert.Single(
@@ -631,6 +635,91 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
+                Directory.Delete(
+                    directory,
+                    true);
+            }
+        }
+
+        [Fact]
+        public async Task SaveDataCaptures_RefusesCaseAndHardLinkAliasesToLoadedCapture()
+        {
+            string directory = Path.Combine(
+                AppContext.BaseDirectory,
+                "CaptureAppModelFixtures",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string loadedPath =
+                SyntheticCaptures.WriteXmatcap(
+                    directory,
+                    "loaded.xmatcap");
+            string aliasPath = Path.Combine(
+                directory,
+                "loaded-alias.xmatcap");
+            CreateHardLink(
+                aliasPath,
+                loadedPath);
+            byte[] before =
+                File.ReadAllBytes(loadedPath);
+            var active = new SqLtDatabase();
+            active.Initialize();
+            active.CreateTable(
+                "LiveData",
+                new Field<string>("Value"))
+                .AddRow("live");
+            var model = new CaptureAppModel
+            {
+                ActiveDatabase = active,
+            };
+            try
+            {
+                model.LoadDataCaptures(loadedPath);
+
+                Assert.Throws<
+                    CaptureSaveException>(
+                        () => model.SaveDataCaptures(
+                            loadedPath
+                                .ToUpperInvariant()));
+                CaptureSaveException exception =
+                    Assert.Throws<
+                        CaptureSaveException>(
+                            () => model.SaveDataCaptures(
+                                aliasPath));
+
+                Assert.Equal(
+                    CaptureSaveFailure.Refused,
+                    exception.Failure);
+                Assert.DoesNotContain(
+                    Path.GetFileName(
+                        loadedPath),
+                    exception.Message,
+                    StringComparison.Ordinal);
+                Assert.Equal(
+                    before,
+                    File.ReadAllBytes(
+                        loadedPath));
+                Assert.Equal(
+                    new[]
+                    {
+                        aliasPath,
+                        loadedPath,
+                    }.OrderBy(
+                        item => item,
+                        StringComparer.Ordinal),
+                    Directory.GetFiles(directory)
+                        .OrderBy(
+                            item => item,
+                            StringComparer.Ordinal));
+            }
+            finally
+            {
+                while (model.CaptureDeviceContexts.Count !=
+                    0)
+                {
+                    await model.RemoveDeviceContextAsync(
+                        model.CaptureDeviceContexts[^1]);
+                }
+                active.Dispose();
                 Directory.Delete(
                     directory,
                     true);
@@ -1587,6 +1676,10 @@ namespace XMAT.Tests
                     hostileHash,
                     SHA256.HashData(
                         File.ReadAllBytes(hostilePath)));
+                Assert.False(
+                    LoadedCaptureDatabaseRegistry
+                        .IsLoadedPath(
+                            hostilePath));
 
                 File.Delete(hostilePath);
                 Assert.False(
@@ -2040,6 +2133,34 @@ namespace XMAT.Tests
                 }
             }
         }
+
+        private static void CreateHardLink(
+            string linkPath,
+            string existingPath)
+        {
+            if (!CreateHardLinkNative(
+                    linkPath,
+                    existingPath,
+                    IntPtr.Zero))
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error());
+            }
+        }
+
+        [DllImport(
+            "kernel32.dll",
+            EntryPoint = "CreateHardLinkW",
+            CharSet = CharSet.Unicode,
+            ExactSpelling = true,
+            SetLastError = true)]
+        [DefaultDllImportSearchPaths(
+            DllImportSearchPath.System32)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateHardLinkNative(
+            string fileName,
+            string existingFileName,
+            IntPtr securityAttributes);
 
         private static void WriteSaz(
             string path,

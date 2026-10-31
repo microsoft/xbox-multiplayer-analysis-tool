@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Threading;
 using Microsoft.Data.Sqlite;
 using Microsoft.Win32.SafeHandles;
 using SQLitePCL;
@@ -29,6 +32,7 @@ namespace XMAT.DataAbstractionLayer
             0x0,
             0x1,
         };
+        private const int HashBufferBytes = 64 * 1024;
 
         private readonly FileStream _snapshot;
         private readonly SqliteConnection _connection;
@@ -80,6 +84,8 @@ namespace XMAT.DataAbstractionLayer
                     FileMode.Open,
                     FileAccess.Read,
                     FileShare.Read);
+                Identity = SqLtFileIdentity.FromHandle(
+                    _snapshot.SafeFileHandle);
                 // SQLite opens the file by the final path of this handle, which has no junction or symbolic link left
                 // that could be retargeted after the check.
                 string checkedPath = ToVerbatimPath(
@@ -111,7 +117,8 @@ namespace XMAT.DataAbstractionLayer
                     _connection,
                     checkedPath);
                 AppliedLimits = ApplyLimits(
-                    _connection);
+                    _connection,
+                    profile);
                 InitializeTables(
                     schema,
                     profile);
@@ -132,6 +139,8 @@ namespace XMAT.DataAbstractionLayer
 
         internal SqLtAppliedLimits AppliedLimits { get; }
 
+        internal SqLtFileIdentity Identity { get; }
+
         public IEnumerable<string> TableNames() =>
             _dataTables.Keys;
 
@@ -150,6 +159,57 @@ namespace XMAT.DataAbstractionLayer
             command.CommandText =
                 "SELECT sqlite_version()";
             return command.ExecuteScalar() as string;
+        }
+
+        // The SHA-256 of the guarded file from its start to its end: the handle that was checked and that keeps writers
+        // out, so these are the bytes SQLite reads. Positional reads leave the handle's position unchanged.
+        internal byte[] ComputeSha256(
+            CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(
+                _disposed,
+                this);
+            SafeFileHandle file =
+                _snapshot.SafeFileHandle;
+            long length =
+                RandomAccess.GetLength(file);
+            using var hash =
+                IncrementalHash.CreateHash(
+                    HashAlgorithmName.SHA256);
+            byte[] buffer =
+                ArrayPool<byte>.Shared.Rent(
+                    HashBufferBytes);
+            try
+            {
+                long offset = 0;
+                while (offset < length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int read =
+                        RandomAccess.Read(
+                            file,
+                            buffer.AsSpan(
+                                0,
+                                (int)Math.Min(
+                                    HashBufferBytes,
+                                    length - offset)),
+                            offset);
+                    if (read == 0)
+                    {
+                        throw new EndOfStreamException();
+                    }
+                    hash.AppendData(
+                        buffer,
+                        0,
+                        read);
+                    offset += read;
+                }
+                return hash.GetHashAndReset();
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
 
         public void Dispose()
@@ -340,14 +400,21 @@ namespace XMAT.DataAbstractionLayer
             }
         }
 
-        // SQLite's value limit is left at its default: opening a capture in XMAT has no size quota. The SQL, column and
-        // expression limits bound statement parsing, and each is read back after it is set.
+        // The GUI profile leaves SQLite's value limit at its default: opening a capture in XMAT has no size quota.
+        // The CLI profile sets it to its record limit. The SQL, column and expression limits bound statement
+        // parsing, and each limit that is set is read back.
         private static SqLtAppliedLimits ApplyLimits(
-            SqliteConnection connection)
+            SqliteConnection connection,
+            SqLtSchemaProfile profile)
         {
-            int length = ReadLimit(
-                connection,
-                raw.SQLITE_LIMIT_LENGTH);
+            int length = profile.MaxValueBytes.HasValue
+                ? SetLimit(
+                    connection,
+                    raw.SQLITE_LIMIT_LENGTH,
+                    profile.MaxValueBytes.Value)
+                : ReadLimit(
+                    connection,
+                    raw.SQLITE_LIMIT_LENGTH);
             int sqlLength = SetLimit(
                 connection,
                 raw.SQLITE_LIMIT_SQL_LENGTH,
