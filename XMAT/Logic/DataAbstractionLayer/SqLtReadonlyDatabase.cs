@@ -84,6 +84,8 @@ namespace XMAT.DataAbstractionLayer
                     FileMode.Open,
                     FileAccess.Read,
                     FileShare.Read);
+                Identity = SqLtFileIdentity.FromHandle(
+                    _snapshot.SafeFileHandle);
                 // SQLite opens the file by the final path of this handle, which has no junction or symbolic link left
                 // that could be retargeted after the check.
                 string checkedPath = ToVerbatimPath(
@@ -136,6 +138,8 @@ namespace XMAT.DataAbstractionLayer
         }
 
         internal SqLtAppliedLimits AppliedLimits { get; }
+
+        internal SqLtFileIdentity Identity { get; }
 
         public IEnumerable<string> TableNames() =>
             _dataTables.Keys;
