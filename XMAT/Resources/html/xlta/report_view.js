@@ -245,8 +245,29 @@ jumpToTop = function() {
 	$(window).scrollTop(0);
 }
 
+// API only selects the text shown for an endpoint. Graph categories, series and table rows
+// belong to the stable endpoint identity (its kind and logical name), and a Uri shared by
+// several endpoints is shown with each endpoint's localized kind.
 API = "Uri";
+ENDPOINT_ID = "EndpointId";
+ENDPOINT_LABEL = "Label";
+
+function endpointId(endpoint) {
+	return endpoint[ENDPOINT_ID];
+}
+
+function endpointText(endpoint, api) {
+	if (api === "Uri" && endpoint[ENDPOINT_LABEL]) {
+		return endpoint[ENDPOINT_LABEL];
+	}
+	return endpoint[api] ? endpoint[api] : endpoint["Uri"];
+}
+
 var rules = ["Call Frequency", "Burst Detection", "Throttled Call Detection", "Small-Batch Detection", "Batch Frequency", "Repeated Calls", "Polling Detection"];
+
+var escapeHtml = function(value) {
+	return $("<div>").text(value == null ? "" : value).html();
+};
 
 function StatsPage() {
 	this.timelineGraphData = [];
@@ -332,8 +353,9 @@ StatsPage.prototype = {
 		var details = this.statDetails;
 		$.each(this.stats, function(index, stat) {
 			var endpointRow = $("<tr>");
-			var endpointName = stat[API]? stat[API] : stat["Uri"];
-			var endpoint = $("<td>").addClass("endpoint").html("<b>" + endpointName + "</b>");
+			var endpointName = endpointText(stat, API);
+			var endpoint = $("<td>").addClass("endpoint").append(
+				$("<b>").text(endpointName));
 			var totalCalls = $("<td>").addClass("center-text").text(stat["Call Count"]);
 			var avgTime = $("<td>").text(Number(stat["Average Time Between Calls"] / 1000).toFixed(3) + calls["SecondsLabel"]);
 
@@ -341,11 +363,7 @@ StatsPage.prototype = {
 			details.append(endpointRow);
 		});	
 		
-		var callCountGraphData = this.callCountGraphData;
-		
-		$.each(stats, function(index, stat) {
-			callCountGraphData.push([ stat["Call Count"],stat[API] ]);
-		});
+		this._setCountGraphData(API);
 		
 		this.timelineTitle = $("<div>").addClass("graph-header").text(this.calls["CallsPerSecondLabel"]);
 		this.timelineGraph = $("<div>").css({ "width": "780px", "height": "300px", "margin": "auto"});
@@ -356,7 +374,8 @@ StatsPage.prototype = {
 		
 		$.each(this.calls["Call List"], function(index, endpoint) {
 			var endpointData = {
-				label: endpoint[API],
+				id: endpointId(endpoint),
+				label: escapeHtml(endpointText(endpoint, API)),
 				data: [],
 				endpoint: endpoint
 			};
@@ -412,13 +431,7 @@ StatsPage.prototype = {
 		element.append(this.countTitle, this.callCountgraph, this.timelineTitle, this.timelineGraph, this.statDetails);
 	},
 	changeAPI: function (API) {
-		var callCountGraphData = [];
-
-		$.each(stats, function (index, stat) {
-			callCountGraphData.push([stat["Call Count"], stat[API]]);
-		});
-
-		this.callCountGraphData = callCountGraphData;
+		this._setCountGraphData(API);
 		this._buildCountsGraph();
 		
 		this.statDetails.empty();
@@ -430,8 +443,8 @@ StatsPage.prototype = {
 		var details = this.statDetails;
 		$.each(this.stats, function (index, stat) {
 			var endpointRow = $("<tr>");
-			var endpointName = stat[API]? stat[API] : stat["Uri"];
-			var endpoint = $("<td>").addClass("endpoint").html(endpointName);
+			var endpointName = endpointText(stat, API);
+			var endpoint = $("<td>").addClass("endpoint").text(endpointName);
 			var totalCalls = $("<td>").addClass("center-text").text(stat["Call Count"]);
 			var avgTime = $("<td>").addClass("time").text(Number(stat["Average Time Between Calls"] / 1000).toFixed(3) + calls["SecondsLabel"]);
 
@@ -440,11 +453,32 @@ StatsPage.prototype = {
 		});
 		
 		$.each(this.timelineGraphData, function(index, endpoint) {
-			endpoint.label = endpoint.endpoint[API];
+			endpoint.label = escapeHtml(endpointText(endpoint.endpoint, API));
 		});
 		
 		this._buildCountsGraph();
 		this._buildTimelineGraph();
+	},
+	// Count-graph categories are endpoint identities; their ticks show the display text.
+	_setCountGraphData: function(api) {
+		var data = [];
+		var labels = {};
+		$.each(this.stats, function(index, stat) {
+			data.push([ stat["Call Count"], endpointId(stat) ]);
+			labels[endpointId(stat)] = escapeHtml(endpointText(stat, api));
+		});
+		this.callCountGraphData = data;
+		this.callCountGraphOptions.yaxis.ticks = function(axis) {
+			var ticks = [];
+			for (var id in axis.categories) {
+				var position = axis.categories[id];
+				if (position >= axis.min && position <= axis.max) {
+					ticks.push([ position, labels[id] ]);
+				}
+			}
+			ticks.sort(function(a, b) { return a[0] - b[0]; });
+			return ticks;
+		};
 	},
 	_buildCountsGraph: function() {
 		this.callCountgraph.empty();

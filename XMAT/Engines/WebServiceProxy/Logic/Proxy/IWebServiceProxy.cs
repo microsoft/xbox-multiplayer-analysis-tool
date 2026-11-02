@@ -27,6 +27,10 @@ namespace XMAT.WebServiceCapture.Proxy
 
         BypassListModel BypassList { get; set; }
 
+        Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> SslConnectionRequestPolicyAsync { get; set; }
+        Func<HttpRequestEventArgs, CancellationToken, Task<bool>> WebRequestPolicyAsync { get; set; }
+        Func<HttpResponseEventArgs, CancellationToken, Task<bool>> WebResponsePolicyAsync { get; set; }
+
         // Completes only after both listeners are bound. On failure, partial startup is rolled back and the exception propagates.
         Task StartProxyAsync(WebServiceProxyOptions options, CancellationToken cancellationToken = default);
 

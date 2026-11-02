@@ -81,6 +81,43 @@ Note that once a port has been chosen for a particular device that is being capt
 the available proxy ports from the preferences will not alter the designated port for the already added
 device proxy session.
 
+XMAT keeps each open capture's port reserved, including while capture is stopped and after
+remembered devices are restored. Editing the automatic allocation range does not free ports
+belonging to existing tabs. One managed proxy endpoint is supported per device; adding a known
+existing device selects its current tab instead of creating a second proxy session. A separate
+Network Trace capture and read-only imported captures are still supported.
+
+### Changing a Proxy Port
+
+Select the device's existing tab, stop capture, then choose **Actions > Change Proxy Port**. You can choose any
+unassigned port from **1 through 65535**, including ports outside the automatic range in
+Preferences. The capture history, filters, and selection are retained.
+
+The bottom status bar shows the selected capture's running/stopped state, assigned port, and
+pending-change or device-configuration details. Endpoint confirmation is shown separately from
+local capture activity, so stopping capture does not leave a message claiming it is still running.
+
+- **Apply now** starts the replacement listener before changing device settings. For an Xbox,
+  it disables/re-enables proxying and waits for the required restarts; the console may reboot
+  twice. The popup explains this before you consent. Other devices remain stoppable while the
+  console restarts.
+- **Later** saves a pending replacement without changing the device or its current assigned
+  port. Both ports remain protected, including after restarting XMAT. Starting/enabling the
+  capture offers the pending change again; **Discard pending change** keeps the current port.
+- **Cancel** closes the popup without accepting a new selection.
+
+The new port is not silently substituted for the device's old endpoint. If binding, saving, or
+device configuration fails, XMAT reports the failed step and preserves the assignments needed
+for recovery. Once a replacement is saved and the device may already be using it, an uncertain
+activation does not automatically tear down its listener or revert to the old port. For an Xbox,
+use **Check Proxy Status** before retrying, stopping, or disabling it. Canceling an apply stops
+subsequent steps; a console reboot or SDK operation already requested cannot be undone.
+
+For a generic/manual device, XMAT cannot edit its proxy settings remotely. Stop the device/app
+from using the old endpoint, confirm that in the popup, then update its settings to the new
+endpoint shown by XMAT. Different applications can use independently configured generic
+listeners, but enabling two global proxy endpoints does not duplicate the same device traffic.
+
 
 ### Enabling/Starting Proxying
 
@@ -96,6 +133,23 @@ _Screenshot of Xbox Multiplayer Analysis Tool when hitting the Enable Proxy butt
 
 A kit will remain enabled to proxy until told to disable proxying through the “Disable Xbox Proxy” tool bar
 option, even after successive console reboots, and restarts of the Xbox Multiplayer Analysis Tool application.
+
+**Stop Capture** stops the local listener; it does not disable or reboot an Xbox.
+**Disable Xbox Proxy** remains available while capture is stopped or after a failed start,
+so clearing stale console settings does not require first starting another listener.
+Status checks show the reported endpoint rather than treating any nonempty proxy host as a
+match. Re-enabling a verified matching endpoint does not rewrite its settings or request another
+reboot; a different existing endpoint is not overwritten automatically.
+
+**Check Proxy Status** is an Xbox action and is not available for Local PC captures.
+Generic/manual devices instead offer **Proxy Setup Details**; that displays connection
+instructions rather than querying device state.
+
+The Xbox proxy-address file is written as NUL-terminated UTF-8. The console loader requires
+that terminator; an EOF-only or CRLF-only file can leave garbage after the port in the reported
+setting. If an older XMAT version configured such a value, explicitly disable and re-enable
+Xbox proxying with the current version to rewrite it. Invalid endpoint suffixes are still
+reported as unverified rather than silently stripped.
 
 A console that has successfully enabled proxying of web service traffic will provide a notification to the kit
 like what is shown below. Even though the Fiddler app is not actually being executed, the words “Fiddler
@@ -193,6 +247,42 @@ switching timeline modes, and stopping a capture refresh the visible timeline wi
 live-update cadence. Stopping also displays the final response status and duration, even if no further
 requests arrive.
 
+### Blocking or Bypassing Hosts
+
+The **Block List** and **Bypass List** apply to every capture in the current session, including imported
+captures and captures created later. They are not saved: closing a capture tab keeps them, and exiting XMAT
+clears them. Each capture's Block and Bypass tabs edit these same lists, so any change there, including
+**Clear All**, applies to every capture.
+
+- **Right-click a host** in the connections list, on a timeline bar or By Host label, or on an analysis Per
+  Endpoint summary row or details header to add or remove that exact host. The menu key acts on the focused
+  row, not the selected one. **Remove** appears only when the exact entry exists, so each action undoes the
+  other, and the menu notes any wildcard that still matches.
+- **Actions > Manage Host Lists...** opens the list editors even when no capture is selected.
+- **Blocked** requests are captured but not forwarded. Block applies to new requests immediately and wins when
+  a host is in both lists, but a bypassed tunnel that is already open continues until it closes.
+- **Bypass** skips HTTPS decryption for new CONNECT tunnels; open connections keep their current mode.
+  Bypassed tunnels appear only as CONNECT rows, and scripts and path-based block patterns cannot see inside
+  them. Plain HTTP is never bypassed. This is not the Windows proxy bypass list.
+
+Entries follow these rules:
+
+- A host entry covers every port and no subdomains; use `*.example.com` for subdomains.
+- DNS names match regardless of case, but a final dot is significant: `example.com.` and `example.com` are
+  different entries.
+- IP addresses match by address, so `[::1]`, `::1`, and `0:0::1` are one entry. A complete IPv6 address such
+  as `2001:db8::1:443` is read as an address, not a host and port.
+- Entries can't include a port: `example.com:443`, `example.com:`, and `[::1]:443` are rejected with an
+  explanation.
+- Entries containing `*` or `/` are glob patterns, such as `example.com/api/*`. A colon inside a pattern is
+  matched literally and is not a port filter. Write IPv6 in patterns without brackets, such as `2001:db8::*`
+  or `::1/api/*`: an IPv6 pattern with brackets is accepted but never matches, including one that matched
+  HTTP/2 traffic in earlier versions.
+
+Analysis endpoints offer host actions only when every request in the endpoint was captured from the same
+host. Endpoints synthesized from telemetry (such as `inGameEvents`), endpoints that combine several hosts,
+and older data without recorded host provenance explain why no action is available.
+
 ### Stopping Proxying
 
 Proxying may be stopped from with Xbox Multiplayer Analysis Tool for a specific device by clicking on the “Stop Capturing”
@@ -223,6 +313,45 @@ connections list will be clear until proxying resumes for that device.
 
 ![](./ReadmeImages/12.png)
 _Screenshot when Xbox Multiplayer Analysis Tool is closed and reopened -- previous capture device is remembered._
+
+### If Xbox Multiplayer Analysis Tool Closes Unexpectedly
+
+Capturing the **Local PC** points the Windows proxy setting at Xbox Multiplayer Analysis Tool. If the tool ended
+without changing it back, apps that use the Windows proxy would lose internet access, so the tool records your
+settings and tries to put them back:
+
+- Before it changes the Windows proxy, the tool records your current proxy settings and starts a small helper
+  process; if the helper cannot start, the Windows proxy is not changed and the capture does not start. If the tool
+  then crashes, is ended from Task Manager, or is stopped from a debugger, the helper tries to restore the recorded
+  settings, which are usually a direct connection.
+- Stopping the capture, exiting normally, or an error that closes the tool also tries to restore them.
+- A restore happens only while Windows still has the settings the tool applied. If it cannot complete, the record is
+  kept and the tool tries again later, for example when you stop the capture and at its next start.
+- If the helper stops unexpectedly during a capture, the tool tries to restore your settings right away and reports
+  the outcome, unless a newer capture has started since. Stop, then start capture to resume.
+- At the next start, if the Windows proxy points at this PC (for example `127.0.0.1:8880`) but nothing is listening
+  there, and either the tool has no record of setting it, which an older version can leave behind, or its settings
+  were changed during the capture, the tool asks before turning that proxy off.
+- If you change the Windows proxy settings yourself during a capture, the tool leaves your changes alone. Stopping
+  the capture turns off only the tool's own proxy; if Windows uses a different proxy by then, the tool leaves it on
+  and tells you. A capture started after such a change records your settings at that point, so the tool later tries
+  to restore those rather than older ones.
+
+Limits:
+
+- While the tool is paused in a debugger or not responding, the proxy stays on, because the tool has not ended.
+- If the PC restarts during a capture, the tool tries to restore the settings the next time you start it.
+- If the tool and its helper are ended together, for example by ending the whole process tree, the tool tries to
+  restore the settings the next time you start it.
+- If the tool cannot verify that the instance that changed the settings has ended, for example one running as
+  administrator, it leaves those settings alone and does not capture this PC.
+- A proxy change that fails partway can leave settings the tool cannot tell from yours, which you may need to
+  correct by hand; a proxy server address that is saved but not in use may not be changed back.
+- The tool does not capture the Local PC when it runs inside a process group that could end the helper together
+  with it, as some terminals and tools do. Start the tool directly instead.
+- Xbox consoles are never reset automatically. If the tool closed unexpectedly while capturing a console, the next
+  start offers to disable that console's proxy, which restarts the console; the offer is repeated at later starts
+  until you answer it.
 
 
 ## Viewing WebSocket Messages
@@ -259,7 +388,10 @@ forwarded to the server.
 **Web Response** – This script is called after the HTTP response is received by the server, but before it is
 forwarded to the client.
 
-Sample scripts are provided as you select each event type to get you started.
+Each event starts with a commented sample script that does nothing until you remove the `//` from the start of
+its example lines. An enabled script runs on every host that passes through that capture unless the script checks
+`Params.Request.Host`, and a **Web Response** script should also skip `CONNECT` requests, because their responses
+open the HTTPS connection. The script editor and the **Script Editor** tab show which scripts are active.
 
 All inspectable and modifiable properties are members of the **Params** object. **Params** contains the web
 **Request** and the web **Response** objects, as well as a Boolean named **Continue** which can be set to **_false_**
@@ -274,11 +406,31 @@ status to determine how your client/title code behaves in the case of an error. 
 **System.Text.Json** namespace is available to use in the scripting engine for easily parsing and
 manipulating JSON content.
 
-To enable a script, complete your code in the text editor, then click the **Enable** button. If any errors are
-detected in the script, the **Script Compilation Status** window will display these errors. Double-click on
-any error in the list to go to the source of the error in the script window. Once the script is enabled, all
-future requests and responses will pass through the script silently, and any modifications you have
-created in the script code will be applied.
+To enable a script, complete your code in the text editor, then click the **Enable** button. While the script
+compiles, the button shows **Compiling…** and can't be clicked again. The script turns on only after it compiles
+without errors. The **Script Compilation Status** window shows the result for the selected event's script. Errors
+are listed there, and the script stays off. Warnings do not prevent the script from turning on; they are listed
+there with the message "Script compiled successfully with warnings." Double-click an error or warning to go to
+its source in the script window. If compiling fails unexpectedly, the script stays off and the window shows
+"Could not compile; script remains disabled. See the app log." The app log has the details. Once enabled, all
+future requests and responses will pass through the script silently, and any modifications you created will be
+applied. Editing a script clears its compilation status: an enabled script turns off, and a script that is
+compiling stays off, until you click **Enable** again. **Load** and **Save** are unavailable while a script is
+compiling or enabled.
+
+Scripts may use `await`. XMAT waits for that event's script before it forwards the request or response.
+Each invocation has a 60-second deadline. If a script reaches the deadline, XMAT writes an error to the app
+log and drops that transaction without sending a response. Stopping capture while a script is running also
+cancels the wait and drops that transaction, but it is not reported as a deadline error. For a CONNECT
+request, the HTTPS tunnel is not opened. The deadline limits one script invocation, not the total time seen
+by the client. Some clients retry a dropped request, and every retry runs the script again.
+
+A **Web Response** script also runs for XMAT's CONNECT reply. Delaying that reply delays every HTTPS tunnel,
+so Web Response scripts should skip CONNECT unless changing tunnel behavior is intentional. Cancellation
+stops XMAT from waiting, but it cannot terminate arbitrary script code. Blocking code may continue running
+in the background after its request has been dropped and continue using worker threads. Later changes to
+`Params.Request` or `Params.Response` are not forwarded or captured, but other side effects performed by the
+script are not undone.
 
 You can also use the **Load** and **Save** buttons to load scripts you have already written and save new scripts
 to disk for later usage. The **Revert to Saved** button can also be used to undo any changes since the last
@@ -299,11 +451,80 @@ Captures can be saved and shared using the **File** menu:
 |--|--|
 | **Save Captures** | Saves all open web proxy and network trace captures to an Xbox Multiplayer Analysis Tool (.XMATCAP) file. |
 | **Load Captures** | Opens a previously saved .XMATCAP file. Loaded captures open in read-only tabs. |
-| **Import** | Imports a Fiddler (.SAZ) archive, or a network trace (.ETL) captured with `netsh`, into a new read-only tab. |
+| **Import** | Imports a Fiddler (.SAZ) archive, or a network trace (.ETL) captured with `netsh`, into a read-only tab. Re-importing the same-named .SAZ replaces that tab's data. |
 | **Export** | Exports the selected web proxy capture to a Fiddler (.SAZ) archive. |
+| **Export Sanitized Capture...** | Exports a sanitized .SAZ copy of the selected web proxy capture, without changing the original capture. Stop all captures first. |
 
 Files can also be dragged and dropped onto the main window -- .XMATCAP files are loaded, and .SAZ and .ETL
 files are imported.
+
+If a new .SAZ import fails, XMAT reports the error and removes only the tab created for that attempt.
+If re-importing a .SAZ with the same file name fails, the existing tab, its selection, and its previously imported data
+remain unchanged. You can retry the import without restarting XMAT. Error details are written to
+`application.log` in the application's `Logs` directory.
+
+### Sanitized Export
+
+Use **File > Export Sanitized Capture...** before sharing a web capture. This is a per-export
+command, not a preference: ordinary **Export** and native **Save Captures** remain unsanitized.
+Loaded and imported web captures are supported. Only the selected capture is exported.
+
+The export redacts recognized credential/cookie headers, sensitive query and form parameters,
+URL credentials, sensitive JSON/XML fields (including OAuth device codes and private JWK
+members), and common token/private-key patterns in text.
+Credential discovery covers headers, URLs, forms and structured fields before either
+direction of a session is written, including decoded Basic/userinfo components, token
+parameters, and individual cookies from repeated or combined headers. JSON keys and
+query/form parameter names are inspected. Learned values in names are masked when long
+(at least eight characters) or numeric identifiers (at least four digits), while short and
+recognized schema labels are preserved. Renamed JSON keys use collision-safe names.
+Xbox profile IDs/display names, recognized structured-body credential echoes across each
+request/response pair, and client-IP metadata are also masked. JWT recognition does not
+depend on a particular encoded-header
+prefix; standalone Xbox credentials and PGP private-key armor are recognized. Header names are
+matched without regard to case, and repeated headers are retained.
+
+JSON, XML, URL-encoded forms and plain text are inspected. Gzip, deflate and Brotli bodies
+and declared character encodings are supported; exported text is UTF-8 with updated HTTP
+framing, including bodyless HEAD/CONNECT/1xx/204/304 responses. Genuine chunk framing is
+decoded before scanning, while already-dechunked captures remain supported; ambiguous or
+malformed framing is omitted. Sensitive namespace URLs are remapped consistently in XML.
+Percent-encoded paths and nested URI/form values are inspected through at most eight
+decoding passes, preserving untouched values' original representation. Invalid UTF-8 or
+excessively nested URL/form components are redacted without discarding unrelated components
+or aborting the archive. URL values are compared literally and with form decoding, preserving
+literal `+` and matching credentials that span path segments. Learned values in URL authorities
+use a valid replacement host; structural Host and generated Content-Type headers are not
+subject to echo replacement. Password-input values in inspected XML are also redacted.
+
+Unsupported content (including binary, HTML/XHTML and multipart bodies), malformed structured
+data, JSON/XML nesting exceeding 64 levels, unknown compression/character encodings and
+bodies exceeding the 4 MiB inspection limit are omitted rather than copied unchecked.
+Scanning also has a finite work budget and a limit of 64 distinct remembered sensitive
+values or representations of at most 4,096 characters each per request/response pair.
+XML discovery includes both individual values and sensitive containers' combined text.
+Learned values are matched at token boundaries and reset before the next pair. Bodies
+exceeding format/size limits are omitted. If credential discovery exceeds capacity, or
+scanning exhausts its work budget or regex timeout in either pass, partial output is discarded
+and the pair's original URLs, headers and bodies are replaced with minimal HTTP framing.
+Large authorization values or profile batches can therefore lose diagnostic content;
+the limits are not a guarantee of diagnostic completeness.
+The completion dialog reports redactions and omissions; SAZ session metadata marks which
+request/response bodies were omitted.
+Longer exports show a cancellable progress window. Cancel, Escape, or closing that window
+requests cancellation and waits for the worker and cleanup to finish before releasing the
+operation guard. An existing destination is replaced only after a complete export, not on
+cancellation or failure.
+
+**Review the archive before sharing it.** This is best-effort detection, not a guarantee of
+anonymity: arbitrary unnamed secrets, custom encodings, and identifiers not recognized by the
+rules may remain. Nonsensitive service endpoints, paths/values, timing and request IDs are
+retained for diagnosis. The original capture data is not sanitized in place.
+HTTP header names, XML element/attribute names, and protocol method/version tokens are not
+identifier-scrubbed. Arbitrary percent-encoded text outside URL/form contexts, unrecognized
+identifier fields, and JWTs joined directly to ordinary letters can remain. Short learned
+values can also redact benign data. These exclusions still require manual review and an
+explicit decision about which identifiers a particular sharing scenario must remove.
 
 ### Importing Network Traces from Another PC
 
@@ -356,8 +577,11 @@ _Screenshot of the Xbox Live Trace analysis in progress._
 
 The analysis will undergo many steps which includes the export of analysis related files placed in the
 **/AppRoaming/Microsoft/Xbox Multiplayer Analysis Tool** storage directory. The folder will have a prefix of “xlca_” and contain a
-timestamp for the executed analysis. Analysis can occur simultaneously with other captures and analysis
-occurring on other devices.
+timestamp for the executed analysis. Stop all captures before starting analysis; the disabled Analyze
+tooltip explains this requirement. Only one analysis or capture-data operation can run at a time.
+
+Recoverable analysis failures display an error and remove the failed result tab instead of closing XMAT.
+The capture remains available for another attempt, and exception details are written to `application.log`.
 
 ![](./ReadmeImages/17.png)
 _Screenshot of Xbox Multiplayer Analysis Tool Xbox Live Capture Analysis result output folders._
@@ -420,8 +644,39 @@ upper right corner of the graph indicates which hosts were called at specific po
 ![](./ReadmeImages/22.png)
 _Screenshot of the statistics report calls timeline and average call times table._
 
+Each bar, timeline series, and table row is one endpoint. When a captured host and endpoints synthesized
+from telemetry share a name (for example `inGameEvents`), they stay separate and are labeled with their
+source, such as `inGameEvents (captured host)` and `inGameEvents (synthesized telemetry)`. The Stats and Call
+report files in the analysis output folder record each endpoint's numeric `Kind` (0 unknown, 1 captured, 2
+synthesized telemetry) and `EndpointId` next to its `Uri`.
+
 Analysis report content present in its output folder within the Xbox Multiplayer Analysis Tool data storage folder can be removed
 if no longer needed once the Analysis results tab for that analysis run is closed.
+
+### Exporting an Analysis Report
+
+After an Xbox Live Trace analysis finishes, select its result tab and choose
+**Analysis > Export Analysis Report...** to copy the complete report folder to a directory you select.
+Inside that directory, XMAT creates a child folder named
+`XMAT Analysis - <capture> - <yyyy-MM-dd HHmmss>`. If that name already exists, XMAT appends
+` (2)`, ` (3)`, and so on without merging or overwriting earlier exports.
+The exported folder contains the browser-based Statistics report, JSON report data, rule findings in
+`_results.txt`, and the service-call diagnostic text files. The Statistics HTML and JSON reports describe
+the first eligible console in the capture; the diagnostic text files can contain data aggregated from all
+consoles.
+
+Analysis exports are not sanitized. They can contain request bodies and sign-in tokens, URLs, Xbox user
+IDs, console IP addresses, and telemetry. Review an export before sharing it or placing it in a
+cloud-synchronized folder. XMAT displays a confirmation describing this sensitive content before writing
+the export. For compatibility with Explorer and browsers, XMAT refuses exports when any generated path
+would reach 260 characters.
+**File > Export Sanitized Capture...** provides opt-in sanitization for .SAZ captures, not analysis
+reports; review exported content before sharing.
+
+An export failure leaves the AppData working report unchanged so the export can be retried. If XMAT
+cannot remove a temporary staging folder, the error identifies that folder for manual cleanup. Exporting
+does not move or automatically delete the working `xlca_*` folder in AppData; those folders may still be
+removed manually after their analysis tabs are closed.
 
 
 ## Network Capture
@@ -493,20 +748,25 @@ choice is remembered the next time the application starts.
 
 ## Known Issues
 
-**Enabling Proxying on a Device twice with a different port the second time will fail to proxy.**
-_Workaround: Make sure to disable proxying first, before re-enabling to ensure the port setting is correct._
+**Xbox proxy endpoint verification depends on the console recovery and installed SDK.**
+Use **Change Proxy Port** for a stopped capture rather than changing an active tab's port indirectly
+through Preferences. If the console cannot report a complete endpoint, XMAT reports it as
+unverified instead of claiming setup succeeded. Explicitly disable proxying, wait for the console
+to return, and check its status before re-enabling or retrying a pending change.
 
 **Proxying with the same header spanned across multiple lines fails to proxy correctly.**
 _Workaround: None currently. Apps like Outlook may fail to function properly when proxying PC._
 
-**Enabling proxying does not confirm settings with user, nor allow cancellation of the process.**
-_Workaround: Be sure to double check that your console device is ready to reboot when enabling._
+**A console reboot or SDK write already requested may not be interruptible.**
+Canceling a port apply prevents later steps but waits for an in-flight mutation to settle.
+Check proxy status before retrying; a saved new port may remain assigned even if activation
+could not be confirmed.
 
 **Potential Future Improvements:**
 
 - Keep alive handling needs further improvement.
 - WebSocket messages are not yet saved to or loaded from .XMATCAP files.
-- Root certificate(s) and analysis output(s) are not stored in a user specified location.
+- Analysis outputs can be exported to a user-selected folder; working copies remain in AppData. Root certificate(s) are not stored in a user specified location.
 - Additional Localization
 
 ## Support

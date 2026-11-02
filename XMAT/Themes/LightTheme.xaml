@@ -9,6 +9,7 @@
     <!-- Foreground / text -->
     <SolidColorBrush x:Key="PrimaryForegroundBrush"         Color="Black"/>
     <SolidColorBrush x:Key="SecondaryForegroundBrush"       Color="#FF333333"/>
+    <SolidColorBrush x:Key="DisabledForegroundBrush"        Color="#FF808080"/>
 
     <!-- Borders -->
     <SolidColorBrush x:Key="BorderBrush"                    Color="#FFCCCCCC"/>

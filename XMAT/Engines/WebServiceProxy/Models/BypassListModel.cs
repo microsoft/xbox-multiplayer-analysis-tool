@@ -15,6 +15,8 @@ namespace XMAT.WebServiceCapture.Models
     /// the proxy without TLS interception. Patterns may contain the '*' wildcard
     /// to match any sequence of characters (e.g. "*.auth.xboxlive.com").
     /// Matching hosts will have their CONNECT tunnels relayed as opaque byte streams.
+    /// Host literals are normalized by <see cref="HostListEntry"/>; standalone
+    /// host:port entries are rejected.
     /// </summary>
     public class BypassListModel
     {
@@ -25,39 +27,53 @@ namespace XMAT.WebServiceCapture.Models
 
         public bool Add(string pattern)
         {
-            if (string.IsNullOrWhiteSpace(pattern))
+            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
                 return false;
-
-            pattern = pattern.Trim();
 
             lock (_lockObj)
             {
-                if (BypassedUrls.Any(existing => string.Equals(existing, pattern, StringComparison.OrdinalIgnoreCase)))
+                if (BypassedUrls.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase)))
                     return false;
 
-                BypassedUrls.Add(pattern);
+                BypassedUrls.Add(entry);
                 return true;
             }
         }
 
-        public void Remove(string pattern)
+        /// <summary>
+        /// Returns true when the list holds exactly this entry (after normalization),
+        /// regardless of any other pattern that might also match it.
+        /// </summary>
+        public bool Contains(string pattern)
         {
-            if (string.IsNullOrWhiteSpace(pattern))
-                return;
+            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
+                return false;
 
-            pattern = pattern.Trim();
+            lock (_lockObj)
+            {
+                return BypassedUrls.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase));
+            }
+        }
 
+        public bool Remove(string pattern)
+        {
+            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
+                return false;
+
+            bool removed = false;
             lock (_lockObj)
             {
                 for (int i = BypassedUrls.Count - 1; i >= 0; i--)
                 {
-                    if (string.Equals(BypassedUrls[i], pattern, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(BypassedUrls[i], entry, StringComparison.OrdinalIgnoreCase))
                     {
                         BypassedUrls.RemoveAt(i);
+                        removed = true;
                     }
                 }
-                _regexCache.Remove(pattern);
+                _regexCache.Remove(entry);
             }
+            return removed;
         }
 
         public void Clear()
@@ -77,17 +93,30 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return false;
 
-            string[] patterns;
+            string candidate = HostListEntry.MatchCandidate(host);
+            return Snapshot()
+                .Select(GetRegex)
+                .Any(regex => regex.IsMatch(candidate));
+        }
+
+        /// <summary>
+        /// Returns the entries that match the host, such as a covering wildcard.
+        /// </summary>
+        internal IReadOnlyList<string> MatchingPatterns(string host)
+        {
+            if (string.IsNullOrEmpty(host))
+                return Array.Empty<string>();
+
+            string candidate = HostListEntry.MatchCandidate(host);
+            return Snapshot().Where(pattern => GetRegex(pattern).IsMatch(candidate)).ToList();
+        }
+
+        private string[] Snapshot()
+        {
             lock (_lockObj)
             {
-                patterns = new string[BypassedUrls.Count];
-                for (int i = 0; i < BypassedUrls.Count; i++)
-                    patterns[i] = BypassedUrls[i];
+                return BypassedUrls.ToArray();
             }
-
-            return patterns
-                .Select(GetRegex)
-                .Any(regex => regex.IsMatch(host));
         }
 
         private Regex GetRegex(string pattern)
@@ -97,8 +126,7 @@ namespace XMAT.WebServiceCapture.Models
                 if (_regexCache.TryGetValue(pattern, out var cached))
                     return cached;
 
-                string escaped = Regex.Escape(pattern).Replace("\\*", ".*");
-                var regex = new Regex("^" + escaped + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                var regex = HostListEntry.CreatePattern(pattern);
                 _regexCache[pattern] = regex;
                 return regex;
             }

@@ -22,9 +22,18 @@ namespace XMAT.WebServiceCapture
             set => SetValue(BypassListProperty, value);
         }
 
+        public bool ShowScopeNote
+        {
+            get => ScopeText.Visibility == Visibility.Visible;
+            set => ScopeText.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         public BypassListView()
         {
             InitializeComponent();
+            BypassTimingText.Text = Localization.GetLocalizedString("HOST_LIST_BYPASS_TIMING");
+            PatternHelpText.Text = Localization.GetLocalizedString("HOST_LIST_PATTERN_HELP");
+            ScopeText.Text = Localization.GetLocalizedString("HOST_LISTS_SCOPE");
         }
 
         private void AddBypass_Click(object sender, RoutedEventArgs e)
@@ -46,10 +55,21 @@ namespace XMAT.WebServiceCapture
             if (BypassList == null)
                 return;
 
-            string text = NewBypassTextBox.Text;
-            if (BypassList.Add(text))
+            // Invalid text (such as a standalone host:port) stays in the box with the reason.
+            if (!HostListEntry.TryNormalize(NewBypassTextBox.Text, out string entry, out string error))
+            {
+                EntryErrorText.Text = error ?? string.Empty;
+                return;
+            }
+
+            if (BypassList.Add(entry))
             {
                 NewBypassTextBox.Clear();
+                EntryErrorText.Text = string.Empty;
+            }
+            else
+            {
+                EntryErrorText.Text = Localization.GetLocalizedString("HOST_LIST_ALREADY_LISTED", entry);
             }
         }
 

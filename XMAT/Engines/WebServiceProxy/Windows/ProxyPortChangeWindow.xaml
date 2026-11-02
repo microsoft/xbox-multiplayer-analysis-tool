@@ -1,0 +1,21 @@
+<Window x:Class="XMAT.WebServiceCapture.ProxyPortChangeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        SizeToContent="WidthAndHeight" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackgroundBrush}">
+  <StackPanel Margin="16" Width="460">
+    <TextBlock x:Name="CurrentPortLabel" Margin="0,0,0,10" TextWrapping="Wrap"/>
+    <StackPanel Orientation="Horizontal">
+      <Label x:Name="NewPortLabel" Target="{Binding ElementName=NewPort}"/>
+      <TextBox x:Name="NewPort" Width="90" VerticalContentAlignment="Center" MaxLength="5"/>
+    </StackPanel>
+    <TextBlock x:Name="Instructions" Margin="0,12" TextWrapping="Wrap"/>
+    <TextBlock x:Name="ValidationMessage" Margin="0,0,0,10" TextWrapping="Wrap"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button x:Name="ApplyButton" MinWidth="90" Margin="4" Padding="6" Click="Apply_Click" IsDefault="True"/>
+      <Button x:Name="LaterButton" MinWidth="90" Margin="4" Padding="6" Click="Later_Click"/>
+      <Button x:Name="CancelButton" MinWidth="90" Margin="4" Padding="6" IsCancel="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>

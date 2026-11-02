@@ -29,9 +29,16 @@ namespace CaptureAnalysisEngine
 
         public class PerConsoleData
         {
-            public Dictionary<String, LinkedList<ServiceCallItem>> m_servicesHistory = new Dictionary<string, LinkedList<ServiceCallItem>>();
-            public Dictionary<String, ServiceCallStats> m_servicesStats = new Dictionary<string, ServiceCallStats>();
+            // Buckets are keyed by kind and logical name so captured hosts never collide with
+            // synthesized telemetry that shares a logical name.
+            public Dictionary<EndpointKey, LinkedList<ServiceCallItem>> m_servicesHistory = new Dictionary<EndpointKey, LinkedList<ServiceCallItem>>();
+            public Dictionary<EndpointKey, ServiceCallStats> m_servicesStats = new Dictionary<EndpointKey, ServiceCallStats>();
         }
+
+        private const string InGameEventsEndpoint = "inGameEvents";
+        private const string XboxTelemetryEndpoint = "data-vef.xboxlive.com";
+        private const string WindowsTelemetryDomain = ".data.microsoft.com";
+        private static readonly EndpointKey SyntheticInGameEvents = new(EndpointKind.SyntheticTelemetry, InGameEventsEndpoint);
 
         public static bool m_allEndpoints = false;
 
@@ -54,19 +61,19 @@ namespace CaptureAnalysisEngine
             {
                 var consoleData = new PerConsoleData();
 
-                var xboxServiceFrames = consoleFrames.GroupBy(f => f.Host)
-                                                     .Select(group => new { Host = group.Key, History = group.AsEnumerable() });
+                var xboxServiceFrames = consoleFrames.GroupBy(f => new EndpointKey(f.EndpointKind, f.Host ?? string.Empty))
+                                                     .Select(group => new { Endpoint = group.Key, History = group.AsEnumerable() });
 
-                consoleData.m_servicesHistory = xboxServiceFrames.ToDictionary(g => g.Host, g => new LinkedList<ServiceCallItem>(g.History.OrderBy(call => call.ReqTimeUTC)));
+                consoleData.m_servicesHistory = xboxServiceFrames.ToDictionary(g => g.Endpoint, g => new LinkedList<ServiceCallItem>(g.History.OrderBy(call => call.ReqTimeUTC)));
 
                 // Xbox telemetry endpoint
-                if (consoleData.m_servicesHistory.ContainsKey("data-vef.xboxlive.com"))
+                if (consoleData.m_servicesHistory.Keys.Any(key => IsTelemetrySource(key, host => host == XboxTelemetryEndpoint)))
                 {
                     ConvertCS1ToEvent(consoleData.m_servicesHistory);
                 }
 
                 // Windows Telemetry endpoint
-                if (consoleData.m_servicesHistory.Any(k => k.Key.Contains(".data.microsoft.com")))
+                if (consoleData.m_servicesHistory.Keys.Any(key => IsTelemetrySource(key, IsWindowsTelemetryHost)))
                 {
                     ConvertCS2ToEvent(consoleData.m_servicesHistory);
                 }
@@ -83,26 +90,68 @@ namespace CaptureAnalysisEngine
             }
         }
 
-        private void ConvertCS2ToEvent(Dictionary<string, LinkedList<ServiceCallItem>> servicesHistory)
+        /// <summary>
+        /// The physical host that host-list actions may target for an endpoint bucket: only a
+        /// captured bucket whose every record has the same valid host qualifies (DNS names
+        /// compared without regard to case, a final dot included; IP literals canonical).
+        /// Synthesized, unknown, mixed or provenance-less buckets are not actionable, even when
+        /// their logical name looks like a host name.
+        /// </summary>
+        public static string GetActionableHost(EndpointKey endpoint, IEnumerable<ServiceCallItem> calls)
+        {
+            if (endpoint.Kind != EndpointKind.Captured || calls == null)
+            {
+                return null;
+            }
+
+            string actionableHost = null;
+            foreach (ServiceCallItem call in calls)
+            {
+                if (call.EndpointKind != EndpointKind.Captured ||
+                    !XMAT.WebServiceCapture.HostAuthority.TryNormalizeHost(call.PhysicalHost, out string host))
+                {
+                    return null;
+                }
+                if (actionableHost == null)
+                {
+                    actionableHost = host;
+                }
+                else if (!string.Equals(actionableHost, host, StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+            }
+            return actionableHost;
+        }
+
+        // Raw telemetry is converted from any non-synthesized bucket with the telemetry host.
+        private static bool IsTelemetrySource(EndpointKey endpoint, Func<string, bool> isTelemetryHost) =>
+            endpoint.Kind != EndpointKind.SyntheticTelemetry && isTelemetryHost(endpoint.LogicalName);
+
+        private static bool IsWindowsTelemetryHost(string host) =>
+            host != null && host.Contains(WindowsTelemetryDomain);
+
+        private static LinkedList<ServiceCallItem> GetSyntheticEvents(Dictionary<EndpointKey, LinkedList<ServiceCallItem>> servicesHistory)
+        {
+            if (!servicesHistory.TryGetValue(SyntheticInGameEvents, out LinkedList<ServiceCallItem> inGameEvents))
+            {
+                inGameEvents = new LinkedList<ServiceCallItem>();
+                servicesHistory.Add(SyntheticInGameEvents, inGameEvents);
+            }
+            return inGameEvents;
+        }
+
+        private void ConvertCS2ToEvent(Dictionary<EndpointKey, LinkedList<ServiceCallItem>> servicesHistory)
         {
             var eventNameMatch1 = new Regex("Microsoft.XboxLive.T[a-zA-Z0-9]{8}.");
             var eventNameMatch2 = @"Microsoft.Xbox.XceBridge";
 
-            var events = servicesHistory.Where(k => k.Key.Contains(".data.microsoft.com")).ToList();
+            var events = servicesHistory.Where(k => IsTelemetrySource(k.Key, IsWindowsTelemetryHost)).ToList();
             foreach (var endpoint in events)
             {
                 servicesHistory.Remove(endpoint.Key);
             }
-            LinkedList<ServiceCallItem> inGameEvents = null;
-            if (servicesHistory.ContainsKey("inGameEvents"))
-            {
-                inGameEvents = servicesHistory["inGameEvents"];
-            }
-            else
-            {
-                inGameEvents = new LinkedList<ServiceCallItem>();
-                servicesHistory.Add("inGameEvents", inGameEvents);
-            }
+            LinkedList<ServiceCallItem> inGameEvents = GetSyntheticEvents(servicesHistory);
 
             foreach (var eventCall in events.SelectMany(e => e.Value))
             {
@@ -143,7 +192,8 @@ namespace CaptureAnalysisEngine
                         string timeAsString = string.Empty;
                         Utils.SafeAssign<string>(requestBodyJson, @"time", ref timeAsString);
 
-                        serviceCall.Host = "inGameEvents";
+                        serviceCall.Host = InGameEventsEndpoint;
+                        serviceCall.EndpointKind = EndpointKind.SyntheticTelemetry;
                         serviceCall.EventName = eventNameParts.Last();
                         serviceCall.ReqTimeUTC = (UInt64)DateTime.Parse(timeAsString).ToFileTimeUtc();
                         serviceCall.ReqBody = String.Empty;
@@ -181,26 +231,20 @@ namespace CaptureAnalysisEngine
             }
         }
 
-        private void ConvertCS1ToEvent(Dictionary<string, LinkedList<ServiceCallItem>> servicesHistory)
+        private void ConvertCS1ToEvent(Dictionary<EndpointKey, LinkedList<ServiceCallItem>> servicesHistory)
         {
-            var events = servicesHistory["data-vef.xboxlive.com"];
-            servicesHistory.Remove("data-vef.xboxlive.com");
+            var sources = servicesHistory.Where(k => IsTelemetrySource(k.Key, host => host == XboxTelemetryEndpoint)).ToList();
+            foreach (var source in sources)
+            {
+                servicesHistory.Remove(source.Key);
+            }
 
-            LinkedList<ServiceCallItem> inGameEvents = null;
-            if (servicesHistory.ContainsKey("inGameEvents"))
-            {
-                inGameEvents = servicesHistory["inGameEvents"];
-            }
-            else
-            {
-                inGameEvents = new LinkedList<ServiceCallItem>();
-                servicesHistory.Add("inGameEvents", inGameEvents);
-            }
+            LinkedList<ServiceCallItem> inGameEvents = GetSyntheticEvents(servicesHistory);
 
             // Event Name starts with a string in the form of {Publisher}_{TitleId}
             Regex eventNameMatch = new Regex("[a-zA-z]{4}_[a-zA-Z0-9]{8}");
 
-            foreach (var eventCall in events)
+            foreach (var eventCall in sources.SelectMany(source => source.Value))
             {
                 var requestBody = eventCall.ReqBody;
 
@@ -223,7 +267,8 @@ namespace CaptureAnalysisEngine
                     {
                         ServiceCallItem splitEvent = eventCall.Copy();
 
-                        splitEvent.Host = "inGameEvents";
+                        splitEvent.Host = InGameEventsEndpoint;
+                        splitEvent.EndpointKind = EndpointKind.SyntheticTelemetry;
                         splitEvent.EventName = eventNameParts[1];
                         splitEvent.ReqTimeUTC = (UInt64)DateTime.Parse(fields[2]).ToFileTimeUtc();
                         splitEvent.ReqBody = String.Empty;

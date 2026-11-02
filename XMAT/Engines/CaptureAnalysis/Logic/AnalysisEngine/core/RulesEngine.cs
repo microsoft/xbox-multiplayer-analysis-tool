@@ -16,7 +16,7 @@ namespace CaptureAnalysisEngine
     public class RulesEngine
     {
         private Dictionary<String, LinkedList<Rule>> m_ruleDefines = new Dictionary<String, LinkedList<Rule>>();
-        private Dictionary<String, LinkedList<Rule>> m_endpointRuleMap = new Dictionary<String, LinkedList<Rule>>();
+        private Dictionary<EndpointKey, LinkedList<Rule>> m_endpointRuleMap = new Dictionary<EndpointKey, LinkedList<Rule>>();
         private Dictionary<String, ConcurrentBag<RuleResult>> m_results = new Dictionary<string, ConcurrentBag<RuleResult>>();
         private String m_version = String.Empty;
         private String m_ruleFile = String.Empty;
@@ -46,9 +46,10 @@ namespace CaptureAnalysisEngine
             IsInternal = isInternal;
         }
 
-        void MapRules(IEnumerable<String> endpoints)
+        // Rules are classified by an endpoint's logical name; each endpoint bucket keeps its own rule instances.
+        void MapRules(IEnumerable<EndpointKey> endpoints)
         {
-            foreach (string endpoint in endpoints)
+            foreach (EndpointKey endpoint in endpoints)
             {
                 var rules = new LinkedList<Rule>();
 
@@ -57,10 +58,10 @@ namespace CaptureAnalysisEngine
                     foreach (var rule in typeRules.Value)
                     {
                         var regex = new Regex(WildCardToRegular(rule.Endpoint));
-                        if (regex.IsMatch(endpoint))
+                        if (regex.IsMatch(endpoint.LogicalName))
                         {
                             var newRule = rule.Clone();
-                            newRule.Endpoint = endpoint;
+                            newRule.Endpoint = endpoint.LogicalName;
                             rules.AddLast(newRule);
 
                             // We only apply the first rule that matches for each type
@@ -83,12 +84,26 @@ namespace CaptureAnalysisEngine
                 m_results.Add(console, new ConcurrentBag<RuleResult>());
             }
 
+            var endpointRules = m_endpointRuleMap
+                .SelectMany(endpoint => endpoint.Value.Select(rule => (Endpoint: endpoint.Key, Rule: rule)))
+                .ToList();
+            var actionableHosts = data.m_servicesHistory.ToDictionary(
+                endpoint => endpoint.Key,
+                endpoint => ServiceCallData.GetActionableHost(endpoint.Key, endpoint.Value));
+
             // Now the rules can be run in parallel
-            Parallel.ForEach(GetAllRules(), rule =>
+            Parallel.ForEach(endpointRules, endpointRule =>
             {
-                if (data.m_servicesHistory.ContainsKey(rule.Endpoint))
+                if (data.m_servicesHistory.TryGetValue(endpointRule.Endpoint, out var history))
                 {
-                    m_results[console].Add(rule.Run(this, data.m_servicesHistory[rule.Endpoint], data.m_servicesStats[rule.Endpoint]));
+                    RuleResult result = endpointRule.Rule.Run(this, history, data.m_servicesStats[endpointRule.Endpoint]);
+                    if (result != null)
+                    {
+                        // Identity and provenance travel with the result for report projection.
+                        result.EndpointKey = endpointRule.Endpoint;
+                        result.ActionableHost = actionableHosts[endpointRule.Endpoint];
+                    }
+                    m_results[console].Add(result);
                 }
             });
 

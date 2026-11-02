@@ -10,6 +10,12 @@ namespace XMAT.WebServiceCapture
     {
         public static readonly RoutedUICommand EditAndResend =
             new("Edit and resend", "EditAndResend", typeof(WebServiceProxyCommands));
+        public static readonly RoutedUICommand ChangePort =
+            new("Change Proxy Port", "ChangePort", typeof(WebServiceProxyCommands));
+        public static readonly RoutedUICommand DiscardPortChange =
+            new("Discard Pending Port", "DiscardPortChange", typeof(WebServiceProxyCommands));
+        public static readonly RoutedUICommand CancelPortChange =
+            new("Cancel Applying Port", "CancelPortChange", typeof(WebServiceProxyCommands));
 
         public static readonly RoutedUICommand EnableDevice =
             new("Enable Device", "Enable Device", typeof(WebServiceProxyCommands));

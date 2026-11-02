@@ -42,6 +42,9 @@ namespace XMAT.WebServiceCapture.Proxy
         public event EventHandler ProxyStopped;
 
         public bool IsProxyEnabled { get { return State == ProxyState.Running; } }
+        public Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> SslConnectionRequestPolicyAsync { get; set; }
+        public Func<HttpRequestEventArgs, CancellationToken, Task<bool>> WebRequestPolicyAsync { get; set; }
+        public Func<HttpResponseEventArgs, CancellationToken, Task<bool>> WebResponsePolicyAsync { get; set; }
 
         internal ProxyState State
         {
@@ -643,9 +646,13 @@ namespace XMAT.WebServiceCapture.Proxy
             return args.AcceptConnection;
         }
 
-        internal bool RaiseReceivedSslConnectionRequest(int connectionID, string clientIP, ClientRequest request)
+        internal async Task<bool> RaiseReceivedSslConnectionRequestAsync(
+            int connectionID,
+            string clientIP,
+            ClientRequest request,
+            CancellationToken cancellationToken)
         {
-            if (_cts?.IsCancellationRequested == true)
+            if (_cts?.IsCancellationRequested == true || cancellationToken.IsCancellationRequested)
             {
                 return false;
             }
@@ -659,8 +666,18 @@ namespace XMAT.WebServiceCapture.Proxy
                 AcceptConnection = true
             };
 
-            ReceivedSslConnectionRequest?.Invoke(this, args);
-            return args.AcceptConnection;
+            bool observersAccepted = InvokeVetoObservers(
+                ReceivedSslConnectionRequest,
+                args,
+                eventArgs => eventArgs.AcceptConnection);
+            args.AcceptConnection = observersAccepted;
+            var policy = SslConnectionRequestPolicyAsync;
+            bool policyAccepted = policy == null ||
+                await policy(args, cancellationToken).ConfigureAwait(false);
+            args.AcceptConnection = observersAccepted && policyAccepted;
+            return args.AcceptConnection &&
+                _cts?.IsCancellationRequested != true &&
+                !cancellationToken.IsCancellationRequested;
         }
 
         internal void RaiseCompletedSslConnectionRequest(int connectionID, ClientRequest request)
@@ -685,9 +702,12 @@ namespace XMAT.WebServiceCapture.Proxy
                 });
         }
 
-        internal bool RaiseReceivedWebRequest(int connectionID, ClientRequest request)
+        internal async Task<bool> RaiseReceivedWebRequestAsync(
+            int connectionID,
+            ClientRequest request,
+            CancellationToken cancellationToken)
         {
-            if (_cts?.IsCancellationRequested == true)
+            if (_cts?.IsCancellationRequested == true || cancellationToken.IsCancellationRequested)
             {
                 return false;
             }
@@ -700,13 +720,27 @@ namespace XMAT.WebServiceCapture.Proxy
                 AcceptRequest = true
             };
 
-            ReceivedWebRequest?.Invoke(this, args);
-            return args.AcceptRequest;
+            bool observersAccepted = InvokeVetoObservers(
+                ReceivedWebRequest,
+                args,
+                eventArgs => eventArgs.AcceptRequest);
+            args.AcceptRequest = observersAccepted;
+            var policy = WebRequestPolicyAsync;
+            bool policyAccepted = policy == null ||
+                await policy(args, cancellationToken).ConfigureAwait(false);
+            args.AcceptRequest = observersAccepted && policyAccepted;
+            return args.AcceptRequest &&
+                _cts?.IsCancellationRequested != true &&
+                !cancellationToken.IsCancellationRequested;
         }
 
-        internal bool RaiseReceivedWebResponse(int connectionID, ClientRequest request, ServerResponse response)
+        internal async Task<bool> RaiseReceivedWebResponseAsync(
+            int connectionID,
+            ClientRequest request,
+            ServerResponse response,
+            CancellationToken cancellationToken)
         {
-            if (_cts?.IsCancellationRequested == true)
+            if (_cts?.IsCancellationRequested == true || cancellationToken.IsCancellationRequested)
             {
                 return false;
             }
@@ -720,8 +754,38 @@ namespace XMAT.WebServiceCapture.Proxy
                 SendResponse = true
             };
 
-            ReceivedWebResponse?.Invoke(this, args);
-            return args.SendResponse;
+            bool observersAccepted = InvokeVetoObservers(
+                ReceivedWebResponse,
+                args,
+                eventArgs => eventArgs.SendResponse);
+            args.SendResponse = observersAccepted;
+            var policy = WebResponsePolicyAsync;
+            bool policyAccepted = policy == null ||
+                await policy(args, cancellationToken).ConfigureAwait(false);
+            args.SendResponse = observersAccepted && policyAccepted;
+            return args.SendResponse &&
+                _cts?.IsCancellationRequested != true &&
+                !cancellationToken.IsCancellationRequested;
+        }
+
+        private bool InvokeVetoObservers<TEventArgs>(
+            EventHandler<TEventArgs> observers,
+            TEventArgs args,
+            Func<TEventArgs, bool> isAccepted) where TEventArgs : EventArgs
+        {
+            bool accepted = true;
+            if (observers == null)
+            {
+                return accepted;
+            }
+
+            foreach (EventHandler<TEventArgs> observer in observers.GetInvocationList())
+            {
+                observer(this, args);
+                accepted &= isAccepted(args);
+            }
+
+            return accepted;
         }
 
         internal void RaiseConnectionClosed(int connectionID)

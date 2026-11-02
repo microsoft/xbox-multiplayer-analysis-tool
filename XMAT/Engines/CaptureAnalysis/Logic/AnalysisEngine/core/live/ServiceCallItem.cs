@@ -36,6 +36,14 @@ namespace CaptureAnalysisEngine
         public bool IsShoulderTap { get; set; }
         public bool IsInGameEvent { get; set; }
 
+        // Where this record came from; telemetry converters mark the records they synthesize.
+        public EndpointKind EndpointKind { get; set; }
+
+        // Host the captured request was sent to (DNS spelling as captured, IP literals
+        // canonical), kept separately from the logical Host label (which telemetry conversion
+        // rewrites). Null when it is not recoverable.
+        public string PhysicalHost { get; set; }
+
         // note: filled in automatically by the rules engine
         internal Tuple<string, string, string> m_xsapiMethods;
 
@@ -115,6 +123,8 @@ namespace CaptureAnalysisEngine
             copy.Dimensions = Dimensions;
             copy.IsShoulderTap = IsShoulderTap;
             copy.IsInGameEvent = IsInGameEvent;
+            copy.EndpointKind = EndpointKind;
+            copy.PhysicalHost = PhysicalHost;
 
             return copy;
         }

@@ -44,7 +44,9 @@ namespace XMAT.WebServiceCapture.Proxy
                 Version = request.Protocol,
                 StreamId = context.Features.Get<IHttp2StreamIdFeature>()?.StreamId,
                 Scheme = request.Scheme,
-                Host = request.Host.Host,
+                // Kestrel keeps IPv6 brackets; capture and policy use the bracket-free IP literal
+                // and the DNS spelling the client sent.
+                Host = HostAuthority.TryNormalizeHost(request.Host.Host, out string host) ? host : request.Host.Host,
                 Port = request.Host.Port ?? GetDefaultPort(request.Scheme),
                 Method = request.Method,
                 Path = request.PathBase + request.Path + request.QueryString
@@ -54,10 +56,14 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 foreach (string value in header.Value)
                 {
+                    string storedValue = StoredHeaderValue(header.Key, value);
+                    if (storedValue == null)
+                        continue;
+
                     if (ProxyHeaderUtilities.IsContentHeader(header.Key))
-                        result.ContentHeaders.Add(header.Key, value);
+                        result.ContentHeaders.Add(header.Key, storedValue);
                     else
-                        result.Headers.Add(header.Key, value);
+                        result.Headers.Add(header.Key, storedValue);
                 }
             }
 
@@ -68,6 +74,23 @@ namespace XMAT.WebServiceCapture.Proxy
             result.BodyBytes = body.ToArray();
 
             return result;
+        }
+
+        // Kestrel already removed the final chunked coding from request.Body,
+        // so drop it from the stored header too; other codings stay as sent.
+        private static string StoredHeaderValue(string key, string value)
+        {
+            if (!string.Equals(key, "Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+                return value;
+
+            int separator = value.LastIndexOf(',');
+            if (!string.Equals(value[(separator + 1)..].Trim(), "chunked", StringComparison.OrdinalIgnoreCase))
+                return value;
+
+            string remaining = separator < 0
+                ? string.Empty
+                : value[..separator].TrimEnd(' ', '\t', ',');
+            return remaining.Length == 0 ? null : remaining;
         }
 
         private static int GetDefaultPort(string scheme)
@@ -241,7 +264,10 @@ namespace XMAT.WebServiceCapture.Proxy
                 _proxy.GetNextRequestID(),
                 cancellationToken).ConfigureAwait(false);
 
-            if (!_proxy.RaiseReceivedWebRequest(tunnel.ConnectionId, clientRequest))
+            if (!await _proxy.RaiseReceivedWebRequestAsync(
+                tunnel.ConnectionId,
+                clientRequest,
+                cancellationToken).ConfigureAwait(false))
             {
                 context.Abort();
                 return;
@@ -252,6 +278,7 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 await ProxyWebSocketAsync(
                     context,
+                    tunnel.ConnectionId,
                     uri,
                     clientRequest,
                     cancellationToken).ConfigureAwait(false);
@@ -290,10 +317,11 @@ namespace XMAT.WebServiceCapture.Proxy
                         upstreamResponse,
                         cancellationToken).ConfigureAwait(false);
 
-                if (!_proxy.RaiseReceivedWebResponse(
+                if (!await _proxy.RaiseReceivedWebResponseAsync(
                     tunnel.ConnectionId,
                     clientRequest,
-                    serverResponse))
+                    serverResponse,
+                    cancellationToken).ConfigureAwait(false))
                 {
                     context.Abort();
                     return;
@@ -308,6 +336,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private async Task ProxyWebSocketAsync(
             HttpContext context,
+            int connectionId,
             Uri uri,
             ClientRequest clientRequest,
             CancellationToken cancellationToken)
@@ -315,6 +344,7 @@ namespace XMAT.WebServiceCapture.Proxy
             using var upstream = new ClientWebSocket();
             upstream.Options.Proxy = null;
             upstream.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+            upstream.Options.CollectHttpResponseDetails = true;
 
             foreach (KeyValuePair<string, IEnumerable<string>> header in clientRequest.Headers)
             {
@@ -337,7 +367,18 @@ namespace XMAT.WebServiceCapture.Proxy
                 Port = uri.IsDefaultPort ? -1 : uri.Port
             }.Uri;
 
-            await upstream.ConnectAsync(upstreamUri, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await upstream.ConnectAsync(upstreamUri, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is WebSocketException or HttpRequestException)
+            {
+                // A failure racing with client abort or shutdown is a cancellation.
+                cancellationToken.ThrowIfCancellationRequested();
+                RespondToFailedUpgrade(context, connectionId, upstream, ex);
+                return;
+            }
+
             using WebSocket downstream =
                 await context.WebSockets.AcceptWebSocketAsync(upstream.SubProtocol).ConfigureAwait(false);
 
@@ -358,6 +399,44 @@ namespace XMAT.WebServiceCapture.Proxy
             await Task.WhenAny(downstreamToUpstream, upstreamToDownstream).ConfigureAwait(false);
             relayCancellation.Cancel();
             await Task.WhenAll(downstreamToUpstream, upstreamToDownstream).ConfigureAwait(false);
+        }
+
+        // The server either answered the upgrade without switching protocols (for example 401
+        // for an expired token) or could not be reached. Give the client that answer, or 502,
+        // as the HTTP/1 WebSocket path does, instead of failing the whole request.
+        private void RespondToFailedUpgrade(
+            HttpContext context,
+            int connectionId,
+            ClientWebSocket upstream,
+            Exception exception)
+        {
+            int status = (int)upstream.HttpStatusCode;
+            if (status < StatusCodes.Status200OK)
+            {
+                Log(connectionId, LogLevel.ERROR,
+                    $"Upstream WebSocket handshake failed: {exception.GetBaseException().Message}");
+                context.Response.StatusCode = StatusCodes.Status502BadGateway;
+                return;
+            }
+
+            Log(connectionId, LogLevel.INFO, $"Upstream refused the WebSocket upgrade with status {status}.");
+            context.Response.StatusCode = status;
+            if (upstream.HttpResponseHeaders == null)
+                return;
+
+            foreach (KeyValuePair<string, IEnumerable<string>> header in upstream.HttpResponseHeaders)
+            {
+                // The upstream body is not available, so its length must not be forwarded.
+                if (ProxyHeaderUtilities.IsHopByHopHeader(header.Key) ||
+                    ProxyHeaderUtilities.IsWebSocketHandshakeHeader(header.Key) ||
+                    string.Equals(header.Key, "Content-Length", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                context.Response.Headers[header.Key] = new Microsoft.Extensions.Primitives.StringValues(
+                    new List<string>(header.Value).ToArray());
+            }
         }
 
         private static async Task RelayWebSocketAsync(
@@ -420,9 +499,22 @@ namespace XMAT.WebServiceCapture.Proxy
                     cancellationToken).ConfigureAwait(false)
             };
 
+            // HttpClient de-chunks any body it reads but keeps the header, so drop
+            // that coding; bodyless responses keep their headers (nothing decoded).
+            if (HasMessageBody(request.Method, response.StatusCode))
+                response.Headers.TransferEncodingChunked = false;
             result.Headers.CopyFrom(response.Headers);
             result.ContentHeaders.CopyFrom(response.Content.Headers);
             return result;
+        }
+
+        // HEAD, 1xx, 204 and 304 responses have no message body to decode.
+        private static bool HasMessageBody(string method, HttpStatusCode statusCode)
+        {
+            return !HttpMethods.IsHead(method) &&
+                (int)statusCode >= 200 &&
+                statusCode != HttpStatusCode.NoContent &&
+                statusCode != HttpStatusCode.NotModified;
         }
 
         private static string GetProtocol(Version version)

@@ -5,12 +5,14 @@
 using System;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT
 {
@@ -25,6 +27,8 @@ namespace XMAT
         private readonly string XMATFilter = $"{PublicUtilities.AppName} files (*.{XMATCaptureFileExtension})|*.{XMATCaptureFileExtension}";
         private readonly string FiddlerFilter = $"Fiddler SAZ files (*.{FiddlerFileExtension})|*.{FiddlerFileExtension}";
         private readonly string NetTraceFilter = $"Network trace files (*.{NetTraceFileExtension})|*.{NetTraceFileExtension}";
+        private readonly AnalysisReportExportWorkflow
+            _analysisReportExportWorkflow;
 
         private Cursor _originalCursor;
         private bool _isCloseInProgress;
@@ -37,6 +41,12 @@ namespace XMAT
             // Apply theme after preferences are deserialized
             ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
 
+            _analysisReportExportWorkflow =
+                new AnalysisReportExportWorkflow(
+                    this,
+                    new WpfAnalysisReportExportDialogService(),
+                    ExportAnalysisReportAsync);
+
             InitializeComponent();
 
             // LOC
@@ -47,20 +57,46 @@ namespace XMAT
             FileSaveCaptures.Header = Localization.GetLocalizedString("FILE_SAVE_CAPTURES");
             FileImportCaptures.Header = Localization.GetLocalizedString("FILE_IMPORT_CAPTURES");
             FileExportCaptures.Header = Localization.GetLocalizedString("FILE_EXPORT_CAPTURES");
+            FileExportSanitizedCaptures.Header = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED");
+            FileExportSanitizedCaptures.ToolTip = Localization.GetLocalizedString("SANITIZED_EXPORT_TOOLTIP");
             FileExit.Header = Localization.GetLocalizedString("FILE_EXIT");
             ViewClearCaptures.Header = Localization.GetLocalizedString("VIEW_CLEAR_CAPTURES");
             EditPreferences.Header = Localization.GetLocalizedString("EDIT_PREFERENCES");
             AnalysisMenu.Header = Localization.GetLocalizedString("ANALYSIS_MENU");
             ViewAnalyzeCaptures.Header = Localization.GetLocalizedString("VIEW_ANALYZE_CAPTURES");
             ViewAnalyzeCaptures.ToolTip = Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
+            AnalysisExportReport.Header = Localization.GetLocalizedString("ANALYSIS_EXPORT_REPORT");
+            AnalysisExportReport.ToolTip = Localization.GetLocalizedString("ANALYSIS_EXPORT_REPORT_TOOLTIP");
             HelpMenu.Header = Localization.GetLocalizedString("HELP_MENU");
             CollectLogs.Header = Localization.GetLocalizedString("COLLECT_LOGS");
             ViewGDKXInfo.Header = Localization.GetLocalizedString("GDKX_INFO");
             ActionsMenu.Header = Localization.GetLocalizedString("ACTIONS_MENU");
+            ChangeProxyPort.Header = Localization.GetLocalizedString("PROXY_PORT_CHANGE");
+            ChangeProxyPort.ToolTip = Localization.GetLocalizedString("PROXY_PORT_CHANGE_TOOLTIP");
             ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
 
             // Sync dark mode checkbox with saved preference
             ToggleDarkMode.IsChecked = CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark";
+        }
+
+        private void ChangeProxyPort_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureConnectionView.CanChangeProxyPort(CaptureAppModel.AppModel.SelectedDeviceContext);
+        }
+
+        private async void ChangeProxyPort_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (CaptureConnectionView.TryGetCaptureContext(
+                CaptureAppModel.AppModel.SelectedDeviceContext, out var context, out var controller))
+            {
+                await CaptureConnectionView.ShowPortChangeAsync(context, controller);
+            }
+        }
+
+        // One non-modal manager for the application's session host lists, brought back if open.
+        private void ManageHostLists_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            HostListManagerWindow.ShowOrActivate(this, CaptureAppModel.AppModel.HostListPolicy);
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -99,6 +135,11 @@ namespace XMAT
                 return;
             }
 
+            if (!await _analysisReportExportWorkflow.RequestCloseAsync())
+            {
+                return;
+            }
+
             _isCloseInProgress = true;
             var wasEnabled = IsEnabled;
             IsEnabled = false;
@@ -110,15 +151,39 @@ namespace XMAT
 
                 if (!await CaptureAppModel.AppModel.CanCloseAsync())
                 {
+                    if (CaptureAppModel.AppModel.IsCaptureDataOperationRunning)
+                    {
+                        MessageBox.Show(
+                            Localization.GetLocalizedString("CAPTURE_DATA_BUSY_CLOSE"),
+                            Localization.GetLocalizedString("FILE_EXIT"),
+                            MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
                     return;
                 }
 
-                CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+                if (!CaptureAppSettings.Serialize(CaptureAppModel.AppModel))
+                {
+                    return;
+                }
                 _closeConfirmed = true;
                 Close();
             }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                _closeConfirmed = false;
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Failed to close the application: {ex}");
+                MessageBox.Show(
+                    Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_MESSAGE", ex.Message),
+                    Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_TITLE"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
             finally
             {
+                if (!_closeConfirmed)
+                {
+                    _analysisReportExportWorkflow.CancelClosing();
+                }
                 _isCloseInProgress = false;
                 IsEnabled = wasEnabled;
             }
@@ -198,7 +263,8 @@ namespace XMAT
                 var context = CaptureAppModel.AppModel.GetDeviceContext(deviceSelector.SelectedDeviceType, deviceSelector.SelectedDeviceName, deviceSelector.SelectedCaptureType, false);
                 if (context != null)
                 {
-                    MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    CaptureAppModel.AppModel.SelectedDeviceContext = context;
+                    MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
                 else
@@ -320,7 +386,19 @@ namespace XMAT
                         ? ImportType.NetTrace
                         : ImportType.Fiddler;
 
-                    await CaptureAppModel.AppModel.ImportDataCapturesAsync(importType, filename);
+                    try
+                    {
+                        await CaptureAppModel.AppModel.ImportDataCapturesAsync(importType, filename);
+                    }
+                    catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                    {
+                        PublicUtilities.AppLog(LogLevel.ERROR, $"Capture import failed: {ex}");
+                        MessageBox.Show(
+                            Localization.GetLocalizedString("WEBCAP_IMPORT_ERROR", ex.Message),
+                            Localization.GetLocalizedString("WEBCAP_IMPORT_ERROR_TITLE"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error);
+                    }
                 }
             }
         }
@@ -342,6 +420,73 @@ namespace XMAT
                 // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
                 // setup the filter above and call export with the appropriate type
                 CaptureAppModel.AppModel.ExportDataCaptures(ExportType.Fiddler, saveFileDialog.FileName);
+            }
+        }
+
+        private void ExportSanitized_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureAppModel.AppModel.CanExportSanitizedCaptures;
+        }
+
+        private async void ExportSanitized_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (!CaptureAppModel.AppModel.CanExportSanitizedCaptures)
+            {
+                return;
+            }
+            if (MessageBox.Show(
+                Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM"),
+                Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
+            {
+                return;
+            }
+            var dialog = new SaveFileDialog
+            {
+                Filter = FiddlerFilter,
+                DefaultExt = ".saz",
+                AddExtension = true,
+                FileName = "sanitized-capture.saz",
+                Title = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED")
+            };
+            if (dialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+            using var cancellation = new CancellationTokenSource();
+            try
+            {
+                WebServiceCapture.SanitizedExportSummary summary;
+                using (PublicUtilities.BlockingOperation())
+                {
+                    var operation = CaptureAppModel.AppModel.ExportSanitizedDataCapturesAsync(dialog.FileName, cancellation.Token);
+                    if (await Task.WhenAny(operation, Task.Delay(250)) != operation && !operation.IsCompleted)
+                    {
+                        var progress = new SanitizedExportProgressWindow(operation, cancellation.Cancel) { Owner = this };
+                        progress.ShowDialog();
+                    }
+                    summary = await operation;
+                }
+                MessageBox.Show(
+                    Localization.GetLocalizedString("SANITIZED_EXPORT_COMPLETE",
+                        summary.Sessions, summary.RedactedValues, summary.OmittedBodies, summary.OmittedHeaders),
+                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                MessageBox.Show(
+                    Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLED"),
+                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Sanitized export failed: {exception}");
+                MessageBox.Show(
+                    Localization.GetLocalizedString("SANITIZED_EXPORT_FAILED", exception.Message),
+                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -453,7 +598,6 @@ namespace XMAT
                     CaptureErrorsPanel.AddedAnalysis(analysisRun);
                     await HandleAnalyzerChosen(
                         analysisRun,
-                        selected,
                         captureDeviceContext.CaptureController);
                 }
             }
@@ -461,50 +605,38 @@ namespace XMAT
 
         private async Task HandleAnalyzerChosen(
             AnalysisRunModel analysisRun,
-            ICaptureAnalyzer captureAnalyzer,
             IDeviceCaptureController captureController)
         {
-            analysisRun.IsProcessing = true;
-            try
+            ECaptureAnalyzerResult analyzerResult = await CaptureAppModel.AppModel.RunAnalysisAsync(
+                analysisRun, captureController);
+
+            void OnError(string strErrorMsg)
             {
-                ECaptureAnalyzerResult analyzerResult = await captureAnalyzer.RunAsync(analysisRun, captureController);
-
-                void OnError(string strErrorMsg)
-                {
-                    // remove entry
-                    CaptureAppModel.AppModel.RemoveAnalysisRun(analysisRun);
-
-                    // show error msg
-                    MessageBox.Show(
-                        strErrorMsg,
-                        Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_TITLE"),
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                }
-
-                switch (analyzerResult)
-                {
-                    case ECaptureAnalyzerResult.Success:
-                    {
-                        break;
-                    }
-
-                    case ECaptureAnalyzerResult.NoSuitableData:
-                    {
-                        OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
-                        break;
-                    }
-
-                    case ECaptureAnalyzerResult.UnknownError:
-                    {
-                        OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));
-                        break;
-                    }
-                }
+                MessageBox.Show(
+                    strErrorMsg,
+                    Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_TITLE"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             }
-            finally
+
+            switch (analyzerResult)
             {
-                analysisRun.IsProcessing = false;
+                case ECaptureAnalyzerResult.Success:
+                {
+                    break;
+                }
+
+                case ECaptureAnalyzerResult.NoSuitableData:
+                {
+                    OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
+                    break;
+                }
+
+                case ECaptureAnalyzerResult.UnknownError:
+                {
+                    OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_UNKNOWN"));
+                    break;
+                }
             }
         }
 
@@ -542,6 +674,57 @@ namespace XMAT
             ThemeManager.ApplyTheme(theme);
             CaptureAppModel.AppModel.PreferencesModel.Theme = theme;
             CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+        }
+
+        private void ExportAnalysisReport_CanExecute(
+            object sender,
+            CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute =
+                !_analysisReportExportWorkflow.IsRunning &&
+                !_analysisReportExportWorkflow.ClosingStarted &&
+                AnalysisReportExportCommand.CanExecute(
+                    CaptureAppModel.AppModel.AnalysisRuns);
+        }
+
+        private async void ExportAnalysisReport_Executed(
+            object sender,
+            ExecutedRoutedEventArgs e)
+        {
+            try
+            {
+                AnalysisExportSource source =
+                    AnalysisReportExportCommand.SnapshotSelected(
+                    CaptureAppModel.AppModel.AnalysisRuns);
+                if (source == null ||
+                    _analysisReportExportWorkflow.ClosingStarted)
+                {
+                    return;
+                }
+
+                await _analysisReportExportWorkflow.RunAsync(
+                    source);
+            }
+            catch (Exception exception) when (
+                !ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"Analysis report export workflow failed: {exception}");
+            }
+        }
+
+        private async Task<string> ExportAnalysisReportAsync(
+            AnalysisExportSource source,
+            string destinationParent)
+        {
+            using (PublicUtilities.BlockingOperation())
+            {
+                return await Task.Run(() =>
+                    new AnalysisReportExporter().Export(
+                        source,
+                        destinationParent));
+            }
         }
     }
 }

@@ -10,7 +10,6 @@
     <Grid>
         <wv2:WebView2
             Name="webView"
-            Source="{Binding ReportUrl}"
         />
     </Grid>
     <!--

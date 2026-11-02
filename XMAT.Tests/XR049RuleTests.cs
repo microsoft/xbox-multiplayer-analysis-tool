@@ -144,8 +144,9 @@ namespace XMAT.Tests
                 CreateCall(2, "{\"activity\":{}}")
             });
             var data = new ServiceCallData.PerConsoleData();
-            data.m_servicesHistory[PresenceEndpoint] = calls;
-            data.m_servicesStats[PresenceEndpoint] = new ServiceCallStats(calls);
+            var endpoint = new EndpointKey(EndpointKind.Captured, PresenceEndpoint);
+            data.m_servicesHistory[endpoint] = calls;
+            data.m_servicesStats[endpoint] = new ServiceCallStats(calls);
 
             engine.RunRulesOnData("Console1", data);
 

@@ -10,6 +10,8 @@ using System.Text.Json;
 using XMAT.NetworkTrace;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Models;
+using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.Models
 {
@@ -58,7 +60,10 @@ namespace XMAT.Models
             string deviceName,
             CaptureType captureType,
             bool readOnly,
-            object serializedParameters)
+            object serializedParameters,
+            bool deferPortAllocation = false,
+            HostListPolicy hostListPolicy = null,
+            Func<IWebServiceProxy> proxyFactory = null)
         {
             DeviceType = deviceType;
             DeviceName = deviceName;
@@ -69,7 +74,14 @@ namespace XMAT.Models
             switch (captureType)
             {
                 case CaptureType.WebProxy:
-                    CaptureController = new WebServiceDeviceCaptureController(deviceName, deviceType, readOnly);
+                    // The shared host lists are injected before Initialize hands them to the proxy.
+                    CaptureController = new WebServiceDeviceCaptureController(
+                        deviceName,
+                        deviceType,
+                        readOnly,
+                        ProxyPortPool.Shared,
+                        hostListPolicy: hostListPolicy,
+                        proxyFactory: proxyFactory);
                     break;
                 case CaptureType.NetworkTrace:
                     CaptureController = new NetworkTraceCaptureController(deviceName, deviceType);
@@ -85,7 +97,14 @@ namespace XMAT.Models
                     .DeserializeFrom((JsonElement)serializedParameters);
             }
 
-            CaptureController.Initialize();
+            if (CaptureController is WebServiceDeviceCaptureController proxy)
+            {
+                proxy.Initialize(deferPortAllocation);
+            }
+            else
+            {
+                CaptureController.Initialize();
+            }
             AssignDeviceColor();
         }
 

@@ -21,7 +21,7 @@
         </Grid.RowDefinitions>
         <TabControl Grid.Row="0" Padding="10" Margin="0,0,0,12">
             <TabItem x:Name="ProxyTab" Header="Web Proxy">
-                <wscc:CaptureOptionsFull/>
+                <wscc:CaptureOptionsFull x:Name="ProxyOptions"/>
             </TabItem>
             <TabItem x:Name="TraceTab" Header="Network Analysis">
                 <ntca:NetworkTraceAnalysisOptions/>

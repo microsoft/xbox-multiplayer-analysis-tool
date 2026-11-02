@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Generic;
+using System.Linq;
 using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
 using XMAT.XboxLiveCaptureAnalysis.Models;
@@ -14,6 +15,13 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
         // NOTE: this data structure to explicitly coupled with the available
         // types of validation rules found within the CaptureAnalysisEngine
         public string EndpointName { get; private set; }
+        // Shown text: EndpointName, qualified by its localized kind when another endpoint in
+        // the report shares the name. EndpointName itself stays the raw logical name.
+        public string DisplayName { get; private set; }
+        // Typed identity used for navigation; EndpointName is display text only.
+        public EndpointKey Key { get; private set; }
+        // Physical host offered by host-list actions, or null when not actionable.
+        public string ActionableHost { get; private set; }
         public ValidationIssueCount BatchFrequencyIssueCount { get; private set; }
         public ValidationIssueCount BurstDetectionIssueCount { get; private set; }
         public ValidationIssueCount CallFrequencyIssueCount { get; private set; }
@@ -22,14 +30,17 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
         public ValidationIssueCount SmallBatchDetectionIssueCount { get; private set; }
         public ValidationIssueCount ThrottledCallIssueCount { get; private set; }
 
-        public EndpointValidationCounts(EndpointReportData endpointReportData)
+        public EndpointValidationCounts(EndpointReportData endpointReportData, string displayName)
         {
+            DisplayName = displayName;
             InitializeFrom(endpointReportData);
         }
 
         private void InitializeFrom(EndpointReportData endpointReportData)
         {
             EndpointName = endpointReportData.UriService;
+            Key = endpointReportData.Key;
+            ActionableHost = endpointReportData.ActionableHost;
             BatchFrequencyIssueCount = new(BatchFrequencyRule.DisplayName);
             BurstDetectionIssueCount = new(BurstDetectionRule.DisplayName);
             CallFrequencyIssueCount = new(CallFrequencyRule.DisplayName);
@@ -71,9 +82,11 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
         private void InitializeFrom(PerEndpointReportDocument reportDocument)
         {
             Endpoints.Clear();
+            Dictionary<EndpointKey, string> labels =
+                EndpointLabels.For(reportDocument.EndpointReportData.Select(data => data.Key));
             foreach (EndpointReportData endpointReportData in reportDocument.EndpointReportData)
             {
-                EndpointValidationCounts endpoint = new(endpointReportData);
+                EndpointValidationCounts endpoint = new(endpointReportData, labels[endpointReportData.Key]);
                 Endpoints.Add(endpoint);
             }
         }
