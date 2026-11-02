@@ -244,19 +244,48 @@ namespace XMAT.Tests
             Assert.Throws<ArgumentException>(() => draft.ToCurlCommand());
         }
 
-        [Fact]
-        public void ToCurlCommand_HandlesHeadAndEmptyHeaderValues()
+        [Theory]
+        [InlineData(false, "")]
+        [InlineData(true, "")]
+        [InlineData(true, " \r\n")]
+        public void ToCurlCommand_HandlesHeadAndEmptyHeaderValues(bool bodyIsBase64, string bodyText)
         {
             var draft = new RequestReplayDraft
             {
                 Method = "HEAD",
                 Url = "https://example.com/",
-                HeadersText = "X-Empty:\r\n"
+                HeadersText = "X-Empty:\r\n",
+                BodyIsBase64 = bodyIsBase64,
+                BodyText = bodyText
             };
             string command = draft.ToCurlCommand();
             Assert.Contains(" --head --request ", command);
             Assert.Contains("--header 'X-Empty;'", command);
             Assert.Contains("--header 'Content-Type:'", command);
+            Assert.DoesNotContain("--data-binary", command);
+        }
+
+        [Theory]
+        [InlineData(false, "payload")]
+        [InlineData(false, " \r\n")]
+        [InlineData(true, "AP8=")]
+        public async Task ToCurlCommand_RejectsHeadWithNonemptyBodyWithoutPreventingReplay(
+            bool bodyIsBase64, string bodyText)
+        {
+            var draft = new RequestReplayDraft
+            {
+                Method = "HEAD",
+                Url = "https://example.com/",
+                BodyIsBase64 = bodyIsBase64,
+                BodyText = bodyText
+            };
+
+            var exception = Assert.Throws<ArgumentException>(() => draft.ToCurlCommand());
+            Assert.Equal("HEAD requests with a nonempty body cannot be exported to cURL.", exception.Message);
+
+            using var request = draft.CreateRequest();
+            Assert.Equal(bodyIsBase64 ? Convert.FromBase64String(bodyText) : Encoding.UTF8.GetBytes(bodyText),
+                await request.Content.ReadAsByteArrayAsync());
         }
 
         [Fact]

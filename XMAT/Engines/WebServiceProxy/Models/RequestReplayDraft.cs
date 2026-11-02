@@ -183,6 +183,10 @@ namespace XMAT.WebServiceCapture
         internal string ToCurlCommand()
         {
             using var request = CreateRequest();
+            byte[] body = GetBodyBytes();
+            if (Method == "HEAD" && body.Length > 0)
+                throw new ArgumentException("HEAD requests with a nonempty body cannot be exported to cURL.");
+
             var command = new StringBuilder("curl.exe --globoff --noproxy '*'");
             // --request HEAD alone does not tell curl to stop reading after the response headers.
             if (Method == "HEAD")
@@ -205,7 +209,6 @@ namespace XMAT.WebServiceCapture
                     command.Append(" --header ").Append(Quote(name + ":"));
             }
 
-            byte[] body = GetBodyBytes();
             if (body.Length == 0)
                 return command.ToString();
 
