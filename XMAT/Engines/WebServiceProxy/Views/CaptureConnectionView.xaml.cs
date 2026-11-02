@@ -911,6 +911,14 @@ namespace XMAT.WebServiceCapture
                 (row.Item as ProxyConnectionModel)?.ActionableHost,
                 "HOST_LIST_NO_HOST",
                 row);
+            row.ContextMenu.Items.Add(new Separator());
+            row.ContextMenu.Items.Add(new MenuItem
+            {
+                Header = Localization.GetLocalizedString("COMPOSER_TITLE"),
+                Command = WebServiceProxyCommands.EditAndResend,
+                CommandTarget = this,
+                CommandParameter = row.Item
+            });
         }
 
         internal static bool TryGetCaptureContext(

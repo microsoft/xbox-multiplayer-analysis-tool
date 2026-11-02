@@ -4,6 +4,8 @@
 
 using System.Net;
 using System.Diagnostics;
+using System.IO;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using XMAT.WebServiceCapture;
@@ -209,6 +211,30 @@ namespace XMAT.Tests
             var draft = new RequestReplayDraft { Url = "http://[::1]:8080/test" };
             using var request = draft.CreateRequest();
             Assert.Equal("[::1]", request.RequestUri.Host);
+        }
+
+        [Theory]
+        [InlineData("/sessions?name=one")]
+        [InlineData("/sessions%2Fone?name=one%26two&next=%2Fpath")]
+        [InlineData("/sessions")]
+        public void FromCapture_PreservesImportedSazRequestTarget(string target)
+        {
+            using var stream = new MemoryStream();
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Update);
+            var entry = archive.CreateEntry("raw/1_c.txt");
+            using (var requestStream = entry.Open())
+            {
+                requestStream.Write(Encoding.ASCII.GetBytes(
+                    $"GET https://example.com:8443{target} HTTP/1.1\r\nHost: example.com:8443\r\n\r\n"));
+            }
+
+            var capture = FiddlerSazHandler.FromFiddlerFrame(1, entry, null, null);
+            var draft = RequestReplayDraft.FromCapture(capture);
+            using var request = draft.CreateRequest();
+
+            Assert.Equal(target, capture.Path);
+            Assert.Equal("https://example.com:8443" + target, draft.Url);
+            Assert.Equal(draft.Url, request.RequestUri.AbsoluteUri);
         }
 
         [Fact]

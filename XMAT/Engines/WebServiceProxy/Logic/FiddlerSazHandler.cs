@@ -81,7 +81,7 @@ namespace XMAT.WebServiceCapture
                             {
                                 if (Uri.TryCreate(firstLineSplit[1], UriKind.Absolute, out Uri uri))
                                 {
-                                    call = uri.LocalPath;
+                                    call = uri.PathAndQuery;
                                     scheme = uri.Scheme;
                                 }
                                 else
