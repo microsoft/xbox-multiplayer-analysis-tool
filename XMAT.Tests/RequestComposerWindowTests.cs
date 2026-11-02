@@ -244,6 +244,7 @@ namespace XMAT.Tests
             Assert.False(WebServiceProxyCommands.EditAndResend.CanExecute(
                 RequestReplayDraftTests.Capture("CONNECT", "example.com:443", []), view));
             var grid = Assert.IsType<DataGrid>(view.FindName("ConnectionList"));
+            Assert.Empty(grid.Items);
             grid.ItemsSource = new[] { capture };
             // Let initial bindings settle before simulating selection on the populated grid.
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
