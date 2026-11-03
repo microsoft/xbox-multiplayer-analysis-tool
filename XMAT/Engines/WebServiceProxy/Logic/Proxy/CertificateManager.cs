@@ -102,7 +102,7 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             lock (_rootLock)
             {
-if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
+                if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
                     return true;
 
                 var certs = _rootStore.Certificates.Find(
@@ -264,14 +264,24 @@ if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(Ho
             File.WriteAllText(Path.Combine(path, CertFileNameFiddlerPem), pem);
         }
 
+        internal byte[] ReadPublicRootCertificate()
+        {
+            lock (_rootLock)
+            { return _rootCert?.Export(X509ContentType.Cert); }
+        }
+
         public void RemoveRootCertificate()
         {
             if (_rootStore == null)
                 return;
 
-            X509Certificate2Collection certs = _rootStore.Certificates.Find(
-                X509FindType.FindBySubjectName, AuthorityName, false);
-            _rootStore.RemoveRange(certs);
+            lock (_rootLock)
+            {
+                X509Certificate2Collection certs = _rootStore.Certificates.Find(
+                    X509FindType.FindBySubjectName, AuthorityName, false);
+                _rootStore.RemoveRange(certs);
+                _rootCert = null;
+            }
         }
 
         public void RemoveHostCertificates()

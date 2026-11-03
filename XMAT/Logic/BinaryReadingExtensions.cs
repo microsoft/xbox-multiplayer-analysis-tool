@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 
 namespace XMAT
 {
@@ -51,14 +52,16 @@ namespace XMAT
             return true;
         }
 
-        public static string ReadLine(this BinaryReader obj)
+        public static string ReadLine(this BinaryReader obj, CancellationToken cancellationToken = default)
         {
             byte[] pattern = Encoding.ASCII.GetBytes("\r\n");
             List<byte> bytes = new List<byte>();
 
             int count = 0;
+            var scanPosition = 0;
             do
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var buffer = obj.ReadBytes(4096);
                 count = buffer.Length;
                 if (count > 0)
@@ -66,13 +69,15 @@ namespace XMAT
                     bytes.AddRange(buffer);
                 }
 
-                // Find the newline pattern
-                int match = bytes.FindFirstMatch(pattern);
-                if (match != -1)
+                for (; scanPosition <= bytes.Count - pattern.Length; scanPosition++)
                 {
-                    // reset the stream to just after the newline
-                    obj.BaseStream.Seek(match - bytes.Count + 2, SeekOrigin.Current);
-                    return bytes.ConvertToString(match);
+                    if ((scanPosition & 4095) == 0)
+                        cancellationToken.ThrowIfCancellationRequested();
+                    if (IsMatch(bytes, scanPosition, pattern))
+                    {
+                        obj.BaseStream.Seek(scanPosition - bytes.Count + 2, SeekOrigin.Current);
+                        return bytes.ConvertToString(scanPosition);
+                    }
                 }
 
             } while (count == 4096);
@@ -80,12 +85,13 @@ namespace XMAT
             return Encoding.ASCII.GetString(bytes.ToArray());
         }
 
-        public static byte[] ReadToEnd(this BinaryReader obj)
+        public static byte[] ReadToEnd(this BinaryReader obj, CancellationToken cancellationToken = default)
         {
             List<byte> bytes = new List<byte>();
             int count = 0;
             do
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var buffer = obj.ReadBytes(4096);
                 count = buffer.Length;
                 if (count > 0)

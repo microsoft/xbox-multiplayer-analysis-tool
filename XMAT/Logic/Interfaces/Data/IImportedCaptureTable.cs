@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Generic;
+using System.Threading;
 
 namespace XMAT.SharedInterfaces
 {
@@ -11,6 +12,7 @@ namespace XMAT.SharedInterfaces
         // Imports publish their prepared view only after this atomic replacement succeeds.
         IReadOnlyList<long> ReplaceImportedRows(
             IFieldValue capture,
-            IEnumerable<object[]> rows);
+            IEnumerable<object[]> rows,
+            CancellationToken cancellationToken = default);
     }
 }

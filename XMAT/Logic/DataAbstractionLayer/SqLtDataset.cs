@@ -24,52 +24,61 @@ namespace XMAT.DataAbstractionLayer
 
         public IEnumerable<IDataRecord> DataRecordsWhen(params IFieldValue[] fieldNamesAndValues)
         {
-            SqliteDataReader dataReader = null;
-
-            _commandBuilder.Clear();
-            _commandBuilder.Append("SELECT DISTINCT id,");
-
-            string fields = string.Join(",", _fieldDefinitions.Select(x => x.Key));
-            _commandBuilder.Append(fields);
-
-            _commandBuilder.Append($" FROM {_sourceTableName}");
-            _commandBuilder.Append(@" WHERE");
-
-            string whereValues = string.Join(" AND ", fieldNamesAndValues.Select(
-                (x) =>
-                {
-                    var fieldDef = _fieldDefinitions[x.Name] as FieldDefinition;
-                    var fieldName = fieldDef.Name;
-                    var fieldValue = fieldDef.FieldValueAsString(x.Value);
-                    return string.Format(" {0} = {1}", fieldName, fieldValue);
-                }));
-            _commandBuilder.Append(whereValues);
-
-            _commandInterface.CommandText = _commandBuilder.ToString();
-
-            if (_commandInterface.Connection.State == System.Data.ConnectionState.Open)
+            lock (_gate)
             {
-                dataReader = _commandInterface.ExecuteReader();
-            }
+                SqliteDataReader dataReader = null;
 
-            return new SqLtDataEnumerable(_fieldDefinitions, dataReader, null);
+                _commandBuilder.Clear();
+                _commandBuilder.Append("SELECT DISTINCT id,");
+
+                string fields = string.Join(",", _fieldDefinitions.Select(x => SqLtQuerySupport.Identifier(x.Key)));
+                _commandBuilder.Append(fields);
+
+                _commandBuilder.Append($" FROM {SqLtQuerySupport.Identifier(_sourceTableName)}");
+                _commandBuilder.Append(@" WHERE");
+
+                _commandInterface.Parameters.Clear();
+                var index = 0;
+                string whereValues = string.Join(" AND ", fieldNamesAndValues.Select(
+                    (x) =>
+                    {
+                        var fieldDef = _fieldDefinitions[x.Name] as FieldDefinition;
+                        var parameter = $"$p{index++}";
+                        _commandInterface.Parameters.AddWithValue(parameter, x.Value ?? DBNull.Value);
+                        return $" {SqLtQuerySupport.Identifier(fieldDef.Name)} = {parameter}";
+                    }));
+                _commandBuilder.Append(whereValues);
+
+                _commandInterface.CommandText = _commandBuilder.ToString();
+
+                if (_commandInterface.Connection.State == System.Data.ConnectionState.Open)
+                {
+                    dataReader = _commandInterface.ExecuteReader();
+                }
+
+                return new SqLtDataEnumerable(_fieldDefinitions, dataReader, null, _gate);
+            }
         }
 
         public IEnumerable<IDataRecord> DataRecordsFrom(Int64 firstRowId, int limit)
         {
-            _commandBuilder.Clear();
-            _commandBuilder.Append("SELECT DISTINCT id,");
+            lock (_gate)
+            {
+                _commandBuilder.Clear();
+                _commandBuilder.Append("SELECT DISTINCT id,");
 
-            string fields = string.Join(",", _fieldDefinitions.Select(x => x.Key));
-            _commandBuilder.Append(fields);
+                string fields = string.Join(",", _fieldDefinitions.Select(x => SqLtQuerySupport.Identifier(x.Key)));
+                _commandBuilder.Append(fields);
 
-            _commandBuilder.Append($" FROM {_sourceTableName}");
-            _commandBuilder.Append($" WHERE id >= {firstRowId} LIMIT {limit}");
+                _commandBuilder.Append($" FROM {SqLtQuerySupport.Identifier(_sourceTableName)}");
+                _commandBuilder.Append($" WHERE id >= {firstRowId} LIMIT {limit}");
 
-            _commandInterface.CommandText = _commandBuilder.ToString();
-            var dataReader = _commandInterface.ExecuteReader();
+                _commandInterface.CommandText = _commandBuilder.ToString();
+                _commandInterface.Parameters.Clear();
+                var dataReader = _commandInterface.ExecuteReader();
 
-            return new SqLtDataEnumerable(_fieldDefinitions, dataReader, null);
+                return new SqLtDataEnumerable(_fieldDefinitions, dataReader, null, _gate);
+            }
         }
 
         internal SqLtDataset(
@@ -77,6 +86,7 @@ namespace XMAT.DataAbstractionLayer
             string sourceTableName,
             IDictionary<string, IFieldDefinition> fieldsToInclude)
         {
+            _gate = SqLtConnectionGate.For(connection);
             _sourceTableName = sourceTableName;
             _commandInterface = new SqliteCommand();
             _commandInterface.Connection = connection;
@@ -91,23 +101,28 @@ namespace XMAT.DataAbstractionLayer
 
         private IEnumerable<IDataRecord> GetDataRecords()
         {
-            _commandBuilder.Clear();
-            _commandBuilder.Append("SELECT DISTINCT id,");
+            lock (_gate)
+            {
+                _commandBuilder.Clear();
+                _commandBuilder.Append("SELECT DISTINCT id,");
 
-            string fields = string.Join(",", _fieldDefinitions.Select(x => x.Key));
-            _commandBuilder.Append(fields);
+                string fields = string.Join(",", _fieldDefinitions.Select(x => SqLtQuerySupport.Identifier(x.Key)));
+                _commandBuilder.Append(fields);
 
-            _commandBuilder.Append($" FROM {_sourceTableName}");
+                _commandBuilder.Append($" FROM {SqLtQuerySupport.Identifier(_sourceTableName)}");
 
-            _commandInterface.CommandText = _commandBuilder.ToString();
-            var dataReader = _commandInterface.ExecuteReader();
+                _commandInterface.CommandText = _commandBuilder.ToString();
+                _commandInterface.Parameters.Clear();
+                var dataReader = _commandInterface.ExecuteReader();
 
-            return new SqLtDataEnumerable(_fieldDefinitions, dataReader, null);
+                return new SqLtDataEnumerable(_fieldDefinitions, dataReader, null, _gate);
+            }
         }
 
         private string _sourceTableName;
         private SqliteCommand _commandInterface;
         private StringBuilder _commandBuilder;
         private IDictionary<string, IFieldDefinition> _fieldDefinitions;
+        private readonly object _gate;
     }
 }

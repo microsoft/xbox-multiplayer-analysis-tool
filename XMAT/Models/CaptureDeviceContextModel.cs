@@ -101,6 +101,10 @@ namespace XMAT.Models
             {
                 proxy.Initialize(deferPortAllocation);
             }
+            else if (readOnly && CaptureController is NetworkTraceCaptureController trace)
+            {
+                trace.InitializeReadOnly();
+            }
             else
             {
                 CaptureController.Initialize();

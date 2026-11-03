@@ -8,6 +8,8 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using XMAT.ApplicationServices;
+using XMAT.SharedInterfaces;
 using XMAT.XboxLiveCaptureAnalysis.ReportModels;
 
 namespace XMAT.XboxLiveCaptureAnalysis.Models
@@ -59,6 +61,9 @@ namespace XMAT.XboxLiveCaptureAnalysis.Models
 
         public string OutputDirectory { get; internal set; }
         public string SourceCaptureName { get; internal set; }
+        internal XboxLiveAnalysisResult CanonicalAnalysis { get; set; }
+        internal CaptureDataResult InvestigationData { get; set; }
+        internal CaptureCompletedReportDescriptor CompletedReport => InvestigationData?.Report;
         public DateTime CompletedAt { get; internal set; }
         public IReadOnlyList<AnalysisArtifact> ArtifactManifest { get; internal set; }
 
@@ -68,9 +73,15 @@ namespace XMAT.XboxLiveCaptureAnalysis.Models
 
         private void FinalizeExportMetadata()
         {
-            CompletedAt = DateTime.Now;
+            CompletedAt = CompletedReport?.CompletedAt.LocalDateTime ?? DateTime.Now;
             try
             {
+                if (InvestigationData?.Details is CaptureDataDetails { DesktopManifest: not null } details)
+                {
+                    ArtifactManifest = Array.AsReadOnly(details.DesktopManifest.Select(artifact =>
+                        new AnalysisArtifact(artifact.RelativePath, artifact.Length, artifact.Sha256)).ToArray());
+                    return;
+                }
                 if (string.IsNullOrEmpty(OutputDirectory) ||
                     !Directory.Exists(OutputDirectory))
                 {
@@ -111,6 +122,11 @@ namespace XMAT.XboxLiveCaptureAnalysis.Models
                     // Logging failure must not prevent analysis completion.
                 }
             }
+
         }
+
+        internal AnalysisExportSource CreateExportSource() => IsComplete
+            ? new(OutputDirectory, SourceCaptureName, CompletedAt, ArtifactManifest)
+            : null;
     }
 }

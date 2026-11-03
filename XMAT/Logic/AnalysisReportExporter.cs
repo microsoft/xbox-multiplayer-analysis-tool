@@ -11,12 +11,16 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
+using System.Threading.Tasks;
+using XMAT.ApplicationServices;
+using XMAT.SharedInterfaces;
 
 namespace XMAT
 {
     internal sealed record AnalysisArtifact(
         string RelativePath,
-        long Length);
+        long Length,
+        string Sha256 = null);
 
     internal sealed class AnalysisExportSource
     {
@@ -65,6 +69,7 @@ namespace XMAT
         internal AnalysisReportPublicationState PublicationState { get; }
         internal string PublishedPath { get; }
         internal string ResiduePath { get; set; }
+        internal WindowsExportFolder.OwnedDirectory OwnedResidue { get; set; }
 
         internal AnalysisReportExportException(
             AnalysisReportExportFailureKind failureKind,
@@ -286,6 +291,85 @@ namespace XMAT
             }
         }
 
+        internal async Task<long> ExportApprovedAsync(
+            AnalysisExportSource source, WindowsExportFolder destination, string directoryName, long maximumBytes,
+            Func<CancellationToken, Task> beforePublish, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(destination);
+            ArgumentNullException.ThrowIfNull(beforePublish);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
+            cancellationToken.ThrowIfCancellationRequested();
+            var sourceDirectory = ValidateSourceDirectory(source);
+            ValidateDestinationParent(sourceDirectory, destination.Path);
+            var finalPath = destination.Destination(directoryName);
+            WindowsExportFolder.DemandNew(finalPath);
+            EnsureCompatiblePaths(finalPath, source.ArtifactManifest, destination.Path);
+            long length = 0;
+            foreach (var artifact in source.ArtifactManifest)
+            {
+                length = checked(length + artifact.Length);
+                if (length > maximumBytes)
+                    throw new QueryException(QueryError.ResultLimit, "The report exceeds the approved output limit.");
+            }
+            var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var artifact in source.ArtifactManifest)
+            {
+                ValidateArtifactDefinition(artifact, sourceDirectory, hashes);
+                hashes.Add(artifact.RelativePath, artifact.Sha256);
+            }
+            using var sourceFolder = new WindowsExportFolder(sourceDirectory);
+            var staging = destination.CreateTemporaryDirectory();
+            var retainStaging = false;
+            try
+            {
+                foreach (var artifact in source.ArtifactManifest)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await using var input = sourceFolder.OpenInput(artifact.RelativePath, out _);
+                    if (input.Length != artifact.Length)
+                        throw new AnalysisReportExportException(AnalysisReportExportFailureKind.ManifestMismatch, "The completed report changed.");
+                    var sourceHash = Convert.ToHexString(await SHA256.HashDataAsync(input, cancellationToken));
+                    if (hashes[artifact.RelativePath] != null &&
+                        !string.Equals(sourceHash, hashes[artifact.RelativePath], StringComparison.OrdinalIgnoreCase))
+                        throw new AnalysisReportExportException(AnalysisReportExportFailureKind.ManifestMismatch, "The completed report content changed.");
+                    input.Position = 0;
+                    await using var output = staging.CreateFile(artifact.RelativePath);
+                    await input.CopyToAsync(output, cancellationToken);
+                    await output.FlushAsync(cancellationToken);
+                    output.Flush(flushToDisk: true);
+                    output.Position = 0;
+                    var hash = Convert.ToHexString(await SHA256.HashDataAsync(output, cancellationToken));
+                    if (output.Length != artifact.Length || !string.Equals(hash, sourceHash, StringComparison.OrdinalIgnoreCase))
+                        throw new AnalysisReportExportException(AnalysisReportExportFailureKind.ManifestMismatch, "The copied report failed validation.");
+                }
+                await beforePublish(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                staging.Publish(directoryName);
+                return length;
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                try
+                { staging.DeleteUnpublished(); }
+                catch (Exception cleanupException) when (!ExceptionUtilities.IsFatal(cleanupException))
+                {
+                    retainStaging = true;
+                    var publication = exception is AnalysisReportExportException export
+                        ? export.PublicationState : AnalysisReportPublicationState.NotPublished;
+                    throw new AnalysisReportExportException(AnalysisReportExportFailureKind.CopyFailed,
+                        "The report publication or cleanup requires review.", exception, publication,
+                        publication == AnalysisReportPublicationState.Unknown ? finalPath : null)
+                    { ResiduePath = staging.Path, OwnedResidue = staging };
+                }
+                throw;
+            }
+            finally
+            {
+                if (!retainStaging)
+                    staging.Dispose();
+            }
+        }
+
         internal static string CreateFolderName(
             string sourceCaptureName,
             DateTime completedAt)
@@ -455,6 +539,9 @@ namespace XMAT
                     }
 
                     string sourceHash = _fileSystem.ComputeSha256(sourcePath);
+                    if (artifact.Sha256 != null &&
+                        !string.Equals(artifact.Sha256, sourceHash, StringComparison.OrdinalIgnoreCase))
+                        throw new AnalysisReportExportException(AnalysisReportExportFailureKind.ManifestMismatch, "The completed report content changed.");
                     hashes.Add(artifact.RelativePath, sourceHash);
                 }
             }

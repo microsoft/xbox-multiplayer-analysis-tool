@@ -4,15 +4,24 @@
 
 using System;
 using System.Text.Json;
+using XMAT.Models;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.WebServiceCapture.Models
 {
-    internal class PreferencesModel : ICaptureMethodParameters
+    internal class PreferencesModel : PreferenceObservable, ICaptureMethodParameters
     {
-        public UInt16 FirstPort { get; set; }
-        public UInt16 LastPort { get; set; }
-        public bool PromptToDisableOnClose { get; set; }
+        private ushort _firstPort = ProxyPortPool.DefaultFirstPort;
+        private ushort _lastPort = ProxyPortPool.DefaultLastPort;
+        private bool _promptToDisableOnClose = true;
+
+        public UInt16 FirstPort { get => _firstPort; set => SetValue(ref _firstPort, value); }
+        public UInt16 LastPort { get => _lastPort; set => SetValue(ref _lastPort, value); }
+        public bool PromptToDisableOnClose
+        {
+            get => _promptToDisableOnClose;
+            set => SetValue(ref _promptToDisableOnClose, value);
+        }
 
         public void Serialized()
         {

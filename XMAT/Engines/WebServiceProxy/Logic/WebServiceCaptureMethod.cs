@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -120,7 +121,7 @@ namespace XMAT.WebServiceCapture
                 throw new InvalidOperationException("WebServiceCaptureMethod does not have a corresponding WebServiceDeviceCaptureController.");
             }
 
-            if (dataTable is not IImportedCaptureTable importTable)
+            if (dataTable is not IImportedCaptureTable)
             {
                 throw new InvalidOperationException("The capture table does not support atomic imports.");
             }
@@ -129,59 +130,72 @@ namespace XMAT.WebServiceCapture
 
             var imported = await Task.Run(() =>
             {
-                var connections = FiddlerSazHandler.ImportSazFile(
-                    fromFilePath,
-                    CancellationToken.None);
-                var hostFilters = captureController.UpdateFilter(
-                    connections.Select(connection => connection.Host).Distinct().ToList());
-                var statusFilters = captureController.UpdateFilter(
-                    connections.Select(connection => connection.Status).Distinct().ToList());
-                var methodFilters = captureController.UpdateFilter(
-                    connections.Select(connection => connection.Method).Distinct().ToList());
-                var rows = connections.Select(
-                    connection => connection.ToDataTableValues(captureController.DeviceName));
-                var rowIds = importTable.ReplaceImportedRows(
-                    new FieldValue<string>(FieldKey_DeviceName, captureController.DeviceName),
-                    rows);
-                for (int index = 0; index < connections.Count; index++)
-                {
-                    connections[index].RecordRowId = rowIds[index];
-                }
-                return (Connections: connections, HostFilters: hostFilters,
-                    StatusFilters: statusFilters, MethodFilters: methodFilters);
+                var prepared = PrepareFiddlerImport(fromFilePath, captureController, long.MaxValue, CancellationToken.None);
+                PersistFiddlerImport(prepared, dataTable, captureController.DeviceName, long.MaxValue, CancellationToken.None);
+                return prepared;
             });
 
-            captureController.PrepareForActiveCaptureData();
-            captureController.ProxyConnections = imported.Connections;
-            captureController.HostFilterList = imported.HostFilters;
-            captureController.StatusFilterList = imported.StatusFilters;
-            captureController.MethodFilterList = imported.MethodFilters;
-            TryNotifyCaptureReplacement(
-                () => captureController.RaisePropertyChange(
-                    nameof(WebServiceDeviceCaptureController.HostFilterList)),
-                logError);
-            TryNotifyCaptureReplacement(
-                () => captureController.RaisePropertyChange(
-                    nameof(WebServiceDeviceCaptureController.StatusFilterList)),
-                logError);
-            TryNotifyCaptureReplacement(
-                () => captureController.RaisePropertyChange(
-                    nameof(WebServiceDeviceCaptureController.MethodFilterList)),
-                logError);
-            TryNotifyCaptureReplacement(
-                () => captureController.SelectedConnectionModel = null,
-                logError);
-            TryNotifyCaptureReplacement(
-                () => captureController.RaisePropertyChange(
-                    nameof(WebServiceDeviceCaptureController.ProxyConnections)),
-                logError);
+            captureController.ApplyImportedCaptures(imported, dataTable);
+            NotifyFiddlerImport(captureController, logError);
         }
 
-        private static void TryNotifyCaptureReplacement(Action notification, Action<string> logError)
+        internal static WebServiceDeviceCaptureController.ImportedCaptures PrepareFiddlerImport(
+            string path, WebServiceDeviceCaptureController controller, long maximumBytes, CancellationToken cancellationToken)
+        {
+            var connections = FiddlerSazHandler.ImportSazFile(path, maximumBytes, cancellationToken);
+            return new(connections,
+                controller.UpdateFilter(connections.Select(connection => connection.Host).Distinct().ToList()),
+                controller.UpdateFilter(connections.Select(connection => connection.Status).Distinct().ToList()),
+                controller.UpdateFilter(connections.Select(connection => connection.Method).Distinct().ToList()));
+        }
+
+        internal static void PersistFiddlerImport(
+            WebServiceDeviceCaptureController.ImportedCaptures prepared, IDataTable table, string deviceName,
+            long maximumBytes, CancellationToken cancellationToken)
+        {
+            IEnumerable<object[]> Rows()
+            {
+                var remaining = maximumBytes;
+                foreach (var connection in prepared.Connections)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var row = connection.ToDataTableValues(deviceName);
+                    long size = 64;
+                    foreach (var value in row)
+                        size += value is string text ? Encoding.UTF8.GetByteCount(text) + (long)text.Count(c => c == '"') + 16 : 24;
+                    if (size > remaining)
+                        throw new QueryException(QueryError.ResultLimit, "The imported rows exceed the approved data limit.");
+                    remaining -= size;
+                    yield return row;
+                }
+            }
+            var ids = ((IImportedCaptureTable)table).ReplaceImportedRows(
+                new FieldValue<string>(FieldKey_DeviceName, deviceName), Rows(), cancellationToken);
+            for (var index = 0; index < prepared.Connections.Count; index++)
+                prepared.Connections[index].RecordRowId = ids[index];
+        }
+
+        internal static bool NotifyFiddlerImport(WebServiceDeviceCaptureController controller, Action<string> logError = null)
+        {
+            var notified = true;
+            foreach (var property in new[]
+            {
+                nameof(WebServiceDeviceCaptureController.HostFilterList),
+                nameof(WebServiceDeviceCaptureController.StatusFilterList),
+                nameof(WebServiceDeviceCaptureController.MethodFilterList),
+                nameof(WebServiceDeviceCaptureController.SelectedConnectionModel),
+                nameof(WebServiceDeviceCaptureController.ProxyConnections)
+            })
+                notified &= TryNotifyCaptureReplacement(() => controller.RaisePropertyChange(property), logError);
+            return notified;
+        }
+
+        private static bool TryNotifyCaptureReplacement(Action notification, Action<string> logError)
         {
             try
             {
                 notification();
+                return true;
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
@@ -192,8 +206,9 @@ namespace XMAT.WebServiceCapture
                 }
                 else
                 {
-                    PublicUtilities.AppLog(LogLevel.ERROR, message);
+                    PublicUtilities.AppLog(LogLevel.ERROR, $"Failed to notify the capture view after import: {ex.GetType().Name}");
                 }
+                return false;
             }
         }
 

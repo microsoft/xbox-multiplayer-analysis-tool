@@ -61,10 +61,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="AvalonEdit" Version="6.3.1.120" />
     <PackageReference Include="JsonDocumentPath" Version="1.0.3" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.3.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4022.49" />
+    <PackageReference Include="ModelContextProtocol.Core" Version="2.3.0" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
   </ItemGroup>
 
@@ -150,6 +152,9 @@
   </ItemGroup>
 
     <ItemGroup>
+      <Content Include="Resources\Sql\AvalonEdit.LICENSE.txt">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
       <None Update="Langs\en-us.json">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
@@ -161,4 +166,5 @@
       </None>
     </ItemGroup>
 
+  <Import Project="..\XMAT.AgentBridge\AgentBridge.targets" />
 </Project>

@@ -10,6 +10,33 @@ namespace XMAT.Tests
     public class TraceAnalyzerTests
     {
         [Fact]
+        public void DetailedRunRetainsEveryConsolesCanonicalRulesAndReportsWithoutWritingFiles()
+        {
+            var analyzer = new TraceAnalyzer();
+            analyzer.AddRule(new ConsoleCountRule { Name = "ConsoleCount", Endpoint = "*" });
+            analyzer.AddReports([new FirstJsonReport()]);
+            var result = analyzer.RunDetailed(new RulesEngine(false), CreateMultiConsoleData());
+            Assert.Equal(new[] { "first-console", "second-console" }, result.Consoles.Select(console => console.ConsoleId));
+            Assert.Equal(1, (int)Assert.Single(result.Consoles[0].Rules).Results["CallCount"]);
+            Assert.Equal(2, (int)Assert.Single(result.Consoles[1].Rules).Results["CallCount"]);
+            Assert.Equal(nameof(ConsoleCountRule), result.Consoles[1].Rules[0].RuleType);
+            Assert.Equal(2, ReportCallCount(Assert.Single(result.Consoles[1].Reports).ToJson()));
+        }
+
+        [Fact]
+        public void DetailedRunHonorsCancellationBeforeRunningAnyConsoleRules()
+        {
+            var analyzer = new TraceAnalyzer();
+            analyzer.AddRule(new ConsoleCountRule { Name = "ConsoleCount", Endpoint = "*" });
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            var engine = new RulesEngine(false);
+            Assert.ThrowsAny<OperationCanceledException>(() => analyzer.RunDetailed(
+                engine, CreateMultiConsoleData(), cancellationToken: cancelled.Token));
+            Assert.Empty(engine.GetAllRules());
+        }
+
+        [Fact]
         public void Run_WritesEveryJsonReportForFirstEligibleConsoleOnly()
         {
             string outputDirectory =

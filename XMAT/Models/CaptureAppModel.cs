@@ -30,12 +30,40 @@ namespace XMAT.Models
         NetTrace = 1
     }
 
-    internal class CaptureAppModel : ICaptureAppModel, INotifyPropertyChanged
+    internal partial class CaptureAppModel : ICaptureAppModel, INotifyPropertyChanged
     {
-        public IDatabase ActiveDatabase { get; internal set; }
+        private IDatabase _activeDatabase;
+        private IReadonlyDatabase _loadedDatabase;
+        public IDatabase ActiveDatabase
+        {
+            get => _activeDatabase;
+            internal set
+            {
+                if (ReferenceEquals(_activeDatabase, value))
+                    return;
+                _activeDatabase = value;
+                RaisePropertyChange();
+            }
+        }
 
         // TODO: someday support multiple readonly databases??
-        public IReadonlyDatabase LoadedDatabase { get; internal set; }
+        public IReadonlyDatabase LoadedDatabase
+        {
+            get => _loadedDatabase;
+            internal set
+            {
+                if (ReferenceEquals(_loadedDatabase, value))
+                    return;
+                _loadedDatabase = value;
+                _loadedCaptureRevision++;
+                LoadedCaptureDisplayName = null;
+                RaisePropertyChange();
+            }
+        }
+        internal string LoadedCaptureFilePath { get; private set; }
+        internal string LoadedCaptureDisplayName { get; private set; }
+        internal long LoadedCaptureRevision => _loadedCaptureRevision;
+        private long _loadedCaptureRevision;
 
         public ObservableCollection<ICaptureDeviceContext> CaptureDeviceContexts { get => _captureDeviceContexts; }
         public ICaptureDeviceContext SelectedDeviceContext
@@ -96,6 +124,23 @@ namespace XMAT.Models
 
         internal static readonly CaptureAppModel AppModel = new();
 
+        internal ICaptureOperations CaptureOperations { get; }
+        internal ICaptureDataOperations CaptureDataOperations { get; }
+        internal ICaptureRecoveryOperations CaptureRecoveryOperations { get; }
+        internal ApplicationServices.CaptureCatalog CaptureCatalog { get; }
+        internal ICaptureQueries CaptureQueries { get; }
+        internal ICaptureInvestigation CaptureInvestigation { get; }
+        internal ICaptureScripts CaptureScripts { get; }
+        internal ApplicationServices.CaptureDevices CaptureDevices { get; }
+        internal ICaptureProxyOperations CaptureProxyOperations { get; }
+        internal ICaptureFileExports CaptureFileExports { get; }
+        internal ICaptureFileInputs CaptureFileInputs { get; }
+        internal ICaptureFileLoads CaptureFileLoads { get; }
+        internal ICaptureSazImports CaptureSazImports { get; }
+        internal ICaptureEtlImports CaptureEtlImports { get; }
+        internal ICaptureFiles CaptureFiles { get; }
+        internal XMAT.AgentAccess.AgentAccessHost AgentAccess { get; }
+
         // Session-only Block and Bypass lists shared by every capture and analysis view of this
         // application instance. They are never saved with settings or captures.
         internal WebServiceCapture.Models.HostListPolicy HostListPolicy { get; } = new();
@@ -133,6 +178,10 @@ namespace XMAT.Models
                 }
             }
         }
+        internal bool IsCaptureFileLoadRunning
+        {
+            get { lock (_analysisStateLock) { return _isCaptureFileLoadRunning; } }
+        }
         internal bool CanAnalyzeCaptures =>
             SelectedDeviceContext != null &&
             !IsAnyCaptureRunning &&
@@ -151,7 +200,7 @@ namespace XMAT.Models
             SelectedDeviceContext.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController controller &&
             controller.ProxyConnections.Count > 0;
 
-        private readonly ObservableCollection<ICaptureDeviceContext> _captureDeviceContexts = new();
+        private readonly CaptureContextCollection _captureDeviceContexts = new();
         private ICaptureDeviceContext _selectedDeviceContext = null;
         private readonly List<ICaptureAnalyzer> _captureAnalyzers = new();
         private readonly ObservableCollection<ICaptureAnalysisRun> _analysisRuns = new();
@@ -161,6 +210,7 @@ namespace XMAT.Models
         private readonly Dispatcher _dispatcher;
         private bool _isAnalysisRunning;
         private bool _isCaptureDataOperationRunning;
+        private bool _isCaptureFileLoadRunning;
 
         public CaptureAppModel() :
             this(Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher)
@@ -170,6 +220,25 @@ namespace XMAT.Models
         internal CaptureAppModel(Dispatcher dispatcher)
         {
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+            CaptureCatalog = new ApplicationServices.CaptureCatalog(this, _dispatcher);
+            var captureOperations = new ApplicationServices.CaptureOperations(this, _dispatcher);
+            CaptureOperations = captureOperations;
+            CaptureDataOperations = new ApplicationServices.CaptureDataOperations(this);
+            CaptureRecoveryOperations = captureOperations;
+            var queries = new ApplicationServices.CaptureQueries(this, _dispatcher);
+            CaptureQueries = queries;
+            CaptureFiles = new ApplicationServices.CaptureFiles(queries);
+            CaptureInvestigation = new ApplicationServices.CaptureInvestigation(this, _dispatcher, CaptureQueries);
+            CaptureScripts = new ApplicationServices.CaptureScripts(this, CaptureCatalog);
+            CaptureDevices = new ApplicationServices.CaptureDevices(this, _dispatcher);
+            CaptureProxyOperations = new ApplicationServices.CaptureProxyOperations(this);
+            CaptureFileExports = new ApplicationServices.CaptureFileExports(() =>
+                _dispatcher.InvokeAsync<IReadOnlyList<string>>(() => new[] { LoadedCaptureFilePath }).Task);
+            CaptureFileInputs = new ApplicationServices.CaptureFileInputs();
+            CaptureFileLoads = new ApplicationServices.CaptureFileLoads(this, _dispatcher, queries, CaptureFileInputs);
+            CaptureSazImports = new ApplicationServices.CaptureSazImports(this, _dispatcher, queries, CaptureFileInputs);
+            CaptureEtlImports = new ApplicationServices.CaptureEtlImports(this, _dispatcher, queries, CaptureFileInputs);
+            AgentAccess = new XMAT.AgentAccess.AgentAccessHost(this, _dispatcher);
             PreferencesModel = new();
             _captureDeviceContexts.CollectionChanged += CaptureDeviceContexts_CollectionChanged;
 
@@ -181,7 +250,7 @@ namespace XMAT.Models
 
         internal async Task<bool> CanCloseAsync()
         {
-            if (IsCaptureDataOperationRunning)
+            if (IsCaptureDataOperationRunning || IsCaptureFileLoadRunning)
             {
                 return false;
             }
@@ -210,9 +279,33 @@ namespace XMAT.Models
 
         internal bool TryBeginAnalysis(out IDisposable analysisLease)
         {
+            return TryBeginAnalysisCore(_selectedDeviceContext, out analysisLease);
+        }
+
+        internal bool TryBeginAnalysis(
+            ICaptureDeviceContext target,
+            out IDisposable analysisLease)
+        {
+            if (target == null || !_captureDeviceContexts.Contains(target))
+            {
+                analysisLease = null;
+                return false;
+            }
+
+            return TryBeginAnalysisCore(target, out analysisLease);
+        }
+
+        internal bool TryBeginSourceAnalysis(out IDisposable analysisLease) =>
+            TryBeginAnalysisCore(null, out analysisLease, sourceOnly: true);
+
+        private bool TryBeginAnalysisCore(
+            ICaptureDeviceContext target,
+            out IDisposable analysisLease,
+            bool sourceOnly = false)
+        {
             lock (_analysisStateLock)
             {
-                if (_selectedDeviceContext == null ||
+                if ((!sourceOnly && target == null) ||
                     _isAnalysisRunning ||
                     _isCaptureDataOperationRunning ||
                     _runningCaptureControllers.Count != 0)
@@ -247,9 +340,25 @@ namespace XMAT.Models
                 _isCaptureDataOperationRunning = true;
             }
 
+            operationLease = new CaptureDataOperationLease(this);
             RaisePropertyChange(nameof(IsCaptureDataOperationRunning));
             InvalidateCommands();
-            operationLease = new CaptureDataOperationLease(this);
+            return true;
+        }
+
+        internal bool TryBeginCaptureFileLoad(out IDisposable lease)
+        {
+            lock (_analysisStateLock)
+            {
+                if (_isCaptureFileLoadRunning)
+                {
+                    lease = null;
+                    return false;
+                }
+                _isCaptureFileLoadRunning = true;
+            }
+            lease = new CaptureFileLoadLease(this);
+            RaisePropertyChange(nameof(IsCaptureFileLoadRunning));
             return true;
         }
 
@@ -495,41 +604,39 @@ namespace XMAT.Models
             }
         }
 
-        internal void LoadDataCaptures(string fromFilePath)
+        internal void CommitLoadedCapture(
+            IReadonlyDatabase database, string path, string displayName,
+            IReadOnlyList<ICaptureDeviceContext> addedContexts)
         {
-            LoadedDatabase = DataAbstractionLayer.DataAbstractionLayer.LoadDatabaseFromFile(fromFilePath);
+            RegisterPreparedContexts(addedContexts);
+            _loadedDatabase = database;
+            LoadedCaptureFilePath = path;
+            LoadedCaptureDisplayName = displayName;
+            _loadedCaptureRevision++;
+        }
 
-            IDataset devicesDataset = AppModel.LoadedDatabase.TableByName(@"CaptureDevices").Dataset;
-
-            List<IDataset> Datasets = new();
-
-            foreach (var record in devicesDataset.DataRecords)
+        internal void RegisterPreparedContexts(IEnumerable<ICaptureDeviceContext> contexts)
+        {
+            foreach (var context in contexts)
             {
-                var device = AppModel.AddDeviceContext(
-                    (DeviceType)record.Int(@"DeviceType"),
-                    record.Str(@"DeviceName"),
-                    (CaptureType)record.Int(@"CaptureType"),
-                    true,
-                    // NOTE: since this is a READONLY
-                    // capture, we do not need parameters maybe?
-                    null
-                );
+                _captureDeviceContexts.AppendWithoutNotification(context);
+                TrackCaptureController(context.CaptureController);
+            }
+        }
 
-                if (device == null)
-                {
-                    continue;
-                }
+        internal event Action<ICaptureDeviceContext, IQueryDatabase> CaptureDataRebound;
+        internal void NotifyCaptureDataRebound(ICaptureDeviceContext context, IQueryDatabase source) =>
+            CaptureDataRebound?.Invoke(context, source);
 
-                Datasets.Clear();
-                foreach (string tableName in AppModel.LoadedDatabase.TableNames())
-                {
-                    if (device.CaptureController.CaptureMethod.OwnsDataTable(tableName))
-                    {
-                        IReadonlyDataTable table = AppModel.LoadedDatabase.TableByName(tableName);
-                        Datasets.Add(table.Dataset);
-                    }
-                }
-                device.CaptureController.LoadCaptures(Datasets);
+        internal void NotifyLoadedContexts()
+        {
+            var selected = SelectedDeviceContext;
+            try
+            { _captureDeviceContexts.NotifyReplacement(); }
+            finally
+            {
+                SelectedDeviceContext = selected;
+                RaisePropertyChange(nameof(SelectedDeviceContext));
             }
         }
 
@@ -542,6 +649,10 @@ namespace XMAT.Models
             ImportType importType,
             string fromFilePath)
         {
+            if (importType == ImportType.Fiddler)
+                return ImportSazDesktopAsync(fromFilePath);
+            if (importType == ImportType.NetTrace)
+                return ImportEtlDesktopAsync(fromFilePath);
             return ImportDataCapturesAsync(
                 importType,
                 fromFilePath,
@@ -558,6 +669,26 @@ namespace XMAT.Models
 
                     return captureMethod.ImportFromFiddlerAsync(path, context);
                 });
+        }
+
+        private async Task ImportSazDesktopAsync(string path)
+        {
+            var receipt = await CaptureSazImports.ImportDesktopAsync(path);
+            await CaptureCatalog.WithTargetAsync(receipt.CaptureId, null, (target, _) =>
+            {
+                SelectedDeviceContext = target;
+                return Task.FromResult(true);
+            });
+        }
+
+        private async Task ImportEtlDesktopAsync(string path)
+        {
+            var receipt = await CaptureEtlImports.ImportDesktopAsync(path);
+            await CaptureCatalog.WithTargetAsync(receipt.CaptureId, null, (target, _) =>
+            {
+                SelectedDeviceContext = target;
+                return Task.FromResult(true);
+            });
         }
 
         internal async Task ImportDataCapturesAsync(
@@ -635,30 +766,9 @@ namespace XMAT.Models
                 // create a new read-only network trace tab and populate it from a netsh .etl file
                 case ImportType.NetTrace:
                 {
-                    captureDevice = AddDeviceContext(
-                        DeviceType.Unknown,
-                        $"{importType} - {Path.GetFileName(fromFilePath)}",
-                        CaptureType.NetworkTrace,
-                        true,
-                        null
-                    );
-
-                    try
-                    {
-                        int packetCount = await (captureDevice.CaptureController as NetworkTrace.NetworkTraceCaptureController).ImportFromEtlFileAsync(fromFilePath);
-                        if (packetCount == 0)
-                        {
-                            System.Windows.MessageBox.Show(
-                                Localization.GetLocalizedString("NETCAP_IMPORT_NO_PACKETS"),
-                                Localization.GetLocalizedString("NETCAP_ERROR"));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Windows.MessageBox.Show(ex.Message, Localization.GetLocalizedString("NETCAP_ERROR"));
-                    }
+                    await ImportEtlDesktopAsync(fromFilePath);
+                    return;
                 }
-                break;
             }
 
             if (captureDevice != null)
@@ -708,7 +818,8 @@ namespace XMAT.Models
             CaptureType captureType,
             bool readOnly,
             object serializedParameters,
-            bool deferPortAllocation = false)
+            bool deferPortAllocation = false,
+            Func<ICaptureDeviceContext> createContext = null)
         {
             var newCaptureDeviceModel = GetDeviceContext(
                 deviceType,
@@ -718,7 +829,7 @@ namespace XMAT.Models
 
             if (newCaptureDeviceModel == null)
             {
-                newCaptureDeviceModel = new CaptureDeviceContextModel(
+                newCaptureDeviceModel = createContext?.Invoke() ?? new CaptureDeviceContextModel(
                     deviceType,
                     deviceName,
                     captureType,
@@ -730,7 +841,7 @@ namespace XMAT.Models
 
                 if (!readOnly)
                 {
-                    AppModel.CaptureDevicesTable.AddRow(
+                    CaptureDevicesTable.AddRow(
                         (Int64)deviceType,
                         deviceName,
                         (Int64)captureType);
@@ -770,7 +881,13 @@ namespace XMAT.Models
                 );
             }
 
+            var index = _captureDeviceContexts.IndexOf(captureDeviceContext);
             _captureDeviceContexts.Remove(captureDeviceContext);
+            if (ReferenceEquals(SelectedDeviceContext, captureDeviceContext))
+            {
+                SelectedDeviceContext = _captureDeviceContexts.Count == 0 ? null :
+                    _captureDeviceContexts[Math.Min(Math.Max(index, 0), _captureDeviceContexts.Count - 1)];
+            }
             InvalidateCommands();
         }
 
@@ -874,6 +991,32 @@ namespace XMAT.Models
                 var owner = _owner;
                 _owner = null;
                 owner?.EndCaptureDataOperation();
+            }
+        }
+
+        private sealed class CaptureContextCollection : ObservableCollection<ICaptureDeviceContext>
+        {
+            internal void AppendWithoutNotification(ICaptureDeviceContext context) => Items.Add(context);
+
+            internal void NotifyReplacement()
+            {
+                OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+                OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+                OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+            }
+        }
+
+        private sealed class CaptureFileLoadLease(CaptureAppModel owner) : IDisposable
+        {
+            private CaptureAppModel _owner = owner;
+            public void Dispose()
+            {
+                var model = Interlocked.Exchange(ref _owner, null);
+                if (model == null)
+                    return;
+                lock (model._analysisStateLock)
+                { model._isCaptureFileLoadRunning = false; }
+                model.RaisePropertyChange(nameof(IsCaptureFileLoadRunning));
             }
         }
     }

@@ -29,6 +29,9 @@ namespace XMAT
         public static readonly RoutedUICommand ExportAnalysisReport =
             new RoutedUICommand("Export Analysis Report...", "ExportAnalysisReport", typeof(AppCommands));
 
+        public static readonly RoutedUICommand NewSqlQuery =
+            new RoutedUICommand("New SQL Query", "NewSqlQuery", typeof(AppCommands));
+
         public static readonly RoutedUICommand ClearAllCaptures =
             new RoutedUICommand("Clear _All Captures", "Clear All Captures", typeof(AppCommands), new InputGestureCollection() { new KeyGesture(Key.X, ModifierKeys.Control) });
 
@@ -47,5 +50,10 @@ namespace XMAT
 
         // Resolved when the menu markup loads, after the language has been loaded.
         public static string ManageHostListsHeader => Localization.GetLocalizedString("HOST_LISTS_MANAGE_MENU");
+
+        public static readonly RoutedUICommand ManageAgentAccess =
+            new RoutedUICommand("Manage Agent Access", "ManageAgentAccess", typeof(AppCommands));
+
+        public static string ManageAgentAccessHeader => Localization.GetLocalizedString("AGENT_ACCESS_TITLE");
     }
 }

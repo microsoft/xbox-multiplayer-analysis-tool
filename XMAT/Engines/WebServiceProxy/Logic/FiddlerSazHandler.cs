@@ -10,7 +10,9 @@ using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading;
+using System.Xml;
 using System.Xml.Linq;
+using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -37,7 +39,9 @@ namespace XMAT.WebServiceCapture
             return int.Parse(number);
         }
 
-        public static ProxyConnectionModel FromFiddlerFrame(UInt32 frameId, ZipArchiveEntry cFileStream, ZipArchiveEntry mFileStream, ZipArchiveEntry sFileStream)
+        public static ProxyConnectionModel FromFiddlerFrame(
+            UInt32 frameId, ZipArchiveEntry cFileStream, ZipArchiveEntry mFileStream, ZipArchiveEntry sFileStream,
+            long maximumEntryBytes = long.MaxValue, CancellationToken cancellationToken = default)
         {
             string status = string.Empty;
             DateTime requestTime = DateTime.MinValue;
@@ -58,11 +62,11 @@ namespace XMAT.WebServiceCapture
             // Read the client part of the frame (###_c.txt)
             if (cFileStream != null)
             {
-                using (MemoryStream cFileMemory = ZipUtilities.DecompressEntryToMemory(cFileStream))
+                using (MemoryStream cFileMemory = ZipUtilities.DecompressEntryToMemory(cFileStream, maximumEntryBytes, cancellationToken))
                 {
                     using (var cFile = new BinaryReader(cFileMemory))
                     {
-                        var firstLine = cFile.ReadLine();
+                        var firstLine = cFile.ReadLine(cancellationToken);
 
                         if (!string.IsNullOrEmpty(firstLine))
                         {
@@ -93,7 +97,7 @@ namespace XMAT.WebServiceCapture
                         }
 
                         // Read the Request Headers
-                        var fileLine = cFile.ReadLine();
+                        var fileLine = cFile.ReadLine(cancellationToken);
                         var reqHeaders = new WebHeaderCollection();
                         while (string.IsNullOrWhiteSpace(fileLine) == false)
                         {
@@ -107,14 +111,14 @@ namespace XMAT.WebServiceCapture
                                 // Ignore and continue
                             }
 
-                            fileLine = cFile.ReadLine();
+                            fileLine = cFile.ReadLine(cancellationToken);
                         }
 
                         // HOST
                         hostAndPort = reqHeaders["Host"];
 
                         // REQUEST BODY
-                        requestBody = cFile.ReadToEnd();
+                        requestBody = cFile.ReadToEnd(cancellationToken);
 
                         // REQUEST HEADERS
                         requestHeaders = $"{firstLine}\r\n{reqHeaders}";
@@ -125,11 +129,11 @@ namespace XMAT.WebServiceCapture
             // Read the server part of the frame(###_s.txt)
             if (sFileStream != null)
             {
-                using (MemoryStream sFileMemory = ZipUtilities.DecompressEntryToMemory(sFileStream))
+                using (MemoryStream sFileMemory = ZipUtilities.DecompressEntryToMemory(sFileStream, maximumEntryBytes, cancellationToken))
                 {
                     using (var sFile = new BinaryReader(sFileMemory))
                     {
-                        var firstLine = sFile.ReadLine();
+                        var firstLine = sFile.ReadLine(cancellationToken);
 
                         if (!string.IsNullOrEmpty(firstLine))
                         {
@@ -141,15 +145,15 @@ namespace XMAT.WebServiceCapture
 
                         // Read the Response Headers
                         var headers = new WebHeaderCollection();
-                        var fileLine = sFile.ReadLine();
+                        var fileLine = sFile.ReadLine(cancellationToken);
                         while (!string.IsNullOrWhiteSpace(fileLine))
                         {
                             headers.Add(fileLine);
-                            fileLine = sFile.ReadLine();
+                            fileLine = sFile.ReadLine(cancellationToken);
                         }
 
                         // RESPONSE BODY
-                        responseBody = sFile.ReadToEnd();
+                        responseBody = sFile.ReadToEnd(cancellationToken);
 
                         // RESPONSE HEADERS
                         responseHeaders = $"{firstLine}\r\n{headers}";
@@ -160,10 +164,16 @@ namespace XMAT.WebServiceCapture
             // Read the frame metadata (###_m.xml)
             if (mFileStream != null)
             {
-                using (var mFile = new StreamReader(mFileStream.Open()))
+                using (var metadata = ZipUtilities.DecompressEntryToMemory(mFileStream, maximumEntryBytes, cancellationToken))
                 {
-                    string rawData = mFile.ReadToEnd();
-                    XDocument xmldata = XDocument.Parse(rawData);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    using var reader = XmlReader.Create(metadata, new XmlReaderSettings
+                    {
+                        DtdProcessing = DtdProcessing.Prohibit,
+                        XmlResolver = null,
+                        MaxCharactersInDocument = Math.Max(1, metadata.Length)
+                    });
+                    XDocument xmldata = XDocument.Load(reader);
 
                     XElement sessionTimers = xmldata.Element("Session").Element("SessionTimers");
 
@@ -177,6 +187,7 @@ namespace XMAT.WebServiceCapture
 
                     foreach (var flag in sessionFlags.Descendants())
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         if ((string)flag.Attribute("N") == "x-clientip")
                         {
                             // CLIENT IP
@@ -188,6 +199,7 @@ namespace XMAT.WebServiceCapture
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             ProxyConnectionModel model = new(
                 id,
                 status,
@@ -206,21 +218,39 @@ namespace XMAT.WebServiceCapture
             return model;
         }
 
+        public static ProxyConnectionsCollection ImportSazFile(string filename, CancellationToken cancelToken) =>
+            ImportSazFile(filename, long.MaxValue, cancelToken);
+
         public static ProxyConnectionsCollection ImportSazFile(
-            string filename,
-            CancellationToken cancelToken)
+            string filename, long maximumExpandedBytes, CancellationToken cancelToken = default)
         {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumExpandedBytes);
+            cancelToken.ThrowIfCancellationRequested();
             var list = new ProxyConnectionsCollection();
 
             // Open the SAZ
             using (var archive = ZipFile.Open(filename, ZipArchiveMode.Read))
             {
-                // Group the archive entries by frame number
-                var result = from e in archive.Entries
-                             where e.Name.Contains("_c.txt") || e.Name.Contains("_s.txt") || e.Name.Contains("_m.xml")
+                var remaining = maximumExpandedBytes;
+                foreach (var entry in archive.Entries)
+                {
+                    cancelToken.ThrowIfCancellationRequested();
+                    if (remaining < 256 || entry.Length > remaining - 256)
+                        throw new QueryException(QueryError.ResultLimit, "The expanded archive exceeds the approved input limit.");
+                    remaining -= entry.Length + 256;
+                }
+                IEnumerable<ZipArchiveEntry> Frames()
+                {
+                    foreach (var entry in archive.Entries)
+                    {
+                        cancelToken.ThrowIfCancellationRequested();
+                        if (entry.Name.Contains("_c.txt") || entry.Name.Contains("_s.txt") || entry.Name.Contains("_m.xml"))
+                            yield return entry;
+                    }
+                }
+                var result = from e in Frames()
                              group e by GetFrameNumber(e.Name) into g
                              select new { Frame = g.Key, Files = g };
-                var totalCalls = result.Count();
 
                 // Process data per frame
                 foreach (var group in result)
@@ -249,7 +279,8 @@ namespace XMAT.WebServiceCapture
                         }
                     }
 
-                    var proxyConnectionModel = FromFiddlerFrame((UInt32)group.Frame, requestFileArchive, metaFileArchive, responseFileArchive);
+                    var proxyConnectionModel = FromFiddlerFrame((UInt32)group.Frame, requestFileArchive, metaFileArchive,
+                        responseFileArchive, maximumExpandedBytes, cancelToken);
 
                     // skip if the frame could not be converted
                     if (proxyConnectionModel == null)
@@ -264,27 +295,28 @@ namespace XMAT.WebServiceCapture
             return list;
         }
 
-        public static void CreateSazFile(string filename, IEnumerable<ProxyConnectionModel> records)
+        public static void CreateSazFile(
+            string filename, IEnumerable<ProxyConnectionModel> records, CancellationToken cancellationToken = default)
         {
-            // always overwrite
-            ZipArchive archive = new ZipArchive(File.Create(filename), ZipArchiveMode.Update);
+            cancellationToken.ThrowIfCancellationRequested();
+            using var archive = new ZipArchive(File.Create(filename), ZipArchiveMode.Update);
 
             foreach (var record in records)
             {
-                AddEntry(archive, EntryType.Request, record.RequestNumber, record.RequestLineAndHeaders, record.RequestBody);
+                cancellationToken.ThrowIfCancellationRequested();
+                AddEntry(archive, EntryType.Request, record.RequestNumber, record.RequestLineAndHeaders, record.RequestBody, cancellationToken);
 
                 var metaData = new FiddlerMetaData(record.RecordRowId);
                 metaData.SetClientIP(record.ClientIP);
                 metaData.ClientBeginRequest = record.RequestTime;
                 metaData.ClientDoneResponse = record.RequestTime + record.Duration;
-                AddMetaEntry(archive, record.RequestNumber, metaData);
+                AddMetaEntry(archive, record.RequestNumber, metaData, cancellationToken);
 
                 if (!string.IsNullOrEmpty(record.ResponseLineAndHeaders))
                 {
-                    AddEntry(archive, EntryType.Response, record.RequestNumber, record.ResponseLineAndHeaders, record.ResponseBody);
+                    AddEntry(archive, EntryType.Response, record.RequestNumber, record.ResponseLineAndHeaders, record.ResponseBody, cancellationToken);
                 }
             }
-            archive.Dispose();
         }
 
         internal static SanitizedExportSummary CreateSanitizedSazFile(

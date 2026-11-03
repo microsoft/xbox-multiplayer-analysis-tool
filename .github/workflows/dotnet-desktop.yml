@@ -48,6 +48,23 @@ jobs:
       env:
         Configuration: ${{ matrix.configuration }}
 
+    - name: Verify packaged agent companion
+      shell: pwsh
+      run: |
+        $output = "XMAT\bin\x64\$env:Configuration\net10.0-windows10.0.17763.0\win-x64"
+        $bridge = Join-Path $output "AgentBridge"
+        foreach ($name in @("XMAT.AgentBridge.exe", "XMAT.AgentBridge.dll", "XMAT.AgentBridge.deps.json", "XMAT.AgentBridge.runtimeconfig.json")) {
+          if (-not (Test-Path -LiteralPath (Join-Path $bridge $name) -PathType Leaf)) {
+            throw "The distributed desktop output is missing agent companion artifact: $name"
+          }
+        }
+        $runtime = Get-Content -LiteralPath (Join-Path $bridge "XMAT.AgentBridge.runtimeconfig.json") -Raw | ConvertFrom-Json
+        if ($runtime.runtimeOptions.tfm -ne "net10.0") {
+          throw "The packaged agent companion targets an unexpected framework."
+        }
+      env:
+        Configuration: ${{ matrix.configuration }}
+
     # Run tests with code coverage
     - name: Run Tests with Coverage
       run: >-

@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
@@ -15,6 +17,10 @@ namespace XMAT.Models
 {
     public static class CaptureAppSettings
     {
+        private static readonly object WriteGate = new();
+        private static long _nextWrite;
+        private static long _lastWrite;
+
         internal class AppSettings
         {
             public AppSettings() { }
@@ -121,9 +127,22 @@ namespace XMAT.Models
 
         internal static void SerializeChecked(CaptureAppModel model)
         {
+            var json = SerializeToJson(model);
+            var sequence = Interlocked.Increment(ref _nextWrite);
+            WriteSnapshot(GetSerializeFullPath(SettingsFileName, model), json, sequence);
+        }
+
+        internal static Task SerializeAsync(CaptureAppModel model)
+        {
+            var json = SerializeToJson(model);
+            var sequence = Interlocked.Increment(ref _nextWrite);
+            var path = GetSerializeFullPath(SettingsFileName, model);
+            return Task.Run(() => WriteSnapshot(path, json, sequence));
+        }
+
+        private static string SerializeToJson(CaptureAppModel model)
+        {
             model.PreferencesModel.Serialized();
-            string fullSettingsPath = GetSerializeFullPath(SettingsFileName, model);
-            Directory.CreateDirectory(Path.GetDirectoryName(fullSettingsPath)); // this will ensure the directory exists or will create if it doesn't
             foreach (ICaptureDeviceContext captureDevice in model.CaptureDeviceContexts)
             {
                 if (captureDevice.CaptureController.Parameters != null)
@@ -132,8 +151,20 @@ namespace XMAT.Models
                 }
             }
             var serializedObject = new AppSettings(model);
-            var jsonText = JsonSerializer.Serialize<object>(serializedObject, new JsonSerializerOptions() { WriteIndented = true });
-            WriteSettingsFile(fullSettingsPath, jsonText);
+            return JsonSerializer.Serialize<object>(serializedObject, new JsonSerializerOptions() { WriteIndented = true });
+        }
+
+        private static void WriteSnapshot(string path, string json, long sequence)
+        {
+            lock (WriteGate)
+            {
+                // A delayed background write must not overwrite a newer desktop snapshot.
+                if (sequence <= _lastWrite)
+                    return;
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                WriteSettingsFile(path, json);
+                _lastWrite = sequence;
+            }
         }
 
         internal static void WriteSettingsFile(string path, string json)

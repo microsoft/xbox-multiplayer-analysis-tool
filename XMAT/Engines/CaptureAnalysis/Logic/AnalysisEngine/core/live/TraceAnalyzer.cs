@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace CaptureAnalysisEngine
@@ -165,9 +166,20 @@ namespace CaptureAnalysisEngine
 
         public Dictionary<string, IEnumerable<ReportDocument>> Run(RulesEngine rulesEngine, ServiceCallData serviceCallData, string reportOutputDirectory)
         {
-            Dictionary<string, IEnumerable<ReportDocument>> perConsoleReports = new();
+            return RunDetailed(rulesEngine, serviceCallData, reportOutputDirectory).Consoles.ToDictionary(
+                console => console.ConsoleId, console => (IEnumerable<ReportDocument>)console.Reports);
+        }
+
+        public TraceAnalysisResult RunDetailed(
+            RulesEngine rulesEngine,
+            ServiceCallData serviceCallData,
+            string reportOutputDirectory = null,
+            CancellationToken cancellationToken = default)
+        {
+            var consoles = new List<ConsoleAnalysisResult>();
             foreach (var console in serviceCallData.m_perConsoleData)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (console.Value.m_servicesHistory.Count == 0)
                 {
                     continue;
@@ -175,27 +187,33 @@ namespace CaptureAnalysisEngine
 
                 rulesEngine.ClearAllRules();
                 rulesEngine.AddRules(m_rules);
-                rulesEngine.RunRulesOnData(console.Key, console.Value);
+                rulesEngine.RunRulesOnData(console.Key, console.Value, cancellationToken);
+                var results = rulesEngine.GetResults(console.Key).AsReadOnly();
 
                 string consoleReportOutputDirectory =
-                    perConsoleReports.Count == 0
+                    consoles.Count == 0
                         ? reportOutputDirectory
                         : null;
                 var reports = RunReports(
-                    rulesEngine.GetResults(console.Key),
+                    results,
                     serviceCallData,
-                    consoleReportOutputDirectory);
+                    consoleReportOutputDirectory,
+                    cancellationToken);
 
-                perConsoleReports.Add(console.Key, reports);
+                consoles.Add(new(console.Key, results, reports.ToList().AsReadOnly()));
             }
-            return perConsoleReports;
+            cancellationToken.ThrowIfCancellationRequested();
+            return new(consoles.AsReadOnly());
         }
 
-        public IEnumerable<ReportDocument> RunReports(IEnumerable<RuleResult> results, ServiceCallData serviceCallData, string reportOutputDirectory)
+        public IEnumerable<ReportDocument> RunReports(
+            IEnumerable<RuleResult> results, ServiceCallData serviceCallData, string reportOutputDirectory,
+            CancellationToken cancellationToken = default)
         {
             ConcurrentBag<ReportDocument> documents = new();
             Parallel.ForEach(
                 m_reports,
+                new ParallelOptions { CancellationToken = cancellationToken },
                 report =>
                 {
                     var reportDocument = report.RunReport(
@@ -212,12 +230,13 @@ namespace CaptureAnalysisEngine
             return documents;
         }
 
-        public void RunUriConverterOnData(ServiceCallData serviceCallData)
+        public void RunUriConverterOnData(ServiceCallData serviceCallData, CancellationToken cancellationToken = default)
         {
             foreach (var console in serviceCallData.m_perConsoleData.Values)
             {
                 foreach (var endpointData in console.m_servicesHistory)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var service = m_converter.GetService(endpointData.Key.LogicalName);
 
                     if (service != null)

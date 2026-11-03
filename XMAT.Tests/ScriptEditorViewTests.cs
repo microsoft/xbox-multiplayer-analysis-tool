@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Diagnostics;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
@@ -40,6 +41,35 @@ namespace XMAT.Tests
 
                 var selectionBox = (ContentPresenter)view.EventSelector.Template.FindName("ContentSite", view.EventSelector);
                 Assert.Equal("Web Request", Descendants(selectionBox).OfType<TextBlock>().Single().Text);
+            });
+        }
+
+        [Fact]
+        public void SaveWritesTheSelectedSourceSnapshotWithoutCompilingOrChangingItsFilename()
+        {
+            _application.Run(window =>
+            {
+                using var directory = new CaptureFileExportTests.DirectoryFixture();
+                var scripts = new ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
+                var script = scripts[WebServiceCaptureScriptableEventType.WebRequest];
+                const string source = "// \u03bb\U0001F600\r\nINVALID_UNCOMPILED_SOURCE(???);\n";
+                script.Script = source;
+                script.Filename = Path.Combine(directory.Path, "source.txt");
+                var view = new ScriptEditorView { ScriptCollection = scripts };
+                WpfTestHost.Show(window, view);
+                view.EventSelector.SelectedItem = script;
+                WpfTestHost.Pump();
+
+                ScriptCommands.SaveScript.Execute(script, view);
+                script.Script = "// newer unsaved edit";
+                PumpUntil(() => File.Exists(script.Filename));
+
+                Assert.Equal(Encoding.UTF8.GetBytes(source), File.ReadAllBytes(script.Filename));
+                Assert.False(script.IsEnabled);
+                Assert.False(script.IsCompiling);
+                Assert.Equal("// newer unsaved edit", script.Script);
+                Assert.Equal(Path.Combine(directory.Path, "source.txt"), script.Filename);
+                Assert.Single(Directory.GetFiles(directory.Path));
             });
         }
 

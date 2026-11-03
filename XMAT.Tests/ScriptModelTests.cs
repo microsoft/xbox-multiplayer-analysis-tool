@@ -9,9 +9,120 @@ namespace XMAT.Tests
 {
     public class ScriptModelTests
     {
+        [Fact]
+        public async Task ActivationReceiptKeepsItsCommittedRevisionAcrossSynchronousHumanChanges()
+        {
+            var model = CreateModel();
+            model.Script = "Params.Continue = false;";
+            var before = model.CaptureState();
+            Task<ScriptActivationResult> human = null;
+            var changed = false;
+            model.PropertyChanged += (_, args) =>
+            {
+                if (!changed && args.PropertyName == nameof(ScriptModel.IsEnabled) && model.IsEnabled)
+                {
+                    changed = true;
+                    model.Script = "Params.Continue = true;";
+                    human = model.EnableScriptAsync<WebServiceCaptureScriptParams>();
+                }
+            };
+            var receipt = await model.ActivateScriptAsync<WebServiceCaptureScriptParams>(
+                before.Revision, before.SourceHash, true, default);
+            Assert.Equal(ScriptActivationResult.Enabled, receipt.Outcome);
+            Assert.Equal(before.SourceHash, receipt.State.SourceHash);
+            Assert.True(receipt.State.IsEnabled);
+            Assert.NotNull(human);
+            Assert.Equal(ScriptActivationResult.Enabled, await human);
+            Assert.True(model.CaptureState().Revision > receipt.State.Revision);
+            Assert.False(model.TryDisableScript(receipt.State.Revision, out _));
+            Assert.True(await RunScriptAsync(model, initialValue: false));
+        }
+
+        [Fact]
+        public async Task CancelledExactActivationClearsBusyStateAndCannotInstallCode()
+        {
+            var gate = new CompileGate();
+            var model = CreateModel(new ScriptHost(gate.WaitAsync));
+            model.Script = "// slow\nParams.Continue = false;";
+            var before = model.CaptureState();
+            using var cancellation = new CancellationTokenSource();
+            var enabling = model.ActivateScriptAsync<WebServiceCaptureScriptParams>(
+                before.Revision, before.SourceHash, true, cancellation.Token);
+            await gate.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+            gate.Release();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => enabling);
+            Assert.False(model.IsCompiling);
+            Assert.False(model.IsEnabled);
+            Assert.True(await RunScriptAsync(model, initialValue: true));
+        }
+
+        [Fact]
+        public void RewritingTheSameSourceDoesNotMakeAnOldRevisionCurrentAgain()
+        {
+            var model = CreateModel();
+            model.Script = "Params.Continue = false;";
+            var before = model.CaptureState();
+            model.Script = "Params.Continue = true;";
+            model.Script = before.Source;
+            Assert.Equal(before.SourceHash, model.CaptureState().SourceHash);
+            Assert.False(model.TryUpdateScript("Params.Continue = true;", before.Revision, out var current));
+            Assert.Equal(before.Source, current.Source);
+            Assert.NotEqual(before.Revision, current.Revision);
+        }
+
         public ScriptModelTests()
         {
             Localization.LoadLanguage("en-us");
+        }
+
+        [Fact]
+        public async Task ValidateScriptAsync_DoesNotEnableAndBindsActivationToExactSource()
+        {
+            var model = CreateModel();
+            model.Script = "Params.Continue = false;";
+            var validation = await model.ValidateScriptAsync<WebServiceCaptureScriptParams>();
+
+            Assert.Empty(validation.Diagnostics);
+            Assert.True(validation.IsCurrent);
+            Assert.False(model.IsEnabled);
+            Assert.Equal(ScriptActivationResult.Enabled,
+                await model.EnableScriptAsync<WebServiceCaptureScriptParams>(validation.SourceHash));
+            Assert.False(await RunScriptAsync(model, initialValue: true));
+
+            model.Script = "Params.Continue = true;";
+            Assert.Equal(ScriptActivationResult.Superseded,
+                await model.EnableScriptAsync<WebServiceCaptureScriptParams>(validation.SourceHash));
+            Assert.False(model.IsEnabled);
+        }
+
+        [Fact]
+        public async Task ValidateScriptAsync_ConcurrentEditMarksResultStaleWithoutChangingActivation()
+        {
+            var gate = new CompileGate();
+            var model = CreateModel(new ScriptHost(gate.WaitAsync));
+            model.Script = "// slow\nParams.Continue = false;";
+            var validating = model.ValidateScriptAsync<WebServiceCaptureScriptParams>();
+            await gate.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            try
+            {
+                model.Script = "Params.Continue = true;";
+                Assert.Equal(ScriptActivationResult.Enabled,
+                    await model.EnableScriptAsync<WebServiceCaptureScriptParams>());
+            }
+            finally
+            {
+                gate.Release();
+            }
+
+            var result = await validating;
+            Assert.False(result.IsCurrent);
+            Assert.True(model.IsEnabled);
+            Assert.True(await RunScriptAsync(model, initialValue: false));
+            Assert.Equal(ScriptActivationResult.Superseded,
+                await model.EnableScriptAsync<WebServiceCaptureScriptParams>(result.SourceHash));
+            Assert.True(model.IsEnabled);
         }
 
         [Fact]

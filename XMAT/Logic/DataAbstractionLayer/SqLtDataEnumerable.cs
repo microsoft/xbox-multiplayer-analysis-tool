@@ -25,16 +25,19 @@ namespace XMAT.DataAbstractionLayer
         internal SqLtDataEnumerable(
             IDictionary<string, IFieldDefinition> fieldDefs,
             SqliteDataReader dataReader,
-            Predicate<IDataRecord> predicate)
+            Predicate<IDataRecord> predicate,
+            object gate = null)
         {
             _fieldDefs = fieldDefs;
             _dataReader = dataReader;
             _predicate = predicate;
             _cachedDataRecord = null;
+            _gate = gate ?? new object();
         }
 
         private IDictionary<string, IFieldDefinition> _fieldDefs;
         private SqliteDataReader _dataReader;
         private Predicate<IDataRecord> _predicate;
+        private readonly object _gate;
     }
 }

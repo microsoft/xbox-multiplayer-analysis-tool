@@ -5,8 +5,10 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:XMAT"
         xmlns:proxy="clr-namespace:XMAT.WebServiceCapture"
+        xmlns:sql="clr-namespace:XMAT.SqlQueries"
         mc:Ignorable="d"
         Loaded="Window_Loaded"
+        Initialized="SqlWorkspace_Initialized"
         Closing="Window_Closing"
         Title="{StaticResource appName}"
         AllowDrop="True"
@@ -16,21 +18,23 @@
     <Window.CommandBindings>
         <CommandBinding Command="New"  Executed="New_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
         <CommandBinding Command="Open" Executed="Open_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
-        <CommandBinding Command="Save" Executed="Save_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
+        <CommandBinding Command="Save" Executed="Save_Executed" CanExecute="CaptureFile_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.Import}"           Executed="Import_Executed" CanExecute="Import_CanExecute"/>
-        <CommandBinding Command="{x:Static local:AppCommands.Export}"           Executed="Export_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.Export}"           Executed="Export_Executed" CanExecute="CaptureFile_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.ExportSanitized}"  Executed="ExportSanitized_Executed" CanExecute="ExportSanitized_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.Preferences}"      Executed="Preferences_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.Exit}"             Executed="Exit_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ClearAllCaptures}" Executed="ClearAllCaptures_Executed" CanExecute="ClearAllCaptures_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.AnalyzeCaptures}"  Executed="AnalyzeCaptures_Executed" CanExecute="AnalyzeCaptures_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.ExportAnalysisReport}" Executed="ExportAnalysisReport_Executed" CanExecute="ExportAnalysisReport_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.NewSqlQuery}" Executed="NewSqlQuery_Executed" CanExecute="NewSqlQuery_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.CollectLogs}"      Executed="CollectLogs_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ViewGDKXInfo}"      Executed="ViewGDKXInfo_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ExportRootCert}"   Executed="ExportRootCert_Executed"/>
         <CommandBinding Command="{x:Static proxy:WebServiceProxyCommands.ChangePort}"
                         Executed="ChangeProxyPort_Executed" CanExecute="ChangeProxyPort_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.ManageHostLists}" Executed="ManageHostLists_Executed"/>
+        <CommandBinding Command="{x:Static local:AppCommands.ManageAgentAccess}" Executed="ManageAgentAccess_Executed"/>
     </Window.CommandBindings>
     <Grid>
         <Grid.RowDefinitions>
@@ -45,30 +49,37 @@
 
         <Menu Grid.Column="0" x:Name="MainMenuBar" Height="20" VerticalAlignment="Center" HorizontalContentAlignment="Left" VerticalContentAlignment="Top" Grid.ColumnSpan="2">
             <MenuItem x:Name="FileMenu" HorizontalAlignment="Left" Header="_File">
-                <MenuItem x:Name="FileNewCapture"     Header="_New Capture..."   Command="New"/>
-                <MenuItem x:Name="FileLoadCaptures"   Header="_Load Captures..." Command="Open"/>
-                <MenuItem x:Name="FileSaveCaptures"   Header="_Save Captures..." Command="Save"/>
+                <MenuItem x:Name="FileNewCapture"     Header="_New Capture..."   Command="New" CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"/>
+                <MenuItem x:Name="FileLoadCaptures"   Header="_Load Captures..." Command="Open" CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"/>
+                <MenuItem x:Name="FileSaveCaptures"   Header="_Save Captures..." Command="Save" CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"/>
                 <Separator />
-                <MenuItem x:Name="FileImportCaptures" Command="{x:Static local:AppCommands.Import}" />
-                <MenuItem x:Name="FileExportCaptures" Command="{x:Static local:AppCommands.Export}" />
+                <MenuItem x:Name="FileImportCaptures" Command="{x:Static local:AppCommands.Import}" CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"/>
+                <MenuItem x:Name="FileExportCaptures" Command="{x:Static local:AppCommands.Export}" CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"/>
                 <MenuItem x:Name="FileExportSanitizedCaptures" Command="{x:Static local:AppCommands.ExportSanitized}"
+                          CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"
                           ToolTipService.ShowOnDisabled="True"/>
                 <Separator />
                 <MenuItem x:Name="FileExit"           Command="{x:Static local:AppCommands.Exit}" />
             </MenuItem>
             <MenuItem x:Name="EditMenu" HorizontalAlignment="Left" Header="_Edit">
-                <MenuItem x:Name="ViewClearCaptures" Command="{x:Static local:AppCommands.ClearAllCaptures}" />
+                <MenuItem x:Name="ViewClearCaptures" Command="{x:Static local:AppCommands.ClearAllCaptures}" CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"/>
                 <Separator />
                 <MenuItem x:Name="ToggleDarkMode" Header="_Dark Mode" IsCheckable="True" Click="ToggleDarkMode_Click"/>
                 <Separator />
                 <MenuItem x:Name="EditPreferences" Command="{x:Static local:AppCommands.Preferences}"/>
             </MenuItem>
             <MenuItem x:Name="AnalysisMenu" HorizontalAlignment="Left" Header="_Analysis">
+                <MenuItem x:Name="AnalysisNewSqlQuery" Header="{sql:SqlText SQL_NEW_QUERY}"
+                          Command="{x:Static local:AppCommands.NewSqlQuery}"
+                          CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"/>
+                <Separator/>
                 <MenuItem x:Name="ViewAnalyzeCaptures"
                           Command="{x:Static local:AppCommands.AnalyzeCaptures}"
+                          CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"
                           ToolTipService.ShowOnDisabled="True"/>
                 <MenuItem x:Name="AnalysisExportReport"
                           Command="{x:Static local:AppCommands.ExportAnalysisReport}"
+                          CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"
                           ToolTipService.ShowOnDisabled="True"/>
             </MenuItem>
             <MenuItem x:Name="ActionsMenu" HorizontalAlignment="Left" Header="_Actions">
@@ -79,6 +90,8 @@
                           CommandTarget="{Binding ElementName=AllCaptureDevicesPanel}"
                           Header="{x:Static local:AppCommands.ManageHostListsHeader}"/>
                 <Separator/>
+                <MenuItem x:Name="ManageAgentAccess" Command="{x:Static local:AppCommands.ManageAgentAccess}"
+                          Header="{x:Static local:AppCommands.ManageAgentAccessHeader}"/>
                 <MenuItem x:Name="ExportRootCert" Header="_Export Root Certificate to Desktop" Command="{x:Static local:AppCommands.ExportRootCert}" />
             </MenuItem>
             <MenuItem x:Name="HelpMenu" HorizontalAlignment="Left" Header="_Help">
@@ -87,7 +100,10 @@
             </MenuItem>
         </Menu>
 
-        <Grid Grid.Row="1" Grid.Column="0" x:Name="MainClientArea" Grid.ColumnSpan="2">
+        <TabControl Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" x:Name="WorkspaceTabs"
+                    HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+          <TabItem x:Name="CapturesWorkspaceTab" Header="{sql:SqlText SQL_CAPTURES_WORKSPACE}">
+          <Grid x:Name="MainClientArea">
             <Grid.RowDefinitions>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="4"/>
@@ -97,7 +113,12 @@
             <local:AllCaptureDevicesTabControl x:Name="AllCaptureDevicesPanel" Grid.Row="0" DeviceTabClosed="AllCaptureDevicesPanel_TabClosed"/>
             <GridSplitter Grid.Row="1" Grid.Column="0" Height="4" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
             <local:CaptureAnalysisControl x:Name="CaptureErrorsPanel" Grid.Row="2" AnalysisTabAdded="CaptureErrorsPanel_TabAdded" AnalysisTabClosed="CaptureErrorsPanel_TabClosed"/>
-        </Grid>
+          </Grid>
+          </TabItem>
+          <TabItem x:Name="SqlWorkspaceTab" Header="{sql:SqlText SQL_WORKSPACE_TITLE}">
+            <local:SqlQueryWorkspaceView x:Name="SqlWorkspaceView"/>
+          </TabItem>
+        </TabControl>
 
         <StatusBar Grid.Row="2" Grid.Column="0" x:Name="MainStatusBar" MinHeight="20" Grid.ColumnSpan="2">
             <StatusBarItem HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
@@ -106,11 +127,14 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock x:Name="StatusBar1" Margin="0,0,16,0" Text="{Binding StatusBarText1}"/>
                     <TextBlock x:Name="StatusBar2" Grid.Column="1" Margin="0,0,16,0" Text="{Binding StatusBarText2}"/>
                     <TextBlock x:Name="StatusBar3" Grid.Column="2" Text="{Binding StatusBarText3}"
                                ToolTip="{Binding StatusBarText3}" TextTrimming="CharacterEllipsis"/>
+                    <Button x:Name="AgentAccessIndicator" Grid.Column="3" Margin="12,0,0,0" Padding="4,0"
+                            Command="{x:Static local:AppCommands.ManageAgentAccess}"/>
                 </Grid>
             </StatusBarItem>
         </StatusBar>

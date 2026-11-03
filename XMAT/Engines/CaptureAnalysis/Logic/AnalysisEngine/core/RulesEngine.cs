@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace CaptureAnalysisEngine
@@ -47,10 +48,11 @@ namespace CaptureAnalysisEngine
         }
 
         // Rules are classified by an endpoint's logical name; each endpoint bucket keeps its own rule instances.
-        void MapRules(IEnumerable<EndpointKey> endpoints)
+        void MapRules(IEnumerable<EndpointKey> endpoints, CancellationToken cancellationToken)
         {
             foreach (EndpointKey endpoint in endpoints)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var rules = new LinkedList<Rule>();
 
                 foreach (var typeRules in m_ruleDefines)
@@ -74,10 +76,11 @@ namespace CaptureAnalysisEngine
             }
         }
 
-        public void RunRulesOnData(String console, ServiceCallData.PerConsoleData data)
+        public void RunRulesOnData(
+            String console, ServiceCallData.PerConsoleData data, CancellationToken cancellationToken = default)
         {
             // Expand the wildcard (*) endpoint rules out to match the actual endpoints
-            MapRules(data.m_servicesHistory.Keys);
+            MapRules(data.m_servicesHistory.Keys, cancellationToken);
 
             if (!m_results.ContainsKey(console))
             {
@@ -92,7 +95,7 @@ namespace CaptureAnalysisEngine
                 endpoint => ServiceCallData.GetActionableHost(endpoint.Key, endpoint.Value));
 
             // Now the rules can be run in parallel
-            Parallel.ForEach(endpointRules, endpointRule =>
+            Parallel.ForEach(endpointRules, new ParallelOptions { CancellationToken = cancellationToken }, endpointRule =>
             {
                 if (data.m_servicesHistory.TryGetValue(endpointRule.Endpoint, out var history))
                 {
@@ -102,6 +105,7 @@ namespace CaptureAnalysisEngine
                         // Identity and provenance travel with the result for report projection.
                         result.EndpointKey = endpointRule.Endpoint;
                         result.ActionableHost = actionableHosts[endpointRule.Endpoint];
+                        result.RuleType = endpointRule.Rule.GetType().Name;
                     }
                     m_results[console].Add(result);
                 }

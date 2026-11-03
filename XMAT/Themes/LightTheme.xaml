@@ -61,6 +61,12 @@
     <SolidColorBrush x:Key="ScrollBarThumbBrush"            Color="#FFCDCDCD"/>
     <SolidColorBrush x:Key="CheckBoxForegroundBrush"        Color="Black"/>
 
+    <!-- Local SQL editor syntax -->
+    <SolidColorBrush x:Key="SQL_KeywordBrush" Color="#FF0000AA"/>
+    <SolidColorBrush x:Key="SQL_StringBrush" Color="#FFA31515"/>
+    <SolidColorBrush x:Key="SQL_CommentBrush" Color="#FF007A32"/>
+    <SolidColorBrush x:Key="SQL_NumberBrush" Color="#FF006B6B"/>
+
     <!-- SystemColors overrides to restore defaults when switching from dark -->
     <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#FFF0F0F0"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="Black"/>

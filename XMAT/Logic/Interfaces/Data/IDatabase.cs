@@ -6,12 +6,10 @@ using System.Collections.Generic;
 
 namespace XMAT.SharedInterfaces
 {
-    public interface IDatabase
+    public interface IDatabase : IQueryDatabase, ICaptureDatabaseBackup
     {
         void Initialize();
         void Shutdown();
-
-        void SaveToFile(string filepath);
 
         IEnumerable<string> TableNames();
 

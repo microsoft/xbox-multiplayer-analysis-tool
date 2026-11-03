@@ -30,7 +30,11 @@ namespace XMAT.Scripting
             _beforeCompileAsync = beforeCompileAsync;
         }
 
-        public async Task<Diagnostic[]> CompileScriptAsync<T>(string script)
+        public Task<Diagnostic[]> CompileScriptAsync<T>(string script) =>
+            CompileScriptAsync<T>(script, exactSourceOnly: false, CancellationToken.None);
+
+        internal async Task<Diagnostic[]> CompileScriptAsync<T>(
+            string script, bool exactSourceOnly, CancellationToken cancellationToken)
         {
             long compileVersion;
             lock (_syncRoot)
@@ -39,38 +43,53 @@ namespace XMAT.Scripting
                 _script = null;
             }
 
-            if (_beforeCompileAsync != null)
-                await _beforeCompileAsync(script).ConfigureAwait(false);
-
-            (Script compiledScript, Diagnostic[] diagnostics) = await Task.Run(() =>
-            {
-                if (string.IsNullOrEmpty(script))
-                    return (null, Array.Empty<Diagnostic>());
-
-                // TODO: what other imports?  and/or can we add this via script?
-                Script<T> candidate = CSharpScript.Create<T>(
-                    script,
-                    ScriptOptions.Default.WithImports("System.Text.Json")
-                                         .WithReferences(typeof(JsonDocument).Assembly),
-                    typeof(ScriptGlobals<T>));
-                ImmutableArray<Diagnostic> candidateDiagnostics = candidate.Compile();
-                var finalDiagnostics = new Diagnostic[candidateDiagnostics.Length];
-                candidateDiagnostics.CopyTo(finalDiagnostics);
-
-                Script installedScript = candidateDiagnostics.Any(
-                    diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
-                    ? null
-                    : candidate;
-                return (installedScript, finalDiagnostics);
-            }).ConfigureAwait(false);
+            (Script compiledScript, Diagnostic[] diagnostics) =
+                await CompileCandidateAsync<T>(script, exactSourceOnly, cancellationToken).ConfigureAwait(false);
 
             lock (_syncRoot)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (compileVersion == _compileVersion)
                     _script = compiledScript;
             }
 
             return diagnostics;
+        }
+
+        public async Task<Diagnostic[]> ValidateScriptAsync<T>(
+            string script,
+            CancellationToken cancellationToken = default)
+        {
+            var candidate = await CompileCandidateAsync<T>(script, exactSourceOnly: true, cancellationToken).ConfigureAwait(false);
+            return candidate.Diagnostics;
+        }
+
+        private async Task<(Script Script, Diagnostic[] Diagnostics)> CompileCandidateAsync<T>(
+            string script,
+            bool exactSourceOnly,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_beforeCompileAsync != null)
+                await _beforeCompileAsync(script).ConfigureAwait(false);
+
+            return await Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(script))
+                    return ((Script)null, Array.Empty<Diagnostic>());
+
+                var options = ScriptOptions.Default.WithImports("System.Text.Json")
+                    .WithReferences(typeof(JsonDocument).Assembly);
+                if (exactSourceOnly)
+                    options = options.WithSourceResolver(null).WithMetadataResolver(null);
+                var candidate = CSharpScript.Create<T>(script, options, typeof(ScriptGlobals<T>));
+                ImmutableArray<Diagnostic> diagnostics = candidate.Compile(cancellationToken);
+                var installed = diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+                    ? null
+                    : candidate;
+                return ((Script)installed, diagnostics.ToArray());
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         internal void ClearScript()

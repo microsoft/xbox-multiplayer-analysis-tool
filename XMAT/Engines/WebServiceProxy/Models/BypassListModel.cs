@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -20,10 +21,24 @@ namespace XMAT.WebServiceCapture.Models
     /// </summary>
     public class BypassListModel
     {
-        public ObservableCollection<string> BypassedUrls { get; } = new ObservableCollection<string>();
+        public ObservableCollection<string> BypassedUrls => Entries;
 
-        private readonly object _lockObj = new object();
+        internal HostListCollection Entries { get; }
+        private readonly object _lockObj;
         private readonly Dictionary<string, Regex> _regexCache = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
+
+        public BypassListModel() : this(new object()) { }
+
+        internal BypassListModel(object gate)
+        {
+            _lockObj = gate;
+            Entries = new HostListCollection(gate);
+            Entries.CollectionChanged += (_, args) =>
+            {
+                if (args.Action is NotifyCollectionChangedAction.Remove or NotifyCollectionChangedAction.Replace or NotifyCollectionChangedAction.Reset)
+                    _regexCache.Clear();
+            };
+        }
 
         public bool Add(string pattern)
         {

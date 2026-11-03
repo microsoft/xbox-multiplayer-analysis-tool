@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using XMAT.SharedInterfaces;
@@ -30,16 +29,19 @@ namespace XMAT.DataAbstractionLayer
 
         private IDataTable CreateTableInternal(string name, IEnumerable<IField> fields)
         {
-            _commandBuilder.Clear();
-            _commandBuilder.Append("DROP TABLE IF EXISTS ");
-            _commandBuilder.Append(name);
+            lock (SqLtConnectionGate.For(_connection))
+            {
+                _commandBuilder.Clear();
+                _commandBuilder.Append("DROP TABLE IF EXISTS ");
+                _commandBuilder.Append(name);
 
-            _command.CommandText = _commandBuilder.ToString();
-            _command.ExecuteNonQuery();
+                _command.CommandText = _commandBuilder.ToString();
+                _command.ExecuteNonQuery();
 
-            var newTable = new SqLtDataTable(_connection, name, fields);
-            _dataTables[name] = newTable;
-            return newTable;
+                var newTable = new SqLtDataTable(_connection, name, fields);
+                _dataTables[name] = newTable;
+                return newTable;
+            }
         }
 
         private void InitializeInternal()
@@ -63,16 +65,7 @@ namespace XMAT.DataAbstractionLayer
 
         private void SaveToFileInternal(string filepath)
         {
-            File.Delete(filepath);
-
-            var connectionString = new SqliteConnectionStringBuilder
-            {
-                DataSource = filepath,
-                Pooling = false, // Dispose must close the file instead of returning it to the pool.
-            }.ToString();
-            using var saveDbConnection = new SqliteConnection(connectionString);
-            saveDbConnection.Open();
-            _connection.BackupDatabase(saveDbConnection);
+            SqLtDatabaseBackup.SaveToFile(_connection, filepath);
         }
 
         private void DisposeInternal()

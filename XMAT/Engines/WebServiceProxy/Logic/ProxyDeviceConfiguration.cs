@@ -173,6 +173,11 @@ namespace XMAT.WebServiceCapture
 
         internal static async Task<IDisposable> AcquireAsync(DeviceType type, string device)
         {
+            return AcquireTarget(await ResolveTargetAsync(type, device));
+        }
+
+        internal static async Task<string> ResolveTargetAsync(DeviceType type, string device)
+        {
             var target = type == DeviceType.LocalPC ? "LocalPC" : device;
             if (type == DeviceType.XboxConsole)
             {
@@ -184,7 +189,7 @@ namespace XMAT.WebServiceCapture
                 }
                 target = address.ToString();
             }
-            return AcquireTarget(target);
+            return target;
         }
 
         internal static IDisposable AcquireTarget(string target)
@@ -223,7 +228,7 @@ namespace XMAT.WebServiceCapture
         private readonly IProxyDeviceConfiguration _device;
         private readonly Func<Task> _start;
         private readonly Func<Task> _stop;
-        private readonly Action _commit;
+        private readonly Func<Task> _commit;
         private readonly Action<string> _status;
         private readonly Func<CancellationToken, Task> _delay;
         private readonly TimeSpan _timeout;
@@ -231,6 +236,18 @@ namespace XMAT.WebServiceCapture
         internal ProxyPortChangeOperation(
             IProxyDeviceConfiguration device, Func<Task> start, Func<Task> stop,
             Action commit, Action<string> status,
+            Func<CancellationToken, Task> delay = null, TimeSpan? timeout = null)
+            : this(device, start, stop, () =>
+            {
+                commit();
+                return Task.CompletedTask;
+            }, status, delay, timeout)
+        {
+        }
+
+        internal ProxyPortChangeOperation(
+            IProxyDeviceConfiguration device, Func<Task> start, Func<Task> stop,
+            Func<Task> commit, Action<string> status,
             Func<CancellationToken, Task> delay = null, TimeSpan? timeout = null)
         {
             _device = device;
@@ -244,11 +261,16 @@ namespace XMAT.WebServiceCapture
 
         internal async Task ApplyAsync(
             Func<ProxyEndpoint, bool> ownsCurrent, ProxyEndpoint desired,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Func<ProxyConfiguration, bool> expectedConfiguration = null)
         {
             var current = await WaitAsync(_ => true, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             current.RequireKnown();
+            if (expectedConfiguration != null && !expectedConfiguration(current))
+                throw new CaptureProxyException(CaptureProxyFailure.SourceChanged);
+            if (current.State == ProxyConfigurationState.Enabled && current.Endpoint == null)
+                throw new CaptureProxyException(CaptureProxyFailure.ConfigurationUnknown);
             if (current.State == ProxyConfigurationState.Enabled &&
                 !current.Endpoint.Matches(desired) && !ownsCurrent(current.Endpoint))
             {
@@ -263,7 +285,7 @@ namespace XMAT.WebServiceCapture
                 cancellationToken.ThrowIfCancellationRequested();
                 if (current.State == ProxyConfigurationState.Enabled && current.Endpoint.Matches(desired))
                 {
-                    _commit();
+                    await _commit();
                     committed = true;
                 }
                 else
@@ -271,11 +293,17 @@ namespace XMAT.WebServiceCapture
                     if (current.State == ProxyConfigurationState.Enabled)
                     {
                         _status("PROXY_PORT_DISABLING");
+                        if (expectedConfiguration != null)
+                        {
+                            var latest = await WaitAsync(_ => true, cancellationToken);
+                            if (!expectedConfiguration(latest))
+                                throw new CaptureProxyException(CaptureProxyFailure.SourceChanged);
+                        }
                         await _device.DisableAsync(current.Endpoint);
                         await WaitAsync(config => _device.IsDisableComplete(config, current.Endpoint), cancellationToken);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
-                    _commit();
+                    await _commit();
                     committed = true;
                     _status("PROXY_PORT_ENABLING");
                     cancellationToken.ThrowIfCancellationRequested();

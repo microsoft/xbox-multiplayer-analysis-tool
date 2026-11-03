@@ -1,0 +1,129 @@
+<Window x:Class="XMAT.AgentAccessWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="1050" Height="820" MinWidth="800" MinHeight="650"
+        WindowStartupLocation="CenterOwner">
+  <Grid Margin="12">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="90" />
+      <RowDefinition Height="2*" />
+      <RowDefinition Height="3*" />
+      <RowDefinition Height="*" />
+    </Grid.RowDefinitions>
+    <StackPanel Orientation="Horizontal">
+      <ToggleButton x:Name="EnableAccess" Click="EnableAccess_Click" Padding="8,4" Margin="0,0,8,6" />
+      <Button x:Name="CopyConfiguration" Click="CopyConfiguration_Click" Padding="8,4" Margin="0,0,8,6" />
+      <TextBlock x:Name="AccessStatus" VerticalAlignment="Center" Margin="8,0" />
+    </StackPanel>
+    <TextBlock x:Name="Intro" Grid.Row="1" TextWrapping="Wrap" Margin="0,0,0,8" />
+    <TextBox x:Name="Configuration" Grid.Row="2" IsReadOnly="True" FontFamily="Consolas"
+             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+    <GroupBox x:Name="SessionsGroup" Grid.Row="3" Margin="0,8,0,0">
+      <Grid Margin="5">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="360" />
+        </Grid.ColumnDefinitions>
+        <DataGrid x:Name="Sessions" IsReadOnly="True" AutoGenerateColumns="False"
+                  SelectionMode="Single" SelectionChanged="Sessions_SelectionChanged">
+          <DataGrid.Columns>
+            <DataGridTextColumn x:Name="ClientColumn" Binding="{Binding DeclaredClientName}" Width="*" />
+            <DataGridTextColumn x:Name="SessionStateColumn" Binding="{Binding State}" Width="110" />
+          </DataGrid.Columns>
+        </DataGrid>
+        <ScrollViewer Grid.Column="1" Margin="10,0,0,0" VerticalScrollBarVisibility="Auto">
+          <StackPanel>
+            <ComboBox x:Name="CaptureTarget" DisplayMemberPath="DeviceName" SelectedValuePath="Id" />
+            <CheckBox x:Name="SummaryGrant" Margin="0,6,0,0" />
+            <CheckBox x:Name="DeviceCreationGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="CaptureLoadGrant" Margin="0,4,0,0" />
+            <TextBlock x:Name="AdministrationGrantsLabel" Margin="0,8,0,3" FontWeight="SemiBold" />
+            <CheckBox x:Name="HostPolicyGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="PreferencesGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="DiagnosticsGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="NavigationGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="LifecycleGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="DeviceConfigurationGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="ControlGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="ScriptReadGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="ScriptExportGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="ScriptEditGrant" Margin="0,4,0,0" />
+            <CheckBox x:Name="ScriptGrant" Margin="0,4,0,0" />
+            <TextBlock x:Name="QuerySourceLabel" Margin="0,8,0,3" />
+            <ComboBox x:Name="QuerySourceTarget" DisplayMemberPath="DisplayName" SelectedValuePath="Id" />
+            <CheckBox x:Name="SourceSummaryGrant" Margin="0,5,0,0">
+              <TextBlock x:Name="SourceSummaryGrantLabel" TextWrapping="Wrap" />
+            </CheckBox>
+            <CheckBox x:Name="RawQueryGrant" Margin="0,5,0,0">
+              <TextBlock x:Name="RawQueryGrantLabel" TextWrapping="Wrap" />
+            </CheckBox>
+            <CheckBox x:Name="QueryExportGrant" Margin="0,5,0,0">
+              <TextBlock x:Name="QueryExportGrantLabel" TextWrapping="Wrap" />
+            </CheckBox>
+            <CheckBox x:Name="CaptureExportGrant" Margin="0,5,0,0" />
+            <CheckBox x:Name="CaptureImportGrant" Margin="0,5,0,0" />
+            <CheckBox x:Name="ReportExportGrant" Margin="0,5,0,0" />
+            <TextBlock x:Name="ExportFolderLabel" Margin="0,8,0,3" />
+            <ComboBox x:Name="ExportFolderTarget" DisplayMemberPath="Path" SelectedValuePath="Id" />
+            <Button x:Name="ChooseExportFolder" Click="ChooseExportFolder_Click" Margin="0,4,0,0" Padding="6,3" />
+            <CheckBox x:Name="FileWriteGrant" Margin="0,5,0,0" />
+            <TextBlock x:Name="InputFileLabel" Margin="0,8,0,3" />
+            <ComboBox x:Name="InputFileTarget" DisplayMemberPath="FileName" SelectedValuePath="Id" />
+            <Button x:Name="ChooseInputFile" Click="ChooseInputFile_Click" Margin="0,4,0,0" Padding="6,3" />
+            <CheckBox x:Name="FileReadGrant" Margin="0,5,0,0" />
+            <TextBlock x:Name="QueryLimitsLabel" Margin="0,6,0,3" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal">
+              <TextBox x:Name="QuerySeconds" Width="65" Margin="0,0,6,0" />
+              <TextBox x:Name="QueryMegabytes" Width="65" Margin="0,0,6,0" />
+              <TextBox x:Name="QueryResultCount" Width="65" />
+            </StackPanel>
+            <WrapPanel Margin="0,6,0,0">
+              <Button x:Name="ApplyGrants" Click="ApplyGrants_Click" Padding="6,3" Margin="0,0,6,0" />
+              <Button x:Name="Revoke" Click="Revoke_Click" Padding="6,3" />
+            </WrapPanel>
+            <TextBlock x:Name="CurrentGrants" TextWrapping="Wrap" Margin="0,6,0,0" />
+          </StackPanel>
+        </ScrollViewer>
+      </Grid>
+    </GroupBox>
+    <GroupBox x:Name="OperationsGroup" Grid.Row="4" Margin="0,8,0,0">
+      <Grid Margin="5">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="*" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="80" />
+        </Grid.RowDefinitions>
+        <DataGrid x:Name="Operations" IsReadOnly="True" AutoGenerateColumns="False"
+                  SelectionMode="Single" SelectionChanged="Operations_SelectionChanged">
+          <DataGrid.Columns>
+            <DataGridTextColumn x:Name="ActionColumn" Binding="{Binding Action}" Width="*" />
+            <DataGridTextColumn x:Name="OperationStateColumn" Binding="{Binding State}" Width="160" />
+            <DataGridTextColumn x:Name="ErrorColumn" Binding="{Binding Error}" Width="160" />
+          </DataGrid.Columns>
+        </DataGrid>
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,5">
+          <Button x:Name="Approve" Click="Approve_Click" Padding="8,3" Margin="0,0,6,0" />
+          <Button x:Name="Deny" Click="Deny_Click" Padding="8,3" Margin="0,0,6,0" />
+          <Button x:Name="CancelOperation" Click="CancelOperation_Click" Padding="8,3" />
+        </StackPanel>
+        <TextBox x:Name="ApprovalDetails" Grid.Row="2" IsReadOnly="True" FontFamily="Consolas"
+                 TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
+      </Grid>
+    </GroupBox>
+    <GroupBox x:Name="ResourcesGroup" Grid.Row="5" Margin="0,8,0,0">
+      <DockPanel Margin="5">
+        <Button x:Name="TakeOver" DockPanel.Dock="Right" Click="TakeOver_Click"
+                Padding="8,3" Margin="6,0,0,0" VerticalAlignment="Top" />
+        <DataGrid x:Name="OwnedResources" IsReadOnly="True" AutoGenerateColumns="False" SelectionMode="Single">
+          <DataGrid.Columns>
+            <DataGridTextColumn x:Name="ResourceKindColumn" Binding="{Binding Resource.Kind}" Width="100" />
+            <DataGridTextColumn x:Name="ResourceIdColumn" Binding="{Binding Resource.Id}" Width="*" />
+            <DataGridTextColumn x:Name="ResourceStateColumn" Binding="{Binding State}" Width="150" />
+          </DataGrid.Columns>
+        </DataGrid>
+      </DockPanel>
+    </GroupBox>
+  </Grid>
+</Window>

@@ -1,0 +1,22 @@
+<Project>
+  <PropertyGroup>
+    <_AgentBridgeProjectDirectory>$(MSBuildThisFileDirectory)</_AgentBridgeProjectDirectory>
+    <_AgentBridgeOutput>$(_AgentBridgeProjectDirectory)bin\$(Platform)\$(Configuration)\net10.0-windows\win-x64\</_AgentBridgeOutput>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(_AgentBridgeProjectDirectory)XMAT.AgentBridge.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyAgentBridge" AfterTargets="Build">
+    <ItemGroup>
+      <_AgentBridgeArtifacts Include="$(_AgentBridgeOutput)XMAT.AgentBridge.*" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(_AgentBridgeOutput)XMAT.AgentBridge.exe')" Text="The agent bridge was not built." />
+    <Copy SourceFiles="@(_AgentBridgeArtifacts)" DestinationFolder="$(OutDir)AgentBridge" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishAgentBridge" AfterTargets="Publish">
+    <ItemGroup>
+      <_AgentBridgePublishArtifacts Include="$(_AgentBridgeOutput)XMAT.AgentBridge.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_AgentBridgePublishArtifacts)" DestinationFolder="$(PublishDir)AgentBridge" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

@@ -117,6 +117,7 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 _certManager.ExportRootCertificate(certPath);
                 _isInitialized = true;
+                ProxyPublicRootCertificate.RegisterInitializedReader(_certManager.ReadPublicRootCertificate);
             }
 
             return _isInitialized;

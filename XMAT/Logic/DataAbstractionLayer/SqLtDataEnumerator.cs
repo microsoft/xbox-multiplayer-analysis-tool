@@ -15,28 +15,34 @@ namespace XMAT.DataAbstractionLayer
         {
             get
             {
-                if (_cachedDataRecord == null)
+                lock (_gate)
                 {
-                    _cachedDataRecord = new SqLtDataRecord(_dataReader, _fieldDefs);
+                    if (_cachedDataRecord == null)
+                    {
+                        _cachedDataRecord = new SqLtDataRecord(_dataReader, _fieldDefs);
+                    }
+                    return _cachedDataRecord;
                 }
-
-                return _cachedDataRecord;
             }
         }
 
         public bool MoveNext()
         {
-            _cachedDataRecord = null;
-            if (_dataReader != null)
-                return _dataReader.GetEnumerator().MoveNext();
-            return false;
+            lock (_gate)
+            {
+                _cachedDataRecord = null;
+                return _dataReader?.Read() == true;
+            }
         }
 
         public void Reset()
         {
-            _cachedDataRecord = null;
-            if (_dataReader != null)
-                _dataReader.GetEnumerator().Reset();
+            lock (_gate)
+            {
+                _cachedDataRecord = null;
+                if (_dataReader != null)
+                    _dataReader.GetEnumerator().Reset();
+            }
         }
 
         object IEnumerator.Current
@@ -46,10 +52,13 @@ namespace XMAT.DataAbstractionLayer
 
         void IDisposable.Dispose()
         {
-            if (_dataReader != null)
+            lock (_gate)
             {
-                _dataReader.Close();
-                _dataReader.Dispose();
+                if (_dataReader != null)
+                {
+                    _dataReader.Close();
+                    _dataReader.Dispose();
+                }
             }
         }
 

@@ -65,6 +65,12 @@
     <!-- CheckBox -->
     <SolidColorBrush x:Key="CheckBoxForegroundBrush"        Color="#FFD4D4D4"/>
 
+    <!-- Local SQL editor syntax -->
+    <SolidColorBrush x:Key="SQL_KeywordBrush" Color="#FF70B7F0"/>
+    <SolidColorBrush x:Key="SQL_StringBrush" Color="#FFE6A180"/>
+    <SolidColorBrush x:Key="SQL_CommentBrush" Color="#FF85BC70"/>
+    <SolidColorBrush x:Key="SQL_NumberBrush" Color="#FFB5CEA8"/>
+
     <!-- SystemColors overrides for built-in control templates -->
     <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#FF2D2D30"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#FFD4D4D4"/>

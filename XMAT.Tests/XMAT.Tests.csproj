@@ -37,4 +37,5 @@
     <EmbeddedResource Include="..\XMAT\Windows\MainWindow.xaml" LogicalName="XMAT.Tests.MainWindow.xaml" />
   </ItemGroup>
 
+  <Import Project="..\XMAT.AgentBridge\AgentBridge.targets" />
 </Project>

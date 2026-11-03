@@ -35,14 +35,16 @@ namespace XMAT
 
         public static void ApplyTheme(string theme)
         {
+            if (theme is not ("Light" or "Dark"))
+                throw new ArgumentException("Unsupported theme.", nameof(theme));
+            var app = Application.Current ?? throw new InvalidOperationException("A desktop application is required.");
+            app.Dispatcher.VerifyAccess();
             string uri = theme == "Dark" ? DarkThemeUri : LightThemeUri;
 
             var newTheme = new ResourceDictionary
             {
                 Source = new Uri(uri, UriKind.Relative)
             };
-
-            var app = Application.Current;
 
             if (_currentThemeDictionary != null)
             {

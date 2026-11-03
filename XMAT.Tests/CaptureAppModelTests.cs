@@ -1288,10 +1288,10 @@ namespace XMAT.Tests
             }
 
             public IReadOnlyList<long> ReplaceImportedRows(
-                IFieldValue capture, IEnumerable<object[]> rows)
+                IFieldValue capture, IEnumerable<object[]> rows, CancellationToken cancellationToken = default)
             {
                 ImportThreadId = Environment.CurrentManagedThreadId;
-                return ((IImportedCaptureTable)_inner).ReplaceImportedRows(capture, rows);
+                return ((IImportedCaptureTable)_inner).ReplaceImportedRows(capture, rows, cancellationToken);
             }
 
             public IDataset Subset(params string[] fieldNames)

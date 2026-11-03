@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -19,10 +20,24 @@ namespace XMAT.WebServiceCapture.Models
     /// </summary>
     public class BlockListModel
     {
-        public ObservableCollection<string> BlockedUrls { get; } = new ObservableCollection<string>();
+        public ObservableCollection<string> BlockedUrls => Entries;
 
-        private readonly object _lockObj = new object();
+        internal HostListCollection Entries { get; }
+        private readonly object _lockObj;
         private readonly Dictionary<string, Regex> _regexCache = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
+
+        public BlockListModel() : this(new object()) { }
+
+        internal BlockListModel(object gate)
+        {
+            _lockObj = gate;
+            Entries = new HostListCollection(gate);
+            Entries.CollectionChanged += (_, args) =>
+            {
+                if (args.Action is NotifyCollectionChangedAction.Remove or NotifyCollectionChangedAction.Replace or NotifyCollectionChangedAction.Reset)
+                    _regexCache.Clear();
+            };
+        }
 
         public bool Add(string pattern)
         {

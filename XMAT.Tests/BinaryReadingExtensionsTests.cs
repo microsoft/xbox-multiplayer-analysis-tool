@@ -166,6 +166,19 @@ namespace XMAT.Tests
             Assert.Equal("No newline here", line);
         }
 
+        [Theory]
+        [InlineData(4094)]
+        [InlineData(4095)]
+        [InlineData(16384)]
+        public void ReadLine_ConsumesCrlfAtChunkBoundariesAndEndOfStream(int length)
+        {
+            var expected = new string('x', length);
+            using var stream = new MemoryStream(Encoding.ASCII.GetBytes(expected + "\r\n"));
+            using var reader = new BinaryReader(stream);
+            Assert.Equal(expected, reader.ReadLine());
+            Assert.True(reader.IsEndOfStream());
+        }
+
         [Fact]
         public void ReadToEnd_ReadsAllBytes()
         {

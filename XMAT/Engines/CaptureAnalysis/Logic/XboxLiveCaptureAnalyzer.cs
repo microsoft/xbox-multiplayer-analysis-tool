@@ -8,8 +8,11 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using CaptureAnalysisEngine;
+using XMAT.ApplicationServices;
+using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.XboxLiveCaptureAnalysis.Models;
@@ -40,10 +43,21 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         private ICaptureAppModel _captureAppModel;
         private TraceAnalyzer _traceAnalyzer;
+        private readonly string _outputRoot;
 
         public static ICaptureAnalyzer Analyzer { get { return AnalyzerInstance; } }
 
         internal static readonly XboxLiveCaptureAnalyzer AnalyzerInstance = new();
+        internal bool IsInitialized => _traceAnalyzer != null;
+
+        public XboxLiveCaptureAnalyzer() { }
+
+        internal XboxLiveCaptureAnalyzer(TraceAnalyzer traceAnalyzer, ICaptureAppModel appModel = null, string outputRoot = null)
+        {
+            _traceAnalyzer = traceAnalyzer ?? throw new ArgumentNullException(nameof(traceAnalyzer));
+            _captureAppModel = appModel;
+            _outputRoot = outputRoot;
+        }
 
         public override string ToString()
         {
@@ -92,13 +106,8 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
             var sourceCaptureName = controller.DeviceName;
 
-            // TODO: expose options for parameters
-            var isInternal = false;
-            var allEndpoints = false;
-            Dictionary<string, IEnumerable<ReportDocument>> perConsoleReports = null;
-
             string analysisRunStorageDirectory = Path.Combine(
-                PublicUtilities.StorageDirectoryPath,
+                _outputRoot ?? PublicUtilities.StorageDirectoryPath,
                 $"xlca_{analysisRun.Id}");
 
             analysisResultsModel.OutputDirectory =
@@ -106,62 +115,35 @@ namespace XMAT.XboxLiveCaptureAnalysis
             analysisResultsModel.SourceCaptureName = sourceCaptureName;
             Directory.CreateDirectory(analysisRunStorageDirectory);
 
-            // TODO: support cancellation of the analysis processing
-            await Task.Run(() =>
+            XboxLiveAnalysisResult canonical;
+            if (_captureAppModel is CaptureAppModel applicationModel && applicationModel.HasInvestigationTarget(controller))
             {
-                var rulesEngine = new RulesEngine(isInternal);
-                var serviceCallData = new ServiceCallData(allEndpoints);
-
-                // The application holds an analysis lease while converting these records,
-                // so writable capture data remains quiescent without a second full copy.
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.ConvertingProxyConnectionsToServiceCallItems);
-                List<ServiceCallItem> serviceCallItems =
-                    GetServiceCallItemsForProxyConnections(controller);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.CreatingServiceDataFromCallItems);
-                serviceCallData.CreateFromServiceCallItems(serviceCallItems);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.RunningUrlConverterOnData);
-                _traceAnalyzer.RunUriConverterOnData(serviceCallData);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.RunningValidationRules);
-                perConsoleReports = _traceAnalyzer.Run(
-                    rulesEngine,
-                    serviceCallData,
-                    analysisRunStorageDirectory);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.DumpingServiceCallData);
-                rulesEngine.DumpServiceCallData(
-                    Path.Combine(
-                        analysisRunStorageDirectory,
-                        $"xlca_{analysisRun.Id}_service_call_data.txt"),
-                    serviceCallData);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.DumpingServiceCallItems);
-                rulesEngine.DumpServiceCallItems(
-                    Path.Combine(
-                        analysisRunStorageDirectory,
-                        $"xlca_{analysisRun.Id}_service_call_items.txt"),
-                    serviceCallItems);
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.DumpingRuleResults);
-                rulesEngine.DumpResultsToFile(
-                    Path.Combine(
-                        analysisRunStorageDirectory,
-                        $"xlca_{analysisRun.Id}_results.txt"));
-            });
+                var result = await ((CaptureInvestigation)applicationModel.CaptureInvestigation).AnalyzeDesktopAsync(
+                    analysisRun, controller, this, analysisRunStorageDirectory);
+                analysisResultsModel.InvestigationData = result;
+                var details = (CaptureDataDetails)result.Details;
+                canonical = details.CanonicalWebAnalysis;
+                await details.WriteDesktopArtifactsAsync(analysisRunStorageDirectory);
+            }
+            else
+            {
+                canonical = await Task.Run(() => AnalyzeRecords(
+                    controller.GetCaptureRecords(), analysisRunStorageDirectory, analysisRun.Id,
+                    step => SetProcessStatus(analysisResultsModel, step)));
+            }
+            analysisResultsModel.CanonicalAnalysis = canonical;
 
             // at this point we should show any report views
             // NOTE: for now we are just showing the reports for the first
             // console that we found in the data
 
-            if (perConsoleReports.Count == 0)
+            if (canonical.Analysis.Consoles.Count == 0)
             {
                 return ECaptureAnalyzerResult.NoSuitableData;
             }
 
-            var firstReports = perConsoleReports.First();
-            foreach (var report in firstReports.Value)
+            var firstReports = canonical.Analysis.Consoles[0];
+            foreach (var report in firstReports.Reports)
             {
                 ReportViewModel model = ReportViewModelFactory.CreateForDocument(
                     _captureAppModel,
@@ -174,6 +156,8 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 }
             }
 
+            if (analysisResultsModel.InvestigationData?.Details is CaptureDataDetails completed)
+                await completed.AdoptDesktopFilesAsync(analysisRunStorageDirectory);
             SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.Complete);
             return ECaptureAnalyzerResult.Success;
         }
@@ -188,20 +172,53 @@ namespace XMAT.XboxLiveCaptureAnalysis
             PublicUtilities.SafeInvoke(() => model.ActiveProcessStep = processStep);
         }
 
-        private List<ServiceCallItem> GetServiceCallItemsForProxyConnections(
-            WebServiceDeviceCaptureController controller)
+        internal XboxLiveAnalysisResult AnalyzeRecords(
+            IEnumerable<IDataRecord> records,
+            string outputDirectory = null,
+            long runId = 0,
+            Action<AnalysisResultsModel.ProcessStep> progress = null,
+            CancellationToken cancellationToken = default)
         {
-            List<ServiceCallItem> items = new();
-
-            foreach (IDataRecord record in controller.GetCaptureRecords())
+            if (_traceAnalyzer == null)
+                throw new InvalidOperationException("The Xbox Live analyzer is not initialized.");
+            var items = new List<ServiceCallItem>();
+            var sourceRows = new Dictionary<string, long>(StringComparer.Ordinal);
+            var skipped = 0;
+            progress?.Invoke(AnalysisResultsModel.ProcessStep.ConvertingProxyConnectionsToServiceCallItems);
+            foreach (var record in records)
             {
-                ServiceCallItem item = ProxyConnectionModelToServiceCallItem(record);
+                cancellationToken.ThrowIfCancellationRequested();
+                var item = ProxyConnectionModelToServiceCallItem(record);
                 if (item != null)
                 {
                     items.Add(item);
+                    sourceRows.Add(item.BreadCrumb, record.RowId);
                 }
+                else
+                    skipped++;
             }
-            return items;
+            var rulesEngine = new RulesEngine(false);
+            var data = new ServiceCallData(false);
+            progress?.Invoke(AnalysisResultsModel.ProcessStep.CreatingServiceDataFromCallItems);
+            data.CreateFromServiceCallItems(items);
+            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Invoke(AnalysisResultsModel.ProcessStep.RunningUrlConverterOnData);
+            _traceAnalyzer.RunUriConverterOnData(data, cancellationToken);
+            progress?.Invoke(AnalysisResultsModel.ProcessStep.RunningValidationRules);
+            var analysis = _traceAnalyzer.RunDetailed(rulesEngine, data, outputDirectory, cancellationToken);
+            if (outputDirectory != null)
+            {
+                progress?.Invoke(AnalysisResultsModel.ProcessStep.DumpingServiceCallData);
+                rulesEngine.DumpServiceCallData(Path.Combine(outputDirectory, $"xlca_{runId}_service_call_data.txt"), data);
+                cancellationToken.ThrowIfCancellationRequested();
+                progress?.Invoke(AnalysisResultsModel.ProcessStep.DumpingServiceCallItems);
+                rulesEngine.DumpServiceCallItems(Path.Combine(outputDirectory, $"xlca_{runId}_service_call_items.txt"), items);
+                cancellationToken.ThrowIfCancellationRequested();
+                progress?.Invoke(AnalysisResultsModel.ProcessStep.DumpingRuleResults);
+                rulesEngine.DumpResultsToFile(Path.Combine(outputDirectory, $"xlca_{runId}_results.txt"));
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return new(analysis, sourceRows, items.Count, skipped);
         }
 
         // TODO: move this to a more appropriate place

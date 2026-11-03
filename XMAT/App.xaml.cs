@@ -228,7 +228,19 @@ namespace XMAT
 
         private void ShutdownDataLayer()
         {
-            CaptureAppModel.AppModel.ActiveDatabase.Shutdown();
+            try
+            {
+                CaptureAppModel.AppModel.DisposeSqlWorkspaceAsync().GetAwaiter().GetResult();
+                CaptureAppModel.AppModel.DisposeInvestigationAsync().GetAwaiter().GetResult();
+                Task.WhenAll(CaptureAppModel.AppModel.CaptureSazImports.DisposeAsync().AsTask(),
+                    CaptureAppModel.AppModel.CaptureEtlImports.DisposeAsync().AsTask(),
+                    CaptureAppModel.AppModel.CaptureFileLoads.DisposeAsync().AsTask()).GetAwaiter().GetResult();
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Capture file cleanup failed: {exception.GetType().Name}");
+            }
+            finally { CaptureAppModel.AppModel.ActiveDatabase.Shutdown(); }
         }
 
         private void ShutdownCaptureMethods()

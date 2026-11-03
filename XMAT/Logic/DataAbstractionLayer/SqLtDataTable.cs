@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using Microsoft.Data.Sqlite;
 using XMAT.SharedInterfaces;
 
@@ -17,7 +18,7 @@ namespace XMAT.DataAbstractionLayer
         public event Action<IDataTable, Int64> RowAdded;
         public event Action<IDataTable, Int64> RowUpdated;
         public event Action<IDataTable, Int64> RowsRemoved;
-        private readonly object _lockObj = new object();
+        private readonly object _lockObj;
 
         public string Name { get { return _name; } }
 
@@ -149,10 +150,12 @@ namespace XMAT.DataAbstractionLayer
 
         public IReadOnlyList<long> ReplaceImportedRows(
             IFieldValue capture,
-            IEnumerable<object[]> rows)
+            IEnumerable<object[]> rows,
+            CancellationToken cancellationToken = default)
         {
             lock (_lockObj)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var captureField = (FieldDefinition)_fieldDefinitions[capture.Name];
                 var fields = _fieldDefinitions.Values.Cast<FieldDefinition>().ToArray();
                 string fieldNames = string.Join(",", fields.Select(field => field.Name));
@@ -190,6 +193,7 @@ namespace XMAT.DataAbstractionLayer
 
                 foreach (object[] row in rows)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (row.Length != fields.Length)
                     {
                         throw new ArgumentException("Inequal number of values to table fields.", nameof(rows));
@@ -205,6 +209,7 @@ namespace XMAT.DataAbstractionLayer
                     rowIds.Add((long)rowIdCommand.ExecuteScalar());
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 transaction.Commit();
                 return rowIds;
             }
@@ -256,6 +261,7 @@ namespace XMAT.DataAbstractionLayer
             string name,
             IEnumerable<IField> fields)
         {
+            _lockObj = SqLtConnectionGate.For(connection);
             _name = name;
 
             var columnIndex = 1;
@@ -272,7 +278,8 @@ namespace XMAT.DataAbstractionLayer
             _command.Connection = connection;
             _commandBuilder = new StringBuilder();
 
-            InitializeNewTable();
+            lock (_lockObj)
+            { InitializeNewTable(); }
         }
 
         private void InitializeNewTable()

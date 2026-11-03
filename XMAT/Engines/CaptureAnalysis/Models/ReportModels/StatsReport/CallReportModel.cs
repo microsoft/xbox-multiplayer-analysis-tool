@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System.IO;
 using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
 
@@ -10,8 +9,6 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.StatsReport
 {
     internal class CallReportModel : ReportViewModel
     {
-        private const string TemplateToken = "${CallsReportJson}";
-
         public override string ReportName { get { return Localization.GetLocalizedString("LTA_REPORT_CALLS_TITLE"); } }
 
         public override bool Show { get { return false; } }
@@ -23,19 +20,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.StatsReport
             CallReportDocument reportDocument) :
             base(captureAppModel, sourceCaptureName, reportDocument)
         {
-            CopyResourceToAnalysisDirectory(
-                "Resources/html/xlta/calls.js",
-                analysisStorageDirectory);
-
-            // populate the newly copied "calls.js" file's token with
-            // the actual JSON from the report
-
-            string statsJsonText = reportDocument.ToJson();
-
-            string templatefilepath = Path.Combine(analysisStorageDirectory, @"calls.js");
-            string templateText = File.ReadAllText(templatefilepath);
-            string replacedText = templateText.Replace(TemplateToken, statsJsonText);
-            File.WriteAllText(templatefilepath, replacedText);
+            AnalysisReportArtifactWriter.WriteCalls(analysisStorageDirectory, reportDocument.ToJson());
         }
     }
 }

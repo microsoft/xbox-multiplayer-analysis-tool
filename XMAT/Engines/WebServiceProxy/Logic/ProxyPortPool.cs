@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace XMAT.WebServiceCapture
 {
@@ -18,6 +19,12 @@ namespace XMAT.WebServiceCapture
         private string _configurationError;
         public UInt16 FirstPort { get; private set; } = DefaultFirstPort;
         public UInt16 LastPort { get; private set; } = DefaultLastPort;
+
+        internal IReadOnlyList<int> GetReservedPorts()
+        {
+            lock (_lockObj)
+            { return _reservations.Keys.Select(port => (int)port).Order().ToArray(); }
+        }
 
         internal void Initialize(UInt16 firstPort, UInt16 lastPort)
         {

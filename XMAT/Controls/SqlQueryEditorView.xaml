@@ -1,0 +1,19 @@
+<UserControl x:Class="XMAT.SqlQueryEditorView"
+  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:editor="http://icsharpcode.net/sharpdevelop/avalonedit"
+  xmlns:sql="clr-namespace:XMAT.SqlQueries"
+  DataContextChanged="View_DataContextChanged"
+  PreviewKeyDown="View_PreviewKeyDown"
+  Loaded="View_Loaded">
+  <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+    <editor:TextEditor x:Name="Editor" ShowLineNumbers="True" FontFamily="Consolas" FontSize="13"
+      Background="{DynamicResource TextBoxBackgroundBrush}"
+      Foreground="{DynamicResource TextBoxForegroundBrush}"
+      LineNumbersForeground="{DynamicResource SecondaryForegroundBrush}"
+      HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+      WordWrap="False" Padding="4" TextChanged="Editor_TextChanged"
+      AutomationProperties.Name="{sql:SqlText SQL_EDITOR_LABEL}"
+      ToolTip="{sql:SqlText SQL_EDITOR_TOOLTIP}"/>
+  </Border>
+</UserControl>
