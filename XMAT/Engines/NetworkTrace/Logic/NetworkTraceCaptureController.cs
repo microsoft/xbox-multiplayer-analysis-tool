@@ -141,14 +141,19 @@ namespace XMAT.NetworkTrace
             return Task.FromResult(!IsRunning);
         }
 
+        // CaptureAppModel disposes the controller once its tab is actually removed.
         public Task CloseAsync()
         {
-            Dispose();
             return Task.CompletedTask;
         }
 
         public void Dispose()
         {
+            // NetworkTracePackets is kept because a reused tab may now display it.
+            if (_dataTable != null)
+            {
+                _dataTable.RowAdded -= HandleRowAdded;
+            }
         }
 
         private void HandleRowAdded(IDataTable table, Int64 rowId)

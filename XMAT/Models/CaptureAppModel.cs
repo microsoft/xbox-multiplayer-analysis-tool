@@ -536,6 +536,7 @@ namespace XMAT.Models
                             true,
                             null,
                             hostListPolicy: HostListPolicy);
+                    staged.Add(device);
                     var datasets = new List<IDataset>();
                     foreach (string tableName in
                         opened.TableNames().Where(name =>
@@ -549,7 +550,6 @@ namespace XMAT.Models
                     }
                     device.CaptureController.LoadCaptures(
                         datasets);
-                    staged.Add(device);
                 }
 
                 ICaptureDeviceContext previousSelection =
@@ -645,7 +645,23 @@ namespace XMAT.Models
             }
             finally
             {
-                opened?.Dispose();
+                try
+                {
+                    // Staged controllers that did not become tabs must stop receiving live rows.
+                    foreach (ICaptureDeviceContext device in staged)
+                    {
+                        if (!_captureDeviceContexts.Contains(
+                            device))
+                        {
+                            (device.CaptureController as
+                                IDisposable)?.Dispose();
+                        }
+                    }
+                }
+                finally
+                {
+                    opened?.Dispose();
+                }
             }
         }
 
@@ -921,14 +937,26 @@ namespace XMAT.Models
                     (wasPresent &&
                      !_captureDeviceContexts.Contains(
                          captureDeviceContext));
-                if (captureDeviceContext.IsReadOnly &&
-                    actuallyRemoved)
+                try
                 {
-                    LoadedCaptureDatabaseRegistry.Release(
-                        captureDeviceContext.CaptureController);
-                    RefreshLoadedDatabase();
+                    // Only a removed tab stops receiving live rows; a failed removal leaves it working.
+                    if (actuallyRemoved)
+                    {
+                        (captureDeviceContext.CaptureController as
+                            IDisposable)?.Dispose();
+                    }
                 }
-                InvalidateCommands();
+                finally
+                {
+                    if (captureDeviceContext.IsReadOnly &&
+                        actuallyRemoved)
+                    {
+                        LoadedCaptureDatabaseRegistry.Release(
+                            captureDeviceContext.CaptureController);
+                        RefreshLoadedDatabase();
+                    }
+                    InvalidateCommands();
+                }
             }
         }
 
