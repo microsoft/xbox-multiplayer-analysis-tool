@@ -48,7 +48,9 @@ XMAT checks capture files before reading them and never changes them:
   While a capture is open, XMAT reads only that file, and other programs can read it
   but not change it. A loaded capture reuses the read-only tab of the same device
   instead of opening a duplicate, and closing the last tab that shows a file releases
-  the file.
+  the file. While a network capture is running, a loaded tab for the same device shows
+  its new packets only from when the tab opens or reloads; packets that arrive while
+  the file loads appear in the running capture's tab, and every packet is still saved.
 - A `.SAZ` archive's directory is checked before it is read: an archive that lists
   more than 750,064 files, has a directory larger than 80 MiB, spans several disks or
   has an inconsistent directory is refused.

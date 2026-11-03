@@ -535,7 +535,8 @@ namespace XMAT.Models
                             (CaptureType)record.Int("CaptureType"),
                             true,
                             null,
-                            hostListPolicy: HostListPolicy);
+                            hostListPolicy: HostListPolicy,
+                            attachLiveRows: false);
                     staged.Add(device);
                     var datasets = new List<IDataset>();
                     foreach (string tableName in
@@ -642,12 +643,23 @@ namespace XMAT.Models
                     LoadedDatabase = opened;
                     opened = null;
                 }
+                // New tabs show live rows from now on; transfer sources and discarded stages never do.
+                foreach (ICaptureDeviceContext device in added)
+                {
+                    if (_captureDeviceContexts.Contains(
+                            device) &&
+                        device.CaptureController is
+                            NetworkTraceCaptureController network)
+                    {
+                        network.AttachLiveRows();
+                    }
+                }
             }
             finally
             {
                 try
                 {
-                    // Staged controllers that did not become tabs must stop receiving live rows.
+                    // Staged controllers that did not become tabs are disposed, so they never attach.
                     foreach (ICaptureDeviceContext device in staged)
                     {
                         if (!_captureDeviceContexts.Contains(

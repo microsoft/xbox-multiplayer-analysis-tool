@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Reflection;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
@@ -21,6 +22,11 @@ namespace XMAT.Tests
         private static readonly string ValidPayload =
             Convert.ToBase64String(
                 new byte[34]);
+
+        private static readonly TimeSpan WaitLimit =
+            TimeSpan.FromSeconds(30);
+
+        private const int InFlightProcessId = 9;
 
         [Fact]
         public async Task LoadDataCaptures_ReloadedNetworkTabAddsEachLivePacketOnce()
@@ -260,6 +266,285 @@ namespace XMAT.Tests
                     database));
         }
 
+        // A row whose RowAdded delivery is already running when a reload hands the file's packets to
+        // the reused tab. The pausing handler is subscribed before any controller, so it holds a
+        // delivery whose handler list is already fixed until LoadDataCaptures has returned.
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task LoadDataCaptures_RowDeliveredDuringAReloadAppearsOnce(
+            bool reload)
+        {
+            await using var session = new LiveNetworkSession();
+            string path = session.WriteCapture(
+                "network.xmatcap",
+                ("console", ValidPayload));
+            using var delivering = new ManualResetEventSlim();
+            using var resume = new ManualResetEventSlim();
+            bool resumedByTest = false;
+            Action<IDataTable, long> pause = (_, _) =>
+            {
+                delivering.Set();
+                Volatile.Write(
+                    ref resumedByTest,
+                    resume.Wait(WaitLimit));
+            };
+            session.LiveTable.RowAdded += pause;
+            Task delivery = null;
+            try
+            {
+                session.Model.LoadDataCaptures(path);
+                var controller =
+                    Assert.IsType<
+                        NetworkTraceCaptureController>(
+                            Assert.Single(
+                                session.Model.CaptureDeviceContexts)
+                                .CaptureController);
+                if (reload)
+                {
+                    // The row starts while the reused tab takes the reloaded packets.
+                    bool pausedDuringReload = false;
+                    PropertyChangedEventHandler startRow = (_, args) =>
+                    {
+                        if (delivery == null &&
+                            args.PropertyName == nameof(
+                                NetworkTraceCaptureController.NetworkTracePackets))
+                        {
+                            delivery = Task.Run(
+                                () => session.AddLivePacket(
+                                    "console",
+                                    InFlightProcessId));
+                            pausedDuringReload =
+                                delivering.Wait(WaitLimit);
+                        }
+                    };
+                    controller.PropertyChanged += startRow;
+                    session.Model.LoadDataCaptures(path);
+                    controller.PropertyChanged -= startRow;
+                    Assert.True(
+                        pausedDuringReload,
+                        "The live row's delivery did not start before the reload finished.");
+                }
+                else
+                {
+                    delivery = Task.Run(
+                        () => session.AddLivePacket(
+                            "console",
+                            InFlightProcessId));
+                }
+
+                Assert.True(
+                    delivering.Wait(WaitLimit),
+                    "The live row's delivery did not start.");
+                resume.Set();
+                await delivery.WaitAsync(WaitLimit);
+                Assert.True(
+                    Volatile.Read(ref resumedByTest),
+                    "The live row's delivery resumed only because its wait timed out.");
+
+                Assert.Single(
+                    controller.NetworkTracePackets,
+                    packet => packet.ProcessId == InFlightProcessId);
+            }
+            finally
+            {
+                resume.Set();
+                if (delivery != null)
+                {
+                    await delivery.WaitAsync(WaitLimit);
+                }
+                session.LiveTable.RowAdded -= pause;
+            }
+        }
+
+        [Fact]
+        public async Task LoadDataCaptures_NewNetworkTabAttachesToLiveRowsOnlyAfterTheLoadCommits()
+        {
+            await using var session = new LiveNetworkSession();
+            string path = session.WriteCapture(
+                "network.xmatcap",
+                ("console", ValidPayload));
+            object[] subscribersWhenAdded = null;
+            NotifyCollectionChangedEventHandler observe =
+                (_, args) =>
+                {
+                    if (args.Action ==
+                        NotifyCollectionChangedAction.Add)
+                    {
+                        subscribersWhenAdded =
+                            session.LiveSubscribers();
+                    }
+                };
+            session.Model.CaptureDeviceContexts.CollectionChanged +=
+                observe;
+            try
+            {
+                session.Model.LoadDataCaptures(path);
+            }
+            finally
+            {
+                session.Model.CaptureDeviceContexts.CollectionChanged -=
+                    observe;
+            }
+
+            var controller =
+                Assert.IsType<
+                    NetworkTraceCaptureController>(
+                        Assert.Single(
+                            session.Model.CaptureDeviceContexts)
+                            .CaptureController);
+            Assert.NotNull(subscribersWhenAdded);
+            Assert.Empty(subscribersWhenAdded);
+            Assert.Equal(
+                new object[] { controller },
+                session.LiveSubscribers());
+
+            session.AddLivePacket("console");
+
+            Assert.Equal(
+                2,
+                controller.NetworkTracePackets.Count);
+        }
+
+        [Fact]
+        public async Task LoadDataCaptures_RejectedNetworkTabAddsNoLiveSubscriber()
+        {
+            await using var session = new LiveNetworkSession();
+            string path = session.WriteCapture(
+                "network.xmatcap",
+                ("console", ValidPayload));
+            NotifyCollectionChangedEventHandler reject =
+                (_, args) =>
+                {
+                    if (args.Action ==
+                        NotifyCollectionChangedAction.Add)
+                    {
+                        throw new InvalidOperationException(
+                            "Injected collection notification failure.");
+                    }
+                };
+            session.Model.CaptureDeviceContexts.CollectionChanged +=
+                reject;
+            try
+            {
+                Assert.Throws<InvalidOperationException>(
+                    () => session.Model.LoadDataCaptures(
+                        path));
+            }
+            finally
+            {
+                session.Model.CaptureDeviceContexts.CollectionChanged -=
+                    reject;
+            }
+
+            Assert.Empty(
+                session.Model.CaptureDeviceContexts);
+            Assert.Empty(
+                session.LiveSubscribers());
+        }
+
+        [Fact]
+        public async Task LoadedNetworkTab_ShowsLiveRowsWhoseIdsMatchFileRowsOrAreReused()
+        {
+            await using var session = new LiveNetworkSession();
+            string path = session.WriteCapture(
+                "network.xmatcap",
+                ("console", ValidPayload),
+                ("console", ValidPayload));
+            session.Model.LoadDataCaptures(path);
+            var controller =
+                Assert.IsType<
+                    NetworkTraceCaptureController>(
+                        Assert.Single(
+                            session.Model.CaptureDeviceContexts)
+                            .CaptureController);
+
+            // The live table is new, so its first rows get the file rows' ids.
+            long first = session.AddLivePacket("console");
+            long second = session.AddLivePacket("console");
+
+            Assert.Equal(
+                new[] { 1L, 2L },
+                new[] { first, second });
+            Assert.Equal(
+                4,
+                controller.NetworkTracePackets.Count);
+
+            // Without AUTOINCREMENT, an emptied table hands out the same id again.
+            session.LiveTable.RemoveRowsWhere();
+            long reused = session.AddLivePacket("console");
+
+            Assert.Equal(
+                first,
+                reused);
+            Assert.Equal(
+                5,
+                controller.NetworkTracePackets.Count);
+        }
+
+        [Fact]
+        public async Task LoadDataCaptures_ReloadKeepsTheLiveTabAndTheLiveTableComplete()
+        {
+            await using var session = new LiveNetworkSession();
+            string path = session.WriteCapture(
+                "network.xmatcap",
+                ("console", ValidPayload));
+            session.Model.CaptureDevicesTable = new RegistrationTable();
+            var live =
+                new CaptureDeviceContextModel(
+                    DeviceType.XboxConsole,
+                    "console",
+                    CaptureType.NetworkTrace,
+                    false,
+                    null);
+            session.Model.CaptureDeviceContexts.Add(live);
+            session.Model.LoadDataCaptures(path);
+            var loaded =
+                Assert.IsType<
+                    NetworkTraceCaptureController>(
+                        Assert.Single(
+                            session.Model.CaptureDeviceContexts,
+                            context => context.IsReadOnly)
+                            .CaptureController);
+            // Rows arrive while the file opens and while the reused tab takes the reloaded packets.
+            PropertyChangedEventHandler addRow = (_, args) =>
+            {
+                if (args.PropertyName == nameof(
+                    NetworkTraceCaptureController.NetworkTracePackets))
+                {
+                    session.AddLivePacket("console", 2);
+                }
+            };
+            loaded.PropertyChanged += addRow;
+            try
+            {
+                session.Model.LoadDataCaptures(
+                    path,
+                    file =>
+                    {
+                        session.AddLivePacket("console", 1);
+                        return new SqLtReadonlyDatabase(file);
+                    });
+            }
+            finally
+            {
+                loaded.PropertyChanged -= addRow;
+            }
+            session.AddLivePacket("console", 3);
+
+            Assert.Equal(
+                new long[] { 1, 2, 3 },
+                Assert.IsType<
+                    NetworkTraceCaptureController>(
+                        live.CaptureController)
+                    .NetworkTracePackets
+                    .Select(packet => packet.ProcessId));
+            Assert.Equal(
+                new long[] { 1, 2, 3 },
+                session.LiveTable.Dataset.DataRecords
+                    .Select(record => record.Int("ProcessId")));
+        }
+
         // Owns a fixture directory, a model and its live database. Disposing it closes the model's
         // tabs and returns NetworkTraceCaptureMethod to the state it had before.
         private sealed class LiveNetworkSession : IAsyncDisposable
@@ -294,6 +579,8 @@ namespace XMAT.Tests
             }
 
             internal CaptureAppModel Model { get; } = new();
+
+            internal IDataTable LiveTable => _liveTable;
 
             private static NetworkTraceCaptureMethod Method =>
                 NetworkTraceCaptureMethod.MethodInstance;
@@ -345,11 +632,14 @@ namespace XMAT.Tests
                 return path;
             }
 
-            internal void AddLivePacket(string deviceName) =>
+            internal long AddLivePacket(
+                string deviceName,
+                int processId = 1) =>
                 AddPacket(
                     _liveTable,
                     deviceName,
-                    ValidPayload);
+                    ValidPayload,
+                    processId);
 
             // The controllers whose handlers are subscribed to the live table's RowAdded event.
             internal object[] LiveSubscribers() =>
@@ -386,13 +676,14 @@ namespace XMAT.Tests
                 }
             }
 
-            private static void AddPacket(
+            private static long AddPacket(
                 IDataTable table,
                 string deviceName,
-                string payload) =>
+                string payload,
+                int processId = 1) =>
                 table.AddRow(
                     deviceName,
-                    1,
+                    processId,
                     1,
                     string.Empty,
                     "ethernet",

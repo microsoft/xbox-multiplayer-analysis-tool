@@ -78,6 +78,8 @@ namespace XMAT.NetworkTrace
         private readonly string _deviceName;
         private DeviceType _deviceType;
         private IDataTable _dataTable;
+        private bool _liveRowsAttached;
+        private bool _disposed;
         internal INetworkTraceEngine _networkTraceEngine;
         private bool _isRunning;
 
@@ -116,16 +118,34 @@ namespace XMAT.NetworkTrace
             DestIpFilterList = new ObservableCollection<CheckedListItem>();
         }
 
-        public void Initialize()
+        public void Initialize() => Initialize(attachLiveRows: true);
+
+        // A capture loaded from a file attaches to live rows only once it becomes a tab.
+        internal void Initialize(bool attachLiveRows)
         {
             NetworkTracePackets = new NetworkTracePacketsCollection();
             CaptureMethod = NetworkTraceCaptureMethod.Method;
             _dataTable = (CaptureMethod as NetworkTraceCaptureMethod).NetworkTracePacketsTable;
-            _dataTable.RowAdded += HandleRowAdded;
+            if (attachLiveRows)
+            {
+                AttachLiveRows();
+            }
             IsCapturing = false;
             DeviceStatus = DeviceStatusEnum.Idle;
             RaisePropertyChange(nameof(HaveTraces));
             RaisePropertyChange(nameof(HaveNoTraces));
+        }
+
+        // Shows rows added to the live table from now on; does nothing once attached or disposed.
+        internal void AttachLiveRows()
+        {
+            if (_liveRowsAttached || _disposed)
+            {
+                return;
+            }
+
+            _dataTable.RowAdded += HandleRowAdded;
+            _liveRowsAttached = true;
         }
 
         public void ClearAllCaptures()
@@ -150,9 +170,11 @@ namespace XMAT.NetworkTrace
         public void Dispose()
         {
             // NetworkTracePackets is kept because a reused tab may now display it.
-            if (_dataTable != null)
+            _disposed = true;
+            if (_liveRowsAttached)
             {
                 _dataTable.RowAdded -= HandleRowAdded;
+                _liveRowsAttached = false;
             }
         }
 
