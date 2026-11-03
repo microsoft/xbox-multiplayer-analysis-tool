@@ -16,12 +16,22 @@ development kit. For packet-level traffic, follow [Network capture](network-capt
 
 ## Obtain and run XMAT
 
+### Use a release (recommended)
+
+1. Open the [latest release page](https://github.com/microsoft/xbox-multiplayer-analysis-tool/releases/latest).
+2. Download the XMAT ZIP under **Assets** (not **Source code (zip)**) and extract
+   the complete archive.
+3. Run `XboxMultiplayerAnalysisTool.exe` from the extracted directory.
+
 ### Use a CI build
 
-1. Open the [XMAT Win64 Desktop Build workflow](https://github.com/microsoft/xbox-multiplayer-analysis-tool/actions/workflows/dotnet-desktop.yml)
-   and select a successful run for the source revision you want.
+Use CI builds when you need changes that are not yet in a release.
+
+1. Open the [XMAT Win64 Desktop Build workflow filtered to push runs on main](https://github.com/microsoft/xbox-multiplayer-analysis-tool/actions/workflows/dotnet-desktop.yml?query=branch%3Amain+event%3Apush)
+   and select a successful **push** run on **main**, not a pull request build.
 2. Download its `XMAT_CI_Build_Release` artifact and extract the complete archive.
-   Downloading workflow artifacts requires signing in to GitHub.
+   Downloading workflow artifacts requires signing in to GitHub, and artifacts
+   expire.
 3. This build is not self-contained: install the .NET 10 Desktop Runtime and
    ASP.NET Core Runtime for Windows x64 if they are not already installed.
 4. Run `XboxMultiplayerAnalysisTool.exe` from the extracted directory.
@@ -33,8 +43,11 @@ Install the **.NET 10 SDK** on Windows. From the repository root, run:
 ```powershell
 dotnet restore .\XboxMultiplayerAnalysisTool.sln
 dotnet build .\XboxMultiplayerAnalysisTool.sln -c Release --no-restore
-dotnet run --project .\XMAT\XboxMultiplayerAnalysisTool.csproj -c Release --no-build
+.\XMAT\bin\x64\Release\net10.0-windows10.0.17763.0\win-x64\XboxMultiplayerAnalysisTool.exe
 ```
+
+Launch the built executable directly rather than using `dotnet run`, which places
+XMAT in a kill-on-close job that prevents Local PC capture.
 
 The solution targets x64. You can also open `XboxMultiplayerAnalysisTool.sln` in a
 Visual Studio installation that supports .NET 10 and WPF, select **Release / x64**,
