@@ -519,28 +519,29 @@ namespace XMAT.Tests
                 directory.Path,
                 "capture.xmatcap");
             string[] before = DirectoryState(directory.Path);
-            var writer = new FileStream(
+            using (var writer = new FileStream(
                 path,
                 FileMode.Open,
                 FileAccess.ReadWrite,
-                FileShare.ReadWrite);
-            MemoryMappedFile mapping = null;
-            MemoryMappedViewAccessor view = null;
-            try
+                FileShare.ReadWrite))
+            using (MemoryMappedFile mapping = mappedViewOnly
+                ? MemoryMappedFile.CreateFromFile(
+                    writer,
+                    null,
+                    0,
+                    MemoryMappedFileAccess.ReadWrite,
+                    HandleInheritability.None,
+                    leaveOpen: true)
+                : null)
+            using (MemoryMappedViewAccessor view =
+                mapping?.CreateViewAccessor(
+                    0,
+                    0,
+                    MemoryMappedFileAccess.ReadWrite))
             {
                 if (mappedViewOnly)
                 {
-                    mapping = MemoryMappedFile.CreateFromFile(
-                        writer,
-                        null,
-                        0,
-                        MemoryMappedFileAccess.ReadWrite,
-                        HandleInheritability.None,
-                        leaveOpen: true);
-                    view = mapping.CreateViewAccessor(
-                        0,
-                        0,
-                        MemoryMappedFileAccess.ReadWrite);
+                    // Closing this handle leaves the mapped view as the only writer.
                     writer.Dispose();
                 }
 
@@ -548,12 +549,6 @@ namespace XMAT.Tests
                     () => new SqLtReadonlyDatabase(
                         path,
                         SqLtSchemaProfile.CreateGui()));
-            }
-            finally
-            {
-                view?.Dispose();
-                mapping?.Dispose();
-                writer.Dispose();
             }
 
             Assert.Equal(
