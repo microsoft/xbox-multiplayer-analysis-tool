@@ -152,7 +152,12 @@ namespace CaptureAnalysisEngine
 
         private static bool HasScheme(string value)
         {
-            int separator = value?.IndexOf(':') ?? -1;
+            if (string.IsNullOrEmpty(value))
+            {
+                return false;
+            }
+
+            int separator = value.IndexOf(':');
             return separator > 0 &&
                 Uri.CheckSchemeName(
                     value.Substring(

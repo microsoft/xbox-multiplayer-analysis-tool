@@ -538,16 +538,14 @@ namespace XMAT.Models
                             hostListPolicy: HostListPolicy);
                     var datasets = new List<IDataset>();
                     foreach (string tableName in
-                        opened.TableNames())
+                        opened.TableNames().Where(name =>
+                            device.CaptureController
+                                .CaptureMethod
+                                .OwnsDataTable(name)))
                     {
-                        if (device.CaptureController
-                            .CaptureMethod
-                            .OwnsDataTable(tableName))
-                        {
-                            datasets.Add(
-                                opened.TableByName(
-                                    tableName).Dataset);
-                        }
+                        datasets.Add(
+                            opened.TableByName(
+                                tableName).Dataset);
                     }
                     device.CaptureController.LoadCaptures(
                         datasets);

@@ -408,7 +408,7 @@ namespace XMAT.NetworkTrace
                 ? protocol.ToString(
                     CultureInfo.InvariantCulture) +
                     " (" +
-                    ((NetworkProtocol)protocol).ToString() +
+                    (NetworkProtocol)protocol +
                     ")"
                 : protocol.ToString(
                     CultureInfo.InvariantCulture);
