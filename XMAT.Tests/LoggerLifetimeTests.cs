@@ -81,15 +81,26 @@ namespace XMAT.Tests
             logger.CloseLog();
         }
 
-        [Fact]
-        public void CloseLog_PropagatesConsumerWriteFailures()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void CloseLog_ReportsConsumerFailureThenAllowsRetryAndReinitialization(bool retryClose)
         {
             using var stream = new FailingWriteStream();
-            var logger = new Logger();
+            using var logger = new Logger();
             logger.InitLog(stream, LogLevel.DEBUG);
             stream.FailWrites = true;
             logger.Log(1, LogLevel.INFO, "cannot write");
             Assert.Throws<IOException>(logger.CloseLog);
+
+            if (retryClose)
+                logger.CloseLog();
+            using var healthy = new MemoryStream();
+            logger.InitLog(healthy, LogLevel.DEBUG);
+            logger.Log(2, LogLevel.INFO, "recovered lifetime");
+            logger.CloseLog();
+
+            Assert.Contains("recovered lifetime", Encoding.UTF8.GetString(healthy.ToArray()));
         }
 
         private sealed class BlockingWriteStream : MemoryStream

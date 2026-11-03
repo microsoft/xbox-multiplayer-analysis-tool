@@ -115,6 +115,7 @@ namespace XMAT
                     {
                         _lines?.Dispose();
                         _lines = null;
+                        _writerTask = null;
                     }
                 }
             }

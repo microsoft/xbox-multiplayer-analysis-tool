@@ -57,6 +57,7 @@ namespace XMAT.WebServiceCapture
             // Keep the raw header lines: the capture's dictionary collapses repeated header names.
             string rawHeaders = capture.RequestLineAndHeaders ?? "";
             int firstLineEnd = rawHeaders.IndexOf('\n');
+            byte[] body = GetCapturedBody(capture);
             var draft = new RequestReplayDraft
             {
                 Method = capture.Method,
@@ -64,7 +65,7 @@ namespace XMAT.WebServiceCapture
                 _originalAuthority = new Uri(url).GetLeftPart(UriPartial.Authority),
                 HeadersText = firstLineEnd < 0 ? "" : rawHeaders[(firstLineEnd + 1)..].TrimEnd('\r', '\n'),
                 BodyIsBase64 = true,
-                BodyText = Convert.ToBase64String(capture.RequestBody ?? Array.Empty<byte>())
+                BodyText = Convert.ToBase64String(body)
             };
 
             // Encoded payloads must not be treated as editable text just because their bytes decode as UTF-8.
@@ -74,7 +75,7 @@ namespace XMAT.WebServiceCapture
             {
                 try
                 {
-                    string text = StrictUtf8.GetString(capture.RequestBody ?? Array.Empty<byte>());
+                    string text = StrictUtf8.GetString(body);
                     if (!text.Any(c => char.IsControl(c) && c is not ('\r' or '\n' or '\t')))
                     {
                         draft.BodyText = text;
@@ -87,6 +88,35 @@ namespace XMAT.WebServiceCapture
                 }
             }
             return draft;
+        }
+
+        private static byte[] GetCapturedBody(ProxyConnectionModel capture)
+        {
+            byte[] body = capture.RequestBody ?? Array.Empty<byte>();
+            if (!capture.RequestHeaders.TryGetValue("Transfer-Encoding", out string transferEncoding) ||
+                !transferEncoding.Split(',')[^1].Trim().Equals("chunked", StringComparison.OrdinalIgnoreCase))
+            {
+                return body;
+            }
+
+            // Live captures may already be dechunked. Only interpret bodies with recognizable framing.
+            int newline = body.AsSpan().IndexOf((byte)'\n');
+            if (newline < 0)
+                return body;
+            string firstLine = Encoding.Latin1.GetString(body, 0, newline).TrimEnd('\r');
+            string sizeText = firstLine.Split(';')[0].Trim();
+            bool hasSizeLine = sizeText.Length > 0 && sizeText.All(Uri.IsHexDigit);
+            if (!hasSizeLine && !body.AsSpan().EndsWith("\r\n0\r\n\r\n"u8))
+                return body;
+
+            try
+            {
+                return ChunkedBodyDecoder.Decode(body, body.Length);
+            }
+            catch (InvalidDataException exception)
+            {
+                throw new FormatException("The captured request contains malformed chunked framing.", exception);
+            }
         }
 
         internal static bool CanReplay(ProxyConnectionModel capture)
@@ -248,6 +278,8 @@ namespace XMAT.WebServiceCapture
         private static bool IsTokenCharacter(char c) =>
             char.IsAsciiLetterOrDigit(c) || "!#$%&'*+-.^_`|~".Contains(c);
 
-        private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
+        private static string Quote(string value) => "'" + value.Replace("'", "''")
+            .Replace("\u2018", "\u2018\u2018").Replace("\u2019", "\u2019\u2019")
+            .Replace("\u201a", "\u201a\u201a").Replace("\u201b", "\u201b\u201b") + "'";
     }
 }

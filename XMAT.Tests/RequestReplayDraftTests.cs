@@ -137,11 +137,14 @@ namespace XMAT.Tests
             Assert.Throws<ArgumentException>(() => draft.CreateRequest());
         }
 
-        [Fact]
-        public async Task FromCapture_PreservesBinaryBodyUsingBase64()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task FromCapture_PreservesBinaryBodyUsingBase64(bool staleChunkedHeader)
         {
             byte[] body = [0, 255, 128, 13, 10];
-            var draft = RequestReplayDraft.FromCapture(Capture("POST", "/", body));
+            var draft = RequestReplayDraft.FromCapture(Capture("POST", "/", body,
+                staleChunkedHeader ? "Transfer-Encoding: chunked\r\n" : ""));
 
             Assert.True(draft.BodyIsBase64);
             Assert.Equal(Convert.ToBase64String(body), draft.BodyText);
@@ -219,22 +222,110 @@ namespace XMAT.Tests
         [InlineData("/sessions")]
         public void FromCapture_PreservesImportedSazRequestTarget(string target)
         {
-            using var stream = new MemoryStream();
-            using var archive = new ZipArchive(stream, ZipArchiveMode.Update);
-            var entry = archive.CreateEntry("raw/1_c.txt");
-            using (var requestStream = entry.Open())
-            {
-                requestStream.Write(Encoding.ASCII.GetBytes(
-                    $"GET https://example.com:8443{target} HTTP/1.1\r\nHost: example.com:8443\r\n\r\n"));
-            }
-
-            var capture = FiddlerSazHandler.FromFiddlerFrame(1, entry, null, null);
+            var capture = ImportedCapture(target, []);
             var draft = RequestReplayDraft.FromCapture(capture);
             using var request = draft.CreateRequest();
 
             Assert.Equal(target, capture.Path);
             Assert.Equal("https://example.com:8443" + target, draft.Url);
             Assert.Equal(draft.Url, request.RequestUri.AbsoluteUri);
+        }
+
+        [Theory]
+        [InlineData("chunked", "4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n", "Wikipedia")]
+        [InlineData("ChUnKeD", "4;name=\"one;two\"\r\nWiki\r\n0;done\r\nX-Trailer: ignored\r\n\r\n", "Wiki")]
+        [InlineData("identity, chunked", "A\r\n0123456789\r\n0\r\n\r\n", "0123456789")]
+        [InlineData("chunked", "0\r\n\r\n", "")]
+        public async Task FromCapture_DecodesImportedChunkedBodyWithoutChangingCapture(
+            string transferEncoding, string framedBody, string expected)
+        {
+            byte[] body = Encoding.ASCII.GetBytes(framedBody);
+            var capture = ImportedCapture("/", body, $"Transfer-Encoding: {transferEncoding}\r\n");
+            string headers = capture.RequestLineAndHeaders;
+
+            var draft = RequestReplayDraft.FromCapture(capture);
+            using var request = draft.CreateRequest();
+
+            Assert.Equal(expected, draft.BodyText);
+            Assert.False(draft.BodyIsBase64);
+            Assert.Equal(Encoding.ASCII.GetBytes(expected), await request.Content.ReadAsByteArrayAsync());
+            Assert.Equal(expected.Length, request.Content.Headers.ContentLength);
+            Assert.False(request.Headers.Contains("Transfer-Encoding"));
+            Assert.Equal(Encoding.ASCII.GetBytes(framedBody), capture.RequestBody);
+            Assert.Equal(headers, capture.RequestLineAndHeaders);
+            Assert.Equal(transferEncoding, capture.RequestHeaders["Transfer-Encoding"]);
+        }
+
+        [Fact]
+        public async Task FromCapture_DecodesBinaryChunksWithoutDecodingContentEncoding()
+        {
+            byte[] body = [.. "3\r\n"u8, 0, 255, 128, .. "\r\n0\r\n\r\n"u8];
+            var capture = ImportedCapture("/", body,
+                "Transfer-Encoding: chunked\r\nContent-Encoding: custom\r\n");
+
+            var draft = RequestReplayDraft.FromCapture(capture);
+            using var request = draft.CreateRequest();
+
+            Assert.True(draft.BodyIsBase64);
+            Assert.Equal(new byte[] { 0, 255, 128 }, await request.Content.ReadAsByteArrayAsync());
+            Assert.Contains("custom", request.Content.Headers.ContentEncoding);
+            Assert.Equal(body, capture.RequestBody);
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("Wikipedia")]
+        [InlineData("{\r\n\"name\":\"one\"\r\n}")]
+        [InlineData("plain\r\ntext\r\n")]
+        [InlineData("123")]
+        public async Task FromCapture_PreservesDecodedBodiesWithStaleChunkedHeader(string text)
+        {
+            var capture = ImportedCapture("/", Encoding.UTF8.GetBytes(text), "Transfer-Encoding: chunked\r\n");
+            var draft = RequestReplayDraft.FromCapture(capture);
+            using var request = draft.CreateRequest();
+
+            Assert.Equal(text, await request.Content.ReadAsStringAsync());
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("gzip")]
+        [InlineData("chunked, gzip")]
+        public async Task FromCapture_DoesNotDecodeWithoutFinalChunkedCoding(string transferEncoding)
+        {
+            byte[] body = "4\r\nWiki\r\n0\r\n\r\n"u8.ToArray();
+            var capture = ImportedCapture("/", body,
+                transferEncoding.Length == 0 ? "" : $"Transfer-Encoding: {transferEncoding}\r\n");
+            var draft = RequestReplayDraft.FromCapture(capture);
+            using var request = draft.CreateRequest();
+
+            Assert.Equal(body, await request.Content.ReadAsByteArrayAsync());
+        }
+
+        [Theory]
+        [InlineData("4\r\nWiki\r\n")]
+        [InlineData("4\nWiki\n0\n\n")]
+        [InlineData("4\r\nWik\r\n0\r\n\r\n")]
+        [InlineData("4\r\nWikiX\r\n0\r\n\r\n")]
+        [InlineData("0\r\n")]
+        [InlineData("0\r\n\r\nextra")]
+        [InlineData("FFFFFFFFFFFFFFFF\r\nx\r\n0\r\n\r\n")]
+        [InlineData("4;=bad\r\nWiki\r\n0\r\n\r\n")]
+        [InlineData("4\r\nWiki\r\n0\r\nBad-Trailer\r\n\r\n")]
+        [InlineData("4\r\nWiki\r\n0\r\nBad Name: value\r\n\r\n")]
+        [InlineData("4\r\nWiki\r\n0\r\nX-Trailer: value\nbad\r\n\r\n")]
+        [InlineData("4\r\nWiki\r\nZ\r\n\r\n")]
+        [InlineData("Z\r\nWiki\r\n0\r\n\r\n")]
+        public void FromCapture_RejectsRecognizedMalformedChunkFraming(string text)
+        {
+            byte[] body = Encoding.ASCII.GetBytes(text);
+            var capture = ImportedCapture("/", body, "Transfer-Encoding: chunked\r\n");
+
+            var exception = Assert.Throws<FormatException>(() => RequestReplayDraft.FromCapture(capture));
+
+            Assert.Contains("malformed chunked framing", exception.Message);
+            Assert.Equal(body, capture.RequestBody);
+            Assert.Equal("chunked", capture.RequestHeaders["Transfer-Encoding"]);
         }
 
         [Fact]
@@ -314,19 +405,27 @@ namespace XMAT.Tests
                 await request.Content.ReadAsByteArrayAsync());
         }
 
-        [Fact]
-        public async Task ToCurlCommand_PowerShellReceivesExactArgumentsAndCleansUpBinaryFile()
+        [Theory]
+        [InlineData("'")]
+        [InlineData("\u2018")]
+        [InlineData("\u2019")]
+        [InlineData("\u201a")]
+        [InlineData("\u201b")]
+        public async Task ToCurlCommand_PowerShellReceivesExactArgumentsAndCleansUpBinaryFile(string quote)
         {
+            string header = $"X-Test: safe{quote}; $script:injected = $true; # O'Neil; \"quoted\" $(notExecuted)";
             var draft = new RequestReplayDraft
             {
                 Url = "https://example.com/path?a=1&b=2",
                 Method = "POST",
-                HeadersText = "X-Test: O'Neil; \"quoted\" $(notExecuted)\r\n",
+                HeadersText = header + "\r\n",
                 BodyIsBase64 = true,
                 BodyText = "AP8NCg=="
             };
             string script = """
                 $ErrorActionPreference = 'Stop'
+                [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+                $script:injected = $false
                 function curl.exe {
                     $script:receivedArguments = @($args)
                     $index = [Array]::IndexOf($script:receivedArguments, '--data-binary')
@@ -339,6 +438,7 @@ namespace XMAT.Tests
                     Arguments = $script:receivedArguments
                     Body = $script:receivedBody
                     Exists = [System.IO.File]::Exists($script:receivedPath)
+                    Injected = $script:injected
                 } | ConvertTo-Json -Compress
                 """;
             using var process = new Process
@@ -348,7 +448,8 @@ namespace XMAT.Tests
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8
                 }
             };
             process.StartInfo.ArgumentList.Add("-NoProfile");
@@ -366,15 +467,30 @@ namespace XMAT.Tests
                 var root = document.RootElement;
                 Assert.Equal(draft.BodyText, root.GetProperty("Body").GetString());
                 Assert.False(root.GetProperty("Exists").GetBoolean());
+                Assert.False(root.GetProperty("Injected").GetBoolean());
                 var arguments = root.GetProperty("Arguments").EnumerateArray().Select(item => item.GetString()).ToArray();
                 Assert.Contains(draft.Url, arguments);
-                Assert.Contains("X-Test: O'Neil; \"quoted\" $(notExecuted)", arguments);
+                Assert.Contains(header, arguments);
             }
             finally
             {
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
             }
+        }
+
+        private static ProxyConnectionModel ImportedCapture(string target, byte[] body, string headers = "")
+        {
+            using var stream = new MemoryStream();
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Update);
+            var entry = archive.CreateEntry("raw/1_c.txt");
+            using (var requestStream = entry.Open())
+            {
+                requestStream.Write(Encoding.ASCII.GetBytes(
+                    $"POST https://example.com:8443{target} HTTP/1.1\r\nHost: example.com:8443\r\n{headers}\r\n"));
+                requestStream.Write(body);
+            }
+            return FiddlerSazHandler.FromFiddlerFrame(1, entry, null, null);
         }
 
         internal static ProxyConnectionModel Capture(
