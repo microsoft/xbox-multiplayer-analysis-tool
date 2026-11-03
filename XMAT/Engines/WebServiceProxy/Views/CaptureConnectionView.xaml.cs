@@ -61,6 +61,7 @@ namespace XMAT.WebServiceCapture
             _connectionFilter = IncludeConnection;
             InitializeComponent();
 
+            EditAndResendMenuItem.Header = Localization.GetLocalizedString("COMPOSER_TITLE");
             EnableButton.Content = Localization.GetLocalizedString("WEBCAP_ENABLE");
             DisableButton.Content = Localization.GetLocalizedString("WEBCAP_DISABLE");
             DiscardPortButton.Content = Localization.GetLocalizedString("PROXY_PORT_DISCARD");
@@ -92,6 +93,42 @@ namespace XMAT.WebServiceCapture
             ConnectionList.Columns[3].Header = Localization.GetLocalizedString("WEBCAP_HEADER_SCHEME");
             ConnectionList.Columns[4].Header = Localization.GetLocalizedString("WEBCAP_HEADER_HOST");
             ConnectionList.Columns[5].Header = Localization.GetLocalizedString("WEBCAP_HEADER_PATH");
+        }
+
+        private void EditAndResend_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = RequestReplayDraft.CanReplay(e.Parameter as ProxyConnectionModel);
+            e.Handled = true;
+        }
+
+        private void EditAndResend_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (!RequestReplayDraft.CanReplay(e.Parameter as ProxyConnectionModel))
+                return;
+            try
+            {
+                var composer = new RequestComposerWindow((ProxyConnectionModel)e.Parameter)
+                {
+                    Owner = Window.GetWindow(this)
+                };
+                composer.Show();
+            }
+            catch (Exception exception) when (exception is ArgumentException or FormatException or OverflowException)
+            {
+                MessageBox.Show(Window.GetWindow(this), Localization.GetLocalizedString("COMPOSER_ERROR", exception.Message),
+                    Localization.GetLocalizedString("COMPOSER_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            e.Handled = true;
+        }
+
+        private void ConnectionList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            // Right-click need not select a row by default; replay the clicked request, not a previous selection.
+            if (e.OriginalSource is DependencyObject source &&
+                ItemsControl.ContainerFromElement(ConnectionList, source) is DataGridRow row)
+            {
+                ConnectionList.SelectedItem = row.Item;
+            }
         }
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
@@ -874,6 +911,14 @@ namespace XMAT.WebServiceCapture
                 (row.Item as ProxyConnectionModel)?.ActionableHost,
                 "HOST_LIST_NO_HOST",
                 row);
+            row.ContextMenu.Items.Add(new Separator());
+            row.ContextMenu.Items.Add(new MenuItem
+            {
+                Header = Localization.GetLocalizedString("COMPOSER_TITLE"),
+                Command = WebServiceProxyCommands.EditAndResend,
+                CommandTarget = this,
+                CommandParameter = row.Item
+            });
         }
 
         internal static bool TryGetCaptureContext(

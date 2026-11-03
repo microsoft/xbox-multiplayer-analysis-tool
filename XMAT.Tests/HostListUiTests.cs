@@ -48,6 +48,12 @@ namespace XMAT.Tests
                 WpfTestHost.Pump();
 
                 ContextMenu menu = Open(Row(grid, clicked));
+                var replay = Assert.Single(menu.Items.OfType<MenuItem>(),
+                    item => item.Command == WebServiceProxyCommands.EditAndResend);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_TITLE"), replay.Header);
+                Assert.Same(view, replay.CommandTarget);
+                Assert.Same(clicked, replay.CommandParameter);
+                Assert.True(replay.IsEnabled);
                 HostListAction block = Actions(menu).Single(action => action.List == HostListKind.Block);
                 Assert.Equal("clicked.example", block.Host);
                 Assert.Equal(HostListOperation.Add, block.Operation);
@@ -84,6 +90,11 @@ namespace XMAT.Tests
                 Assert.Same(selected, grid.SelectedItem);
 
                 ContextMenu menu = OpenFromFocus(window);
+                var replay = Assert.Single(menu.Items.OfType<MenuItem>(),
+                    item => item.Command == WebServiceProxyCommands.EditAndResend);
+                Assert.Same(view, replay.CommandTarget);
+                Assert.Same(focused, replay.CommandParameter);
+                Assert.True(replay.IsEnabled);
                 Assert.NotEmpty(Actions(menu));
                 Assert.All(Actions(menu), action => Assert.Equal("focused.example", action.Host));
                 HostListAction block = Actions(menu).Single(action => action.List == HostListKind.Block);
@@ -136,6 +147,31 @@ namespace XMAT.Tests
                     WpfTestHost.Pump();
                 }
                 Assert.Equal(handlers, CollectionHandlerCount(policy.BlockList.BlockedUrls));
+            });
+        }
+
+        [Theory]
+        [InlineData("GET", "", true)]
+        [InlineData("CONNECT", "", false)]
+        [InlineData("GET", "Upgrade: websocket\r\n", false)]
+        public void CaptureRowMenu_OnlyEnablesReplayForSupportedRequests(
+            string method, string headers, bool expected)
+        {
+            _application.Run(window =>
+            {
+                var capture = RequestReplayDraftTests.Capture(method, "/", [], headers);
+                CaptureConnectionView view = CaptureView(new HostListPolicy(), capture);
+                ShowCaptureView(window, view);
+                var grid = (DataGrid)view.FindName("ConnectionList");
+
+                ContextMenu menu = Open(Row(grid, capture));
+                var replay = Assert.Single(menu.Items.OfType<MenuItem>(),
+                    item => item.Command == WebServiceProxyCommands.EditAndResend);
+                Assert.Same(capture, replay.CommandParameter);
+                Assert.Equal(expected, replay.IsEnabled);
+                Assert.NotEmpty(Actions(menu));
+                menu.IsOpen = false;
+                WpfTestHost.Pump();
             });
         }
 

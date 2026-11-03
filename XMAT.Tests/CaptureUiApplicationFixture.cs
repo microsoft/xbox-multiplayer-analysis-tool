@@ -97,6 +97,10 @@ namespace XMAT.Tests
         internal void Run(Action<Window> test) =>
             (_shared ?? this)._application.Dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
 
+        // Async UI tests share this application's dispatcher and lifetime instead of creating another Application.
+        internal Task RunAsync(Func<Task> test) =>
+            (_shared ?? this)._application.Dispatcher.InvokeAsync(test).Task.Unwrap().WaitAsync(TimeSpan.FromSeconds(30));
+
         public void Dispose()
         {
             var failure = (_shared ?? this)._failure;
