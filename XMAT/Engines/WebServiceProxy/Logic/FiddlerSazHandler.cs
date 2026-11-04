@@ -13,6 +13,7 @@ using System.Text;
 using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
+using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
 using XMAT.WebServiceCapture.Models;
 
@@ -683,6 +684,11 @@ namespace XMAT.WebServiceCapture
 
         private static bool IsHeaderValueTrimCharacter(char value) =>
             value is '\t' or '\n' or '\v' or '\f' or '\r' or ' ';
+
+        // The SAZ writer of the shared export operation, sanitizing when asked. expectedRows sets the width of the
+        // ordinal frame names.
+        internal static ICaptureExportWriter CreateExportWriter(string stagedPath, bool sanitized, long expectedRows) =>
+            throw new NotImplementedException();
 
         public static void CreateSazFile(string filename, IEnumerable<ProxyConnectionModel> records)
         {

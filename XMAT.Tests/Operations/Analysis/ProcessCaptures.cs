@@ -14,14 +14,16 @@ using XMAT.WebServiceCapture.Models;
 namespace XMAT.Tests.Operations.Analysis
 {
     // One session of a process-aware synthetic capture, stored with its ClientProcess* values as given. Analyzable
-    // sessions are Xbox Live calls; the others are web traffic that the analysis skips but the process scope counts.
+    // sessions are Xbox Live calls; the others are web traffic that the analysis skips but the process scope counts. An
+    // empty HttpStatus stores a request without a recorded response.
     internal sealed record ProcessSession(
         string ProcessName,
         long ProcessId,
         string Status,
         bool Analyzable = true,
         string Device = ProcessCaptures.Device,
-        string StartTimeUtc = "");
+        string StartTimeUtc = "",
+        string HttpStatus = "200");
 
     // One frame of a process-aware synthetic SAZ. The process flags are written exactly as given (a null value writes
     // no flag), so tests can vary the flag spelling.
@@ -86,22 +88,23 @@ namespace XMAT.Tests.Operations.Analysis
                 long number = index + 1;
                 Message message = CreateMessage(number, session.Analyzable);
                 DateTime started = StartUtc.AddSeconds(number);
+                bool responded = session.HttpStatus.Length != 0;
                 captures.AddRow(
                     session.Device,
                     number,
                     number,
                     ProxyConnectionModel.ToDateTimeString(started),
-                    ProxyConnectionModel.ToDateTimeString(started.AddMilliseconds(25)),
+                    responded ? ProxyConnectionModel.ToDateTimeString(started.AddMilliseconds(25)) : string.Empty,
                     "https",
                     message.Host,
                     "443",
                     message.Method,
                     message.PathAndQuery,
-                    "200",
+                    session.HttpStatus,
                     message.RequestHeaders,
                     Convert.ToBase64String(message.RequestBody),
-                    message.ResponseHeaders,
-                    Convert.ToBase64String(message.ResponseBody),
+                    responded ? message.ResponseHeaders : string.Empty,
+                    responded ? Convert.ToBase64String(message.ResponseBody) : string.Empty,
                     ClientIp,
                     session.ProcessName ?? string.Empty,
                     session.ProcessId,
