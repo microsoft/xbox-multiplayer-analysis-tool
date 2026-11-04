@@ -19,6 +19,13 @@ namespace XMAT.WebServiceCapture
     internal sealed class RequestReplayDraft
     {
         private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+        // Replaying a request unconditionally removes the validators that would let the server answer 304 or 412.
+        private static readonly HashSet<string> ConditionalHeaders = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "If-Range"
+        };
+
         private string _originalAuthority;
 
         internal string Method { get; set; } = "GET";
@@ -26,11 +33,18 @@ namespace XMAT.WebServiceCapture
         internal string HeadersText { get; set; } = "";
         internal string BodyText { get; set; } = "";
         internal bool BodyIsBase64 { get; set; }
+
+        // Methods other than GET, HEAD and OPTIONS can change server state.
+        internal bool UsesUnsafeMethod => Method is not ("GET" or "HEAD" or "OPTIONS");
+
+        // True when the URL no longer targets the origin the request was captured for, while it still carries the
+        // captured headers, such as credentials.
+        internal bool ChangesOrigin =>
+            _originalAuthority != null && Uri.TryCreate(Url, UriKind.Absolute, out var uri) &&
+            !string.Equals(_originalAuthority, uri.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase);
+
         // Even a safe method needs confirmation when captured credentials could reach a different origin.
-        internal bool RequiresConfirmation =>
-            Method is not ("GET" or "HEAD" or "OPTIONS") ||
-            (_originalAuthority != null && Uri.TryCreate(Url, UriKind.Absolute, out var uri) &&
-                !string.Equals(_originalAuthority, uri.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase));
+        internal bool RequiresConfirmation => UsesUnsafeMethod || ChangesOrigin;
 
         internal static RequestReplayDraft FromCapture(ProxyConnectionModel capture)
         {
@@ -39,8 +53,9 @@ namespace XMAT.WebServiceCapture
                 throw new ArgumentException("Only HTTP requests without a protocol upgrade can be replayed.");
 
             // Captures can store either an absolute proxy URL or a path relative to the recorded host.
+            string path = capture.Path ?? "";
             string url;
-            if (Uri.TryCreate(capture.Path, UriKind.Absolute, out var absolute) &&
+            if (Uri.TryCreate(path, UriKind.Absolute, out var absolute) &&
                 (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps))
             {
                 url = absolute.AbsoluteUri;
@@ -51,7 +66,7 @@ namespace XMAT.WebServiceCapture
                 if (!string.IsNullOrEmpty(capture.Port))
                     authority.Port = int.Parse(capture.Port);
                 url = authority.Uri.GetLeftPart(UriPartial.Authority) +
-                    (capture.Path.StartsWith('/') ? capture.Path : "/" + capture.Path);
+                    (path.StartsWith('/') ? path : "/" + path);
             }
 
             // Keep the raw header lines: the capture's dictionary collapses repeated header names.
@@ -93,25 +108,10 @@ namespace XMAT.WebServiceCapture
         private static byte[] GetCapturedBody(ProxyConnectionModel capture)
         {
             byte[] body = capture.RequestBody ?? Array.Empty<byte>();
-            if (!capture.RequestHeaders.TryGetValue("Transfer-Encoding", out string transferEncoding) ||
-                !transferEncoding.Split(',')[^1].Trim().Equals("chunked", StringComparison.OrdinalIgnoreCase))
-            {
-                return body;
-            }
-
-            // Live captures may already be dechunked. Only interpret bodies with recognizable framing.
-            int newline = body.AsSpan().IndexOf((byte)'\n');
-            if (newline < 0)
-                return body;
-            string firstLine = Encoding.Latin1.GetString(body, 0, newline).TrimEnd('\r');
-            string sizeText = firstLine.Split(';')[0].Trim();
-            bool hasSizeLine = sizeText.Length > 0 && sizeText.All(Uri.IsHexDigit);
-            if (!hasSizeLine && !body.AsSpan().EndsWith("\r\n0\r\n\r\n"u8))
-                return body;
-
+            capture.RequestHeaders.TryGetValue("Transfer-Encoding", out string transferEncoding);
             try
             {
-                return ChunkedBodyDecoder.Decode(body, body.Length);
+                return ChunkedBodyDecoder.DecodeIfFramed(transferEncoding, body, body.Length);
             }
             catch (InvalidDataException exception)
             {
@@ -137,8 +137,7 @@ namespace XMAT.WebServiceCapture
             {
                 throw new ArgumentException("Enter an absolute HTTP or HTTPS URL without embedded credentials or a fragment.");
             }
-            if (string.IsNullOrEmpty(Method) || !Method.All(IsTokenCharacter) ||
-                string.Equals(Method, "CONNECT", StringComparison.OrdinalIgnoreCase))
+            if (!IsValidMethod(Method))
             {
                 throw new ArgumentException("Enter a valid HTTP method other than CONNECT.");
             }
@@ -249,8 +248,59 @@ namespace XMAT.WebServiceCapture
                 "} finally {\r\n[System.IO.File]::Delete($xmatBodyFile)\r\n}\r\n}";
         }
 
-        private byte[] GetBodyBytes() =>
+        internal byte[] GetBodyBytes() =>
             BodyIsBase64 ? Convert.FromBase64String(BodyText ?? "") : StrictUtf8.GetBytes(BodyText ?? "");
+
+        // Replaces the body with these exact bytes; Base64 keeps binary content lossless.
+        internal void SetBodyBytes(byte[] body)
+        {
+            ArgumentNullException.ThrowIfNull(body);
+            BodyText = Convert.ToBase64String(body);
+            BodyIsBase64 = true;
+        }
+
+        // Replaces every header with this name by a single line, in place of the first one, or appends it.
+        internal void SetHeader(string name, string value)
+        {
+            ValidateHeader(name, value ?? "");
+            var headers = ParseHeaders();
+            int index = headers.FindIndex(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase));
+            headers.RemoveAll(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase));
+            headers.Insert(index < 0 ? headers.Count : index, new(name, (value ?? "").Trim()));
+            HeadersText = FormatHeaders(headers);
+        }
+
+        internal void RemoveHeader(string name)
+        {
+            var headers = ParseHeaders();
+            if (headers.RemoveAll(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase)) > 0)
+                HeadersText = FormatHeaders(headers);
+        }
+
+        internal void RemoveConditionalHeaders()
+        {
+            var headers = ParseHeaders();
+            if (headers.RemoveAll(header => ConditionalHeaders.Contains(header.Key)) > 0)
+                HeadersText = FormatHeaders(headers);
+        }
+
+        // A header name is an HTTP token; its value has no control characters other than tab, so no line can be injected.
+        internal static bool IsValidHeader(string name, string value) =>
+            !string.IsNullOrEmpty(name) && name.All(IsTokenCharacter) &&
+            value != null && !value.Any(c => (char.IsControl(c) && c != '\t') || c == '\u007f');
+
+        internal static bool IsValidMethod(string method) =>
+            !string.IsNullOrEmpty(method) && method.All(IsTokenCharacter) &&
+            !string.Equals(method, "CONNECT", StringComparison.OrdinalIgnoreCase);
+
+        private static void ValidateHeader(string name, string value)
+        {
+            if (!IsValidHeader(name, value))
+                throw new FormatException("Enter one valid 'Name: value' header per line.");
+        }
+
+        private static string FormatHeaders(IEnumerable<KeyValuePair<string, string>> headers) =>
+            string.Join("\r\n", headers.Select(header => $"{header.Key}: {header.Value}"));
 
         private List<KeyValuePair<string, string>> ParseHeaders()
         {
@@ -265,8 +315,7 @@ namespace XMAT.WebServiceCapture
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
                 int separator = line.IndexOf(':');
-                if (separator <= 0 || !line[..separator].All(IsTokenCharacter) ||
-                    line[(separator + 1)..].Any(c => (char.IsControl(c) && c != '\t') || c == '\u007f'))
+                if (separator <= 0 || !IsValidHeader(line[..separator], line[(separator + 1)..]))
                 {
                     throw new FormatException("Enter one valid 'Name: value' header per line.");
                 }

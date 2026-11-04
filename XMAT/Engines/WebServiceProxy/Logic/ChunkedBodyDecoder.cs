@@ -13,6 +13,30 @@ namespace XMAT.WebServiceCapture
 {
     internal static class ChunkedBodyDecoder
     {
+        // Stored bodies can keep their chunked framing (imported archives) or be decoded already while their headers still
+        // say Transfer-Encoding: chunked (live captures). Only a body with recognizable framing is decoded when chunked is
+        // the final transfer coding; any other body is returned as stored. Malformed framing throws InvalidDataException.
+        internal static byte[] DecodeIfFramed(string transferEncoding, byte[] body, int maximumBodyBytes)
+        {
+            body ??= Array.Empty<byte>();
+            if (transferEncoding == null ||
+                !transferEncoding.Split(',')[^1].Trim().Equals("chunked", StringComparison.OrdinalIgnoreCase))
+            {
+                return body;
+            }
+
+            int newline = body.AsSpan().IndexOf((byte)'\n');
+            if (newline < 0)
+                return body;
+            string firstLine = Encoding.Latin1.GetString(body, 0, newline).TrimEnd('\r');
+            string sizeText = firstLine.Split(';')[0].Trim();
+            bool hasSizeLine = sizeText.Length > 0 && sizeText.All(Uri.IsHexDigit);
+            if (!hasSizeLine && !body.AsSpan().EndsWith("\r\n0\r\n\r\n"u8))
+                return body;
+
+            return Decode(body, maximumBodyBytes);
+        }
+
         internal static byte[] Decode(byte[] body, int maximumBodyBytes, Action<int> spendWork = null)
         {
             using var output = new MemoryStream();
