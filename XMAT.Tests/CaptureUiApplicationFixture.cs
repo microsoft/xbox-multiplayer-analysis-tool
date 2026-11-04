@@ -105,7 +105,10 @@ namespace XMAT.Tests
 
             host._stopped = true;
             var application = host._application;
-            application?.Dispatcher.BeginInvoke(new Action(application.Shutdown));
+            if (application != null)
+            {
+                _ = application.Dispatcher.BeginInvoke(new Action(application.Shutdown));
+            }
             var stopped = host._thread.Join(TimeSpan.FromSeconds(30));
             host._appLog?.CloseLog();
             if (host._storage != null && !await TryDeleteStorageAsync(host._storage, TimeSpan.FromSeconds(10)))

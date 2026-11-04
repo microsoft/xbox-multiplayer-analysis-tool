@@ -64,20 +64,22 @@ namespace XMAT.Tests.HeadlessParity
 
                 const BindingFlags StaticMembers =
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
-                foreach (FieldInfo field in type.GetFields(StaticMembers))
+                foreach (FieldInfo field in
+                    type.GetFields(StaticMembers).Where(field =>
+                        typeof(RoutedCommand)
+                            .IsAssignableFrom(
+                                field.FieldType)))
                 {
-                    if (typeof(RoutedCommand).IsAssignableFrom(field.FieldType))
-                    {
-                        keys.Add(CapabilityKeys.Command(type.FullName + "." + field.Name));
-                    }
+                    keys.Add(CapabilityKeys.Command(type.FullName + "." + field.Name));
                 }
 
-                foreach (PropertyInfo property in type.GetProperties(StaticMembers))
+                foreach (PropertyInfo property in
+                    type.GetProperties(StaticMembers).Where(property =>
+                        typeof(RoutedCommand)
+                            .IsAssignableFrom(
+                                property.PropertyType)))
                 {
-                    if (typeof(RoutedCommand).IsAssignableFrom(property.PropertyType))
-                    {
-                        keys.Add(CapabilityKeys.Command(type.FullName + "." + property.Name));
-                    }
+                    keys.Add(CapabilityKeys.Command(type.FullName + "." + property.Name));
                 }
 
                 if (typeof(System.Windows.Window).IsAssignableFrom(type))

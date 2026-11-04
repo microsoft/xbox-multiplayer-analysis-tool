@@ -83,12 +83,15 @@ namespace XMAT.Tests.HeadlessParity
                     problems.Add($"{id}: needs a title.");
                 }
 
-                foreach (string key in capability.GuiEntryPoints)
+                foreach (string key in
+                    capability.GuiEntryPoints.Where(key =>
+                        key == null ||
+                        !KeyPrefixes.Any(prefix =>
+                            key.StartsWith(
+                                prefix,
+                                StringComparison.Ordinal))))
                 {
-                    if (key == null || !KeyPrefixes.Any(prefix => key.StartsWith(prefix, StringComparison.Ordinal)))
-                    {
-                        problems.Add($"{id}: '{key}' is not a known entry point key.");
-                    }
+                    problems.Add($"{id}: '{key}' is not a known entry point key.");
                 }
 
                 if (capability.GuiEntryPoints.Distinct(StringComparer.Ordinal).Count() != capability.GuiEntryPoints.Count)
