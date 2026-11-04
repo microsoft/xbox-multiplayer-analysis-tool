@@ -205,6 +205,24 @@ namespace XMAT.Tests.Replay
             Assert.Equal(new byte[] { 0, 255 }, draft.GetBodyBytes());
             Assert.Equal("hello"u8.ToArray(), shared);
         }
+
+        // Only these exact names are safe: a lowercase or custom method counts as one that can change server state.
+        [Theory]
+        [InlineData("GET", false)]
+        [InlineData("HEAD", false)]
+        [InlineData("OPTIONS", false)]
+        [InlineData("get", true)]
+        [InlineData("Head", true)]
+        [InlineData("POST", true)]
+        [InlineData("PURGE", true)]
+        [InlineData("", true)]
+        [InlineData(null, true)]
+        public void Method_OnlyExactGetHeadAndOptionsAreSafe(string method, bool unsafeMethod)
+        {
+            Assert.Equal(unsafeMethod, RequestReplayDraft.IsUnsafeMethod(method));
+            Assert.Equal(unsafeMethod, new RequestReplayDraft { Method = method }.UsesUnsafeMethod);
+        }
+
         [Fact]
         public void Draft_SeparatesUnsafeMethodsFromOriginChanges()
         {

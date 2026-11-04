@@ -48,8 +48,11 @@ namespace XMAT.WebServiceCapture
 
         internal bool BodyIsBase64 { get; set; }
 
-        // Methods other than GET, HEAD and OPTIONS can change server state.
-        internal bool UsesUnsafeMethod => Method is not ("GET" or "HEAD" or "OPTIONS");
+        // Only exactly GET, HEAD and OPTIONS are safe; any other method, in any case, can change server state. Shared by
+        // the operation's policy and the GUI's confirmation, so both count the same requests.
+        internal static bool IsUnsafeMethod(string method) => method is not ("GET" or "HEAD" or "OPTIONS");
+
+        internal bool UsesUnsafeMethod => IsUnsafeMethod(Method);
 
         // True when the URL no longer targets the origin the request was captured for, while it still carries the
         // captured headers, such as credentials.
