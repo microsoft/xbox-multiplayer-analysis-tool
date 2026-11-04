@@ -145,7 +145,9 @@ Captures HTTP/HTTPS traffic by acting as a forward proxy. Supports Xbox developm
 - **FiddlerSazHandler** — Import/export support for Fiddler SAZ archive format
 - **ScriptHost** — Roslyn-based C# script execution for on-the-fly traffic modification
 
-**Data storage:** `WebProxyConnections` table with request/response metadata (timestamps, headers, bodies, status codes, client IP).
+**Data storage:** `WebProxyConnections` table with request/response metadata (timestamps, headers, bodies, status codes, client IP) and, for traffic from a PC, the client process (image name, PID, start time and status).
+
+**Process filter:** each capture tab can hide sessions by client process (`ProcessFilterSpec`). The filter only changes what the grid and timeline show; the proxy still forwards and records every session. The GUI, opt-in filtered analysis and `xmat analyze --process/--exclude-process` share one matcher (`ProcessFilter`) and `FilterCaptureSessionsOperation`, which also counts the included, hidden and unknown sessions.
 
 ### NetworkTrace Engine
 
@@ -235,7 +237,7 @@ The data abstraction layer wraps SQLite via `Microsoft.Data.Sqlite`:
 | Table | Created By | Fields |
 |---|---|---|
 | `CaptureDevices` | App startup | DeviceType, DeviceName, CaptureType |
-| `WebProxyConnections` | WebServiceCaptureMethod | Request/response metadata, timestamps, headers, bodies |
+| `WebProxyConnections` | WebServiceCaptureMethod | Request/response metadata, timestamps, headers, bodies; optional client process columns (`ClientProcessName`, `ClientProcessId`, `ClientProcessStartTime`, `ClientProcessStatus`) |
 | `NetworkTracePackets` | NetworkTraceCaptureMethod | PID, TID, timestamp, flags, payload |
 
 ## Design Patterns

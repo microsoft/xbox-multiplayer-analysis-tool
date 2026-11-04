@@ -32,6 +32,9 @@ namespace XMAT.Tests.Proxy
         public int Port { get; }
         public ConcurrentQueue<ClientRequest> CapturedRequests { get; } = new();
         public ConcurrentQueue<ServerResponse> CapturedResponses { get; } = new();
+        public ConcurrentQueue<ClientProcessContext> CapturedRequestProcessContexts { get; } = new();
+        public ConcurrentQueue<ClientProcessContext> CapturedResponseProcessContexts { get; } = new();
+        public ConcurrentQueue<ClientProcessContext> CapturedSslProcessContexts { get; } = new();
 
         private ProxyTestHarness(
             WebServiceProxy proxy,
@@ -122,8 +125,18 @@ namespace XMAT.Tests.Proxy
                     .RequestBufferBudget,
                 connectionHandler,
                 port);
-            proxy.ReceivedWebRequest += (_, args) => harness.CapturedRequests.Enqueue(args.Request);
-            proxy.ReceivedWebResponse += (_, args) => harness.CapturedResponses.Enqueue(args.Response);
+            proxy.ReceivedWebRequest += (_, args) =>
+            {
+                harness.CapturedRequests.Enqueue(args.Request);
+                harness.CapturedRequestProcessContexts.Enqueue(args.ProcessContext);
+            };
+            proxy.ReceivedSslConnectionRequest += (_, args) => harness.CapturedSslProcessContexts.Enqueue(
+                args.ProcessContext);
+            proxy.ReceivedWebResponse += (_, args) =>
+            {
+                harness.CapturedResponses.Enqueue(args.Response);
+                harness.CapturedResponseProcessContexts.Enqueue(args.ProcessContext);
+            };
             return harness;
         }
 

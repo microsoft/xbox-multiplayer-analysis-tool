@@ -13,8 +13,8 @@ using XMAT.Operations.Capabilities;
 namespace XMAT.Cli
 {
     // Writes xmat's JSON field by field, so only allow-listed values reach the output: rule names, levels, counts,
-    // service labels, ordinal ids, the input kind and SHA-256, the effective limits, codes and fixed messages. Never
-    // AnalysisResult.Legacy, captured content or paths.
+    // service labels, ordinal ids, the input kind and SHA-256, the effective limits, the validated process selectors of
+    // the command line, codes and fixed messages. Never AnalysisResult.Legacy, captured content or paths.
     internal static class CliJson
     {
         // summary.json in a published --out folder.
@@ -155,6 +155,12 @@ namespace XMAT.Cli
                 writer.WriteNumber("maxRecordMib", analysis.Limits.MaxRecordMib);
                 writer.WriteNumber("maxRecords", analysis.Limits.MaxRecords);
                 writer.WriteEndObject();
+            }
+
+            if (analysis.ProcessFilter != null)
+            {
+                writer.WritePropertyName("processFilter");
+                ProcessScopeJson.Write(writer, analysis.ProcessFilter, analysis.ProcessScope);
             }
 
             writer.WriteStartArray("devices");

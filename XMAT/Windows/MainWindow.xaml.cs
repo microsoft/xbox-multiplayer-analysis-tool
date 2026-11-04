@@ -12,6 +12,7 @@ using System.Windows.Input;
 using Microsoft.Win32;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
@@ -394,8 +395,17 @@ namespace XMAT
             {
                 try
                 {
-                    CaptureAppModel.AppModel.SaveDataCaptures(
-                        saveFileDialog.FileName);
+                    if (!CaptureAppModel.AppModel.TrySaveDataCaptures(
+                        saveFileDialog.FileName))
+                    {
+                        MessageBox.Show(
+                            Localization.GetLocalizedString(
+                                "CAPTURE_SAVE_ERROR_BUSY"),
+                            Localization.GetLocalizedString(
+                                "CAPTURE_SAVE_ERROR_TITLE"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                    }
                 }
                 catch (CaptureSaveException ex)
                 {
@@ -620,7 +630,15 @@ namespace XMAT
                 return;
             }
 
-            CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController.ClearAllCaptures();
+            if (!CaptureAppModel.AppModel.TryClearAllCaptures(
+                CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController))
+            {
+                MessageBox.Show(
+                    Localization.GetLocalizedString("PROXY_OPERATION_BUSY"),
+                    Localization.GetLocalizedString("VIEW_CLEAR_CAPTURES"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
         }
 
         private void AnalyzeCaptures_CanExecute(object sender, CanExecuteRoutedEventArgs e)
@@ -655,7 +673,9 @@ namespace XMAT
                 list.First().IsSelected = true;
             }
 
-            var selectorWindow = new CaptureAnalyzerWindow
+            var selectorWindow = new CaptureAnalyzerWindow(
+                (captureDeviceContext.CaptureController as WebServiceDeviceCaptureController)?.ProcessFilter ??
+                    ProcessFilterSpec.Empty)
             {
                 Owner = this,
                 DataContext = list
@@ -675,7 +695,9 @@ namespace XMAT
 
                 using (analysisLease)
                 {
-                    var analysisRun = CaptureAppModel.AppModel.AddAnalysisRun(selected);
+                    var analysisRun = CaptureAppModel.AppModel.AddAnalysisRun(
+                        selected,
+                        selectorWindow.ProcessFilterForRun);
                     CaptureErrorsPanel.AddedAnalysis(analysisRun);
                     await HandleAnalyzerChosen(
                         analysisRun,

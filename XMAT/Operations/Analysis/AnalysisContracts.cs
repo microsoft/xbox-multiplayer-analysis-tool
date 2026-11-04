@@ -5,6 +5,8 @@
 using System;
 using System.Collections.Generic;
 using CaptureAnalysisEngine;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Processes;
 
 namespace XMAT.Operations.Analysis
 {
@@ -46,10 +48,12 @@ namespace XMAT.Operations.Analysis
                 records);
     }
 
+    // ProcessFilter selects sessions by client process; null or empty analyzes every session.
     internal sealed record AnalysisOptions(
         string DeviceId = null,
         AnalysisLimits Limits = null,
-        bool ProduceLegacyReports = false);
+        bool ProduceLegacyReports = false,
+        ProcessFilterSpec ProcessFilter = null);
 
     internal sealed record AnalyzeCaptureRequest(
         AnalysisInput Input,
@@ -80,6 +84,12 @@ namespace XMAT.Operations.Analysis
     internal sealed record AnalysisResult(AnalysisSummary Summary)
     {
         internal LegacyAnalysisReports Legacy { get; init; }
+
+        // The client-process scope of the selected devices, counted before service conversion, and the keys of the
+        // sessions that were analyzed. A run with no analyzable data still returns them.
+        internal ProcessFilterScope ProcessScope { get; init; }
+
+        internal IReadOnlyList<CaptureRowKey> IncludedKeys { get; init; }
     }
 
     internal sealed class LegacyAnalysisReports

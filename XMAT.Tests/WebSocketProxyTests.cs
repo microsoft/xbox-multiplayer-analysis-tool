@@ -2,8 +2,11 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Text;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Processes;
 using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.Tests
@@ -101,6 +104,44 @@ namespace XMAT.Tests
             Assert.True(received.FromHost);
             Assert.Equal(WebSocketMessageType.Text, received.MessageType);
             Assert.Equal(payload, received.Message);
+        }
+
+        [Fact]
+        public void PublishMessageAndOpened_PreserveProcessContext()
+        {
+            var proxy = new WebSocketProxy();
+            var context = new ClientProcessContext(
+                Guid.NewGuid(),
+                42,
+                new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 50180),
+                new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 8080),
+                DateTimeOffset.UtcNow,
+                Stopwatch.GetTimestamp());
+            context.Publish(
+                new ClientProcessInfo("game.exe", 4455, DateTimeOffset.UtcNow.AddMinutes(-1), ClientProcessStatus.Local)
+            );
+            WebSocketOpenedEventArgs opened = null;
+            WebSocketMessageEventArgs message = null;
+            var rowKey = new CaptureRowKey(Guid.NewGuid(), 1, 7, 7);
+            proxy.WebSocketOpened += (_, args) => opened = args;
+            proxy.WebSocketMessage += (_, args) => message = args;
+
+            Assert.True(proxy.PublishOpened(42, 7,
+                    "ws://example.test/socket",
+                    null,
+                    context));
+            proxy.PublishMessage(
+                42,
+                7,
+                false,
+                WebSocketMessageType.Text,
+                "hello"u8.ToArray(),
+                processContext: context,
+                rowKey: rowKey);
+
+            Assert.Same(context, opened.ProcessContext);
+            Assert.Same(context, message.ProcessContext);
+            Assert.Equal(rowKey, message.RowKey);
         }
 
         [Fact]

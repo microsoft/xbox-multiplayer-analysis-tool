@@ -14,6 +14,8 @@ using CaptureAnalysisEngine;
 using Microsoft.Data.Sqlite;
 using SQLitePCL;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
@@ -35,6 +37,8 @@ namespace XMAT.Operations.Analysis
 
         internal const string WorkLimitCode =
             "analysis.rules.work-limit";
+        internal const string ProcessSelectionConsistencyCode =
+            "analysis.process-filter.consistency";
         private const string CaptureDevicesTableName = "CaptureDevices";
         private static readonly RequiredField[] CaptureDeviceFields =
         {
@@ -140,6 +144,16 @@ namespace XMAT.Operations.Analysis
                     OperationDiagnosticSeverity.Error,
                     "Required analysis data is unavailable.");
             }
+            catch (ProcessSelectionConsistencyException ex)
+            {
+                // A broken internal invariant, not bad input, so xmat keeps exit code 70; the message names no value.
+                ObserveException(ex);
+                return Failure(
+                    OperationOutcome.InternalError,
+                    ProcessSelectionConsistencyCode,
+                    OperationDiagnosticSeverity.Error,
+                    ProcessSelectionConsistencyException.Description);
+            }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 ObserveException(ex);
@@ -199,6 +213,7 @@ namespace XMAT.Operations.Analysis
             {
                 ValidateLimits(limits);
             }
+            var selection = new SessionSelection(options.ProcessFilter);
             cancellationToken.ThrowIfCancellationRequested();
 
             var diagnostics = new List<OperationDiagnostic>();
@@ -253,6 +268,7 @@ namespace XMAT.Operations.Analysis
                             context,
                             workBudget,
                             bodyIdentities,
+                            selection,
                             cancellationToken));
                     }
                     catch (OperationCanceledException)
@@ -281,6 +297,7 @@ namespace XMAT.Operations.Analysis
                 bodyIdentities.ClearRepresentatives();
             }
 
+            FilterCaptureSessionsResult selected = selection.Complete(cancellationToken);
             var labeler = new CanonicalServiceLabeler(deviceAnalyses);
             var deviceSummaries = new List<DeviceSummary>();
             var totalCalls = 0;
@@ -309,6 +326,12 @@ namespace XMAT.Operations.Analysis
                 }
             }
 
+            var summary = new AnalysisSummary(
+                InputKindName(loaded.Kind),
+                loaded.InputSha256,
+                deviceSummaries,
+                totalCalls,
+                totalFindings);
             if (totalCalls == 0 ||
                 deviceSummaries.All(device => device.Consoles.Count == 0))
             {
@@ -318,21 +341,26 @@ namespace XMAT.Operations.Analysis
                         "analysis.no-data",
                         OperationDiagnosticSeverity.Info,
                         "The input contains no analyzable data."));
+
+                // The selection still completed, so adapters can say how many sessions the process filter hid.
                 return new OperationResult<AnalysisResult>(
                     OperationOutcome.NoAnalyzableData,
-                    null,
+                    new AnalysisResult(summary)
+                    {
+                        ProcessScope = selected.Scope,
+                        IncludedKeys = selected.IncludedKeys,
+                    },
                     diagnostics);
             }
 
             ReportProgress(context, "analysis.complete", 1);
-            var summary = new AnalysisSummary(
-                InputKindName(loaded.Kind),
-                loaded.InputSha256,
-                deviceSummaries,
-                totalCalls,
-                totalFindings);
             return OperationResult<AnalysisResult>.Success(
-                new AnalysisResult(summary) { Legacy = legacy },
+                new AnalysisResult(summary)
+                {
+                    Legacy = legacy,
+                    ProcessScope = selected.Scope,
+                    IncludedKeys = selected.IncludedKeys,
+                },
                 diagnostics);
         }
 
@@ -766,6 +794,7 @@ namespace XMAT.Operations.Analysis
             OperationContext context,
             AnalysisWorkBudget workBudget,
             RequestBodyIdentityInterner bodyIdentities,
+            SessionSelection selection,
             CancellationToken cancellationToken)
         {
             ReportProgress(context, "analysis.convert", null);
@@ -776,6 +805,11 @@ namespace XMAT.Operations.Analysis
                     device.Device.RecordsForConversion())
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    if (!selection.Include(device.Id, record))
+                    {
+                        continue;
+                    }
+
                     ServiceCallItem item =
                         WebServiceCaptureRecordConverter.Convert(
                             record,
@@ -1458,9 +1492,87 @@ namespace XMAT.Operations.Analysis
             }
         }
 
+        // Selects the sessions to analyze by client process while the records are converted, so a streamed record is read
+        // once. Every record of a selected device is counted before service conversion; the shared selection operation
+        // then derives the scope from the same body-free references, and the analyzed rows must be exactly its keys.
+        private sealed class SessionSelection
+        {
+            private readonly ProcessFilter _filter;
+            private readonly Guid _sourceId = Guid.NewGuid();
+            private readonly List<CaptureSessionRef> _sessions = new();
+            private readonly HashSet<CaptureRowKey> _included = new();
+            private long _incarnation;
+
+            internal SessionSelection(ProcessFilterSpec specification)
+            {
+                Specification = specification ?? ProcessFilterSpec.Empty;
+                try
+                {
+                    _filter = ProcessFilter.Compile(Specification);
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new AnalysisInputException(
+                        "analysis.process-filter.invalid",
+                        "The process filter is invalid.",
+                        ex);
+                }
+            }
+
+            internal ProcessFilterSpec Specification { get; }
+
+            internal bool Include(string deviceId, IDataRecord record)
+            {
+                // The incarnation numbers the rows of this run, so keys stay distinct even if a source repeats a row id.
+                var key = new CaptureRowKey(_sourceId, 0, record.RowId, ++_incarnation);
+                ClientProcessInfo process = ClientProcessRecordCodec.Read(record);
+                _sessions.Add(new CaptureSessionRef(key, deviceId, process));
+                if (!_filter.Matches(process))
+                {
+                    return false;
+                }
+
+                _included.Add(key);
+                return true;
+            }
+
+            internal FilterCaptureSessionsResult Complete(CancellationToken cancellationToken)
+            {
+                // The operation completes synchronously over references already in memory.
+                OperationResult<FilterCaptureSessionsResult> result = new FilterCaptureSessionsOperation()
+                    .ExecuteAsync(
+                        new FilterCaptureSessionsRequest(_sessions, Specification),
+                        OperationContext.None,
+                        cancellationToken)
+                    .GetAwaiter()
+                    .GetResult();
+                if (!result.Succeeded ||
+                    result.Value?.Scope == null ||
+                    !IsExactSelection(result.Value.IncludedKeys, _included))
+                {
+                    throw new ProcessSelectionConsistencyException();
+                }
+
+                return result.Value;
+            }
+        }
+
+        // Whether the shared selection kept each analyzed session's key exactly once, and no other key.
+        internal static bool IsExactSelection(IReadOnlyList<CaptureRowKey> selected, HashSet<CaptureRowKey> analyzed)
+        {
+            if (selected == null || selected.Count != analyzed.Count)
+            {
+                return false;
+            }
+
+            var unique = new HashSet<CaptureRowKey>(selected);
+            return unique.Count == selected.Count && unique.SetEquals(analyzed);
+        }
+
         internal sealed class AnalysisDataRecord :
             IDataRecord,
-            IRawBodyDataRecord
+            IRawBodyDataRecord,
+            IOptionalTypedDataRecord
         {
             private readonly Dictionary<string, object> _values;
 
@@ -1509,45 +1621,69 @@ namespace XMAT.Operations.Analysis
                         : ReadOnlyMemory<byte>.Empty;
             }
 
+            public bool TryReadString(string name, out string value)
+            {
+                value = _values.TryGetValue(name, out object stored) ? stored as string : null;
+                return value != null;
+            }
+
+            public bool TryReadInt64(string name, out long value)
+            {
+                if (_values.TryGetValue(name, out object stored) && stored is long number)
+                {
+                    value = number;
+                    return true;
+                }
+
+                value = 0;
+                return false;
+            }
+
+            // The session's fields as XMAT stores them, so SAZ and capture-file inputs read the same way. The process
+            // fields use the shared projection of the capture files.
             internal static AnalysisDataRecord FromProxyModel(
                 int rowId,
                 ProxyConnectionModel model)
             {
-                return new AnalysisDataRecord(
-                    rowId,
-                    new Dictionary<string, object>(StringComparer.Ordinal)
-                    {
-                        [WebServiceCaptureMethod.FieldKey_DeviceName] = string.Empty,
-                        [WebServiceCaptureMethod.FieldKey_RequestNumber] = model.RequestNumber,
-                        [WebServiceCaptureMethod.FieldKey_ConnectionId] = model.Id,
-                        [WebServiceCaptureMethod.FieldKey_RequestTimestamp] =
-                            ProxyConnectionModel.ToDateTimeString(model.RequestTime),
-                        [WebServiceCaptureMethod.FieldKey_ResponseTimestamp] =
-                            ProxyConnectionModel.ToDateTimeString(
-                                model.RequestTime + model.Duration),
-                        [WebServiceCaptureMethod.FieldKey_RequestScheme] =
-                            model.Scheme ?? string.Empty,
-                        [WebServiceCaptureMethod.FieldKey_RequestHost] =
-                            model.Host ?? string.Empty,
-                        [WebServiceCaptureMethod.FieldKey_RequestPort] =
-                            model.Port ?? string.Empty,
-                        [WebServiceCaptureMethod.FieldKey_RequestMethod] =
-                            model.Method ?? string.Empty,
-                        [WebServiceCaptureMethod.FieldKey_RequestPath] =
-                            model.Path ?? string.Empty,
-                        [WebServiceCaptureMethod.FieldKey_RequestStatus] =
-                            model.Status ?? string.Empty,
-                        [WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders] =
-                            model.RequestLineAndHeaders ?? string.Empty,
-                        [WebServiceCaptureMethod.FieldKey_RequestBody] =
-                            model.RequestBody,
-                        [WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders] =
-                            model.ResponseLineAndHeaders ?? string.Empty,
-                        [WebServiceCaptureMethod.FieldKey_ResponseBody] =
-                            model.ResponseBody,
-                        [WebServiceCaptureMethod.FieldKey_ClientIP] =
-                            model.ClientIP ?? string.Empty,
-                    });
+                var values = new Dictionary<string, object>(StringComparer.Ordinal)
+                {
+                    [WebServiceCaptureMethod.FieldKey_DeviceName] = string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_RequestNumber] = model.RequestNumber,
+                    [WebServiceCaptureMethod.FieldKey_ConnectionId] = model.Id,
+                    [WebServiceCaptureMethod.FieldKey_RequestTimestamp] =
+                        ProxyConnectionModel.ToDateTimeString(model.RequestTime),
+                    [WebServiceCaptureMethod.FieldKey_ResponseTimestamp] =
+                        ProxyConnectionModel.ToDateTimeString(
+                            model.RequestTime + model.Duration),
+                    [WebServiceCaptureMethod.FieldKey_RequestScheme] =
+                        model.Scheme ?? string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_RequestHost] =
+                        model.Host ?? string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_RequestPort] =
+                        model.Port ?? string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_RequestMethod] =
+                        model.Method ?? string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_RequestPath] =
+                        model.Path ?? string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_RequestStatus] =
+                        model.Status ?? string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders] =
+                        model.RequestLineAndHeaders ?? string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_RequestBody] =
+                        model.RequestBody,
+                    [WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders] =
+                        model.ResponseLineAndHeaders ?? string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_ResponseBody] =
+                        model.ResponseBody,
+                    [WebServiceCaptureMethod.FieldKey_ClientIP] =
+                        model.ClientIP ?? string.Empty,
+                };
+                foreach (IFieldValue field in ClientProcessRecordCodec.ToFields(model.ClientProcess))
+                {
+                    values[field.Name] = field.Value;
+                }
+
+                return new AnalysisDataRecord(rowId, values);
             }
 
             private static string EncodeBody(byte[] body)
@@ -1572,6 +1708,17 @@ namespace XMAT.Operations.Analysis
 
             internal string Code { get; }
             internal string DiagnosticMessage { get; }
+        }
+
+        // The shared selection did not keep exactly the sessions that the analysis analyzed.
+        private sealed class ProcessSelectionConsistencyException : Exception
+        {
+            internal const string Description = "The process selection does not match the analyzed sessions.";
+
+            internal ProcessSelectionConsistencyException()
+                : base(Description)
+            {
+            }
         }
     }
 }

@@ -79,6 +79,18 @@ namespace XMAT.Cli
             {
                 yield return "  xmat " + usage;
             }
+
+            if (command.Name == CliCommands.Analyze)
+            {
+                yield return string.Empty;
+                yield return "Process filters choose the sessions to analyze; the input is never changed:";
+                yield return "  --process NAME_OR_PID          analyze only the sessions of these processes";
+                yield return "  --exclude-process NAME_OR_PID  never analyze the sessions of these processes; wins over --process";
+                yield return "Both are repeatable (at most 64 of each, 260 characters each). A name is an image name such as";
+                yield return "game*.exe: case-insensitive, * and ? are wildcards and .exe is optional. A number is a process id.";
+                yield return "Sessions without process information (older captures, Fiddler archives without x-ProcessInfo,";
+                yield return "Xbox or other remote devices) never match --process; the JSON counts them as unknown.";
+            }
         }
     }
 }

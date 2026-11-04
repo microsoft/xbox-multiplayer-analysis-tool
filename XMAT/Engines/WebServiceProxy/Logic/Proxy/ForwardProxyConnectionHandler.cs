@@ -16,6 +16,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.Extensions.Hosting;
+using XMAT.Operations.Processes;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -97,9 +98,26 @@ namespace XMAT.WebServiceCapture.Proxy
             var cancellationToken = connectionCancellation.Token;
             var connectionID = _proxy.GetNextConnectionID();
             var remoteEndPoint = connection.RemoteEndPoint?.ToString() ?? "unknown";
+            ClientProcessResolver processResolver = _proxy.ProcessResolver;
+            IClientProcessResolverClock processClock = processResolver.Clock;
+            var processContext = new ClientProcessContext(
+                _proxy.RunId,
+                connectionID,
+                connection.RemoteEndPoint as IPEndPoint,
+                connection.LocalEndPoint as IPEndPoint,
+                processClock.UtcNow,
+                processClock.Timestamp);
+            try
+            {
+                _ = processResolver.TryEnqueue(processContext);
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                processContext.Publish(new ClientProcessInfo(string.Empty, 0, null, ClientProcessStatus.Unresolved));
+            }
 
             if (cancellationToken.IsCancellationRequested ||
-                !_proxy.RaiseReceivedInitialConnection(connectionID, remoteEndPoint))
+                !_proxy.RaiseReceivedInitialConnection(connectionID, remoteEndPoint, processContext))
             {
                 _logger.Log(connectionID, LogLevel.WARN, $"REJECTING connection from {remoteEndPoint}");
                 return;
@@ -175,12 +193,14 @@ namespace XMAT.WebServiceCapture.Proxy
                     _proxy.GetNextRequestID();
                 if (request.Method == "CONNECT")
                 {
-                    await HandleConnectAsync(connectionID, stream, request, remoteEndPoint, cancellationToken).ConfigureAwait(false);
+                    await HandleConnectAsync(connectionID, stream, request, remoteEndPoint, processContext,
+                        cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
                     request.Scheme = "http";
-                    await HandleHttpRequestAsync(connectionID, stream, request, cancellationToken).ConfigureAwait(false);
+                    await HandleHttpRequestAsync(connectionID, stream, request, processContext,
+                        cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -209,11 +229,17 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             finally
             {
-                _proxy.RaiseConnectionClosed(connectionID);
+                _proxy.RaiseConnectionClosed(connectionID, processContext);
             }
         }
 
-        private async Task HandleConnectAsync(int connectionID, Stream clientStream, ClientRequest connectRequest, string remoteEndPoint, CancellationToken ct)
+        private async Task HandleConnectAsync(
+            int connectionID,
+            Stream clientStream,
+            ClientRequest connectRequest,
+            string remoteEndPoint,
+            ClientProcessContext processContext,
+            CancellationToken ct)
         {
             connectRequest.Scheme = "https";
             var clientIP = remoteEndPoint.Contains(':') ? remoteEndPoint.Split(':')[0] : remoteEndPoint;
@@ -222,7 +248,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 connectionID,
                 clientIP,
                 connectRequest,
-                ct).ConfigureAwait(false))
+                ct,
+                processContext).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.ERROR, "REJECTING SSL connection request");
                 return;
@@ -243,7 +270,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 connectionID,
                 connectRequest,
                 response,
-                ct).ConfigureAwait(false))
+                ct,
+                processContext).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.WARN, "CONNECT response was aborted.");
                 return;
@@ -260,7 +288,7 @@ namespace XMAT.WebServiceCapture.Proxy
             if (_proxy.BypassList != null && _proxy.BypassList.IsBypassed(hostname))
             {
                 _logger.Log(connectionID, LogLevel.INFO, $"Bypassing TLS interception for {hostname}:{port}");
-                _proxy.RaiseCompletedSslConnectionRequest(connectionID, connectRequest);
+                _proxy.RaiseCompletedSslConnectionRequest(connectionID, connectRequest, processContext);
                 await TunnelConnectionAsync(connectionID, clientStream, hostname, port, ct).ConfigureAwait(false);
                 return;
             }
@@ -272,15 +300,22 @@ namespace XMAT.WebServiceCapture.Proxy
                 connectionID,
                 clientStream,
                 connectRequest,
+                processContext,
                 ct).ConfigureAwait(false);
         }
 
-        private async Task HandleHttpRequestAsync(int connectionID, Stream clientStream, ClientRequest request, CancellationToken ct)
+        private async Task HandleHttpRequestAsync(
+            int connectionID,
+            Stream clientStream,
+            ClientRequest request,
+            ClientProcessContext processContext,
+            CancellationToken ct)
         {
             if (!await _proxy.RaiseReceivedWebRequestAsync(
                 connectionID,
                 request,
-                ct).ConfigureAwait(false))
+                ct,
+                processContext).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.WARN, "Client request was aborted.");
                 return;
@@ -310,15 +345,23 @@ namespace XMAT.WebServiceCapture.Proxy
 
             if (WebSocketProxy.IsWebSocketUpgrade(request))
             {
-                await HandleWebSocketAsync(connectionID, uri, clientStream, request, ct).ConfigureAwait(false);
+                await HandleWebSocketAsync(connectionID, uri, clientStream, request, processContext, ct).ConfigureAwait(
+                    false);
             }
             else
             {
-                await ForwardHttpAsync(connectionID, uri, clientStream, request, ct).ConfigureAwait(false);
+                await ForwardHttpAsync(connectionID, uri, clientStream, request, processContext, ct).ConfigureAwait(
+                    false);
             }
         }
 
-        private async Task ForwardHttpAsync(int connectionID, Uri uri, Stream clientStream, ClientRequest clientRequest, CancellationToken ct)
+        private async Task ForwardHttpAsync(
+            int connectionID,
+            Uri uri,
+            Stream clientStream,
+            ClientRequest clientRequest,
+            ClientProcessContext processContext,
+            CancellationToken ct)
         {
             var requestMessage = new HttpRequestMessage
             {
@@ -363,7 +406,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 connectionID,
                 clientRequest,
                 serverResponse,
-                ct).ConfigureAwait(false))
+                ct,
+                processContext).ConfigureAwait(false))
             {
                 _logger.Log(connectionID, LogLevel.WARN, "Server response was aborted.");
                 return;
@@ -394,7 +438,13 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
-        private async Task HandleWebSocketAsync(int connectionID, Uri uri, Stream clientStream, ClientRequest clientRequest, CancellationToken ct)
+        private async Task HandleWebSocketAsync(
+            int connectionID,
+            Uri uri,
+            Stream clientStream,
+            ClientRequest clientRequest,
+            ClientProcessContext processContext,
+            CancellationToken ct)
         {
             var wsProxy = new WebSocketProxy();
             wsProxy.WebSocketOpened += (_, args) => _proxy.RaiseWebSocketOpened(args);
@@ -407,6 +457,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 clientStream,
                 clientRequest,
                 _logger,
+                processContext,
                 ct).ConfigureAwait(false);
         }
 
@@ -616,6 +667,7 @@ namespace XMAT.WebServiceCapture.Proxy
             int connectionID,
             Stream clientStream,
             ClientRequest connectRequest,
+            ClientProcessContext processContext,
             CancellationToken ct)
         {
             using var tcpClient = new TcpClient();
@@ -635,7 +687,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 localPort = ((IPEndPoint)tcpClient.Client.LocalEndPoint).Port;
                 registered = _interceptedTunnels.TryRegister(
                     localPort,
-                    new InterceptedTunnelContext(connectionID, connectRequest));
+                    new InterceptedTunnelContext(connectionID, connectRequest, processContext));
                 if (!registered)
                     throw new InvalidOperationException(
                         $"An intercepted tunnel is already registered for port {localPort}.");
@@ -666,7 +718,7 @@ namespace XMAT.WebServiceCapture.Proxy
                     connectionID,
                     LogLevel.ERROR,
                     $"Failed opening intercepted TLS tunnel: {ex.Message}");
-                _proxy.RaiseFailedSslConnectionRequest(connectionID, ex);
+                _proxy.RaiseFailedSslConnectionRequest(connectionID, ex, processContext);
             }
             finally
             {
