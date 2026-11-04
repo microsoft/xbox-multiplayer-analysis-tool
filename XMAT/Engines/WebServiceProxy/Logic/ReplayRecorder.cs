@@ -353,18 +353,30 @@ namespace XMAT.WebServiceCapture
     // the tab from being closed, replaced or analyzed until the run ends. Dispose it once the run has ended.
     internal sealed class ReplayRecording : IDisposable
     {
+        private readonly Func<bool> _isRevoked;
         private IDisposable _operation;
 
-        internal ReplayRecording(ICaptureDeviceContext destination, ReplayRecorder recorder, IDisposable operation)
+        // isRevoked says whether XMAT revoked the operation (CaptureAppModel.IsCaptureDataOperationRevoked).
+        internal ReplayRecording(
+            ICaptureDeviceContext destination,
+            ReplayRecorder recorder,
+            IDisposable operation,
+            Func<bool> isRevoked = null)
         {
             Destination = destination ?? throw new ArgumentNullException(nameof(destination));
             Recorder = recorder ?? throw new ArgumentNullException(nameof(recorder));
             _operation = operation ?? throw new ArgumentNullException(nameof(operation));
+            _isRevoked = isRevoked ?? (() => false);
         }
 
         internal ICaptureDeviceContext Destination { get; }
 
         internal ReplayRecorder Recorder { get; }
+
+        // XMAT took the run's operation back to close (CaptureAppModel.CancelCaptureDataOperationAsync), also when the user
+        // had cancelled the run first: the rows that the run recorded stay, but what the run does once it ends must not
+        // change what XMAT shows.
+        internal bool IsRevoked => _isRevoked();
 
         public void Dispose() => Interlocked.Exchange(ref _operation, null)?.Dispose();
     }
@@ -437,7 +449,8 @@ namespace XMAT.WebServiceCapture
                     _model.SelectedDeviceContext = destination;
                 }
 
-                return new ReplayRecording(destination, recorder, operation);
+                return new ReplayRecording(
+                    destination, recorder, operation, () => _model.IsCaptureDataOperationRevoked(operation));
             }
             catch
             {
@@ -448,14 +461,16 @@ namespace XMAT.WebServiceCapture
 
         // Inspect session: selects, on the UI thread once a run has ended, the row that its recording added last, in the tab
         // that it added it to, by reference; never a row found by its tab's name or by its number, which other tabs can
-        // share. Nothing is selected, and false returned, when the run added no row, once XMAT is shutting down, or once
-        // that tab or row is gone. The tab's selection is cleared first, so a view that does not show the row, such as one
-        // that filters it out, selects nothing rather than keeping another row.
+        // share. Nothing is selected, and false returned, when the run added no row, once XMAT has taken the run back to
+        // close (ReplayRecording.IsRevoked) or is shutting down, or once that tab or row is gone. The tab's selection is
+        // cleared first, so a view that does not show the row, such as one that filters it out, selects nothing rather than
+        // keeping another row.
         internal bool TrySelectLastRecorded(ReplayRecording recording)
         {
             ArgumentNullException.ThrowIfNull(recording);
             ProxyConnectionModel row = recording.Recorder.LastRecorded;
             if (row == null ||
+                recording.IsRevoked ||
                 _model.IsShuttingDown ||
                 !_model.CaptureDeviceContexts.Any(context => ReferenceEquals(context, recording.Destination)) ||
                 recording.Destination.CaptureController is not WebServiceDeviceCaptureController controller ||

@@ -190,9 +190,11 @@ send and says so; send again when it has finished.
   it. When XMAT does not follow a redirect, the redirect response is the result and the
   status line says why. Without the option, a redirect response is shown as it is.
 - **Inspect session** is off by default. When it is selected, XMAT selects the last
-  request of the send in the **XMAT Replays** tab once the send has ended, also when
-  that request failed or timed out. It selects nothing when you cancelled the send,
-  when nothing was recorded, or when the tab or the composer was closed meanwhile.
+  request that the send recorded in the **XMAT Replays** tab once the send has ended,
+  also when that request failed or timed out, and also when you cancelled the send
+  after some of its requests were recorded. It selects nothing when the send recorded
+  nothing (never a request of an earlier send), when the tab or the composer was closed
+  meanwhile, or when XMAT stopped the send because it is closing or exiting.
 
 ### Numbered URLs
 

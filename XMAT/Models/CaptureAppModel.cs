@@ -191,10 +191,11 @@ namespace XMAT.Models
         private ICaptureDeviceContext _replayContext;
 
         // The running capture-data operation, if closing XMAT may cancel it and wait for it to end, such as a GUI replay,
-        // and the task that completes when it has ended; and whether XMAT is shutting down (BeginShutdown). Guarded by
-        // _analysisStateLock.
+        // the task that completes when it has ended and its lease; and whether XMAT is shutting down (BeginShutdown).
+        // Guarded by _analysisStateLock.
         private CancellationTokenSource _cancellableOperation;
         private TaskCompletionSource _cancellableOperationEnded;
+        private CancellableOperationLease _cancellableOperationLease;
         private bool _isShuttingDown;
 
         public CaptureAppModel() :
@@ -308,18 +309,22 @@ namespace XMAT.Models
             }
 
             var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cancellableLease = new CancellableOperationLease(this, lease, ended);
             lock (_analysisStateLock)
             {
                 _cancellableOperation = cancellation;
                 _cancellableOperationEnded = ended;
+                _cancellableOperationLease = cancellableLease;
             }
 
-            operationLease = new CancellableOperationLease(this, lease, ended);
+            operationLease = cancellableLease;
             return true;
         }
 
         // Cancels the running capture-data operation if it may be cancelled (TryBeginCancellableCaptureDataOperation) and
-        // waits until it has ended. False when an operation that cannot be cancelled is still running.
+        // waits until it has ended. False when an operation that cannot be cancelled is still running. The operation is
+        // revoked too (IsCaptureDataOperationRevoked): XMAT takes it back to close, also when its user had cancelled it, so
+        // what it would still do once it ends, such as selecting a row that it recorded, must not change what XMAT shows.
         internal async Task<bool> CancelCaptureDataOperationAsync()
         {
             CancellationTokenSource cancellation;
@@ -328,6 +333,10 @@ namespace XMAT.Models
             {
                 cancellation = _cancellableOperation;
                 ended = _cancellableOperationEnded?.Task;
+                if (_cancellableOperationLease != null)
+                {
+                    _cancellableOperationLease.Revoked = true;
+                }
             }
 
             if (cancellation != null)
@@ -345,6 +354,17 @@ namespace XMAT.Models
             }
 
             return !IsCaptureDataOperationRunning;
+        }
+
+        // Whether XMAT revoked the cancellable capture-data operation that this lease holds
+        // (TryBeginCancellableCaptureDataOperation), as CancelCaptureDataOperationAsync does when XMAT closes. It stays
+        // revoked once it has ended; another operation has another lease.
+        internal bool IsCaptureDataOperationRevoked(IDisposable operationLease)
+        {
+            lock (_analysisStateLock)
+            {
+                return operationLease is CancellableOperationLease { Revoked: true };
+            }
         }
 
         // For XMAT exiting without its main window's Closing, which cancels a GUI replay and waits for it (CanCloseAsync):
@@ -381,6 +401,7 @@ namespace XMAT.Models
                 {
                     _cancellableOperation = null;
                     _cancellableOperationEnded = null;
+                    _cancellableOperationLease = null;
                 }
             }
         }
@@ -1301,6 +1322,9 @@ namespace XMAT.Models
                 _operationLease = operationLease;
                 _ended = ended;
             }
+
+            // XMAT took the operation back (CancelCaptureDataOperationAsync). Guarded by the model's _analysisStateLock.
+            internal bool Revoked { get; set; }
 
             public void Dispose()
             {

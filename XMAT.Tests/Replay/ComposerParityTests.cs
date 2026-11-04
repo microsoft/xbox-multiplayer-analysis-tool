@@ -605,9 +605,26 @@ namespace XMAT.Tests.Replay
                     Assert.Null(ControllerOf(closed.Destination).SelectedConnectionModel);
                 }
 
+                // XMAT takes the run back to close, as its main window does: its row stays, and nothing is selected.
+                Task<bool> closing;
+                using (ReplayRecording revoked = target.TryBegin(cancellation, _ => ReplayProvenance.Composed))
+                {
+                    revoked.Recorder.Add(Sent(), Answered());
+                    Assert.False(revoked.IsRevoked);
+                    closing = model.CancelCaptureDataOperationAsync();
+                    Assert.True(revoked.IsRevoked);
+                    Assert.False(target.TrySelectLastRecorded(revoked));
+                    Assert.Same(other, model.SelectedDeviceContext);
+                    Assert.Null(ControllerOf(revoked.Destination).SelectedConnectionModel);
+                    Assert.Same(revoked.Recorder.LastRecorded, ControllerOf(revoked.Destination).ProxyConnections[^1]);
+                }
+
+                Assert.True(await closing.WaitAsync(Patience));
+
                 using (ReplayRecording late = target.TryBegin(cancellation, _ => ReplayProvenance.Composed))
                 {
                     late.Recorder.Add(Sent(), Answered());
+                    Assert.False(late.IsRevoked);
                     model.BeginShutdown();
                     Assert.False(target.TrySelectLastRecorded(late));
                     Assert.Same(other, model.SelectedDeviceContext);
@@ -679,14 +696,18 @@ namespace XMAT.Tests.Replay
             }
         });
 
-        // Cancel request, closing the window or XMAT exiting stops a numbered run before its next request: the rows recorded
-        // stay, the Replays tab is released, nothing waits on anything, and Inspect session selects nothing. The run shows
-        // its progress meanwhile, and a window that closes disposes its own transport only once the run has ended.
+        // Cancel request, closing the window, XMAT closing or XMAT exiting stops a numbered run before its next request: the
+        // rows recorded stay, the Replays tab is released and nothing waits on anything. Inspect session then selects exactly
+        // the run's last recorded row when the user cancelled it, and nothing when the window closed or XMAT stopped the run,
+        // also when XMAT closes after the user cancelled but before the run ended. The run shows its progress meanwhile, and
+        // a window that closes disposes its own transport only once the run has ended.
         [Theory]
         [InlineData("cancel")]
         [InlineData("close")]
+        [InlineData("closing")]
+        [InlineData("cancel then closing")]
         [InlineData("shutdown")]
-        public Task StoppingANumberedRun_SendsNothingMore_KeepsTheRowsRecorded_AndSelectsNothing(string stop) => _application.RunAsync(async () =>
+        public Task StoppingANumberedRun_SendsNothingMore_KeepsItsRows_AndInspectsThemOnlyWhenTheUserCancelled(string stop) => _application.RunAsync(async () =>
         {
             await using var server = new LoopbackHttpServer(request =>
                 request.Target == "/item/2" ? new LoopbackResponse(Hang: true) : LoopbackResponse.Ok());
@@ -711,6 +732,7 @@ namespace XMAT.Tests.Replay
                 Assert.False(Find<Button>(window, "CopyCurlButton").IsEnabled);
                 Assert.True(Find<Button>(window, "CancelSendButton").IsEnabled);
 
+                Task<bool> closing = null;
                 switch (stop)
                 {
                     case "cancel":
@@ -721,20 +743,36 @@ namespace XMAT.Tests.Replay
                         closed = true;
                         Assert.False(window.Client.IsDisposed);
                         break;
+                    case "closing":
+                        // As XMAT's main window does when it closes (CaptureAppModel.CanCloseAsync).
+                        closing = model.CancelCaptureDataOperationAsync();
+                        break;
+                    case "cancel then closing":
+                        // The user cancels, then closes XMAT's main window before the run has ended.
+                        window.CancelSend();
+                        closing = model.CancelCaptureDataOperationAsync();
+                        break;
                     default:
                         model.BeginShutdown();
                         break;
                 }
 
                 await sending.WaitAsync(Patience);
+                if (closing != null)
+                {
+                    Assert.True(await closing.WaitAsync(Patience));
+                }
 
+                ICaptureDeviceContext replays = model.GetOrAddReplayContext();
                 Assert.Equal(new[] { "/item/1", "/item/2" }, Targets(server));
-                Assert.Equal("/item/1", Assert.Single(ControllerOf(model.GetOrAddReplayContext()).ProxyConnections).Path);
+                ProxyConnectionModel recorded = Assert.Single(ControllerOf(replays).ProxyConnections);
+                Assert.Equal("/item/1", recorded.Path);
                 Assert.True(model.CanModifyCaptureData);
-                Assert.Same(other, model.SelectedDeviceContext);
                 Assert.Equal(closed, window.Client.IsDisposed);
                 if (stop == "cancel")
                 {
+                    Assert.Same(replays, model.SelectedDeviceContext);
+                    Assert.Same(recorded, ControllerOf(replays).SelectedConnectionModel);
                     Assert.Equal(
                         Localization.GetLocalizedString("COMPOSER_SEQUENCE_CANCELLED", 1, 3) + " " +
                             Localization.GetLocalizedString("COMPOSER_RECORDED", CaptureAppModel.ReplayContextName),
@@ -742,6 +780,11 @@ namespace XMAT.Tests.Replay
                     Assert.True(Find<Button>(window, "SendButton").IsEnabled);
                     Assert.True(Find<Grid>(window, "RequestEditor").IsEnabled);
                     Assert.Null(window.LastResult);
+                }
+                else
+                {
+                    Assert.Same(other, model.SelectedDeviceContext);
+                    Assert.Null(ControllerOf(replays).SelectedConnectionModel);
                 }
             }
             finally
@@ -751,6 +794,64 @@ namespace XMAT.Tests.Replay
                     window.Close();
                 }
 
+                await RemoveAllAsync(model);
+            }
+        });
+
+        // A run that recorded nothing selects nothing, not a row that an earlier run recorded; and a run that XMAT stopped
+        // selects nothing although an earlier run of the same window was one that the user cancelled.
+        [Fact]
+        public Task InspectSession_NeverSelectsAnEarlierRunsRow_OrTakesAnEarlierRunsCancelForThisRunsOwn() => _application.RunAsync(async () =>
+        {
+            await using var server = new LoopbackHttpServer(request =>
+                request.Target is "/hang" or "/n/2" ? new LoopbackResponse(Hang: true) : LoopbackResponse.Ok());
+            using var client = new RequestReplayClient();
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            ICaptureDeviceContext other = AddTab(model, "Other");
+            var window = RequestComposerWindow.ForNewRequest(client, NoQuestion, Recording(model));
+            try
+            {
+                Find<CheckBox>(window, "InspectSessionBox").IsChecked = true;
+                Find<TextBox>(window, "UrlBox").Text = server.Origin + "/first";
+                await window.SendAsync();
+
+                ICaptureDeviceContext replays = model.GetOrAddReplayContext();
+                ProxyConnectionModel earlier = Assert.Single(ControllerOf(replays).ProxyConnections);
+                Assert.Same(replays, model.SelectedDeviceContext);
+                Assert.Same(earlier, ControllerOf(replays).SelectedConnectionModel);
+
+                // The user looks elsewhere, then cancels a send before it is answered: it recorded nothing.
+                model.SelectedDeviceContext = other;
+                ControllerOf(replays).SelectedConnectionModel = null;
+                Find<TextBox>(window, "UrlBox").Text = server.Origin + "/hang";
+                Task sending = window.SendAsync();
+                await WaitUntilAsync(() => server.Requests.Count == 2);
+                window.CancelSend();
+                await sending.WaitAsync(Patience);
+
+                Assert.Equal(
+                    Localization.GetLocalizedString("COMPOSER_CANCELLED_NOT_RECORDED", replays.DeviceName), Status(window));
+                Assert.Same(earlier, Assert.Single(ControllerOf(replays).ProxyConnections));
+                Assert.Same(other, model.SelectedDeviceContext);
+                Assert.Null(ControllerOf(replays).SelectedConnectionModel);
+
+                // The next run records a row, and XMAT stops it as when its main window closes: no selection either.
+                Find<TextBox>(window, "UrlBox").Text = server.Origin + "/n/#";
+                window.ChooseSequence = () => "1-2";
+                sending = window.SendAsync();
+                await WaitUntilAsync(() => server.Requests.Count == 4);
+                Task<bool> closing = model.CancelCaptureDataOperationAsync();
+                await sending.WaitAsync(Patience);
+
+                Assert.True(await closing.WaitAsync(Patience));
+                Assert.Equal(
+                    new[] { "/first", "/n/1" }, ControllerOf(replays).ProxyConnections.Select(row => row.Path));
+                Assert.Same(other, model.SelectedDeviceContext);
+                Assert.Null(ControllerOf(replays).SelectedConnectionModel);
+            }
+            finally
+            {
+                window.Close();
                 await RemoveAllAsync(model);
             }
         });

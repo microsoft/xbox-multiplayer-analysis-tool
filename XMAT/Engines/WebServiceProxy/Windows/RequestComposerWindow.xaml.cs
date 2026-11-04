@@ -41,6 +41,10 @@ namespace XMAT.WebServiceCapture
         private bool _updatingEditors;
         private string _bodyTextInEditor;
 
+        // The cancellation of the run that the user stopped with Cancel request, as opposed to a run that XMAT stopped, as
+        // when it closes. It is compared with each run's own cancellation, so an earlier run's cancel never counts.
+        private CancellationTokenSource _cancelledByUser;
+
         // An uploaded body, the exact bytes read, and the name of its file; null while the editor holds the body.
         private byte[] _fileBody;
         private string _fileName;
@@ -209,8 +213,11 @@ namespace XMAT.WebServiceCapture
 
             bool cancelled = sent?.WasCancelled ?? cancellation.IsCancellationRequested;
             ShowOutcome(plan, sent, recording, maxRedirects, cancelled);
-            // Inspect session follows a run that ended, not one that was cancelled or failed.
-            if (inspect && sent?.Result.Succeeded == true && recording != null)
+            // Inspect session selects the last row that this run recorded, whatever the run's outcome: also when it failed
+            // or the user cancelled it after some of its requests were recorded. A run that XMAT stopped, because it is
+            // closing or exiting, or because the run's tab closed, selects nothing, also when the user had cancelled it
+            // first (TrySelectLastRecorded refuses a revoked run); so does a run that recorded no row.
+            if (inspect && recording != null && (!cancelled || ReferenceEquals(_cancelledByUser, cancellation)))
                 _recording.TrySelectLastRecorded(recording);
         }
 
@@ -451,8 +458,14 @@ namespace XMAT.WebServiceCapture
                 ? Localization.GetLocalizedString("COMPOSER_CANCELLED_NOT_RECORDED", recorder.Destination)
                 : WithRecording(Localization.GetLocalizedString("COMPOSER_CANCELLED"), recording);
 
-        // Stops the run in progress before its next request, and the file being read.
+        // Cancel request: the user stops the run in progress before its next request, and the file being read.
         internal void CancelSend()
+        {
+            _cancelledByUser = _sendingCancellation;
+            StopWork();
+        }
+
+        private void StopWork()
         {
             _sendingCancellation?.Cancel();
             _readingCancellation?.Cancel();
@@ -461,7 +474,7 @@ namespace XMAT.WebServiceCapture
         protected override void OnClosed(EventArgs e)
         {
             _closed = true;
-            CancelSend();
+            StopWork();
             // A run or read in progress releases the client once it has ended (EndState): it may still be using it.
             ReleaseClient();
             base.OnClosed(e);
