@@ -198,6 +198,10 @@ namespace XMAT.WebServiceCapture
         // Sends that found the tab closed, or that the UI thread did not take.
         internal int NotRecorded => Volatile.Read(ref _notRecorded);
 
+        // The row that this recorder added last, the exact object in the tab's rows; null until it adds one. A recorder
+        // records one run, so this is never a row of an earlier run (ReplayRecordingTarget.TrySelectLastRecorded).
+        internal ProxyConnectionModel LastRecorded { get; private set; }
+
         public void Add(ReplayItemResult result, ReplayExchange exchange)
         {
             ArgumentNullException.ThrowIfNull(result);
@@ -290,6 +294,7 @@ namespace XMAT.WebServiceCapture
             _controller.ProxyConnections.Add(row);
             _lastNumber++;
             Recorded++;
+            LastRecorded = row;
         }
 
         // A send that the tab cannot take is counted, and the run stops: nothing after it would be recorded either.
@@ -439,6 +444,30 @@ namespace XMAT.WebServiceCapture
                 operation.Dispose();
                 throw;
             }
+        }
+
+        // Inspect session: selects, on the UI thread once a run has ended, the row that its recording added last, in the tab
+        // that it added it to, by reference; never a row found by its tab's name or by its number, which other tabs can
+        // share. Nothing is selected, and false returned, when the run added no row, once XMAT is shutting down, or once
+        // that tab or row is gone. The tab's selection is cleared first, so a view that does not show the row, such as one
+        // that filters it out, selects nothing rather than keeping another row.
+        internal bool TrySelectLastRecorded(ReplayRecording recording)
+        {
+            ArgumentNullException.ThrowIfNull(recording);
+            ProxyConnectionModel row = recording.Recorder.LastRecorded;
+            if (row == null ||
+                _model.IsShuttingDown ||
+                !_model.CaptureDeviceContexts.Any(context => ReferenceEquals(context, recording.Destination)) ||
+                recording.Destination.CaptureController is not WebServiceDeviceCaptureController controller ||
+                !controller.ProxyConnections.Any(connection => ReferenceEquals(connection, row)))
+            {
+                return false;
+            }
+
+            _model.SelectedDeviceContext = recording.Destination;
+            controller.SelectedConnectionModel = null;
+            controller.SelectedConnectionModel = row;
+            return true;
         }
 
         // Once XMAT is shutting down a send no longer waits for the UI thread, which may be tearing down the tabs and the

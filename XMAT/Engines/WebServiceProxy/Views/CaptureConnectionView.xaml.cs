@@ -43,6 +43,10 @@ namespace XMAT.WebServiceCapture
         private DispatcherOperation _pendingFilterRefresh;
         private ReplayRecordingTarget _replayTarget;
 
+        // The row that the left button went down on, and where, until a drag starts or the button is released.
+        private ProxyConnectionModel _dragRow;
+        private Point _dragStart;
+
         // The Replay menu run in progress, for Cancel replay, and whether the user cancelled it. Used on the UI thread.
         private static CancellationTokenSource _reissueCancellation;
         private static bool _reissueCancelledByUser;
@@ -143,6 +147,51 @@ namespace XMAT.WebServiceCapture
                 ConnectionList.SelectedItem = row.Item;
             }
         }
+
+        // Drag a session: pressing on a row and moving past the system's drag distance drags that request into a composer
+        // (RequestComposerWindow.DropSession).
+        private void ConnectionList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _dragRow = e.OriginalSource is DependencyObject source &&
+                ItemsControl.ContainerFromElement(ConnectionList, source) is DataGridRow { Item: ProxyConnectionModel row }
+                    ? row
+                    : null;
+            _dragStart = e.GetPosition(ConnectionList);
+        }
+
+        private void ConnectionList_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (_dragRow == null)
+                return;
+            if (e.LeftButton != MouseButtonState.Pressed)
+            {
+                _dragRow = null;
+                return;
+            }
+
+            if (!IsPastDragThreshold(e.GetPosition(ConnectionList) - _dragStart))
+                return;
+            ProxyConnectionModel row = _dragRow;
+            _dragRow = null;
+            using ComposerSessionDragToken drag = BeginSessionDrag(row);
+            if (drag != null)
+            {
+                DragDrop.DoDragDrop(ConnectionList, drag.Data, DragDropEffects.Copy);
+            }
+        }
+
+        // Whether the mouse has moved far enough with its button down to start a drag.
+        internal static bool IsPastDragThreshold(Vector moved) =>
+            Math.Abs(moved.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+            Math.Abs(moved.Y) >= SystemParameters.MinimumVerticalDragDistance;
+
+        // Lends the pressed row to a composer for one drag: one replayable request, the only selected row; several selected
+        // rows are not dragged, since a composer takes one request. Null when nothing is dragged. Dispose it when the drag
+        // has ended.
+        internal ComposerSessionDragToken BeginSessionDrag(ProxyConnectionModel row) =>
+            row != null && ConnectionList.SelectedItems.Count == 1 && ReferenceEquals(ConnectionList.SelectedItem, row)
+                ? ComposerSessionDrag.Begin(row, SourceName)
+                : null;
 
         // The rows that a Replay menu item applies to: the selection, in list order, when the clicked row is part of
         // it; otherwise only the clicked row.

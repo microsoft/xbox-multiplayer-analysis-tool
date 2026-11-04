@@ -4,6 +4,8 @@
         xmlns:local="clr-namespace:XMAT.WebServiceCapture"
         Title="Edit and resend" Width="1120" Height="760" MinWidth="800" MinHeight="550"
         WindowStartupLocation="CenterOwner"
+        AllowDrop="True" PreviewDragEnter="Window_PreviewDragOver" PreviewDragOver="Window_PreviewDragOver"
+        PreviewDrop="Window_PreviewDrop"
         Background="{DynamicResource PanelBackgroundBrush}"
         Foreground="{DynamicResource PrimaryForegroundBrush}">
   <Grid Margin="12">
@@ -28,6 +30,7 @@
           <RowDefinition Height="2*"/>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="3*"/>
+          <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid Grid.RowSpan="2">
           <Grid.ColumnDefinitions>
@@ -41,18 +44,32 @@
           <Label x:Name="MethodLabel" Target="{Binding ElementName=MethodBox}"/>
           <Label x:Name="UrlLabel" Grid.Column="1" Target="{Binding ElementName=UrlBox}"/>
           <TextBox x:Name="MethodBox" Grid.Row="1" Margin="0,0,6,0" VerticalContentAlignment="Center"/>
-          <TextBox x:Name="UrlBox" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center"/>
+          <TextBox x:Name="UrlBox" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center"
+                   TextChanged="UrlBox_TextChanged"/>
         </Grid>
         <Label x:Name="HeadersLabel" Grid.Row="2" Target="{Binding ElementName=HeadersBox}"/>
         <TextBox x:Name="HeadersBox" Grid.Row="3" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
                  HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
         <DockPanel Grid.Row="4" Margin="0,6,0,0">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+            <Button x:Name="UploadFileButton" Margin="4,0" Padding="8,2" Click="UploadFile_Click"/>
+            <Button x:Name="ClearBodyButton" Margin="4,0" Padding="8,2" Click="ClearBody_Click"/>
+            <CheckBox x:Name="Base64Box" Margin="8,0,0,0" VerticalAlignment="Center"
+                      Checked="BodyFormat_Changed" Unchecked="BodyFormat_Changed"/>
+          </StackPanel>
           <Label x:Name="BodyLabel" Target="{Binding ElementName=BodyBox}"/>
-          <CheckBox x:Name="Base64Box" VerticalAlignment="Center" HorizontalAlignment="Right"
-                    Checked="BodyFormat_Changed" Unchecked="BodyFormat_Changed"/>
         </DockPanel>
-        <TextBox x:Name="BodyBox" Grid.Row="5" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
-                 HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
+        <Grid Grid.Row="5">
+          <TextBox x:Name="BodyBox" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
+                   HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
+          <TextBlock x:Name="BodyFileText" Margin="4" TextWrapping="Wrap" Visibility="Collapsed"/>
+        </Grid>
+        <WrapPanel Grid.Row="6" Margin="0,8,0,0" Orientation="Horizontal">
+          <CheckBox x:Name="FollowRedirectsBox" VerticalAlignment="Center"
+                    Checked="FollowRedirects_Changed" Unchecked="FollowRedirects_Changed"/>
+          <ComboBox x:Name="RedirectLimitBox" MinWidth="56" Margin="6,0,0,0" VerticalAlignment="Center" IsEnabled="False"/>
+          <CheckBox x:Name="InspectSessionBox" Margin="18,0,0,0" VerticalAlignment="Center"/>
+        </WrapPanel>
       </Grid>
       <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" ResizeDirection="Columns"/>
       <local:RequestResponseView x:Name="ResponseView" Grid.Column="2"/>
@@ -60,7 +77,8 @@
     <TextBlock x:Name="StatusText" Grid.Row="2" Margin="0,10" TextWrapping="Wrap"
                AutomationProperties.LiveSetting="Polite"/>
     <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-      <Button x:Name="CopyCurlButton" MinWidth="140" Margin="4" Padding="8,4" Click="CopyCurl_Click"/>
+      <Button x:Name="CopyCurlButton" MinWidth="140" Margin="4" Padding="8,4" Click="CopyCurl_Click"
+              ToolTipService.ShowOnDisabled="True"/>
       <Button x:Name="SendButton" MinWidth="90" Margin="4" Padding="8,4" Click="Send_Click"/>
       <Button x:Name="CancelSendButton" MinWidth="110" Margin="4" Padding="8,4" IsEnabled="False" Click="CancelSend_Click"/>
       <Button x:Name="CloseButton" MinWidth="90" Margin="4" Padding="8,4" IsCancel="True" Click="Close_Click"/>

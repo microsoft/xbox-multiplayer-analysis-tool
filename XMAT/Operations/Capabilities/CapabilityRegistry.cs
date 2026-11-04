@@ -31,6 +31,7 @@ namespace XMAT.Operations.Capabilities
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
         private const string SanitizedExportXaml = "Windows/SanitizedExportProgressWindow.xaml";
         private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
+        private const string SequenceRangeXaml = "Engines/WebServiceProxy/Windows/SequenceRangeWindow.xaml";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
@@ -190,7 +191,8 @@ namespace XMAT.Operations.Capabilities
                 }),
 
             // Replay sends captured requests again, as captured or edited, directly from this PC through the shared
-            // ReplaySender; the replays are not captured. The composer is its GUI adapter for one request at a time.
+            // ReplaySender; the replays are not captured. The composer is its GUI adapter for one request, or one per number
+            // of a URL with '#' (SequenceRangeWindow).
             Capability.Supported(
                 "request.replay", "Replay captured requests, as captured or edited", "S9",
                 cli: "replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
@@ -208,6 +210,8 @@ namespace XMAT.Operations.Capabilities
                     Click(ComposerXaml, "Send_Click"),
                     Click(ComposerXaml, "CancelSend_Click"),
                     Click(ComposerXaml, "CopyCurl_Click"),
+                    Click(ComposerXaml, "UploadFile_Click"),
+                    Click(ComposerXaml, "ClearBody_Click"),
                     Click(ComposerXaml, "Close_Click"),
                 }),
             Capability.Supported(
@@ -220,6 +224,8 @@ namespace XMAT.Operations.Capabilities
                 {
                     Command(AppCommandsPrefix + "ComposeRequest"),
                     Window("XMAT.WebServiceCapture.RequestComposerWindow"),
+                    Window("XMAT.WebServiceCapture.SequenceRangeWindow"),
+                    Click(SequenceRangeXaml, "Ok_Click"),
                 }),
 
             // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.

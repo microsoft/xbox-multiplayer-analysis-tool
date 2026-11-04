@@ -66,7 +66,7 @@ namespace XMAT.Tests
             using var httpClient = new HttpClient(handler);
             using var client = new RequestReplayClient(httpClient);
             int confirmations = 0;
-            var window = RequestComposerWindow.ForNewRequest(client, (_, _) => { ++confirmations; return true; });
+            var window = RequestComposerWindow.ForNewRequest(client, _ => { ++confirmations; return true; });
             try
             {
                 Assert.Equal("GET", Find<TextBox>(window, "MethodBox").Text);
@@ -98,7 +98,7 @@ namespace XMAT.Tests
             using var httpClient = new HttpClient(handler);
             using var client = new RequestReplayClient(httpClient);
             var capture = RequestReplayDraftTests.Capture("POST", "/original", "original"u8.ToArray());
-            var window = new RequestComposerWindow(capture, client, (_, _) => { ++confirmations; return false; });
+            var window = new RequestComposerWindow(capture, client, _ => { ++confirmations; return false; });
             try
             {
                 Assert.Equal("POST", Find<TextBox>(window, "MethodBox").Text);
@@ -129,7 +129,7 @@ namespace XMAT.Tests
             using var httpClient = new HttpClient(handler);
             using var client = new RequestReplayClient(httpClient);
             var capture = RequestReplayDraftTests.Capture("POST", "/original", "original"u8.ToArray());
-            var window = new RequestComposerWindow(capture, client, (_, _) => true);
+            var window = new RequestComposerWindow(capture, client, _ => true);
             try
             {
                 Find<TextBox>(window, "MethodBox").Text = "PUT";
@@ -163,7 +163,7 @@ namespace XMAT.Tests
             using var httpClient = new HttpClient(handler);
             using var client = new RequestReplayClient(httpClient);
             var window = new RequestComposerWindow(
-                RequestReplayDraftTests.Capture("GET", "/", []), client, (_, _) => true);
+                RequestReplayDraftTests.Capture("GET", "/", []), client, _ => true);
             try
             {
                 Task sending = window.SendAsync();
@@ -199,7 +199,7 @@ namespace XMAT.Tests
             using var httpClient = new HttpClient(handler);
             using var client = new RequestReplayClient(httpClient);
             var window = new RequestComposerWindow(
-                RequestReplayDraftTests.Capture("GET", "/", []), client, (_, _) => true);
+                RequestReplayDraftTests.Capture("GET", "/", []), client, _ => true);
             Task sending = window.SendAsync();
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             window.Close();
@@ -216,7 +216,7 @@ namespace XMAT.Tests
             using var httpClient = new HttpClient(handler);
             using var client = new RequestReplayClient(httpClient);
             var window = new RequestComposerWindow(
-                RequestReplayDraftTests.Capture("GET", "/", []), client, (_, _) => true);
+                RequestReplayDraftTests.Capture("GET", "/", []), client, _ => true);
             try
             {
                 if (invalidInput)
@@ -247,7 +247,7 @@ namespace XMAT.Tests
             using var httpClient = new HttpClient(handler);
             using var client = new RequestReplayClient(httpClient);
             var window = new RequestComposerWindow(
-                RequestReplayDraftTests.Capture("POST", "/", bytes), client, (_, _) => true);
+                RequestReplayDraftTests.Capture("POST", "/", bytes), client, _ => true);
             try
             {
                 await window.SendAsync();
@@ -271,7 +271,7 @@ namespace XMAT.Tests
             using var httpClient = new HttpClient(handler);
             using var client = new RequestReplayClient(httpClient);
             var window = new RequestComposerWindow(
-                RequestReplayDraftTests.Capture("POST", "/", bytes), client, (_, _) => true);
+                RequestReplayDraftTests.Capture("POST", "/", bytes), client, _ => true);
             try
             {
                 window.Show();
@@ -302,8 +302,8 @@ namespace XMAT.Tests
             var capture = new ProxyConnectionModel(7, "200", DateTime.UtcNow, TimeSpan.Zero, "http", "127.0.0.1:9", "POST",
                 "/original", "POST /original HTTP/1.1\r\n\r\n", "original"u8.ToArray(), "HTTP/1.1 200 OK\r\n\r\n",
                 "old response"u8.ToArray(), "127.0.0.1");
-            var edited = new RequestComposerWindow(capture, client, (_, _) => true, recording, "Local PC");
-            var composed = RequestComposerWindow.ForNewRequest(client, (_, _) => true, recording);
+            var edited = new RequestComposerWindow(capture, client, _ => true, recording, "Local PC");
+            var composed = RequestComposerWindow.ForNewRequest(client, _ => true, recording);
             try
             {
                 await edited.SendAsync();
@@ -349,7 +349,7 @@ namespace XMAT.Tests
                 new ProxyConnectionModel(7, "200", DateTime.UtcNow, TimeSpan.Zero, "http", "127.0.0.1:9", "GET", "/",
                     "GET / HTTP/1.1\r\n\r\n", [], "HTTP/1.1 200 OK\r\n\r\n", [], "127.0.0.1"),
                 client,
-                (_, _) => true,
+                _ => true,
                 Recording(model),
                 "Local PC");
             try
@@ -392,7 +392,7 @@ namespace XMAT.Tests
             using var httpClient = new HttpClient(handler);
             using var client = new RequestReplayClient(httpClient);
             var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
-            var window = new RequestComposerWindow(LoopbackGet(), client, (_, _) => true, Recording(model), "Local PC");
+            var window = new RequestComposerWindow(LoopbackGet(), client, _ => true, Recording(model), "Local PC");
             try
             {
                 Task sending = window.SendAsync();
@@ -430,7 +430,7 @@ namespace XMAT.Tests
             using var httpClient = new HttpClient(handler);
             using var client = new RequestReplayClient(httpClient);
             var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
-            var window = new RequestComposerWindow(LoopbackGet(), client, (_, _) => true, Recording(model), "Local PC");
+            var window = new RequestComposerWindow(LoopbackGet(), client, _ => true, Recording(model), "Local PC");
             try
             {
                 Task sending = window.SendAsync();

@@ -137,7 +137,9 @@
                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"
                   AutoGenerateColumns="False" GridLinesVisibility="None" ScrollViewer.ScrollChanged="ConnectionList_ScrollChanged"
                   ContextMenuOpening="ConnectionList_ContextMenuOpening"
-                  PreviewMouseRightButtonDown="ConnectionList_PreviewMouseRightButtonDown">
+                  PreviewMouseRightButtonDown="ConnectionList_PreviewMouseRightButtonDown"
+                  PreviewMouseLeftButtonDown="ConnectionList_PreviewMouseLeftButtonDown"
+                  PreviewMouseMove="ConnectionList_PreviewMouseMove">
             <DataGrid.ContextMenu>
                 <ContextMenu>
                     <!-- Popups have a separate visual tree; route the command through the owning grid. -->

@@ -158,16 +158,18 @@ Loaded and imported captures can be resent too. Binary, compressed, and non-UTF-
 request bodies are preserved as editable Base64; text bodies use UTF-8.
 
 Requests are sent directly from this PC, bypassing system proxies and capture scripts.
-HTTPS certificates are validated, redirects are not followed, and response cookies
-are not reused. **Captured headers, including credentials, are sent to the edited URL.**
-Host and Content-Length are regenerated, and connection-only headers are omitted.
-Methods other than exactly GET, HEAD, and OPTIONS, in capitals, require confirmation, as
-does changing the captured origin. CONNECT and WebSocket handshakes cannot be resent.
+HTTPS certificates are validated, redirects are not followed unless you select **Follow
+same-origin redirects** (see below), and response cookies are not reused. **Captured
+headers, including credentials, are sent to the edited URL.** Host and Content-Length
+are regenerated, and connection-only headers are omitted. Methods other than exactly
+GET, HEAD, and OPTIONS, in capitals, require confirmation, as does changing the captured
+origin. CONNECT and WebSocket handshakes cannot be resent.
 
 Use **Cancel request** to stop waiting, or **Copy as cURL (PowerShell 7)** to copy a
 command for PowerShell 7 with `curl.exe` available. **Copied commands can contain
 credentials and body data.** Sending has a 30-second timeout and a 16 MiB response
-limit. Cancelling or timing out cannot undo changes already processed by the server.
+limit for each request. Cancelling or timing out cannot undo changes already processed
+by the server.
 
 To send a request that was never captured, select **Actions > Compose a New Request**.
 The composer opens with an empty GET request and works the same way.
@@ -177,6 +179,56 @@ requests that **Replay** sends (see below). A send that you cancel is not record
 it may already have reached the server, and the status line says so. While a replay, an
 analysis, or a capture file operation such as an import runs, the composer does not
 send and says so; send again when it has finished.
+
+### Composer options
+
+- **Follow same-origin redirects, at most** *N* is off by default; *N* is 1 to 10, and
+  10 at first. XMAT follows a redirect only to the scheme, host, and port that the
+  request was sent to, and never from HTTPS to HTTP, so captured headers and the body
+  never go to another origin. Each redirect followed is another request: after a 303,
+  or a 301 or 302 that answers a POST, it is a GET without the body, as browsers send
+  it. When XMAT does not follow a redirect, the redirect response is the result and the
+  status line says why. Without the option, a redirect response is shown as it is.
+- **Inspect session** is off by default. When it is selected, XMAT selects the last
+  request of the send in the **XMAT Replays** tab once the send has ended, also when
+  that request failed or timed out. It selects nothing when you cancelled the send,
+  when nothing was recorded, or when the tab or the composer was closed meanwhile.
+
+### Numbered URLs
+
+As in Fiddler's composer, a `#` in the path or query of the URL sends one request per
+number. **Send** asks for **Start At** and **End At**, 1 and 1 at first, and every `#`
+in the URL is replaced by each number in turn. A leading `0` in **Start At** pads every
+number to its width: `http://example.com/#/?a=#` from `08` to `11` sends `/08/?a=08`,
+`/09/?a=09`, `/10/?a=10`, and `/11/?a=11`. Only the URL changes; a `#` in a header or
+the body is sent as it is. Write `%23` for a literal `#` in the URL. A `#` in the
+scheme, host, or port is refused, so numbers never lead to other hosts.
+
+The requests are checked before anything is sent and go out one at a time, at most
+10,000 of them. When they need confirmation, one question covers them all and says how
+many there are. **Cancel request** stops before the next request: the requests already
+sent stay in the **XMAT Replays** tab. The composer shows the last response only.
+**Copy as cURL** is not available for a numbered URL or while **Follow same-origin
+redirects** is selected, since the command would not send the same requests.
+
+### Upload a body from a file
+
+**Upload File** replaces the whole body with the bytes of a file, up to 64 MiB. The file
+is read once, when you choose it: later changes to it are not sent, and the composer
+keeps only its bytes and its name. Headers such as `Content-Type` are not changed.
+**Clear body** removes the uploaded body. A file that cannot be read leaves the body as
+it was. Fiddler's `<@INCLUDE@>` tokens and multipart forms are not supported: such text
+is sent as typed, and no file is read.
+
+### Drag a request into the composer
+
+Drag a request from a connections list onto an open composer to edit and send it there.
+One request is dragged at a time; CONNECT tunnels, protocol upgrades, and requests
+recorded without their body cannot be dragged. The composer loads a copy of the request
+as it was when the drag began, clears the previous response, and sends nothing. If you
+have edited the request in the composer, it asks before replacing it. Only requests
+dragged from XMAT can be dropped; text, links, and files are refused, and nothing can be
+dropped while the composer sends or reads a file.
 
 ## Replay requests
 
