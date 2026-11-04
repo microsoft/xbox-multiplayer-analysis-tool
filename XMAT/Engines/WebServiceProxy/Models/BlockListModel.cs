@@ -92,21 +92,9 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return false;
 
-            host = HostListEntry.MatchCandidate(host);
-            string[] candidates;
-            if (!string.IsNullOrEmpty(path))
-            {
-                string normalizedPath = path.StartsWith('/') ? path : "/" + path;
-                candidates = new[] { host, host + normalizedPath };
-            }
-            else
-            {
-                candidates = new[] { host };
-            }
-
             return Snapshot()
                 .Select(GetRegex)
-                .Any(regex => candidates.Any(candidate => regex.IsMatch(candidate)));
+                .Any(regex => HostListEntry.Matches(regex, host, path));
         }
 
         /// <summary>
@@ -118,8 +106,7 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return Array.Empty<string>();
 
-            string candidate = HostListEntry.MatchCandidate(host);
-            return Snapshot().Where(pattern => GetRegex(pattern).IsMatch(candidate)).ToList();
+            return Snapshot().Where(pattern => HostListEntry.Matches(GetRegex(pattern), host)).ToList();
         }
 
         private string[] Snapshot()

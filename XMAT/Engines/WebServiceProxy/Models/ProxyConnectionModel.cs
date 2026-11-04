@@ -230,6 +230,12 @@ namespace XMAT.WebServiceCapture.Models
             UpdateFromDataRecord(dataRecord);
         }
 
+        internal void SetImportedIdentity(long requestNumber, long connectionId)
+        {
+            RequestNumber = requestNumber;
+            Id = connectionId;
+        }
+
         internal void SetClientProcess(ClientProcessInfo info, bool resolving = false)
         {
             ClientProcessInfo value = info ?? ClientProcessInfo.NotRecorded;

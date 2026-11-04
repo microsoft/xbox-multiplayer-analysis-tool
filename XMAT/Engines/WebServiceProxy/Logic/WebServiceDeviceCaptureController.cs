@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -20,6 +21,7 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
@@ -95,6 +97,7 @@ namespace XMAT.WebServiceCapture
                     return;
                 }
 
+                _captureWasStopped = !value && _isRunning;
                 _isRunning = value;
                 RaisePropertyChange();
                 RaisePropertyChange(nameof(CaptureStatusText));
@@ -230,8 +233,218 @@ namespace XMAT.WebServiceCapture
                     }).ToList();
         }
 
-        internal ICaptureExportSnapshot CreateExportSnapshot(string ordinalDeviceId, AnalysisLimits limits) =>
-            throw new NotImplementedException();
+        internal ICaptureExportSnapshot CreateExportSnapshot(string ordinalDeviceId, AnalysisLimits limits)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(ordinalDeviceId);
+            ArgumentNullException.ThrowIfNull(limits);
+            CaptureInputReader.ValidateLimits(limits);
+            bool ownsDataset = _captureDataSource == CaptureDataSource.ActiveTable;
+            IDataset dataset = _captureDataSource == CaptureDataSource.LoadedDataset
+                ? _loadedCaptureDataset
+                : _dataTable?.Dataset;
+            if (dataset == null)
+            {
+                throw new InvalidOperationException("The capture has no data source.");
+            }
+            IReadOnlyList<SqLtSchemaColumn> captureFields = dataset is IRawCaptureDataset rawDataset
+                ? rawDataset.Columns
+                : dataset.FieldDefs.Select(FieldColumn).ToList();
+            SqLtFileIdentity? inputIdentity =
+                LoadedCaptureDatabaseRegistry.DatabaseFor(this)?.Identity;
+            IVersionedCaptureTable versioned = _captureDataSource == CaptureDataSource.ActiveTable
+                ? _dataTable as IVersionedCaptureTable
+                : null;
+            var frozen = new Dictionary<CaptureRowKey, FrozenExportRow>();
+            var sessions = new List<CaptureExportSession>();
+            IDataset freezeDataset = ownsDataset
+                ? _dataTable.Subset(
+                    WebServiceCaptureMethod.FieldKey_DeviceName,
+                    WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
+                    WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders)
+                : dataset;
+            try
+            {
+                using (_captureRows.EnterMutation())
+                using (versioned?.EnterRead())
+                {
+                    Dictionary<long, IDataRecord> records = freezeDataset.DataRecordsWhen(
+                            new FieldValue<string>(
+                                WebServiceCaptureMethod.FieldKey_DeviceName,
+                                DeviceName))
+                        .ToDictionary(record => (long)record.RowId);
+                    foreach (ProxyConnectionModel model in ProxyConnections)
+                    {
+                        if (model.RowKey.SourceId == Guid.Empty)
+                        {
+                            ProxyConnections.AssignRowKey(
+                                model,
+                                new CaptureRowKey(
+                                    _sourceId,
+                                    -1,
+                                    model.RecordRowId,
+                                    checked(++_loadedIncarnation)));
+                        }
+                        if (!records.TryGetValue(model.RecordRowId, out IDataRecord record))
+                        {
+                            continue;
+                        }
+                        long version = versioned?.VersionOf(model.RecordRowId) ?? 0;
+                        ClientProcessInfo process = model.ClientProcess;
+                        bool responseHeaders = !string.IsNullOrEmpty(
+                            record.Str(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders));
+                        bool responseTimestamp = !string.IsNullOrEmpty(
+                            record.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp));
+                        var session = new CaptureExportSession(
+                            model.RowKey,
+                            ordinalDeviceId,
+                            model.Host ?? string.Empty,
+                            model.Path ?? string.Empty,
+                            model.Status ?? string.Empty,
+                            model.Method ?? string.Empty,
+                            process,
+                            responseHeaders,
+                            responseTimestamp,
+                            version);
+                        sessions.Add(session);
+                        frozen.Add(
+                            model.RowKey,
+                            new FrozenExportRow(model.RecordRowId, version, process, model));
+                    }
+                }
+            }
+            finally
+            {
+                if (!ReferenceEquals(freezeDataset, dataset))
+                {
+                    (freezeDataset as IDisposable)?.Dispose();
+                }
+            }
+
+            var deviceFields = new[]
+            {
+                new SqLtSchemaColumn("DeviceType", SqLtDeclaredType.Integer),
+                new SqLtSchemaColumn("DeviceName", SqLtDeclaredType.Text),
+                new SqLtSchemaColumn("CaptureType", SqLtDeclaredType.Integer),
+            };
+            IReadOnlyDictionary<string, RawExportRow> devices = new Dictionary<string, RawExportRow>
+            {
+                [ordinalDeviceId] = new RawExportRow(
+                    default,
+                    1,
+                    0,
+                    new Dictionary<string, object>(StringComparer.Ordinal)
+                    {
+                        ["DeviceType"] = (long)_deviceType,
+                        ["DeviceName"] = DeviceName,
+                        ["CaptureType"] = (long)CaptureType.WebProxy,
+                    }),
+            };
+
+            IReadOnlyList<RawExportRow> ReadRows(
+                IReadOnlyList<CaptureRowKey> keys,
+                CancellationToken cancellationToken)
+            {
+                var result = new List<RawExportRow>();
+                var index = 0;
+                while (index < keys.Count)
+                {
+                    var batchCount = 0;
+                    long batchBytes = 0;
+                    using (_captureRows.EnterMutation())
+                    using (versioned?.EnterRead())
+                    {
+                        while (index < keys.Count && batchCount < 64)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            CaptureRowKey key = keys[index];
+                            if (!frozen.TryGetValue(key, out FrozenExportRow expected) ||
+                                !ReferenceEquals(ProxyConnections.ByKey(key), expected.Model))
+                            {
+                                index++;
+                                continue;
+                            }
+                            IDataRecord record = dataset.DataRecordsFrom(expected.RowId, 1)
+                                .FirstOrDefault(candidate => candidate.RowId == expected.RowId);
+                            if (record == null)
+                            {
+                                index++;
+                                continue;
+                            }
+                            if (versioned != null && versioned.VersionOf(expected.RowId) != expected.PayloadVersion)
+                            {
+                                throw new InvalidOperationException("The capture row changed after the export snapshot.");
+                            }
+                            Dictionary<string, object> values = CaptureRawValues.Read(record, captureFields);
+                            CaptureRawValues.OverlayProcess(values, expected.Process);
+                            long rowBytes = CaptureRawValues.Measure(values);
+                            if (rowBytes > limits.MaxEntryBytes)
+                            {
+                                throw new CaptureExportException(
+                                    CaptureExportErrorCodes.InvalidBody,
+                                    OperationOutcome.InvalidInput);
+                            }
+                            if (batchCount != 0 && batchBytes + rowBytes > 8 * 1024 * 1024)
+                            {
+                                break;
+                            }
+                            result.Add(new RawExportRow(
+                                key,
+                                expected.RowId,
+                                expected.PayloadVersion,
+                                values));
+                            batchCount++;
+                            batchBytes += rowBytes;
+                            index++;
+                        }
+                    }
+                    if (batchCount != 0)
+                    {
+                        ExportReadBatchObserver?.Invoke(batchCount, batchBytes);
+                    }
+                }
+                return result;
+            }
+
+            return new CaptureExportSnapshot(
+                captureFields,
+                deviceFields,
+                devices,
+                sessions.AsReadOnly(),
+                _captureDataSource == CaptureDataSource.ActiveTable && !_readOnly && !_captureWasStopped,
+                "records",
+                inputIdentity,
+                null,
+                ReadRows,
+                destination =>
+                {
+                    if (inputIdentity.HasValue &&
+                        File.Exists(destination) &&
+                        SqLtFileIdentity.FromPath(destination) == inputIdentity.Value)
+                    {
+                        throw new CaptureExportDestinationException("export.output.is-source");
+                    }
+                },
+                () =>
+                {
+                    if (ownsDataset)
+                    {
+                        (dataset as IDisposable)?.Dispose();
+                    }
+                });
+        }
+
+        private static SqLtSchemaColumn FieldColumn(IFieldDefinition field) =>
+            new(
+                field.Name,
+                field.ValueType == FieldValueType.Integer
+                    ? SqLtDeclaredType.Integer
+                    : SqLtDeclaredType.Text);
+
+        private sealed record FrozenExportRow(
+            long RowId,
+            long PayloadVersion,
+            ClientProcessInfo Process,
+            ProxyConnectionModel Model);
 
         internal bool IsCurrent(CaptureRowKey key) => key.SourceId != Guid.Empty &&
             (_captureRows.IsCurrent(key) || ProxyConnections.ByKey(key) != null);
@@ -2231,6 +2444,7 @@ namespace XMAT.WebServiceCapture
 
         private ManualResetEvent _importResetEvent = new ManualResetEvent(true);
         private CancellationTokenSource _fiddlerAsyncImportCancelTokenSource;
+        private bool _captureWasStopped;
         private bool _isRunning;
         private ControllerParameters _parameters;
 

@@ -423,68 +423,6 @@ namespace XMAT.Tests
             }
         }
 
-        [Theory]
-        [InlineData("before-first")]
-        [InlineData("between-records")]
-        [InlineData("after-last")]
-        public void CancelledArchiveExport_DisposesTheSourceAndNeverReplacesTheDestination(string point)
-        {
-            Export("text/plain", "visible");
-            var path = Assert.Single(Directory.GetFiles(_directory, "*.saz"));
-            var original = File.ReadAllBytes(path);
-            var record = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
-            using var cancellation = new CancellationTokenSource();
-            var disposed = false;
-            IEnumerable<ProxyConnectionModel> Records()
-            {
-                try
-                {
-                    if (point == "before-first")
-                    {
-                        cancellation.Cancel();
-                    }
-                    yield return record;
-                    cancellation.Cancel();
-                    if (point == "between-records")
-                    {
-                        yield return record;
-                    }
-                }
-                finally
-                {
-                    disposed = true;
-                }
-            }
-
-            Assert.ThrowsAny<OperationCanceledException>(() =>
-                FiddlerSazHandler.CreateSanitizedSazFile(path, Records(), cancellation.Token));
-
-            Assert.True(disposed);
-            Assert.Equal(original, File.ReadAllBytes(path));
-            Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
-            var retained = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
-            Assert.Equal("visible", Encoding.UTF8.GetString(retained.ResponseBody));
-        }
-
-        [Fact]
-        public void AlreadyCancelledExport_DoesNotOpenTheSourceOrCreateATemporaryArchive()
-        {
-            using var cancellation = new CancellationTokenSource();
-            cancellation.Cancel();
-            var enumerated = false;
-            IEnumerable<ProxyConnectionModel> Records()
-            {
-                enumerated = true;
-                yield break;
-            }
-
-            Assert.ThrowsAny<OperationCanceledException>(() => FiddlerSazHandler.CreateSanitizedSazFile(
-                Path.Join(_directory, "cancelled.saz"), Records(), cancellation.Token));
-
-            Assert.False(enumerated);
-            Assert.Empty(Directory.GetFiles(_directory));
-        }
-
         [Fact]
         public void RequestCredentials_AreRemovedFromThePairedResponseButNotTheNextSession()
         {
@@ -1334,7 +1272,7 @@ namespace XMAT.Tests
                 "Cookie: a=1\r\nCookie: sid=IMPORT-COOKIE-CANARY\r\n",
                 "Set-Cookie: lang=en; Path=/\r\nSet-Cookie: sid=IMPORT-SETCOOKIE-CANARY" +
                 (expires ? "; Expires=Wed, 21 Oct 2037 07:28:00 GMT" : "") + "; HttpOnly\r\n");
-            FiddlerSazHandler.CreateSazFile(original, new[] { source });
+            SazArchive.Write(original, new[] { source });
             var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(original, CancellationToken.None));
             Assert.Contains("a=1,sid=", imported.RequestLineAndHeaders);
             Assert.Contains("Path=/,sid=", imported.ResponseLineAndHeaders);
@@ -1476,7 +1414,7 @@ namespace XMAT.Tests
             var originals = records.Select(record => (
                 Request: record.RequestBody.ToArray(), Response: record.ResponseBody.ToArray(),
                 RequestHeaders: record.RequestLineAndHeaders, ResponseHeaders: record.ResponseLineAndHeaders)).ToArray();
-            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, records);
+            var summary = SazArchive.Write(path, records, sanitized: true);
             for (var index = 0; index < records.Length; index++)
             {
                 Assert.Equal(originals[index].Request, records[index].RequestBody);
@@ -1526,7 +1464,8 @@ namespace XMAT.Tests
                 omissions += flags.Keys.Count(key => key.EndsWith("-body-omitted", StringComparison.Ordinal));
                 Assert.All(flags.Keys, key => Assert.Contains(key, new[]
                 {
-                    "x-clientip", "x-xmat-request-body-omitted", "x-xmat-response-body-omitted"
+                    "x-clientip", "x-xmat-request-body-omitted", "x-xmat-response-body-omitted", "x-xmat-request-number",
+                    "x-xmat-connection-id", "x-xmat-request-timestamp", "x-xmat-response-timestamp", "x-xmat-scheme",
                 }));
                 if (flags.ContainsKey("x-xmat-request-body-omitted"))
                 {

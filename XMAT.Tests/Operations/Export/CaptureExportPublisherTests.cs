@@ -112,7 +112,8 @@ namespace XMAT.Tests.Operations.Export
             File.WriteAllText(destination, "existing");
             var publisher = new CaptureExportPublisher();
 
-            await Assert.ThrowsAsync<IOException>(
+            CaptureExportDestinationException failure =
+                await Assert.ThrowsAsync<CaptureExportDestinationException>(
                 () => publisher.PublishAsync(
                     destination,
                     replaceExisting: false,
@@ -120,6 +121,8 @@ namespace XMAT.Tests.Operations.Export
                     (path, cancellationToken) => File.WriteAllTextAsync(path, "new", cancellationToken),
                     CancellationToken.None));
 
+            Assert.Equal("export.output.exists", failure.Code);
+            Assert.Equal("The export destination already exists.", failure.Message);
             Assert.Equal("existing", File.ReadAllText(destination));
             Assert.Equal(new[] { destination }, Directory.GetFileSystemEntries(directory.Root));
         }

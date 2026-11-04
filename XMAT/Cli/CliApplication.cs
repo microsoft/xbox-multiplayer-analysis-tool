@@ -26,7 +26,8 @@ namespace XMAT.Cli
     }
 
     // Parses the command line, runs the command and writes its report. Help, --version, doctor and usage errors never
-    // write files or touch legacy statics; only analyze reserves a staging folder and isolates them (CliAnalyzeCommand).
+    // write files or touch legacy statics; analyze reserves a staging folder and isolates them (CliAnalyzeCommand), and
+    // export isolates them too.
     internal static class CliApplication
     {
         private static readonly byte[] NewLine = { (byte)'\r', (byte)'\n' };
@@ -50,6 +51,16 @@ namespace XMAT.Cli
                     var cancellation = new CancellationTokenSource();
                     signals = CliSignals.Register(cancellation);
                     report = await CliAnalyzeCommand.RunAsync(parsed.Request, runId, cancellation.Token).ConfigureAwait(false);
+                }
+                else if (parsed.Request.Command == CliCommands.Export)
+                {
+                    var cancellation = new CancellationTokenSource();
+                    signals = CliSignals.Register(cancellation);
+
+                    // Export uses no legacy static, but any that a failure path reached would keep its files in a
+                    // private folder of the run (created only if used), never in the GUI's folder under %APPDATA%.
+                    HeadlessStorage.Configure(Path.Join(Path.GetTempPath(), "xmat-" + runId));
+                    report = await CliExportCommand.RunAsync(parsed.Request, runId, cancellation.Token).ConfigureAwait(false);
                 }
                 else if (parsed.Request.Command == CliCommands.Doctor)
                 {

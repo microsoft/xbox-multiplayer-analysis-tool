@@ -819,7 +819,8 @@ namespace XMAT.Operations.Analysis
         internal sealed class AnalysisDataRecord :
             IDataRecord,
             IRawBodyDataRecord,
-            IOptionalTypedDataRecord
+            IOptionalTypedDataRecord,
+            IRawDataRecord
         {
             private readonly Dictionary<string, object> _values;
 
@@ -885,6 +886,9 @@ namespace XMAT.Operations.Analysis
                 value = 0;
                 return false;
             }
+
+            public bool TryReadRaw(string name, out object value) =>
+                _values.TryGetValue(name, out value);
 
             // The session's fields as XMAT stores them, so SAZ and capture-file inputs read the same way. The process
             // fields use the shared projection of the capture files.

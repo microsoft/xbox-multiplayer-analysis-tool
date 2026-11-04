@@ -22,7 +22,7 @@ namespace XMAT
             _operation = operation ?? throw new ArgumentNullException(nameof(operation));
             _cancel = cancel ?? throw new ArgumentNullException(nameof(cancel));
             InitializeComponent();
-            Title = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED");
+            Title = Localization.GetLocalizedString("EXPORT_TITLE");
             StatusText.Text = Localization.GetLocalizedString("SANITIZED_EXPORT_SCANNING");
             DetailsText.Text = Localization.GetLocalizedString("SANITIZED_EXPORT_PROGRESS_DETAILS");
             CancelExport.Content = Localization.GetLocalizedString("CANCEL");

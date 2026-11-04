@@ -39,5 +39,12 @@ namespace XMAT.WebServiceCapture
 
         public static readonly RoutedUICommand ShowAllProcesses =
             new("Show All Processes", "ShowAllProcesses", typeof(WebServiceProxyCommands));
+
+        // The capture list's row menu: export the selected or the visible sessions of the capture.
+        public static readonly RoutedUICommand ExportSelectedSessions =
+            new("Export Selected Sessions", "ExportSelectedSessions", typeof(WebServiceProxyCommands));
+
+        public static readonly RoutedUICommand ExportVisibleSessions =
+            new("Export Visible Sessions", "ExportVisibleSessions", typeof(WebServiceProxyCommands));
     }
 }

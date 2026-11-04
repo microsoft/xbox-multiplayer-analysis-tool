@@ -36,6 +36,8 @@
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ShowOnlyProcess}"  Executed="ProcessFilterCommand_Executed" CanExecute="ProcessFilterCommand_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.HideProcess}"      Executed="ProcessFilterCommand_Executed" CanExecute="ProcessFilterCommand_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ShowAllProcesses}" Executed="ProcessFilterCommand_Executed" CanExecute="ProcessFilterCommand_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ExportSelectedSessions}" Executed="ExportSessions_Executed" CanExecute="ExportSessions_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ExportVisibleSessions}" Executed="ExportSessions_Executed" CanExecute="ExportSessions_CanExecute"/>
     </UserControl.CommandBindings>
 
     <Grid>

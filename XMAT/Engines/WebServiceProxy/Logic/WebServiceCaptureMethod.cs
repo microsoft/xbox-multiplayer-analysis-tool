@@ -220,21 +220,5 @@ namespace XMAT.WebServiceCapture
                 }
             }
         }
-
-        public void ExportToFiddler(string toFilePath)
-        {
-            var list = new List<ProxyConnectionModel>();
-            if (WebProxyConnectionsTable != null)
-            {
-                var records = WebProxyConnectionsTable.Dataset.DataRecords;
-                foreach (var record in records)
-                {
-                    var m = new ProxyConnectionModel(record);
-                    list.Add(m);
-                }
-            }
-
-            FiddlerSazHandler.CreateSazFile(toFilePath, list);
-        }
     }
 }

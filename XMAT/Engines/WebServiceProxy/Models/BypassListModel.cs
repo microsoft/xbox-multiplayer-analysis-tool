@@ -93,10 +93,9 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return false;
 
-            string candidate = HostListEntry.MatchCandidate(host);
             return Snapshot()
                 .Select(GetRegex)
-                .Any(regex => regex.IsMatch(candidate));
+                .Any(regex => HostListEntry.Matches(regex, host));
         }
 
         /// <summary>
@@ -107,8 +106,7 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return Array.Empty<string>();
 
-            string candidate = HostListEntry.MatchCandidate(host);
-            return Snapshot().Where(pattern => GetRegex(pattern).IsMatch(candidate)).ToList();
+            return Snapshot().Where(pattern => HostListEntry.Matches(GetRegex(pattern), host)).ToList();
         }
 
         private string[] Snapshot()
