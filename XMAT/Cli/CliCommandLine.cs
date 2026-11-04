@@ -536,8 +536,8 @@ namespace XMAT.Cli
                     return CliParseResult.UsageError(
                         command,
                         "cli.usage.invalid-value",
-                        "--header takes NAME: VALUE, with a valid header name and a printable ASCII value; it cannot set Host, " +
-                            "Content-Length or connection headers.");
+                        "--header takes NAME: VALUE, with a valid header name and a value of printable ASCII or " +
+                            "tabs; it cannot set Host, Content-Length or connection headers.");
                 }
 
                 headers.Add(header);

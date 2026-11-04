@@ -129,12 +129,13 @@ xmat --version
   `--repeat` (1 by default, at most 1,000), all of them in turn before the next round, in capture order; `--parallel`
   sends up to that many at a time (1 by default, at most 16), and `--parallel` times `--max-response-mib` may not
   exceed 1,024 MiB. A run makes at most 10,000 sends (`replay.plan.too-large`), which xmat checks before it prepares
-  any request, counting every selected request, including any that a range or `all` would skip; each send can follow up to `--follow-redirects` redirects, so with `--follow-redirects 10` a run makes
-  at most 110,000 HTTP requests.
+  any request, counting every selected request, including any that a range or `all` would skip; each send can
+  follow up to `--follow-redirects` redirects, so with `--follow-redirects 10` a run makes at most 110,000 HTTP
+  requests.
 - Edits apply to every selected request before anything is sent: `--method`; `--header "NAME: VALUE"`, which replaces
-  every header of that name or adds it (repeat it for more headers; the value must be printable ASCII, and `Host`,
-  `Content-Length` and connection headers cannot be set); `--remove-header`; `--body-file`, whose bytes replace the
-  body (at most 64 MiB, read before anything else happens); `--unconditional`, which removes `If-Match`,
+  every header of that name or adds it (repeat it for more headers; the value must be printable ASCII or tabs, and
+  `Host`, `Content-Length` and connection headers cannot be set); `--remove-header`; `--body-file`, whose bytes
+  replace the body (at most 64 MiB, read before anything else happens); `--unconditional`, which removes `If-Match`,
   `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since` and `If-Range` so the server cannot answer 304 or 412;
   `--url`, which replaces the whole URL of a single selected request (`replay.edit.url-needs-one-request` otherwise);
   and `--origin`, which sends every selected request to another scheme, host and port with its path and query, for
@@ -151,9 +152,9 @@ xmat --version
   the body, as browsers do, while a 307 or 308 keeps the method and the body. A redirect to another origin is never
   followed, whatever the options, so a server never decides where the headers and body of a request go next; nor is
   a redirect from HTTPS to HTTP, to anything other than HTTP and HTTPS, to a URL with credentials, or without exactly
-  one usable `Location`. A redirect that is not followed is the result, with the code
-  `replay.redirect.origin-change`, `replay.redirect.insecure`, `replay.redirect.unsupported` or
-  `replay.redirect.limit`.
+  one usable `Location`. With `--follow-redirects 0`, a redirect is the result as it is, without a code; otherwise a
+  redirect that is not followed is the result, with the code `replay.redirect.origin-change`,
+  `replay.redirect.insecure`, `replay.redirect.unsupported` or `replay.redirect.limit`.
 - Each request waits for its response up to `--timeout` seconds (30 by default, at most 600) and keeps a body of up to
   `--max-response-mib` (16 by default, at most 512). HEAD, 1xx, 204 and 304 responses have no body, whatever their
   `Content-Length` says. A request without a complete response is a result too: its
