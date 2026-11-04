@@ -6,7 +6,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Net.Http;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -637,30 +636,29 @@ namespace XMAT.Operations.Replay
         private static bool IsHttps(RequestReplayDraft draft) =>
             Uri.TryCreate(draft.Url, UriKind.Absolute, out Uri uri) && uri.Scheme == Uri.UriSchemeHttps;
 
-        // Building the request validates the method, URL, headers and body; a Fiddler control header is refused.
+        // Building the request validates the method, URL, headers and body. A Fiddler control header is refused wherever it
+        // is in the headers, also when Connection nominates it, which building the request drops without sending it.
         private static void Validate(RequestReplayDraft draft)
         {
-            HttpRequestMessage message;
             try
             {
-                message = draft.CreateRequestToSend();
+                using (draft.CreateRequestToSend())
+                {
+                    // Built only to be validated.
+                }
             }
             catch (Exception ex) when (ex is FormatException or ArgumentException or NotSupportedException)
             {
                 throw Invalid(ex);
             }
 
-            using (message)
+            if (draft.HasAnyHeader(ControlHeaders))
             {
-                if (message.Headers.NonValidated.Any(header =>
-                    ControlHeaders.Contains(header.Key, StringComparer.OrdinalIgnoreCase)))
-                {
-                    throw new ReplayInputException(
-                        ControlHeaderCode,
-                        "A selected request has a Fiddler control header (Fiddler-Host, X-OverrideHost, " +
-                            "X-IgnoreCertCNMismatch or X-OverrideGateway), which XMAT does not act on; remove it to send " +
-                            "the request. Nothing was sent.");
-                }
+                throw new ReplayInputException(
+                    ControlHeaderCode,
+                    "A selected request has a Fiddler control header (Fiddler-Host, X-OverrideHost, " +
+                        "X-IgnoreCertCNMismatch or X-OverrideGateway), which XMAT does not act on; remove it to send " +
+                        "the request. Nothing was sent.");
             }
         }
 

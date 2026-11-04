@@ -325,6 +325,11 @@ namespace XMAT.WebServiceCapture
                 HeadersText = FormatHeaders(headers);
         }
 
+        // Whether a header line has one of these names, in any case, whether or not the request built from the draft keeps
+        // it: a header that Connection nominates is in the headers but never sent.
+        internal bool HasAnyHeader(IReadOnlyCollection<string> names) =>
+            ParseHeaders().Any(header => names.Contains(header.Key, StringComparer.OrdinalIgnoreCase));
+
         // A header name is an HTTP token; its value has no control characters other than tab, so no line can be injected.
         internal static bool IsValidHeader(string name, string value) =>
             !string.IsNullOrEmpty(name) && name.All(IsTokenCharacter) &&

@@ -332,5 +332,31 @@ namespace XMAT.Tests.Cli
             Assert.False(Directory.Exists(Path.Join(directory.Root, "results")));
             Assert.DoesNotContain(Canary, run.Stdout + run.Stderr, StringComparison.OrdinalIgnoreCase);
         }
+
+        // A Fiddler capture can carry Fiddler's control headers. xmat refuses such a request, also when its Connection
+        // header nominates the control header, which would then not be sent, and sends it once --remove-header removes it.
+        [Fact]
+        public async Task Replay_ACapturedFiddlerControlHeader_IsRefusedUntilRemoved()
+        {
+            using var directory = new CliTestDirectory();
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string input = ReplayCaptures.WriteSaz(
+                directory.Root,
+                "capture.saz",
+                new CapturedExchange("GET", server.Origin + "/item", "Connection: keep-alive, Fiddler-Host\r\nFiddler-Host: 10.0.0.1:443\r\n"));
+
+            XmatRun refused = await XmatProcess.RunAsync(directory.Root, "replay", input, "--request", "1", "--out", "refused");
+
+            CliAssert.ExitCode(3, refused);
+            Assert.Equal(new[] { ReplayOperation.ControlHeaderCode }, refused.ErrorCodes());
+            Assert.Equal(0, server.Connections);
+            Assert.False(Directory.Exists(Path.Join(directory.Root, "refused")));
+
+            XmatRun removed = await XmatProcess.RunAsync(
+                directory.Root, "replay", input, "--request", "1", "--remove-header", "Fiddler-Host", "--out", "removed");
+
+            CliAssert.ExitCode(0, removed);
+            Assert.Null(Assert.Single(server.Requests).Header("Fiddler-Host"));
+        }
     }
 }

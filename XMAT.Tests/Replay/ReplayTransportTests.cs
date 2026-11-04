@@ -376,19 +376,23 @@ namespace XMAT.Tests.Replay
             Assert.Equal(ReplayOperation.ConnectToOriginCountCode, Assert.Single(result.Diagnostics).Code);
         }
 
-        // Fiddler's control headers are refused in any case, in a preview too, and removing them makes the request
-        // replayable: a captured header never chooses where a request goes or which certificate is accepted.
+        // Fiddler's control headers are refused in any case, in a preview too, and also when Connection nominates one, so
+        // that it would not be sent: a captured header never chooses where a request goes or which certificate is
+        // accepted, and is never dropped silently either. Removing it makes the request replayable.
         [Theory]
-        [InlineData("Fiddler-Host: 10.0.0.1")]
-        [InlineData("x-overridehost: 10.0.0.1")]
-        [InlineData("X-IgnoreCertCNMismatch: true")]
-        [InlineData("X-OverrideGateway: 10.0.0.1:8888")]
-        public async Task FiddlerControlHeaders_AreRefused_UntilRemoved(string header)
+        [InlineData("Fiddler-Host: 10.0.0.1", false)]
+        [InlineData("x-overridehost: 10.0.0.1", false)]
+        [InlineData("X-IgnoreCertCNMismatch: true", false)]
+        [InlineData("X-OverrideGateway: 10.0.0.1:8888", false)]
+        [InlineData("Fiddler-Host: 10.0.0.1", true)]
+        [InlineData("X-OverrideHost: 10.0.0.1", true)]
+        public async Task FiddlerControlHeaders_AreRefused_UntilRemoved(string header, bool nominatedByConnection)
         {
             await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
             var operation = new ReplayOperation();
-            RequestReplayDraft Draft() => new() { Url = server.Origin + "/", HeadersText = "Accept: */*\r\n" + header };
             string name = header[..header.IndexOf(':')];
+            string connection = nominatedByConnection ? $"Connection: keep-alive, {name}\r\n" : string.Empty;
+            RequestReplayDraft Draft() => new() { Url = server.Origin + "/", HeadersText = "Accept: */*\r\n" + connection + header };
 
             OperationResult<ReplayPlanPreview> preview = operation.Preview(ReplaySource.FromDraft(Draft()));
             OperationResult<ReplayResult> refused = await operation.ExecuteAsync(
