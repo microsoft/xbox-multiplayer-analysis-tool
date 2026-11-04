@@ -183,6 +183,7 @@ namespace XMAT.Operations.Replay
                         "Some requests are not verified: their captured response was recorded without its body."));
                 }
             }
+
             return new Prepared(items, inputKind, inputSha256, null);
         }
 
