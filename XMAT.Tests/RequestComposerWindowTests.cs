@@ -36,6 +36,20 @@ namespace XMAT.Tests
             return Task.CompletedTask;
         });
 
+        // XMAT exits when its last window closes, so a window registered by a failed launch would keep it running.
+        [Fact]
+        public Task Window_FailedLaunchLeavesNoWindowBehind() => OnDispatcher(() =>
+        {
+            int windows = Application.Current.Windows.Count;
+
+            Assert.Throws<ArgumentException>(() => new RequestComposerWindow(
+                RequestReplayDraftTests.Capture("CONNECT", "example.com:443", [])));
+            Assert.Throws<ArgumentNullException>(() => new RequestComposerWindow(null));
+
+            Assert.Equal(windows, Application.Current.Windows.Count);
+            return Task.CompletedTask;
+        });
+
         [Fact]
         public Task Window_PrefillsEditorsAndHonorsDeclinedConfirmation() => OnDispatcher(async () =>
         {

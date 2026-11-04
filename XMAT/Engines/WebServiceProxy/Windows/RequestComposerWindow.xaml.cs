@@ -29,11 +29,18 @@ namespace XMAT.WebServiceCapture
         private bool _closed;
         private string _bodyTextInEditor;
 
+        // The draft is built before the base Window constructor registers this window with the application: a capture
+        // that cannot be replayed must not leave a hidden window behind that keeps XMAT running after its last close.
         internal RequestComposerWindow(
             ProxyConnectionModel capture, RequestReplayClient client = null, Func<string, string, bool> confirm = null)
+            : this(RequestReplayDraft.FromCapture(capture), client, confirm)
+        {
+        }
+
+        private RequestComposerWindow(RequestReplayDraft draft, RequestReplayClient client, Func<string, string, bool> confirm)
         {
             InitializeComponent();
-            _draft = RequestReplayDraft.FromCapture(capture);
+            _draft = draft;
             _ownsClient = client == null;
             _client = client ?? new RequestReplayClient();
             _confirm = confirm ?? ((method, url) =>
