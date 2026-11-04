@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,6 +14,12 @@ namespace CaptureAnalysisEngine
 {
     public class CallReportDocument : ReportDocument
     {
+        private static readonly JsonSerializerOptions
+            SerializerOptions = new()
+            {
+                IncludeFields = true,
+            };
+
         internal CallReportDocument()
         {
             CallEndpoints = new();
@@ -20,14 +27,21 @@ namespace CaptureAnalysisEngine
 
         public override string ToJson()
         {
-            var options = new JsonSerializerOptions
-            {
-                IncludeFields = true,
-            };
             return JsonSerializer.Serialize(
                 this,
                 this.GetType(),
-                options);
+                SerializerOptions);
+        }
+
+        public override void WriteJson(
+            Stream output)
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            JsonSerializer.Serialize(
+                output,
+                this,
+                this.GetType(),
+                SerializerOptions);
         }
 
         public class Endpoint
@@ -57,6 +71,15 @@ namespace CaptureAnalysisEngine
             public string EndpointFunctionCall;
             [JsonPropertyName("Calls")]
             public List<Call> Calls;
+            // Identity of the endpoint the calls were recorded for; Unknown when not recorded.
+            [JsonPropertyName("Kind")]
+            public EndpointKind Kind;
+            // Stable kind and logical-name identity that report consumers group by.
+            [JsonPropertyName("EndpointId")]
+            public string EndpointId;
+            // Display text: the Uri, qualified by its localized kind when another endpoint shares it.
+            [JsonPropertyName("Label")]
+            public string Label;
         }
 
         [JsonPropertyName("Start Time")]
@@ -92,7 +115,13 @@ namespace CaptureAnalysisEngine
         {
             var document = new CallReportDocument();
 
-            var calls = result.Where(r => r.RuleName == "CallRecorder");
+            // Each recorded endpoint keeps the identity its rule ran on, so a captured host and
+            // telemetry synthesized under the same name stay separate records.
+            var calls = result
+                .Where(r => r.RuleName == "CallRecorder")
+                .Where(r => (r.FindResultByKey("Calls") as IEnumerable<ServiceCallItem>).Any())
+                .ToList();
+            Dictionary<EndpointKey, string> labels = EndpointLabels.For(calls.Select(r => r.Identity));
 
             double firstCall = double.MaxValue;
             double lastCall = double.MinValue;
@@ -100,14 +129,13 @@ namespace CaptureAnalysisEngine
             foreach (var callResult in calls)
             {
                 var callList = callResult.FindResultByKey("Calls") as IEnumerable<ServiceCallItem>;
-                if (callList.Count() == 0)
-                {
-                    continue;
-                }
 
                 var host = new CallReportDocument.Endpoint();
 
                 host.Uri = callResult.Endpoint;
+                host.Kind = callResult.Identity.Kind;
+                host.EndpointId = callResult.Identity.Id;
+                host.Label = labels[callResult.Identity];
 
                 if (endpoints.ContainsKey(callResult.Endpoint))
                 {

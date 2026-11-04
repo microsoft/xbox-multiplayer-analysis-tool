@@ -9,8 +9,13 @@
              d:DesignHeight="450" d:DesignWidth="800">
     <Expander x:Name="EndpointExpanderTemplate" IsExpanded="True" Background="{DynamicResource ExpanderHeaderBrush}" >
         <Expander.Header>
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="{Binding EndpointName}" />
+            <!-- Its menu is filled by the report view for this endpoint when it opens. -->
+            <StackPanel x:Name="EndpointHeader" Orientation="Horizontal" Background="Transparent">
+                <StackPanel.ContextMenu>
+                    <ContextMenu Background="{DynamicResource MenuBackgroundBrush}"
+                                 Foreground="{DynamicResource MenuForegroundBrush}"/>
+                </StackPanel.ContextMenu>
+                <TextBlock Text="{Binding DisplayName}" />
             </StackPanel>
         </Expander.Header>
         <ItemsControl ItemsSource="{Binding ValidationRulesDetails}" x:Name="EndpointRuleStack">

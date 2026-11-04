@@ -25,6 +25,7 @@ namespace CaptureAnalysisEngine
         public string ConsoleIP { get; set; }
         public uint HttpStatusCode { get; set; }
         public ulong ReqBodyHash { get; set; }
+        internal RequestBodyIdentity BodyIdentity { get; set; }
         public ulong ElapsedCallTimeMs { get; set; }
         public ulong ReqTimeUTC { get; set; }
         public string Method { get; set; }
@@ -35,6 +36,14 @@ namespace CaptureAnalysisEngine
         public string Measurements { get; set; }
         public bool IsShoulderTap { get; set; }
         public bool IsInGameEvent { get; set; }
+
+        // Where this record came from; telemetry converters mark the records they synthesize.
+        public EndpointKind EndpointKind { get; set; }
+
+        // Host the captured request was sent to (DNS spelling as captured, IP literals
+        // canonical), kept separately from the logical Host label (which telemetry conversion
+        // rewrites). Null when it is not recoverable.
+        public string PhysicalHost { get; set; }
 
         // note: filled in automatically by the rules engine
         internal Tuple<string, string, string> m_xsapiMethods;
@@ -79,6 +88,7 @@ namespace CaptureAnalysisEngine
         {
             HttpStatusCode = 0;
             ReqBodyHash = 0;
+            BodyIdentity = null;
             ElapsedCallTimeMs = 0;
             ReqTimeUTC = 0;
 
@@ -104,6 +114,7 @@ namespace CaptureAnalysisEngine
             copy.ConsoleIP = ConsoleIP;
             copy.HttpStatusCode = HttpStatusCode;
             copy.ReqBodyHash = ReqBodyHash;
+            copy.BodyIdentity = BodyIdentity;
             copy.ElapsedCallTimeMs = ElapsedCallTimeMs;
             copy.ReqTimeUTC = ReqTimeUTC;
             copy.Method = Method;
@@ -115,6 +126,8 @@ namespace CaptureAnalysisEngine
             copy.Dimensions = Dimensions;
             copy.IsShoulderTap = IsShoulderTap;
             copy.IsInGameEvent = IsInGameEvent;
+            copy.EndpointKind = EndpointKind;
+            copy.PhysicalHost = PhysicalHost;
 
             return copy;
         }

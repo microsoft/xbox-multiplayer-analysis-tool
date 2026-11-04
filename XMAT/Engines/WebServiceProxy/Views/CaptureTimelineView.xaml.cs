@@ -31,6 +31,8 @@ namespace XMAT.WebServiceCapture
         private readonly List<TextBlock> _hostLabels = new();
         private readonly List<AxisVisual> _axis = new();
         private readonly DispatcherTimer _refreshTimer;
+        // Shared by every bar and host label; filled for the right-clicked element when it opens.
+        private readonly ContextMenu _hostListMenu = new();
         private ObservableCollection<ProxyConnectionModel> _attachedSource;
         private DispatcherOperation _pendingRender;
         private bool _active;
@@ -74,6 +76,17 @@ namespace XMAT.WebServiceCapture
             set => SetValue(IsCaptureRunningProperty, value);
         }
 
+        public static readonly DependencyProperty HostListPolicyProperty =
+            DependencyProperty.Register(nameof(HostListPolicy), typeof(HostListPolicy), typeof(CaptureTimelineView),
+                new PropertyMetadata(null));
+
+        // The application's host lists edited from bar and host-label context menus.
+        public HostListPolicy HostListPolicy
+        {
+            get => (HostListPolicy)GetValue(HostListPolicyProperty);
+            set => SetValue(HostListPolicyProperty, value);
+        }
+
         internal int RenderCount { get; private set; }
         internal bool HasPendingRefresh => _refreshTimer.IsEnabled ||
             _pendingRender?.Status == DispatcherOperationStatus.Pending;
@@ -86,9 +99,12 @@ namespace XMAT.WebServiceCapture
             };
             _refreshTimer.Tick += RefreshTimerTick;
             InitializeComponent();
+            _hostListMenu.SetResourceReference(Control.BackgroundProperty, "MenuBackgroundBrush");
+            _hostListMenu.SetResourceReference(Control.ForegroundProperty, "MenuForegroundBrush");
             Loaded += ViewLoaded;
             Unloaded += ViewUnloaded;
             IsVisibleChanged += ViewVisibilityChanged;
+            ContextMenuOpening += HostListMenuOpening;
         }
 
         private static void OnItemsSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -364,6 +380,7 @@ namespace XMAT.WebServiceCapture
                 {
                     var label = GetHostLabel(labelCount++);
                     label.Text = row.Host;
+                    label.Tag = row.Host;
                     Canvas.SetLeft(label, 4 - left);
                     Canvas.SetTop(label, row.Top - rowOffset);
                 }
@@ -398,7 +415,8 @@ namespace XMAT.WebServiceCapture
                     Height = BarHeight,
                     CornerRadius = new CornerRadius(2),
                     Cursor = Cursors.Hand,
-                    Child = label
+                    Child = label,
+                    ContextMenu = _hostListMenu
                 };
                 border.MouseLeftButtonDown += Bar_Click;
                 _bars.Add(new BarVisual(border, label));
@@ -435,11 +453,35 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        // Bars carry their request and host labels carry their host group in Tag; the menu
+        // acts on the element that owns the route, not on the selected request.
+        private void HostListMenuOpening(object sender, ContextMenuEventArgs e)
+        {
+            FrameworkElement owner = HostListContextMenu.FindOwner(e.OriginalSource);
+            if (owner == null || !ReferenceEquals(owner.ContextMenu, _hostListMenu))
+            {
+                return;
+            }
+            if (HostListPolicy == null)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            string host = owner.Tag switch
+            {
+                ProxyConnectionModel model => model.ActionableHost,
+                string hostGroup => hostGroup,
+                _ => null
+            };
+            HostListContextMenu.Populate(_hostListMenu, HostListPolicy, host, "HOST_LIST_NO_HOST", owner);
+        }
+
         private TextBlock GetHostLabel(int index)
         {
             if (index == _hostLabels.Count)
             {
-                var label = new TextBlock { FontWeight = FontWeights.SemiBold, FontSize = 11 };
+                var label = new TextBlock { FontWeight = FontWeights.SemiBold, FontSize = 11, ContextMenu = _hostListMenu };
                 label.SetResourceReference(TextBlock.ForegroundProperty, "PrimaryForegroundBrush");
                 _hostLabels.Add(label);
                 TimelineCanvas.Children.Add(label);

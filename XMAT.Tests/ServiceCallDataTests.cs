@@ -72,8 +72,8 @@ namespace XMAT.Tests
 
             var consoleData = data.m_perConsoleData["10.0.0.1"];
             Assert.Equal(2, consoleData.m_servicesHistory.Count);
-            Assert.True(consoleData.m_servicesHistory.ContainsKey("api1.host.com"));
-            Assert.True(consoleData.m_servicesHistory.ContainsKey("api2.host.com"));
+            Assert.Contains(consoleData.m_servicesHistory.Keys, key => key.LogicalName == "api1.host.com");
+            Assert.Contains(consoleData.m_servicesHistory.Keys, key => key.LogicalName == "api2.host.com");
         }
 
         [Fact]
@@ -121,7 +121,9 @@ namespace XMAT.Tests
             var data = new ServiceCallData(false);
             data.CreateFromServiceCallItems(items);
 
-            var stats = data.m_perConsoleData["10.0.0.1"].m_servicesStats["api.host.com"];
+            var stats = Assert.Single(
+                data.m_perConsoleData["10.0.0.1"].m_servicesStats,
+                entry => entry.Key.LogicalName == "api.host.com").Value;
             Assert.Equal(2ul, stats.m_numCalls);
         }
 
@@ -150,8 +152,57 @@ namespace XMAT.Tests
             var data = new ServiceCallData(false);
             data.CreateFromServiceCallItems(items);
 
-            var history = data.m_perConsoleData["10.0.0.1"].m_servicesHistory["api.host.com"];
+            var history = Assert.Single(
+                data.m_perConsoleData["10.0.0.1"].m_servicesHistory,
+                entry => entry.Key.LogicalName == "api.host.com").Value;
             Assert.True(history.First.Value.ReqTimeUTC <= history.Last.Value.ReqTimeUTC);
+        }
+
+        [Fact]
+        public void Cs1LargeTelemetryLinePreservesFieldsAndDelimiters()
+        {
+            const int FieldCount = 10_000;
+            var fields = new string[FieldCount];
+            fields[0] = "0";
+            fields[1] =
+                "ABCD_12345678.CustomEvent";
+            fields[2] =
+                "2026-01-01T00:00:00Z";
+            for (var index = 3;
+                index < fields.Length;
+                index++)
+            {
+                fields[index] =
+                    index % 3 == 0
+                        ? string.Empty
+                        : $"value-{index}";
+            }
+            var call = new ServiceCallItem(1)
+            {
+                ConsoleIP = "10.0.0.1",
+                Host = "data-vef.xboxlive.com",
+                EndpointKind = EndpointKind.Captured,
+                ReqBody = string.Join("|", fields),
+            };
+            var data = new ServiceCallData(false);
+
+            data.CreateFromServiceCallItems(
+                new[] { call });
+
+            ServiceCallItem converted = Assert.Single(
+                data.m_perConsoleData["10.0.0.1"]
+                    .m_servicesHistory[
+                        new EndpointKey(
+                            EndpointKind.SyntheticTelemetry,
+                            "inGameEvents")]);
+            Assert.Equal(
+                string.Join(
+                    "|",
+                    fields,
+                    1,
+                    fields.Length - 1) +
+                    "|",
+                converted.Dimensions);
         }
     }
 }

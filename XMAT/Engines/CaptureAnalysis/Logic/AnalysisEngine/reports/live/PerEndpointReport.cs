@@ -4,8 +4,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using XMAT;
 
 namespace CaptureAnalysisEngine
@@ -75,12 +77,26 @@ namespace CaptureAnalysisEngine
 
         public string UriService;
         public string EndpointFunctionCall;
+        // Kind distinguishes a captured endpoint from synthesized telemetry with the same name;
+        // Unknown (the default) is never actionable.
+        public EndpointKind Kind;
+        // Physical host for host-list actions, or null when not actionable.
+        public string ActionableHost;
         public ReportMetadata Metadata = new();
         public List<RuleReportData> RuleReportData { get; }
+
+        [JsonIgnore]
+        public EndpointKey Key => new(Kind, UriService);
     }
 
     public class PerEndpointReportDocument : ReportDocument, IEndpointReportData
     {
+        private static readonly JsonSerializerOptions
+            SerializerOptions = new()
+            {
+                IncludeFields = true,
+            };
+
         public int Warnings { get { return Metadata.Warnings; } }
         public int Errors { get { return Metadata.Errors; } }
         public string Result { get { return Metadata.Result; } }
@@ -92,14 +108,21 @@ namespace CaptureAnalysisEngine
 
         public override string ToJson()
         {
-            var options = new JsonSerializerOptions
-            {
-                IncludeFields = true,
-            };
             return JsonSerializer.Serialize(
                 this,
                 this.GetType(),
-                options);
+                SerializerOptions);
+        }
+
+        public override void WriteJson(
+            Stream output)
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            JsonSerializer.Serialize(
+                output,
+                this,
+                this.GetType(),
+                SerializerOptions);
         }
 
         public ReportMetadata Metadata = new();
@@ -129,14 +152,26 @@ namespace CaptureAnalysisEngine
         {
             var document = new PerEndpointReportDocument();
 
-            var endpointRules = result.GroupBy(r => r.Endpoint);
+            // Grouped by endpoint identity, so a captured endpoint and synthesized telemetry
+            // sharing a logical name are reported as separate endpoints.
+            ILookup<string, IGrouping<EndpointKey, RuleResult>>
+                endpointRules = result
+                    .GroupBy(rule => rule.Identity)
+                    .ToLookup(
+                        group => group.Key.LogicalName,
+                        StringComparer.Ordinal);
 
             foreach (var endpoint in endpoints)
             {
-                var endpointReportData = ReportEndpoint(endpointRules, endpoint);
-                if (endpointReportData != null)
+                foreach (var endpointResults in
+                    endpointRules[endpoint.Key]
+                        .OrderBy(group => group.Key.Kind))
                 {
-                    document.EndpointReportData.Add(endpointReportData);
+                    var endpointReportData = ReportEndpoint(endpointResults, endpoint);
+                    if (endpointReportData != null)
+                    {
+                        document.EndpointReportData.Add(endpointReportData);
+                    }
                 }
             }
 
@@ -145,20 +180,11 @@ namespace CaptureAnalysisEngine
             return document;
         }
 
-        private static IEnumerable<RuleResult> GetEndpointResults(
-            IEnumerable<IGrouping<String, RuleResult>> ruleGroups,
-            String endpoint)
-        {
-            return ruleGroups.Where(g => g.Key == endpoint).SelectMany(g => g.AsEnumerable());
-        }
-
         public EndpointReportData ReportEndpoint(
-            IEnumerable<IGrouping<String, RuleResult>> ruleGroups,
+            IGrouping<EndpointKey, RuleResult> endpointResults,
             KeyValuePair<String, Tuple<String, String, String>> endpoint)
         {
-            var endpointList = GetEndpointResults(ruleGroups, endpoint.Key);
-
-            if (endpointList.Count() == 0)
+            if (!endpointResults.Any())
             {
                 return null;
             }
@@ -167,8 +193,12 @@ namespace CaptureAnalysisEngine
 
             endpointReportData.UriService = endpoint.Key;
             endpointReportData.EndpointFunctionCall = endpoint.Value.Item3;
+            endpointReportData.Kind = endpointResults.Key.Kind;
+            endpointReportData.ActionableHost = endpointResults.Key.Kind == EndpointKind.Captured
+                ? endpointResults.First().ActionableHost
+                : null;
 
-            foreach (var rule in endpointList)
+            foreach (var rule in endpointResults)
             {
                 var ruleReportData = ReportRule(rule);
                 if (ruleReportData != null)

@@ -19,15 +19,18 @@
         <CommandBinding Command="Save" Executed="Save_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.Import}"           Executed="Import_Executed" CanExecute="Import_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.Export}"           Executed="Export_Executed" CanExecute="CaptureDataCommand_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.ExportSanitized}"  Executed="ExportSanitized_Executed" CanExecute="ExportSanitized_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.Preferences}"      Executed="Preferences_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.Exit}"             Executed="Exit_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ClearAllCaptures}" Executed="ClearAllCaptures_Executed" CanExecute="ClearAllCaptures_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.AnalyzeCaptures}"  Executed="AnalyzeCaptures_Executed" CanExecute="AnalyzeCaptures_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.ExportAnalysisReport}" Executed="ExportAnalysisReport_Executed" CanExecute="ExportAnalysisReport_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.CollectLogs}"      Executed="CollectLogs_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ViewGDKXInfo}"      Executed="ViewGDKXInfo_Executed"/>
         <CommandBinding Command="{x:Static local:AppCommands.ExportRootCert}"   Executed="ExportRootCert_Executed"/>
         <CommandBinding Command="{x:Static proxy:WebServiceProxyCommands.ChangePort}"
                         Executed="ChangeProxyPort_Executed" CanExecute="ChangeProxyPort_CanExecute"/>
+        <CommandBinding Command="{x:Static local:AppCommands.ManageHostLists}" Executed="ManageHostLists_Executed"/>
     </Window.CommandBindings>
     <Grid>
         <Grid.RowDefinitions>
@@ -48,6 +51,8 @@
                 <Separator />
                 <MenuItem x:Name="FileImportCaptures" Command="{x:Static local:AppCommands.Import}" />
                 <MenuItem x:Name="FileExportCaptures" Command="{x:Static local:AppCommands.Export}" />
+                <MenuItem x:Name="FileExportSanitizedCaptures" Command="{x:Static local:AppCommands.ExportSanitized}"
+                          ToolTipService.ShowOnDisabled="True"/>
                 <Separator />
                 <MenuItem x:Name="FileExit"           Command="{x:Static local:AppCommands.Exit}" />
             </MenuItem>
@@ -62,11 +67,17 @@
                 <MenuItem x:Name="ViewAnalyzeCaptures"
                           Command="{x:Static local:AppCommands.AnalyzeCaptures}"
                           ToolTipService.ShowOnDisabled="True"/>
+                <MenuItem x:Name="AnalysisExportReport"
+                          Command="{x:Static local:AppCommands.ExportAnalysisReport}"
+                          ToolTipService.ShowOnDisabled="True"/>
             </MenuItem>
             <MenuItem x:Name="ActionsMenu" HorizontalAlignment="Left" Header="_Actions">
                 <MenuItem x:Name="ChangeProxyPort" Command="{x:Static proxy:WebServiceProxyCommands.ChangePort}"
                           CommandTarget="{Binding ElementName=AllCaptureDevicesPanel}"
                           ToolTipService.ShowOnDisabled="True"/>
+                <MenuItem x:Name="ManageHostLists" Command="{x:Static local:AppCommands.ManageHostLists}"
+                          CommandTarget="{Binding ElementName=AllCaptureDevicesPanel}"
+                          Header="{x:Static local:AppCommands.ManageHostListsHeader}"/>
                 <Separator/>
                 <MenuItem x:Name="ExportRootCert" Header="_Export Root Certificate to Desktop" Command="{x:Static local:AppCommands.ExportRootCert}" />
             </MenuItem>

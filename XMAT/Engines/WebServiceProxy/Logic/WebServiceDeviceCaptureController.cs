@@ -128,6 +128,7 @@ namespace XMAT.WebServiceCapture
         public UInt16 PendingPort => _parameters.PendingPort;
         public bool HasPendingPort => PendingPort != 0;
         public string PortStatus { get => _portStatus; private set { _portStatus = value; RaisePropertyChange(); } }
+        public string ImportNotice { get; private set; }
         public string CaptureStatusText => Localization.GetLocalizedString(
             _readOnly ? "PROXY_CAPTURE_READ_ONLY" : IsRunning ? "PROXY_CAPTURE_RUNNING" : "PROXY_CAPTURE_STOPPED");
         public string PortDescription => Localization.GetLocalizedString(
@@ -163,8 +164,10 @@ namespace XMAT.WebServiceCapture
 
         public ScriptCollection Scripts { get; set; }
         public ScriptTypeCollection ScriptTypes { get; set; }
-        public BlockListModel BlockList { get; set; }
-        public BypassListModel BypassList { get; set; }
+        // The application's session host lists; stable for the controller's lifetime.
+        public HostListPolicy HostListPolicy { get; }
+        public BlockListModel BlockList => HostListPolicy.BlockList;
+        public BypassListModel BypassList => HostListPolicy.BypassList;
         public WebSocketMessageModel SelectedWebSocketMessage
         {
             get => _selectedWebSocketMessage;
@@ -173,6 +176,17 @@ namespace XMAT.WebServiceCapture
                 _selectedWebSocketMessage = value;
                 RaisePropertyChange();
             }
+        }
+
+        internal void SetImportNotice(string notice)
+        {
+            if (ImportNotice == notice)
+            {
+                return;
+            }
+
+            ImportNotice = notice;
+            RaisePropertyChange(nameof(ImportNotice));
         }
 
         private const int LoadedCapturesPageBreakSize = 100;
@@ -206,6 +220,7 @@ namespace XMAT.WebServiceCapture
         private bool _initialized;
         private readonly ProxyPortPool _portPool;
         private readonly IProxyDeviceConfiguration _deviceConfiguration;
+        private readonly Func<IWebServiceProxy> _proxyFactory;
         private ProxyPortPool.Reservation _portReservation;
         private ProxyPortPool.Reservation _pendingPortReservation;
         private string _portStatus;
@@ -243,12 +258,16 @@ namespace XMAT.WebServiceCapture
         }
 
         // The optional classifier provider must return every assigned unicast IPv4 address and throw on failure.
+        // A null policy gives a standalone controller its own isolated lists; the application
+        // passes its shared policy so it is in place before Initialize wires the proxy.
         internal WebServiceDeviceCaptureController(
             string deviceName, DeviceType deviceType, bool readOnly, ProxyPortPool portPool,
             IProxyDeviceConfiguration deviceConfiguration = null,
             TimeSpan? scriptExecutionDeadline = null,
             Func<IEnumerable<IPAddress>> getClassifierIp4Addresses = null,
-            TimeSpan? enableFailureProbeTimeout = null)
+            TimeSpan? enableFailureProbeTimeout = null,
+            HostListPolicy hostListPolicy = null,
+            Func<IWebServiceProxy> proxyFactory = null)
         {
             _scriptExecutionDeadline =
                 scriptExecutionDeadline ?? DefaultScriptExecutionDeadline;
@@ -267,6 +286,8 @@ namespace XMAT.WebServiceCapture
             _deviceConfiguration = deviceConfiguration;
             _getClassifierIp4Addresses =
                 getClassifierIp4Addresses ?? GetAssignedUnicastIp4Addresses;
+            _proxyFactory = proxyFactory ?? (() => WebServiceProxy.CreateProxy());
+            HostListPolicy = hostListPolicy ?? new HostListPolicy();
             DeviceName = deviceName;
 
             _deviceType = deviceType;
@@ -281,8 +302,6 @@ namespace XMAT.WebServiceCapture
             WebSocketMessages = new WebSocketMessagesCollection();
             Scripts = new ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
             ScriptTypes = new ScriptTypeCollection(new Type[] { typeof(WebServiceCaptureScriptParams), typeof(ClientRequest), typeof(ServerResponse), typeof(HeaderCollection) });
-            BlockList = new BlockListModel();
-            BypassList = new BypassListModel();
             _uiUpdateQueue = new BatchedDispatcherQueue(
                 Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher,
                 UiUpdateBatchSize,
@@ -309,7 +328,7 @@ namespace XMAT.WebServiceCapture
 
                 try
                 {
-                    _webProxy = WebServiceProxy.CreateProxy();
+                    _webProxy = _proxyFactory();
                 }
                 catch
                 {
@@ -663,6 +682,46 @@ namespace XMAT.WebServiceCapture
                     ProxyConnections.AddFromDataRecord(record, true);
                 }
             }
+            StatusFilterList = UpdateFilter(
+                ProxyConnections
+                    .Select(connection => connection.Status)
+                    .Distinct()
+                    .ToList());
+            HostFilterList = UpdateFilter(
+                ProxyConnections
+                    .Select(connection => connection.Host)
+                    .Distinct()
+                    .ToList());
+            MethodFilterList = UpdateFilter(
+                ProxyConnections
+                    .Select(connection => connection.Method)
+                    .Distinct()
+                    .ToList());
+            NotifyPropertyChangesSafely(
+                nameof(StatusFilterList),
+                nameof(HostFilterList),
+                nameof(MethodFilterList));
+        }
+
+        internal void ReplaceLoadedCapturesFrom(
+            WebServiceDeviceCaptureController source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            _captureDataSource = source._captureDataSource;
+            _loadedCaptureDataset = source._loadedCaptureDataset;
+            ProxyConnections = source.ProxyConnections;
+            StatusFilterList = source.StatusFilterList;
+            HostFilterList = source.HostFilterList;
+            MethodFilterList = source.MethodFilterList;
+            _selectedConnectionModel = null;
+            _selectedWebSocketMessage = null;
+            NotifyPropertyChangesSafely(
+                nameof(ProxyConnections),
+                nameof(StatusFilterList),
+                nameof(HostFilterList),
+                nameof(MethodFilterList),
+                nameof(SelectedConnectionModel),
+                nameof(SelectedWebSocketMessage));
         }
 
         internal IEnumerable<IDataRecord> GetCaptureRecords()
@@ -1306,7 +1365,7 @@ namespace XMAT.WebServiceCapture
 
         private bool IsRequestBlocked(ClientRequest request)
         {
-            if (BlockList == null || request == null)
+            if (request == null)
                 return false;
 
             string host = request.Host;
@@ -1320,15 +1379,15 @@ namespace XMAT.WebServiceCapture
                     host = absoluteUri.Host;
                     path = absoluteUri.PathAndQuery;
                 }
-                // Otherwise, assume CONNECT request where Path is "host:port"
+                // Otherwise, assume CONNECT request where Path is the "host:port" authority
                 else
                 {
-                    int colon = path.IndexOf(':');
-                    host = colon > 0 ? path.Substring(0, colon) : path;
+                    host = HostAuthority.TryParse(path, out string authorityHost, out _) ? authorityHost : path;
                     path = null;
                 }
             }
 
+            // The list model compares the host without its port (DNS spelling kept).
             return BlockList.IsBlocked(host, path);
         }
 
@@ -1781,6 +1840,40 @@ namespace XMAT.WebServiceCapture
         public void RaisePropertyChange([CallerMemberName] string name = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        }
+
+        private void NotifyPropertyChangesSafely(
+            params string[] propertyNames)
+        {
+            Delegate[] subscribers =
+                PropertyChanged?.GetInvocationList();
+            if (subscribers == null)
+            {
+                return;
+            }
+            foreach (string propertyName in propertyNames)
+            {
+                var args =
+                    new PropertyChangedEventArgs(
+                        propertyName);
+                foreach (Delegate subscriber in subscribers)
+                {
+                    try
+                    {
+                        ((PropertyChangedEventHandler)subscriber)(
+                            this,
+                            args);
+                    }
+                    catch (Exception exception) when (
+                        !ExceptionUtilities.IsFatal(
+                            exception))
+                    {
+                        PublicUtilities.AppLog(
+                            LogLevel.ERROR,
+                            $"Capture reload notification failed: {exception}");
+                    }
+                }
+            }
         }
     }
 }

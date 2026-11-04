@@ -139,6 +139,22 @@ namespace XMAT.WebServiceCapture.Proxy
             ServerCertificateCustomValidationCallback = (_, _, _, _) => true
         };
 
+        internal static void AddRequestReaderServices(
+            IServiceCollection services,
+            ProxyRequestReadPolicy policy = null,
+            ProxyRequestBufferBudget budget = null)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            policy ??=
+                ProxyRequestReadPolicy.Default;
+            budget ??=
+                ProxyRequestBufferBudget.Shared;
+            services.AddSingleton(policy);
+            services.AddSingleton(budget);
+            services.AddSingleton<
+                InitialProxyRequestReader>();
+        }
+
         internal static CertificateManager CertManager { get { return _certManager; } }
 
         internal static WebServiceProxy CreateProxy()
@@ -296,6 +312,8 @@ namespace XMAT.WebServiceCapture.Proxy
                         services.AddSingleton(this);
                         services.AddSingleton(_interceptedHost);
                         services.AddSingleton(_interceptedTunnels);
+                        AddRequestReaderServices(
+                            services);
                         services.AddSingleton<ForwardProxyConnectionHandler>();
                     });
                     webBuilder.Configure(app => { });

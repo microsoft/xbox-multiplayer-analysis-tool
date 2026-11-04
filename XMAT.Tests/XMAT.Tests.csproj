@@ -26,6 +26,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\XMAT\XboxMultiplayerAnalysisTool.csproj" />
+    <!-- Build order only: the tests in Cli run the built xmat.exe from XMAT.Cli's output folder. Private="false" keeps
+         xmat.exe and its configuration files out of the test output, so they are never run without xmat.dll. -->
+    <ProjectReference Include="..\XMAT.Cli\XMAT.Cli.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -35,6 +38,16 @@
   <ItemGroup>
     <EmbeddedResource Include="..\XMAT\App.xaml" LogicalName="XMAT.Tests.App.xaml" />
     <EmbeddedResource Include="..\XMAT\Windows\MainWindow.xaml" LogicalName="XMAT.Tests.MainWindow.xaml" />
+  </ItemGroup>
+
+  <!-- Every product XAML file, so the headless-parity tests can classify its Command, Click and CommandBinding
+       entry points. Logical names keep the path relative to the XMAT project. App.xaml and MainWindow.xaml are
+       embedded once, above, and the parity tests read them under those names. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\XMAT\**\*.xaml"
+                      Exclude="..\XMAT\bin\**;..\XMAT\obj\**;..\XMAT\App.xaml;..\XMAT\Windows\MainWindow.xaml"
+                      LogicalName="XMAT.Tests.XamlSources\%(RecursiveDir)%(Filename)%(Extension)"
+                      WithCulture="false" />
   </ItemGroup>
 
 </Project>
