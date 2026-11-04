@@ -6,7 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace CaptureAnalysisEngine
 {
@@ -39,6 +39,14 @@ namespace CaptureAnalysisEngine
         private const string XboxTelemetryEndpoint = "data-vef.xboxlive.com";
         private const string WindowsTelemetryDomain = ".data.microsoft.com";
         private static readonly EndpointKey SyntheticInGameEvents = new(EndpointKind.SyntheticTelemetry, InGameEventsEndpoint);
+        private static readonly InputRegex Cs2EventName =
+            new(
+                "Microsoft.XboxLive.T[a-zA-Z0-9]{8}.",
+                cacheLastResult: false);
+        private static readonly InputRegex Cs1EventName =
+            new(
+                "[a-zA-z]{4}_[a-zA-Z0-9]{8}",
+                cacheLastResult: false);
 
         public static bool m_allEndpoints = false;
 
@@ -54,11 +62,24 @@ namespace CaptureAnalysisEngine
 
         public void CreateFromServiceCallItems(IEnumerable<ServiceCallItem> frameData)
         {
-            var consoleGroups = from f in frameData
+            CreateFromServiceCallItems(frameData, CancellationToken.None);
+        }
+
+        internal void CreateFromServiceCallItems(
+            IEnumerable<ServiceCallItem> frameData,
+            CancellationToken cancellationToken)
+        {
+            IEnumerable<ServiceCallItem>
+                identifiedFrames =
+                    EnsureBodyIdentities(
+                        frameData,
+                        cancellationToken);
+            var consoleGroups = from f in identifiedFrames
                                 group f by f.ConsoleIP;
 
             foreach (var consoleFrames in consoleGroups.Where(g => g.Key != String.Empty))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var consoleData = new PerConsoleData();
 
                 var xboxServiceFrames = consoleFrames.GroupBy(f => new EndpointKey(f.EndpointKind, f.Host ?? string.Empty))
@@ -69,13 +90,17 @@ namespace CaptureAnalysisEngine
                 // Xbox telemetry endpoint
                 if (consoleData.m_servicesHistory.Keys.Any(key => IsTelemetrySource(key, host => host == XboxTelemetryEndpoint)))
                 {
-                    ConvertCS1ToEvent(consoleData.m_servicesHistory);
+                    ConvertCS1ToEvent(
+                        consoleData.m_servicesHistory,
+                        cancellationToken);
                 }
 
                 // Windows Telemetry endpoint
                 if (consoleData.m_servicesHistory.Keys.Any(key => IsTelemetrySource(key, IsWindowsTelemetryHost)))
                 {
-                    ConvertCS2ToEvent(consoleData.m_servicesHistory);
+                    ConvertCS2ToEvent(
+                        consoleData.m_servicesHistory,
+                        cancellationToken);
                 }
 
                 // clear empty items
@@ -83,10 +108,35 @@ namespace CaptureAnalysisEngine
 
                 foreach (var endpoint in consoleData.m_servicesHistory)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     consoleData.m_servicesStats.Add(endpoint.Key, new ServiceCallStats(endpoint.Value));
                 }
 
                 m_perConsoleData.Add(consoleFrames.Key, consoleData);
+            }
+        }
+
+        private static IEnumerable<ServiceCallItem>
+            EnsureBodyIdentities(
+                IEnumerable<ServiceCallItem> items,
+                CancellationToken cancellationToken)
+        {
+            RequestBodyIdentityInterner identities = null;
+            foreach (ServiceCallItem item in items)
+            {
+                cancellationToken
+                    .ThrowIfCancellationRequested();
+                if (item.BodyIdentity == null)
+                {
+                    identities ??=
+                        new RequestBodyIdentityInterner();
+                    item.BodyIdentity =
+                        item.ReqBody == null
+                            ? identities.CreateUnique()
+                            : identities.GetOrAdd(
+                                item.ReqBody);
+                }
+                yield return item;
             }
         }
 
@@ -141,9 +191,10 @@ namespace CaptureAnalysisEngine
             return inGameEvents;
         }
 
-        private void ConvertCS2ToEvent(Dictionary<EndpointKey, LinkedList<ServiceCallItem>> servicesHistory)
+        private void ConvertCS2ToEvent(
+            Dictionary<EndpointKey, LinkedList<ServiceCallItem>> servicesHistory,
+            CancellationToken cancellationToken)
         {
-            var eventNameMatch1 = new Regex("Microsoft.XboxLive.T[a-zA-Z0-9]{8}.");
             var eventNameMatch2 = @"Microsoft.Xbox.XceBridge";
 
             var events = servicesHistory.Where(k => IsTelemetrySource(k.Key, IsWindowsTelemetryHost)).ToList();
@@ -155,6 +206,7 @@ namespace CaptureAnalysisEngine
 
             foreach (var eventCall in events.SelectMany(e => e.Value))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var requestBody = eventCall.ReqBody;
 
                 // If there's nothing in the request body, then there was an error with the event and we can't parse it.
@@ -167,11 +219,15 @@ namespace CaptureAnalysisEngine
 
                 foreach (var eventLine in eventArray)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     JsonElement requestBodyJson;
+                    JsonDocument eventDocument;
 
                     try
                     {
-                        JsonDocument eventDocument = JsonDocument.Parse(eventLine);
+                        eventDocument =
+                            JsonDocument.Parse(
+                                eventLine);
                         requestBodyJson = eventDocument.RootElement;
                     }
                     catch (JsonException)
@@ -181,57 +237,62 @@ namespace CaptureAnalysisEngine
                         continue;
                     }
 
-                    string eventName = string.Empty;
-                    Utils.SafeAssign<string>(requestBodyJson, @"name", ref eventName);
-
-                    if (eventNameMatch1.IsMatch(eventName) || eventNameMatch2.StartsWith(eventName))
+                    using (eventDocument)
                     {
-                        var serviceCall = eventCall.Copy();
-                        var eventNameParts = eventName.Split('.');
+                        string eventName = string.Empty;
+                        Utils.SafeAssign<string>(requestBodyJson, @"name", ref eventName);
 
-                        string timeAsString = string.Empty;
-                        Utils.SafeAssign<string>(requestBodyJson, @"time", ref timeAsString);
-
-                        serviceCall.Host = InGameEventsEndpoint;
-                        serviceCall.EndpointKind = EndpointKind.SyntheticTelemetry;
-                        serviceCall.EventName = eventNameParts.Last();
-                        serviceCall.ReqTimeUTC = (UInt64)DateTime.Parse(timeAsString).ToFileTimeUtc();
-                        serviceCall.ReqBody = String.Empty;
-
-                        JsonElement dataObject;
-                        if (requestBodyJson.TryGetProperty(@"data", out dataObject))
+                        if (Cs2EventName.IsMatch(eventName) || eventNameMatch2.StartsWith(eventName))
                         {
-                            JsonElement baseDataObject;
-                            if (dataObject.TryGetProperty(@"baseData", out baseDataObject))
+                            var serviceCall = eventCall.Copy();
+                            var eventNameParts = eventName.Split('.');
+
+                            string timeAsString = string.Empty;
+                            Utils.SafeAssign<string>(requestBodyJson, @"time", ref timeAsString);
+
+                            serviceCall.Host = InGameEventsEndpoint;
+                            serviceCall.EndpointKind = EndpointKind.SyntheticTelemetry;
+                            serviceCall.EventName = eventNameParts.Last();
+                            serviceCall.ReqTimeUTC = (UInt64)DateTime.Parse(timeAsString).ToFileTimeUtc();
+                            serviceCall.ReqBody = String.Empty;
+
+                            JsonElement dataObject;
+                            if (requestBodyJson.TryGetProperty(@"data", out dataObject))
                             {
-                                //            var measurements = baseData["measurements"];
-                                string measurements = string.Empty;
-                                Utils.SafeAssign<string>(baseDataObject, @"mesasurements", ref measurements);
-                                serviceCall.Measurements = measurements;
-
-                                if (serviceCall.EventName.Contains("MultiplayerRoundStart") ||
-                                    serviceCall.EventName.Contains("MultiplayerRoundEnd"))
+                                JsonElement baseDataObject;
+                                if (dataObject.TryGetProperty(@"baseData", out baseDataObject))
                                 {
-                                    string playerSessionId = string.Empty;
-                                    Utils.SafeAssign<string>(baseDataObject, @"playerSessionId", ref playerSessionId);
+                                    //            var measurements = baseData["measurements"];
+                                    string measurements = string.Empty;
+                                    Utils.SafeAssign<string>(baseDataObject, @"mesasurements", ref measurements);
+                                    serviceCall.Measurements = measurements;
 
-                                    JsonElement propertiesObject;
-                                    if (baseDataObject.TryGetProperty(@"properties", out propertiesObject))
+                                    if (serviceCall.EventName.Contains("MultiplayerRoundStart") ||
+                                        serviceCall.EventName.Contains("MultiplayerRoundEnd"))
                                     {
-                                        string multiplayerCorrelationId = string.Empty;
-                                        Utils.SafeAssign<string>(propertiesObject, @"MultiplayerCorrelationId", ref multiplayerCorrelationId);
-                                        serviceCall.MultiplayerCorrelationId = multiplayerCorrelationId;
+                                        string playerSessionId = string.Empty;
+                                        Utils.SafeAssign<string>(baseDataObject, @"playerSessionId", ref playerSessionId);
+
+                                        JsonElement propertiesObject;
+                                        if (baseDataObject.TryGetProperty(@"properties", out propertiesObject))
+                                        {
+                                            string multiplayerCorrelationId = string.Empty;
+                                            Utils.SafeAssign<string>(propertiesObject, @"MultiplayerCorrelationId", ref multiplayerCorrelationId);
+                                            serviceCall.MultiplayerCorrelationId = multiplayerCorrelationId;
+                                        }
                                     }
                                 }
                             }
+                            inGameEvents.AddLast(serviceCall);
                         }
-                        inGameEvents.AddLast(serviceCall);
                     }
                 }
             }
         }
 
-        private void ConvertCS1ToEvent(Dictionary<EndpointKey, LinkedList<ServiceCallItem>> servicesHistory)
+        private void ConvertCS1ToEvent(
+            Dictionary<EndpointKey, LinkedList<ServiceCallItem>> servicesHistory,
+            CancellationToken cancellationToken)
         {
             var sources = servicesHistory.Where(k => IsTelemetrySource(k.Key, host => host == XboxTelemetryEndpoint)).ToList();
             foreach (var source in sources)
@@ -241,17 +302,16 @@ namespace CaptureAnalysisEngine
 
             LinkedList<ServiceCallItem> inGameEvents = GetSyntheticEvents(servicesHistory);
 
-            // Event Name starts with a string in the form of {Publisher}_{TitleId}
-            Regex eventNameMatch = new Regex("[a-zA-z]{4}_[a-zA-Z0-9]{8}");
-
             foreach (var eventCall in sources.SelectMany(source => source.Value))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var requestBody = eventCall.ReqBody;
 
                 var eventArray = requestBody.Split(Environment.NewLine.ToCharArray());
 
                 foreach (var eventLine in eventArray)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var fields = eventLine.Split('|');
 
                     if (fields.Length < 12)
@@ -263,7 +323,7 @@ namespace CaptureAnalysisEngine
                     // The name field is in the form of {Publisher}_{TitleId}.{EventName}
                     var eventNameParts = fields[1].Split('.');
 
-                    if (eventNameParts.Length > 1 && eventNameMatch.IsMatch(eventNameParts[0]))
+                    if (eventNameParts.Length > 1 && Cs1EventName.IsMatch(eventNameParts[0]))
                     {
                         ServiceCallItem splitEvent = eventCall.Copy();
 
@@ -289,14 +349,14 @@ namespace CaptureAnalysisEngine
 
         private static string CS1PartBC(string[] fields)
         {
-            string result = "";
-
-            for (int i = 1; i < fields.Length; ++i)
-            {
-                result += fields[i] + "|";
-            }
-
-            return result;
+            return fields.Length <= 1
+                ? string.Empty
+                : string.Join(
+                    "|",
+                    fields,
+                    1,
+                    fields.Length - 1) +
+                    "|";
         }
     }
 }

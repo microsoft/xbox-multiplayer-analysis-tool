@@ -10,6 +10,7 @@ namespace XMAT.SharedInterfaces
     {
         Success,
         NoSuitableData,
+        WorkLimit,
         UnknownError
     }
 

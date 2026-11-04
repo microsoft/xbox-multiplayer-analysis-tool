@@ -392,9 +392,39 @@ namespace XMAT
 
             if (saveFileDialog.ShowDialog() == true && !string.IsNullOrEmpty(saveFileDialog.FileName))
             {
-                CaptureAppModel.AppModel.SaveDataCaptures(saveFileDialog.FileName);
+                try
+                {
+                    CaptureAppModel.AppModel.SaveDataCaptures(
+                        saveFileDialog.FileName);
+                }
+                catch (CaptureSaveException ex)
+                {
+                    PublicUtilities.AppLog(
+                        LogLevel.ERROR,
+                        $"Capture save failed ({ex.Failure}).");
+                    MessageBox.Show(
+                        Localization.GetLocalizedString(
+                            CaptureSaveFailureMessageKey(
+                                ex.Failure)),
+                        Localization.GetLocalizedString(
+                            "CAPTURE_SAVE_ERROR_TITLE"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
             }
         }
+
+        internal static string CaptureSaveFailureMessageKey(
+            CaptureSaveFailure failure) =>
+            failure switch
+            {
+                CaptureSaveFailure.Refused =>
+                    "CAPTURE_SAVE_ERROR_REFUSED",
+                CaptureSaveFailure.DestinationLocked =>
+                    "CAPTURE_SAVE_ERROR_LOCKED",
+                _ =>
+                    "CAPTURE_SAVE_ERROR_FAILED",
+            };
 
         private async void Import_Executed(object sender, RoutedEventArgs e)
         {
@@ -680,6 +710,13 @@ namespace XMAT
                 case ECaptureAnalyzerResult.NoSuitableData:
                 {
                     OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
+                    break;
+                }
+
+                case ECaptureAnalyzerResult.WorkLimit:
+                {
+                    OnError(Localization.GetLocalizedString(
+                        "WEBCAP_ANALYSIS_ERROR_WORK_LIMIT"));
                     break;
                 }
 

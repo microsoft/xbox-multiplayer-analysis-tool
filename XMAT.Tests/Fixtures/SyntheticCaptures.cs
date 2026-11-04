@@ -6,6 +6,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Analysis;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
@@ -173,6 +174,22 @@ namespace XMAT.Tests.Fixtures
             }
 
             database.SaveToFile(path);
+            return path;
+        }
+
+        internal static string WriteCorruptSaz(
+            string directory,
+            string fileName)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            File.WriteAllBytes(
+                path,
+                Encoding.ASCII.GetBytes(
+                    "not a zip archive"));
             return path;
         }
 
@@ -351,6 +368,49 @@ namespace XMAT.Tests.Fixtures
                     Encoding.UTF8);
             }
 
+            return path;
+        }
+
+        internal static string WriteZipBombSaz(
+            string directory,
+            string fileName)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            using var file =
+                File.Create(path);
+            using var archive =
+                new ZipArchive(
+                    file,
+                    ZipArchiveMode.Create);
+            ZipArchiveEntry entry =
+                archive.CreateEntry(
+                    "raw/1_c.txt",
+                    CompressionLevel.Optimal);
+            using Stream stream =
+                entry.Open();
+            var buffer =
+                new byte[64 * 1024];
+            long remaining =
+                AnalysisLimits
+                    .Default
+                    .MaxEntryBytes +
+                1;
+            while (remaining > 0)
+            {
+                int count =
+                    (int)Math.Min(
+                        buffer.Length,
+                        remaining);
+                stream.Write(
+                    buffer,
+                    0,
+                    count);
+                remaining -= count;
+            }
             return path;
         }
 
@@ -565,6 +625,154 @@ namespace XMAT.Tests.Fixtures
             return path;
         }
 
+        internal static string WriteOpaqueEncodedBodySaz(
+            string directory,
+            string fileName)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            using var file =
+                File.Create(path);
+            using var archive =
+                new ZipArchive(
+                    file,
+                    ZipArchiveMode.Create);
+            WriteTextEntry(
+                archive,
+                "_index.htm",
+                "<html><body>Synthetic capture</body></html>",
+                Encoding.UTF8);
+            RequestData request =
+                CreateRequestData(
+                    0,
+                    0,
+                    1,
+                    false,
+                    false);
+            WriteTextEntry(
+                archive,
+                "raw/0001_c.txt",
+                request.RequestText,
+                Encoding.ASCII);
+            byte[] body =
+                CompressGzip(
+                    new byte[64 * 1024]);
+            byte[] headers =
+                Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 200 OK\r\n" +
+                    "Content-Type: application/json\r\n" +
+                    "Content-Encoding: gzip\r\n" +
+                    $"Content-Length: {body.Length}\r\n\r\n");
+            var response =
+                new byte[
+                    headers.Length +
+                    body.Length];
+            Buffer.BlockCopy(
+                headers,
+                0,
+                response,
+                0,
+                headers.Length);
+            Buffer.BlockCopy(
+                body,
+                0,
+                response,
+                headers.Length,
+                body.Length);
+            WriteBytesEntry(
+                archive,
+                "raw/0001_s.txt",
+                response);
+            WriteTextEntry(
+                archive,
+                "raw/0001_m.xml",
+                CreateMetadata(
+                    1,
+                    "10.0.0.1"),
+                Encoding.UTF8);
+            return path;
+        }
+
+        internal static string WriteMixedIncompleteSaz(
+            string directory,
+            string fileName)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            using var file =
+                File.Create(path);
+            using var archive =
+                new ZipArchive(
+                    file,
+                    ZipArchiveMode.Create);
+            RequestData request =
+                CreateRequestData(
+                    0,
+                    0,
+                    1,
+                    false,
+                    false);
+            WriteTextEntry(
+                archive,
+                "raw/0001_c.txt",
+                request.RequestText,
+                Encoding.ASCII);
+            WriteTextEntry(
+                archive,
+                "raw/0001_s.txt",
+                request.ResponseText,
+                Encoding.ASCII);
+            WriteTextEntry(
+                archive,
+                "raw/0001_m.xml",
+                CreateMetadata(
+                    1,
+                    "10.0.0.1"),
+                Encoding.UTF8);
+            WriteTextEntry(
+                archive,
+                "raw/0002_c.txt",
+                request.RequestText,
+                Encoding.ASCII);
+            return path;
+        }
+
+        internal static string WriteIncompleteSaz(
+            string directory,
+            string fileName)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            using var file =
+                File.Create(path);
+            using var archive =
+                new ZipArchive(
+                    file,
+                    ZipArchiveMode.Create);
+            RequestData request =
+                CreateRequestData(
+                    0,
+                    0,
+                    1,
+                    false,
+                    false);
+            WriteTextEntry(
+                archive,
+                "raw/0001_c.txt",
+                request.RequestText,
+                Encoding.ASCII);
+            return path;
+        }
+
         private static RequestData CreateRequestData(
             int group,
             int request,
@@ -703,6 +911,25 @@ namespace XMAT.Tests.Fixtures
             entry.LastWriteTime = new DateTimeOffset(SyntheticStartUtc);
             using var stream = entry.Open();
             stream.Write(bytes, 0, bytes.Length);
+        }
+
+        private static byte[] CompressGzip(
+            byte[] value)
+        {
+            using var output =
+                new MemoryStream();
+            using (var gzip =
+                new GZipStream(
+                    output,
+                    CompressionLevel.Optimal,
+                    true))
+            {
+                gzip.Write(
+                    value,
+                    0,
+                    value.Length);
+            }
+            return output.ToArray();
         }
 
         private static int FindEndOfCentralDirectory(byte[] bytes)
