@@ -591,60 +591,7 @@ namespace XMAT.WebServiceCapture
                 return body;
             }
 
-            using var output = new MemoryStream();
-            var position = 0;
-            while (true)
-            {
-                SpendWork(1);
-                var lineEnd = body.AsSpan(position).IndexOf("\r\n"u8);
-                if (lineEnd < 0 || lineEnd > 8192)
-                {
-                    throw new InvalidDataException();
-                }
-                var line = Encoding.ASCII.GetString(body, position, lineEnd);
-                position += lineEnd + 2;
-                extension = line.IndexOf(';');
-                sizeText = extension < 0 ? line : line.Substring(0, extension);
-                if (!int.TryParse(sizeText, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var size) ||
-                    size < 0 || size > body.Length - position)
-                {
-                    throw new InvalidDataException();
-                }
-                if (size == 0)
-                {
-                    while (true)
-                    {
-                        SpendWork(1);
-                        lineEnd = body.AsSpan(position).IndexOf("\r\n"u8);
-                        if (lineEnd < 0 || lineEnd > 8192)
-                        {
-                            throw new InvalidDataException();
-                        }
-                        if (lineEnd == 0)
-                        {
-                            if (position + 2 != body.Length)
-                            {
-                                throw new InvalidDataException();
-                            }
-                            return output.ToArray();
-                        }
-                        var trailer = body.AsSpan(position, lineEnd);
-                        if (trailer.IndexOf((byte)':') <= 0)
-                        {
-                            throw new InvalidDataException();
-                        }
-                        position += lineEnd + 2;
-                    }
-                }
-                if (output.Length + size > MaximumBodyBytes || position + size + 2 > body.Length ||
-                    body[position + size] != 13 || body[position + size + 1] != 10)
-                {
-                    throw new InvalidDataException();
-                }
-                SpendWork(size);
-                output.Write(body, position, size);
-                position += size + 2;
-            }
+            return ChunkedBodyDecoder.Decode(body, MaximumBodyBytes, SpendWork);
         }
 
         private bool HasChunkFraming(ReadOnlySpan<byte> body)
