@@ -73,13 +73,9 @@ namespace XMAT.Cli
                 report = CliReport.ForInternalError(runId, parsed, ex);
             }
 
-            try
+            using (signals)
             {
                 Write(console, report);
-            }
-            finally
-            {
-                signals?.Dispose();
             }
 
             return report.ExitCode;

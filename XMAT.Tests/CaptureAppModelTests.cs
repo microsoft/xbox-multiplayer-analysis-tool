@@ -661,7 +661,7 @@ namespace XMAT.Tests
                 loadedPath);
             byte[] before =
                 File.ReadAllBytes(loadedPath);
-            var active = new SqLtDatabase();
+            using var active = new SqLtDatabase();
             active.Initialize();
             active.CreateTable(
                 "LiveData",
@@ -719,7 +719,6 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                active.Dispose();
                 Directory.Delete(
                     directory,
                     true);
