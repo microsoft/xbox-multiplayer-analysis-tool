@@ -731,6 +731,91 @@ namespace XMAT.Tests.Replay
             AssertFailure(result, OperationOutcome.InvalidInput, ReplayOperation.SequenceInvalidCode);
         }
 
+        // A preview counts and checks a sequence without a sender, and keeps a copy of what it checked: later edits to the
+        // draft change nothing in it.
+        [Fact]
+        public void Preview_CountsASequenceWithoutASender_AndKeepsACopyOfItsTemplate()
+        {
+            var operation = new ReplayOperation
+            {
+                SenderFactory = () => throw new InvalidOperationException("A preview never creates a sender."),
+            };
+            Assert.True(ReplaySequence.TryParse("08-11", out ReplaySequence sequence));
+            var draft = new RequestReplayDraft { Url = "http://h.test/#/?a=#" };
+
+            OperationResult<ReplayPlanPreview> preview = operation.Preview(
+                ReplaySource.FromTemplate(draft, sequence), new ReplayOptions(Repeat: 2));
+            draft.Url = "http://other.test/";
+            draft.Method = "DELETE";
+
+            Assert.True(preview.Succeeded);
+            Assert.Equal(8, preview.Value.Sends);
+            Assert.Same(sequence, preview.Value.Sequence);
+            Assert.Equal(("GET", "http://h.test/#/?a=#"), (preview.Value.Template.Method, preview.Value.Template.Url));
+            Assert.Equal((false, false), (preview.Value.UsesUnsafeMethod, preview.Value.ChangesOrigin));
+        }
+
+        // A preview names the consent that the sends need, and the operation still refuses them without it: a preview is
+        // not a permission.
+        [Fact]
+        public async Task Preview_NamesTheConsentThatTheOperationStillChecks()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            RequestReplayDraft draft = RequestReplayDraft.FromCapture(Row(1, "http://captured.test/items"));
+            draft.Method = "POST";
+            draft.Url = server.Origin + "/items/#";
+            Assert.True(ReplaySequence.TryParse("1-2", out ReplaySequence sequence));
+
+            ReplayPlanPreview preview = new ReplayOperation().Preview(ReplaySource.FromTemplate(draft, sequence)).Value;
+            OperationResult<ReplayResult> unsafeMethod = await Execute(new ReplayRequest(
+                preview.ToSource(), new ReplayOptions(AllowOriginChange: true)));
+            OperationResult<ReplayResult> originChange = await Execute(new ReplayRequest(
+                preview.ToSource(), new ReplayOptions(AllowUnsafeMethods: true)));
+            int sentWhenRefused = server.Requests.Count;
+            OperationResult<ReplayResult> sent = await Execute(new ReplayRequest(
+                preview.ToSource(),
+                new ReplayOptions(AllowUnsafeMethods: preview.UsesUnsafeMethod, AllowOriginChange: preview.ChangesOrigin)));
+
+            Assert.Equal((true, true), (preview.UsesUnsafeMethod, preview.ChangesOrigin));
+            AssertFailure(unsafeMethod, OperationOutcome.InvalidInput, "replay.policy.unsafe-method");
+            AssertFailure(originChange, OperationOutcome.InvalidInput, "replay.policy.origin-change");
+            Assert.Equal(0, sentWhenRefused);
+            Assert.True(sent.Succeeded, Describe(sent));
+            Assert.Equal(
+                new[] { "POST /items/1", "POST /items/2" },
+                server.Requests.Select(request => request.Method + " " + request.Target));
+        }
+
+        // A plan that the operation would refuse fails its preview with the same code, before anything is expanded or
+        // sent.
+        [Theory]
+        [InlineData("http://h.test/#", "1-5", 0, "replay.options.invalid")]
+        [InlineData("http://#.test/", "1-5001", 2, "replay.plan.too-large")]
+        [InlineData("http://h#.test/", "1-1", 1, ReplayOperation.SequenceInvalidCode)]
+        [InlineData("http://h.test/", "1-1", 1, ReplayOperation.SequenceInvalidCode)]
+        [InlineData("http://h.test/#", "1-7", 1, "replay.plan.too-large")]
+        [InlineData("http://h.test/#", "1-6", 1, null)]
+        [InlineData("http://h.test:99999/#", "1-1", 1, "replay.request.invalid")]
+        public async Task Preview_FailsWithTheCodeThatTheOperationReports(string url, string range, int repeat, string code)
+        {
+            Assert.True(ReplaySequence.TryParse(range, out ReplaySequence sequence));
+            var operation = new ReplayOperation
+            {
+                MaxSequenceUrlCharacters = 90,
+                SenderFactory = () => new ReplaySender(new HttpMessageInvoker(new FailingFirstHandler()), ownsInvoker: true),
+            };
+            ReplaySource source = ReplaySource.FromTemplate(new RequestReplayDraft { Url = url }, sequence);
+            var options = new ReplayOptions(Repeat: repeat);
+
+            OperationResult<ReplayPlanPreview> preview = operation.Preview(source, options);
+            OperationResult<ReplayResult> run = await operation.ExecuteAsync(
+                new ReplayRequest(source, options), OperationContext.None, CancellationToken.None);
+
+            Assert.Equal(code, preview.Diagnostics.SingleOrDefault()?.Code);
+            Assert.Equal(code, run.Diagnostics.SingleOrDefault()?.Code);
+            Assert.Equal(code == null, preview.Succeeded);
+        }
+
         [Fact]
         public async Task Captures_SkipRowsThatCannotBeReplayed()
         {

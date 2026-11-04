@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using XMAT.Operations.Replay;
 using XMAT.Tests.Proxy;
 using XMAT.Tests.Replay;
 
@@ -231,6 +232,38 @@ namespace XMAT.Tests.Cli
             }
 
             Assert.DoesNotContain("/item/", run.Stdout, StringComparison.Ordinal);
+        }
+
+        // The --body-file is read before anything is reserved or sent: one that is missing, cannot be read or is larger
+        // than 64 MiB is exit code 3 with its own code, and nothing is sent or published.
+        [Theory]
+        [InlineData("missing", ReplayBodyFile.NotFoundCode)]
+        [InlineData("folder", ReplayBodyFile.UnreadableCode)]
+        [InlineData("too-large", ReplayBodyFile.TooLargeCode)]
+        public async Task Compose_ABodyFileThatCannotBeUsed_SendsNothing(string file, string code)
+        {
+            using var directory = new CliTestDirectory();
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string bodyFile = Path.Join(directory.Root, "body.bin");
+            if (file == "folder")
+            {
+                Directory.CreateDirectory(bodyFile);
+            }
+            else if (file == "too-large")
+            {
+                using var stream = new FileStream(bodyFile, FileMode.CreateNew);
+                stream.SetLength(ReplayBodyFile.MaxBytes + 1);
+            }
+
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root, "compose", "--url", server.Origin + "/items", "--method", "PUT", "--allow-unsafe-methods",
+                "--body-file", bodyFile, "--out", "results");
+
+            CliAssert.ExitCode(3, run);
+            Assert.Equal(new[] { code }, run.ErrorCodes());
+            Assert.Empty(server.Requests);
+            Assert.False(Directory.Exists(Path.Join(directory.Root, "results")));
+            CliAssert.NoStagingFolders(directory.Root);
         }
     }
 }

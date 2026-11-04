@@ -152,6 +152,21 @@ namespace XMAT.Operations.Replay
         ReplayEdits Edits = null,
         IReplayExchangeSink Sink = null);
 
+    // What a composed request, or one per number of a sequence, would send (ReplayOperation.Preview). Template is a copy
+    // of the draft that was checked, so later edits to that draft change nothing here; send it with ToSource. Sends counts
+    // every send, repeats included. UsesUnsafeMethod and ChangesOrigin say which consent the options must carry
+    // (AllowUnsafeMethods, AllowOriginChange) for the operation to send them; it checks them again when it runs.
+    internal sealed record ReplayPlanPreview(
+        RequestReplayDraft Template,
+        ReplaySequence Sequence,
+        int Sends,
+        bool UsesUnsafeMethod,
+        bool ChangesOrigin)
+    {
+        internal ReplaySource ToSource() =>
+            Sequence == null ? ReplaySource.FromDraft(Template) : ReplaySource.FromTemplate(Template, Sequence);
+    }
+
     // One send, without its messages. Id numbers the sends of a run from 1, in plan order: every selected request once per
     // iteration, iterations in turn. DeviceId and RequestNumber are null for a composed request. SourceIndex is the
     // position of the sent request in ReplaySource.Captures (the GUI's rows), and null for other sources. Sequence is the

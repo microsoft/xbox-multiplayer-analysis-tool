@@ -98,6 +98,50 @@ namespace XMAT.Operations.Replay
             }
         }
 
+        // A composed request, or one per number of a sequence, checked as ExecuteAsync checks it before it sends, but
+        // without sending anything or expanding the sequence: the options, the plan size, the template and its URL budget,
+        // and that the request can be built (the widest number's URL for a sequence). The result says how many sends it
+        // makes and which consent they need, so the GUI can ask once before it sends. An invalid plan fails with the code
+        // that ExecuteAsync would report.
+        internal OperationResult<ReplayPlanPreview> Preview(ReplaySource source, ReplayOptions options = null)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            if (source.Draft == null)
+            {
+                throw new ArgumentException("Only a composed request or sequence can be previewed.", nameof(source));
+            }
+
+            options ??= ReplayOptions.Default;
+            try
+            {
+                if (!options.IsValid)
+                {
+                    throw new ReplayInputException("replay.options.invalid", "The replay options are out of range.");
+                }
+
+                RequestReplayDraft template = source.Draft.WithUrl(source.Draft.Url);
+                RequestReplayDraft widest = template;
+                int requests = 1;
+                if (source.Sequence != null)
+                {
+                    requests = source.Sequence.Count;
+                    CheckPlanSize(requests, options);
+                    CheckSequence(template.Url, source.Sequence, MaxSequenceUrlCharacters);
+                    widest = template.WithUrl(source.Sequence.Expand(template.Url, source.Sequence.End));
+                }
+
+                Validate(widest);
+                return OperationResult<ReplayPlanPreview>.Success(new ReplayPlanPreview(
+                    template, source.Sequence, requests * options.Repeat, widest.UsesUnsafeMethod, widest.ChangesOrigin));
+            }
+            catch (ReplayInputException ex)
+            {
+                return OperationResult<ReplayPlanPreview>.Failure(
+                    OperationOutcome.InvalidInput,
+                    new OperationDiagnostic(ex.Code, OperationDiagnosticSeverity.Error, ex.DiagnosticMessage));
+            }
+        }
+
         private Prepared Prepare(
             ReplayRequest request,
             ReplayOptions options,
@@ -290,20 +334,7 @@ namespace XMAT.Operations.Replay
             long maxUrlCharacters,
             CancellationToken cancellationToken)
         {
-            if (!ReplaySequence.IsPathAndQueryTemplate(template.Url))
-            {
-                throw new ReplayInputException(
-                    SequenceInvalidCode,
-                    "A sequence needs a '#' in the path or query of the URL, and none in its scheme, host or port.");
-            }
-
-            if ((long)sequence.Count * sequence.MaxExpandedLength(template.Url) > maxUrlCharacters)
-            {
-                throw new ReplayInputException(
-                    "replay.plan.too-large",
-                    "The URLs of the sequence would be too long together; use fewer numbers or a shorter URL.");
-            }
-
+            CheckSequence(template.Url, sequence, maxUrlCharacters);
             var items = new List<ReplayItem>(sequence.Count);
             string origin = null;
             foreach (long value in sequence.Values)
@@ -327,6 +358,24 @@ namespace XMAT.Operations.Replay
             }
 
             return items;
+        }
+
+        // A template has its every '#' in the path or query, and its expanded URLs fit maxUrlCharacters together.
+        private static void CheckSequence(string template, ReplaySequence sequence, long maxUrlCharacters)
+        {
+            if (!ReplaySequence.IsPathAndQueryTemplate(template))
+            {
+                throw new ReplayInputException(
+                    SequenceInvalidCode,
+                    "A sequence needs a '#' in the path or query of the URL, and none in its scheme, host or port.");
+            }
+
+            if ((long)sequence.Count * sequence.MaxExpandedLength(template) > maxUrlCharacters)
+            {
+                throw new ReplayInputException(
+                    "replay.plan.too-large",
+                    "The URLs of the sequence would be too long together; use fewer numbers or a shorter URL.");
+            }
         }
 
         // The GUI selects rows itself; rows that cannot be replayed are skipped with a warning.
@@ -481,17 +530,7 @@ namespace XMAT.Operations.Replay
             foreach (ReplayItem item in items)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    using (item.Draft.CreateRequestToSend())
-                    {
-                        // Building the request validates the method, URL, headers and body.
-                    }
-                }
-                catch (Exception ex) when (ex is FormatException or ArgumentException or NotSupportedException)
-                {
-                    throw Invalid(ex);
-                }
+                Validate(item.Draft);
             }
 
             if (!options.AllowUnsafeMethods && items.Any(item => item.Draft.UsesUnsafeMethod))
@@ -508,6 +547,22 @@ namespace XMAT.Operations.Replay
                     "replay.policy.origin-change",
                     "A selected request would go to another origin than the one it was captured for, with its captured " +
                         "headers, and origin changes are not allowed; nothing was sent.");
+            }
+        }
+
+        // Building the request validates the method, URL, headers and body.
+        private static void Validate(RequestReplayDraft draft)
+        {
+            try
+            {
+                using (draft.CreateRequestToSend())
+                {
+                    // Built only to be validated.
+                }
+            }
+            catch (Exception ex) when (ex is FormatException or ArgumentException or NotSupportedException)
+            {
+                throw Invalid(ex);
             }
         }
 

@@ -5,7 +5,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,9 +28,6 @@ namespace XMAT.Cli
         internal const string RequestFile = "request.http";
         internal const string ResponseFile = "response.http";
 
-        // A larger --body-file is refused (exit code 3).
-        internal const long MaxBodyFileBytes = 64L * 1024 * 1024;
-
         // replays/00001, replays/00002, ...: one folder per send, in plan order.
         internal static string FolderOf(int id) => ReplaysPath + "/" + id.ToString("D5", CultureInfo.InvariantCulture);
 
@@ -43,10 +39,29 @@ namespace XMAT.Cli
                 Replay = new CliReplayReport(request.Replay, fromCapture ? request.Limits ?? CliLimits.Default : null),
             };
 
+            // The body file is read before anything is reserved or sent; its path and content never reach the output. A
+            // larger file than ReplayBodyFile.MaxBytes (64 MiB) is refused with exit code 3.
             byte[] body = null;
-            if (request.Replay.BodyFile != null && !TryReadBody(request.Replay.BodyFile, report, out body))
+            if (request.Replay.BodyFile != null)
             {
-                return report;
+                ReplayBodyRead read;
+                try
+                {
+                    read = await ReplayBodyFile.ReadAsync(request.Replay.BodyFile, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    report.Cancel();
+                    return report;
+                }
+
+                if (!read.Succeeded)
+                {
+                    report.Fail(CliExitCodes.InvalidInput, read.Code, BodyFileMessage(read.Code));
+                    return report;
+                }
+
+                body = read.Body;
             }
 
             CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out string target);
@@ -106,35 +121,13 @@ namespace XMAT.Cli
             return report;
         }
 
-        // The body file is read before anything is reserved or sent; its path and content never reach the output.
-        private static bool TryReadBody(string path, CliReport report, out byte[] body)
-        {
-            body = null;
-            try
+        private static string BodyFileMessage(string code) =>
+            code switch
             {
-                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                if (stream.Length > MaxBodyFileBytes)
-                {
-                    report.Fail(CliExitCodes.InvalidInput, "replay.body.too-large", "The --body-file is larger than 64 MiB.");
-                    return false;
-                }
-
-                body = new byte[stream.Length];
-                stream.ReadExactly(body);
-                return true;
-            }
-            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-            {
-                report.Fail(CliExitCodes.InvalidInput, "replay.body.not-found", "The --body-file was not found.");
-                return false;
-            }
-            catch (Exception ex) when (
-                CliOutputFolder.IsFileSystemFailure(ex) || ex is ArgumentException or NotSupportedException)
-            {
-                report.Fail(CliExitCodes.InvalidInput, "replay.body.unreadable", "The --body-file could not be read.");
-                return false;
-            }
-        }
+                ReplayBodyFile.TooLargeCode => "The --body-file is larger than 64 MiB.",
+                ReplayBodyFile.NotFoundCode => "The --body-file was not found.",
+                _ => "The --body-file could not be read.",
+            };
 
         // Produces the results inside the staging folder; null when the run did not send its requests (the report says
         // why).
