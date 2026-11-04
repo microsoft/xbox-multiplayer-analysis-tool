@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
@@ -25,6 +26,7 @@ namespace XMAT.Operations.Replay
     {
         internal const string SkippedCode = "replay.request.skipped";
         internal const string VerifySkippedCode = "replay.verify.skipped";
+        internal const string SequenceInvalidCode = "replay.sequence.invalid";
 
         internal Func<ReplaySender> SenderFactory { get; set; } = static () => new ReplaySender();
 
@@ -128,6 +130,12 @@ namespace XMAT.Operations.Replay
             {
                 CheckPlanSize(source.Captures.Count, options);
                 items = SelectCaptures(source.Captures, diagnostics, cancellationToken);
+            }
+            else if (source.Sequence != null)
+            {
+                // Checked before the template is expanded, so a sequence that is too large costs nothing to refuse.
+                CheckPlanSize(source.Sequence.Count, options);
+                items = ExpandSequence(source.Draft, source.Sequence, cancellationToken);
             }
             else
             {
@@ -251,6 +259,46 @@ namespace XMAT.Operations.Replay
             if (skipped)
             {
                 diagnostics.Add(Skipped());
+            }
+
+            return items;
+        }
+
+        // One request per number of the sequence, in ascending order: the template with every '#' in its URL replaced. The
+        // numbers may change only the path and query, so the template has its '#' there, and every expanded URL must keep
+        // the scheme, host and port of the first. The header text and body are shared, not copied.
+        private static List<ReplayItem> ExpandSequence(
+            RequestReplayDraft template,
+            ReplaySequence sequence,
+            CancellationToken cancellationToken)
+        {
+            if (!ReplaySequence.IsPathAndQueryTemplate(template.Url))
+            {
+                throw new ReplayInputException(
+                    SequenceInvalidCode,
+                    "A sequence needs a '#' in the path or query of the URL, and none in its scheme, host or port.");
+            }
+
+            var items = new List<ReplayItem>(sequence.Count);
+            string origin = null;
+            foreach (long value in sequence.Values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string url = sequence.Expand(template.Url, value);
+                if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+                {
+                    throw Invalid(null);
+                }
+
+                string current = uri.Scheme + "://" + uri.IdnHost + ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
+                origin ??= current;
+                if (!string.Equals(current, origin, StringComparison.Ordinal))
+                {
+                    throw new ReplayInputException(
+                        SequenceInvalidCode, "Every number of a sequence must keep the scheme, host and port of the URL.");
+                }
+
+                items.Add(new ReplayItem(null, null, null, template.WithUrl(url), Sequence: value));
             }
 
             return items;
@@ -496,7 +544,8 @@ namespace XMAT.Operations.Replay
                         exchange.Redirects,
                         exchange.Code,
                         verification,
-                        step.Item.SourceIndex);
+                        step.Item.SourceIndex,
+                        step.Item.Sequence);
                     lock (gate)
                     {
                         token.ThrowIfCancellationRequested();
@@ -541,7 +590,8 @@ namespace XMAT.Operations.Replay
             long? RequestNumber,
             ProxyConnectionModel Original,
             RequestReplayDraft Draft,
-            int? SourceIndex = null)
+            int? SourceIndex = null,
+            long? Sequence = null)
         {
             // The captured response was recorded by the GUI without its body, so verify has nothing to compare it with.
             internal bool ResponseBodyNotKept =>

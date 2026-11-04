@@ -207,5 +207,30 @@ namespace XMAT.Tests.Cli
                 Assert.DoesNotContain(directory.Name, text, StringComparison.OrdinalIgnoreCase);
             }
         }
+
+        // One request per number of --sequence; the output says which number each send used, never its URL.
+        [Fact]
+        public async Task Compose_SendsOneRequestPerSequenceNumber()
+        {
+            using var directory = new CliTestDirectory();
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root, "compose", "--url", server.Origin + "/item/#?page=#", "--sequence", "08-10", "--out", "results");
+
+            CliAssert.ExitCode(0, run);
+            Assert.Equal(
+                new[] { "/item/08?page=08", "/item/09?page=09", "/item/10?page=10" },
+                server.Requests.Select(request => request.Target));
+            using JsonDocument summary = JsonDocument.Parse(File.ReadAllBytes(Path.Join(directory.Root, "results", "summary.json")));
+            foreach (JsonElement json in new[] { run.Json(), summary.RootElement })
+            {
+                Assert.Equal(
+                    new long[] { 8, 9, 10 },
+                    json.GetProperty("replays").EnumerateArray().Select(replay => replay.GetProperty("sequence").GetInt64()));
+            }
+
+            Assert.DoesNotContain("/item/", run.Stdout, StringComparison.Ordinal);
+        }
     }
 }

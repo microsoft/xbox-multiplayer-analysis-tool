@@ -88,6 +88,14 @@ namespace XMAT.Tests.Cli
         [InlineData("compose --url http://a.test/ --out results --allow-origin-change", "cli.usage.unknown-option")]
         [InlineData("replay a.saz --request 1 --out results --parallel 3 --max-response-mib 512", "cli.usage.invalid-value")]
         [InlineData("compose --url http://a.test/ --out results --parallel 16 --max-response-mib 65", "cli.usage.invalid-value")]
+        [InlineData("compose --url http://a.test/item/ --out results --sequence 1-3", "cli.usage.invalid-value")]
+        [InlineData("compose --url http://a#.test/ --out results --sequence 1-3", "cli.usage.invalid-value")]
+        [InlineData("compose --url http://a.test:#/ --out results --sequence 1-3", "cli.usage.invalid-value")]
+        [InlineData("compose --url http://a.test/# --out results --sequence 3-1", "cli.usage.invalid-value")]
+        [InlineData("compose --url http://a.test/# --out results --sequence 1-10001", "cli.usage.invalid-value")]
+        [InlineData("compose --url http://a.test/# --out results --sequence 1234567890123456-1234567890123457", "cli.usage.invalid-value")]
+        [InlineData("compose --url http://a.test/# --out results", "cli.usage.invalid-value")]
+        [InlineData("replay a.saz --request 1 --out results --sequence 1-2", "cli.usage.unknown-option")]
         public void Parse_RejectsInvalidCommandLinesWithExitCode2(string commandLine, string code)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));
@@ -201,6 +209,19 @@ namespace XMAT.Tests.Cli
                 new[] { "replay", "a.saz", "--request", "1", "--out", "r", "--parallel", "2", "--max-response-mib", "512" }).Succeeded);
             Assert.True(CliCommandLine.Parse(
                 new[] { "compose", "--url", "https://a.test/", "--out", "r", "--parallel", "16", "--max-response-mib", "64" }).Succeeded);
+        }
+
+        // --sequence turns --url into a template; a '#' without it is refused with a pointer to --sequence.
+        [Fact]
+        public void Parse_ReadsComposeSequences_AndPointsAFragmentAtThem()
+        {
+            CliParseResult sequence = CliCommandLine.Parse(Split("compose --url http://a.test/item/#?page=# --sequence 08-11 --out r"));
+            CliParseResult fragment = CliCommandLine.Parse(Split("compose --url http://a.test/item# --out r"));
+
+            Assert.True(sequence.Succeeded);
+            Assert.Equal(("http://a.test/item/#?page=#", "08-11"), (sequence.Request.Replay.Url, sequence.Request.Replay.Sequence));
+            Assert.Null(CliCommandLine.Parse(Split("compose --url http://a.test/ --out r")).Request.Replay.Sequence);
+            Assert.Equal(CliCommandLine.SequenceNeededMessage, fragment.Error.Message);
         }
 
         // Errors name commands and options but never repeat values, which can be paths.
@@ -356,7 +377,7 @@ namespace XMAT.Tests.Cli
                 summary.RootElement.EnumerateObject().Select(property => property.Name));
             JsonElement[] replays = published.RootElement.GetProperty("replays").EnumerateArray().ToArray();
             Assert.Equal(
-                new[] { "id", "device", "request", "iteration", "outcome", "status", "durationMs", "responseBytes", "redirects", "code", "verify", "files" },
+                new[] { "id", "device", "request", "sequence", "iteration", "outcome", "status", "durationMs", "responseBytes", "redirects", "code", "verify", "files" },
                 replays[0].EnumerateObject().Select(property => property.Name));
             Assert.Equal(("completed", 200, 12L), (replays[0].GetProperty("outcome").GetString(), replays[0].GetProperty("status").GetInt32(), replays[0].GetProperty("durationMs").GetInt64()));
             Assert.Equal("mismatch", replays[0].GetProperty("verify").GetProperty("result").GetString());

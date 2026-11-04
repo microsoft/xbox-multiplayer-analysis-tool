@@ -222,6 +222,15 @@ namespace XMAT.Cli
                     writer.WriteNull("request");
                 }
 
+                if (item.Sequence is long sequence)
+                {
+                    writer.WriteNumber("sequence", sequence);
+                }
+                else
+                {
+                    writer.WriteNull("sequence");
+                }
+
                 writer.WriteNumber("iteration", item.Iteration);
                 writer.WriteString("outcome", OutcomeName(item.Outcome));
                 if (item.StatusCode != 0)

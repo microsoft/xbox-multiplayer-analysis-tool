@@ -11,8 +11,8 @@ using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.Operations.Replay
 {
-    // What to send: requests selected from a capture file, captured requests the caller already holds (the GUI), or one
-    // composed request.
+    // What to send: requests selected from a capture file, captured requests the caller already holds (the GUI), one
+    // composed request, or one composed request per number of a sequence.
     internal sealed class ReplaySource
     {
         private ReplaySource(
@@ -21,7 +21,8 @@ namespace XMAT.Operations.Replay
             string deviceId,
             AnalysisLimits limits,
             IReadOnlyList<ProxyConnectionModel> captures,
-            RequestReplayDraft draft)
+            RequestReplayDraft draft,
+            ReplaySequence sequence = null)
         {
             Path = path;
             Selection = selection;
@@ -29,6 +30,7 @@ namespace XMAT.Operations.Replay
             Limits = limits;
             Captures = captures;
             Draft = draft;
+            Sequence = sequence;
         }
 
         internal string Path { get; }
@@ -44,6 +46,9 @@ namespace XMAT.Operations.Replay
         internal IReadOnlyList<ProxyConnectionModel> Captures { get; }
 
         internal RequestReplayDraft Draft { get; }
+
+        // With Draft as the template whose every '#' each number replaces; null for the other sources.
+        internal ReplaySequence Sequence { get; }
 
         internal static ReplaySource FromFile(
             string path, ReplaySelection selection, string deviceId = null, AnalysisLimits limits = null)
@@ -64,6 +69,15 @@ namespace XMAT.Operations.Replay
         {
             ArgumentNullException.ThrowIfNull(draft);
             return new ReplaySource(null, null, null, null, null, draft);
+        }
+
+        // One request per number of the sequence, in ascending order: the template with every '#' in its URL replaced by
+        // the number. The operation checks the plan size before it expands the template.
+        internal static ReplaySource FromTemplate(RequestReplayDraft template, ReplaySequence sequence)
+        {
+            ArgumentNullException.ThrowIfNull(template);
+            ArgumentNullException.ThrowIfNull(sequence);
+            return new ReplaySource(null, null, null, null, null, template, sequence);
         }
     }
 
@@ -137,7 +151,8 @@ namespace XMAT.Operations.Replay
 
     // One send, without its messages. Id numbers the sends of a run from 1, in plan order: every selected request once per
     // iteration, iterations in turn. DeviceId and RequestNumber are null for a composed request. SourceIndex is the
-    // position of the sent request in ReplaySource.Captures (the GUI's rows), and null for other sources.
+    // position of the sent request in ReplaySource.Captures (the GUI's rows), and null for other sources. Sequence is the
+    // number that a sequence put in the URL, and null for other sources.
     internal sealed record ReplayItemResult(
         int Id,
         string DeviceId,
@@ -150,7 +165,8 @@ namespace XMAT.Operations.Replay
         int Redirects,
         string Code,
         ReplayVerification Verification,
-        int? SourceIndex = null);
+        int? SourceIndex = null,
+        long? Sequence = null);
 
     // InputKind and InputSha256 describe a capture file and are null for other sources.
     internal sealed record ReplayResult(string InputKind, string InputSha256, IReadOnlyList<ReplayItemResult> Items)

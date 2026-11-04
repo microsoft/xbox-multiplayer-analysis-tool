@@ -212,9 +212,9 @@ namespace XMAT.Operations.Capabilities
                 }),
             Capability.Supported(
                 "request.compose", "Compose and send a new request", "S9",
-                cli: "compose --url URL --out DIR [--method METHOD] [--header \"NAME: VALUE\"]... [--body-file FILE] " +
-                    "[--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] " +
-                    "[--allow-unsafe-methods]",
+                cli: "compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header \"NAME: VALUE\"]... " +
+                    "[--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
+                    "[--max-response-mib N] [--allow-unsafe-methods]",
                 operation: ReplayOperation,
                 gui: new[]
                 {

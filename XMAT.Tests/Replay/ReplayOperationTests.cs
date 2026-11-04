@@ -593,6 +593,115 @@ namespace XMAT.Tests.Replay
             Assert.Equal("/composed", Assert.Single(server.Requests).Target);
         }
 
+        // A sequence sends one request per number, ascending in each round, with the number in its result; the ids stay
+        // the plan order.
+        [Fact]
+        public async Task Sequence_SendsOneRequestPerNumberInPlanOrder()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            Assert.True(ReplaySequence.TryParse("08-10", out ReplaySequence sequence));
+
+            OperationResult<ReplayResult> result = await Execute(new ReplayRequest(
+                ReplaySource.FromTemplate(new RequestReplayDraft { Url = server.Origin + "/item/#?page=#" }, sequence),
+                new ReplayOptions(Repeat: 2)));
+
+            Assert.True(result.Succeeded, Describe(result));
+            string[] round = { "/item/08?page=08", "/item/09?page=09", "/item/10?page=10" };
+            Assert.Equal(round.Concat(round), server.Requests.Select(request => request.Target));
+            Assert.Equal(new long?[] { 8, 9, 10, 8, 9, 10 }, result.Value.Items.Select(item => item.Sequence));
+            Assert.Equal(Enumerable.Range(1, 6), result.Value.Items.Select(item => item.Id));
+            Assert.Equal(new[] { 1, 1, 1, 2, 2, 2 }, result.Value.Items.Select(item => item.Iteration));
+            Assert.All(result.Value.Items, item => Assert.Null(item.RequestNumber));
+        }
+
+        // Edits and the unsafe-method policy cover every number before anything is sent, and one body serves every send.
+        [Fact]
+        public async Task Sequence_AppliesEditsAndPolicyToEveryNumber()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            Assert.True(ReplaySequence.TryParse("1-3", out ReplaySequence sequence));
+            byte[] body = "{\"n\":true}"u8.ToArray();
+            var edits = new ReplayEdits(
+                Method: "POST", SetHeaders: new[] { new KeyValuePair<string, string>("X-Run", "seq") }, Body: body);
+            ReplaySource Source() =>
+                ReplaySource.FromTemplate(new RequestReplayDraft { Url = server.Origin + "/n/#" }, sequence);
+            var sink = new RecordingSink();
+
+            OperationResult<ReplayResult> denied = await Execute(new ReplayRequest(Source(), Edits: edits));
+            int sentWhenDenied = server.Requests.Count;
+            OperationResult<ReplayResult> allowed = await Execute(
+                new ReplayRequest(Source(), new ReplayOptions(AllowUnsafeMethods: true), edits, sink));
+
+            AssertFailure(denied, OperationOutcome.InvalidInput, "replay.policy.unsafe-method");
+            Assert.Equal(0, sentWhenDenied);
+            Assert.True(allowed.Succeeded, Describe(allowed));
+            Assert.Equal(new[] { "/n/1", "/n/2", "/n/3" }, server.Requests.Select(request => request.Target));
+            Assert.All(server.Requests, request => Assert.Equal(("POST", "seq"), (request.Method, request.Header("X-Run"))));
+            Assert.All(server.Requests, request => Assert.Equal(body, request.Body));
+            Assert.All(sink.Exchanges, exchange => Assert.Same(body, exchange.Request.Body));
+        }
+
+        // A template's own headers and body go with every number, the body as one shared array.
+        [Fact]
+        public async Task Sequence_KeepsTheTemplatesHeadersAndBodyInEveryRequest()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            Assert.True(ReplaySequence.TryParse("1-2", out ReplaySequence sequence));
+            byte[] body = new byte[] { 0, 1, 2, 255 };
+            var template = new RequestReplayDraft
+            {
+                Method = "PUT",
+                Url = server.Origin + "/blob/#",
+                HeadersText = "Content-Type: application/octet-stream\r\nX-Template: yes",
+            };
+            template.SetBodyBytes(body);
+            var sink = new RecordingSink();
+
+            OperationResult<ReplayResult> result = await Execute(new ReplayRequest(
+                ReplaySource.FromTemplate(template, sequence), new ReplayOptions(AllowUnsafeMethods: true), Sink: sink));
+
+            Assert.True(result.Succeeded, Describe(result));
+            Assert.Equal(new[] { "/blob/1", "/blob/2" }, server.Requests.Select(request => request.Target));
+            Assert.All(server.Requests, request => Assert.Equal(("PUT", "yes"), (request.Method, request.Header("X-Template"))));
+            Assert.All(server.Requests, request => Assert.Equal(body, request.Body));
+            Assert.All(sink.Exchanges, exchange => Assert.Same(body, exchange.Request.Body));
+            Assert.Equal(server.Origin + "/blob/#", template.Url);
+        }
+
+        // The plan counts the numbers times the repeats before the template is expanded: a template whose expansion
+        // would be refused shows that too large a plan fails first.
+        [Fact]
+        public async Task Sequence_PlanIsCheckedBeforeTheTemplateIsExpanded()
+        {
+            Assert.True(ReplaySequence.TryParse("1-5001", out ReplaySequence sequence));
+            ReplaySource Source() => ReplaySource.FromTemplate(new RequestReplayDraft { Url = "http://#.test/" }, sequence);
+
+            OperationResult<ReplayResult> tooLarge = await Execute(new ReplayRequest(Source(), new ReplayOptions(Repeat: 2)));
+            OperationResult<ReplayResult> fits = await Execute(new ReplayRequest(Source()));
+
+            AssertFailure(tooLarge, OperationOutcome.InvalidInput, "replay.plan.too-large");
+            AssertFailure(fits, OperationOutcome.InvalidInput, ReplayOperation.SequenceInvalidCode);
+        }
+
+        // A '#' in the host is refused even when the sequence has one number, which no later origin comparison could
+        // catch. The sender is in memory, so nothing could reach a network if the check were missing.
+        [Fact]
+        public async Task Sequence_RefusesAPlaceholderInTheAuthority_EvenForOneNumber()
+        {
+            Assert.True(ReplaySequence.TryParse("1-1", out ReplaySequence sequence));
+            var operation = new ReplayOperation
+            {
+                SenderFactory = () => new ReplaySender(new HttpMessageInvoker(new FailingFirstHandler()), ownsInvoker: true),
+            };
+
+            OperationResult<ReplayResult> result = await operation.ExecuteAsync(
+                new ReplayRequest(ReplaySource.FromTemplate(new RequestReplayDraft { Url = "http://h#.test/" }, sequence)),
+                OperationContext.None,
+                CancellationToken.None);
+
+            AssertFailure(result, OperationOutcome.InvalidInput, ReplayOperation.SequenceInvalidCode);
+        }
+
         [Fact]
         public async Task Captures_SkipRowsThatCannotBeReplayed()
         {

@@ -38,8 +38,8 @@ namespace XMAT.Cli
         CliReplay Replay = null);
 
     // What xmat replay and xmat compose send and how, as their command lines give it. Headers and RemoveHeaders keep
-    // the order they were given in; BodyFile is read when the run starts. Selection is the --request text, already
-    // validated (replay only).
+    // the order they were given in; BodyFile is read when the run starts. Selection is the --request text (replay only)
+    // and Sequence the --sequence text (compose only), both already validated.
     internal sealed record CliReplay(
         string Selection = null,
         int Repeat = 1,
@@ -56,7 +56,8 @@ namespace XMAT.Cli
         bool Unconditional = false,
         bool Verify = false,
         bool AllowUnsafeMethods = false,
-        bool AllowOriginChange = false)
+        bool AllowOriginChange = false,
+        string Sequence = null)
     {
         internal static CliReplay Default { get; } = new();
     }
@@ -91,6 +92,7 @@ namespace XMAT.Cli
         internal const string HeaderOption = "--header";
         internal const string RemoveHeaderOption = "--remove-header";
         internal const string BodyFileOption = "--body-file";
+        internal const string SequenceOption = "--sequence";
         internal const string UnconditionalSwitch = "--unconditional";
         internal const string VerifySwitch = "--verify";
         internal const string AllowUnsafeMethodsSwitch = "--allow-unsafe-methods";
@@ -105,6 +107,17 @@ namespace XMAT.Cli
             new("--follow-redirects", string.Empty, 0, ReplayOptions.MaxRedirectLimit);
 
         internal const string FollowRedirectsRangeMessage = "--follow-redirects takes a whole number from 0 to 10.";
+
+        internal const string SequenceRangeMessage =
+            "--sequence takes START-END: whole numbers of 1 to 15 digits, START no greater than END, " +
+            "at most 10,000 numbers.";
+
+        internal const string SequenceTemplateMessage =
+            "--sequence needs a # in the path or query of --url, and none in its scheme, host or port.";
+
+        internal const string SequenceNeededMessage =
+            "--url cannot have a fragment; to send one request per number, put # in its path or query and " +
+            "add --sequence.";
 
         // Unknown commands, options and doctor targets get fixed messages.
         internal const string UnknownCommandMessage = "Unknown command. Run xmat help for the commands.";
@@ -138,7 +151,8 @@ namespace XMAT.Cli
             FollowRedirectsOption.Name,
         };
 
-        private static readonly HashSet<string> ComposeCommandOptions = new(SendOptions.Append(UrlOption), StringComparer.Ordinal);
+        private static readonly HashSet<string> ComposeCommandOptions = new(
+            SendOptions.Concat(new[] { UrlOption, SequenceOption }), StringComparer.Ordinal);
 
         private static readonly HashSet<string> ReplayCommandOptions = new(
             SendOptions.Concat(new[]
@@ -516,10 +530,31 @@ namespace XMAT.Cli
                     command, "cli.usage.invalid-value", "--parallel times --max-response-mib must not exceed 1,024 MiB.");
             }
 
-            if (arguments.Options.TryGetValue(UrlOption, out string url) && !IsHttpUrl(url))
+            // With --sequence, --url is a template: its first number must give a valid URL, and the operation checks every
+            // number before anything is sent.
+            arguments.Options.TryGetValue(UrlOption, out string url);
+            ReplaySequence sequence = null;
+            if (arguments.Options.TryGetValue(SequenceOption, out string sequenceText))
+            {
+                if (!ReplaySequence.TryParse(sequenceText, out sequence))
+                {
+                    return CliParseResult.UsageError(command, "cli.usage.invalid-value", SequenceRangeMessage);
+                }
+
+                if (!ReplaySequence.IsPathAndQueryTemplate(url))
+                {
+                    return CliParseResult.UsageError(command, "cli.usage.invalid-value", SequenceTemplateMessage);
+                }
+            }
+
+            if (url != null && !IsHttpUrl(sequence == null ? url : sequence.Expand(url, sequence.Start)))
             {
                 return CliParseResult.UsageError(
-                    command, "cli.usage.invalid-value", "--url takes an absolute http or https URL without credentials or a fragment.");
+                    command,
+                    "cli.usage.invalid-value",
+                    command == CliCommands.Compose && url.Contains(ReplaySequence.Placeholder)
+                        ? SequenceNeededMessage
+                        : "--url takes an absolute http or https URL without credentials or a fragment.");
             }
 
             if (arguments.Options.TryGetValue(MethodOption, out string method) && !RequestReplayDraft.IsValidMethod(method))
@@ -556,7 +591,8 @@ namespace XMAT.Cli
                 RemoveHeaders: Array.Empty<string>(),
                 BodyFile: bodyFile,
                 AllowUnsafeMethods: arguments.Switches.Contains(AllowUnsafeMethodsSwitch),
-                AllowOriginChange: arguments.Switches.Contains(AllowOriginChangeSwitch));
+                AllowOriginChange: arguments.Switches.Contains(AllowOriginChangeSwitch),
+                Sequence: sequenceText);
             return null;
         }
 

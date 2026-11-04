@@ -278,6 +278,19 @@ namespace XMAT.WebServiceCapture
             _sharedBody ??
             (BodyIsBase64 ? Convert.FromBase64String(BodyText ?? "") : StrictUtf8.GetBytes(BodyText ?? ""));
 
+        // A copy that sends to url, sharing this draft's header text and body rather than copying them.
+        internal RequestReplayDraft WithUrl(string url) =>
+            new()
+            {
+                Method = Method,
+                Url = url,
+                HeadersText = HeadersText,
+                BodyIsBase64 = BodyIsBase64,
+                _bodyText = _bodyText,
+                _sharedBody = _sharedBody,
+                _originalAuthority = _originalAuthority,
+            };
+
         // Replaces the body with these exact bytes, without copying them; BodyText shows them as Base64.
         internal void SetBodyBytes(byte[] body)
         {

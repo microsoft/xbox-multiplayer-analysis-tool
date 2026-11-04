@@ -175,9 +175,13 @@ namespace XMAT.Cli
                 AllowOriginChange: replay.AllowOriginChange);
             if (request.Command == CliCommands.Compose)
             {
-                // The operation applies and checks the method, headers and body of a composed request like any edit.
+                // The operation applies and checks the method, headers and body of a composed request like any edit; with
+                // --sequence it expands the URL template once per number after checking the plan size.
+                var draft = new RequestReplayDraft { Url = replay.Url };
                 return new ReplayRequest(
-                    ReplaySource.FromDraft(new RequestReplayDraft { Url = replay.Url }),
+                    ReplaySequence.TryParse(replay.Sequence, out ReplaySequence sequence)
+                        ? ReplaySource.FromTemplate(draft, sequence)
+                        : ReplaySource.FromDraft(draft),
                     options,
                     new ReplayEdits(Method: replay.Method, SetHeaders: replay.Headers, Body: body),
                     sink);

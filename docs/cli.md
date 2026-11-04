@@ -20,9 +20,9 @@ xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--paralle
             [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
             [--allow-unsafe-methods] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N]
             [--max-record-mib N] [--max-records N]
-xmat compose --url URL --out DIR [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N]
-             [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
-             [--allow-unsafe-methods]
+xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]...
+             [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS]
+             [--max-response-mib N] [--allow-unsafe-methods]
 xmat doctor --for analyze
 xmat help [COMMAND]
 xmat --version
@@ -178,6 +178,16 @@ xmat --version
 - A capture that the GUI saved can include its replays as a device named `XMAT Replays`: `xmat analyze` reports it
   like any other device, and `xmat replay` can select its requests. Their numbers can repeat those of another device,
   so a selected number may need `--device` (`replay.request.ambiguous`).
+- `xmat compose --sequence START-END` sends one request per number, like Fiddler's sequential requests: every `#`
+  in `--url` is replaced by each number from `START` to `END` in turn, so `--url "https://localhost:5001/item/#?page=#"
+  --sequence 08-11` sends `/item/08?page=08` up to `/item/11?page=11`. A `START` with a leading zero pads every number
+  to its width; wider numbers are never cut. `START` and `END` have 1 to 15 digits, `START` is at most `END`, and a
+  sequence has at most 10,000 numbers (exit code 2 otherwise). The numbers change only the path and query: a `#` in
+  the scheme, host or port is refused (exit code 2), and every number must keep the URL's scheme, host and port
+  (`replay.sequence.invalid`). Write `%23` for a `#` that the URL should keep. The numbers times `--repeat` count
+  toward the 10,000 sends of a run (`replay.plan.too-large`, exit code 3), which xmat checks before it builds any
+  request. The requests are planned in ascending order, round after round; with `--parallel` they can reach the
+  server in another order. Each send's `sequence` in the JSON output is its number.
 - `xmat doctor --for analyze` checks what `xmat analyze` needs and writes nothing: the analysis rules (`data.rules`),
   the API map (`data.apimap`) and the English strings (`localization.en-us`) installed next to `xmat.exe`, and a 64-bit
   process (`runtime.64-bit`). A missing or damaged file fails its check with a code such as `analysis.assets.rules` and
@@ -241,10 +251,11 @@ whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFai
 of the capabilities that the command provides); and `--version` reports `version`. Instead of the analysis fields,
 `replay` and `compose` report `options` (`repeat`, `parallel`, `timeoutSeconds`, `maxResponseMib`, `followRedirects`,
 `unconditional`, `verify`, `allowUnsafeMethods` and `allowOriginChange`), `replays` (one per send, in order, each with
-its `id`, `device` and `request` (null for `compose`), `iteration`, `outcome`, `status` (null without a response),
-`durationMs`, `responseBytes`, `redirects`, `code`, `verify` (null without `--verify`, otherwise its `result`, `match`
-or `mismatch`, and its `differences`, `status` and `body`) and, once published, its `files`) and `totals` (`replays`,
-`completed`, `failed`, `matched` and `mismatched`); `replay` also reports `input` and `limits` like `analyze`.
+its `id`, `device` and `request` (null for `compose`), `sequence` (the number that `--sequence` put in the URL,
+otherwise null), `iteration`, `outcome`, `status` (null without a response), `durationMs`, `responseBytes`,
+`redirects`, `code`, `verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`, and its
+`differences`, `status` and `body`) and, once published, its `files`) and `totals` (`replays`, `completed`, `failed`,
+`matched` and `mismatched`); `replay` also reports `input` and `limits` like `analyze`.
 `summary.json` of a replay holds `schema` (`xmat-replay/1`), `command`, `runId`, `version`, the same fields and the
 run's `warnings`.
 
@@ -260,7 +271,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 |---|---|
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
-| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device; for `replay` and `compose` also a selection, edit or `--body-file` that cannot be used, or a request that needs `--allow-unsafe-methods` or `--allow-origin-change` (nothing is sent) |
+| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device; for `replay` and `compose` also a selection, edit, sequence or `--body-file` that cannot be used, or a request that needs `--allow-unsafe-methods` or `--allow-origin-change` (nothing is sent) |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists |
 | 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`) |
@@ -330,7 +341,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
-| Compose and send a new request (`request.compose`) | `xmat compose --url URL --out DIR [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--allow-unsafe-methods]` | Supported (S9) |
+| Compose and send a new request (`request.compose`) | `xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--allow-unsafe-methods]` | Supported (S9) |
 | Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--allow-unsafe-methods] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |
