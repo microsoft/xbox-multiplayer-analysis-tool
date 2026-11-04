@@ -92,5 +92,17 @@ namespace XMAT.Tests.Replay
 
             Assert.Equal("http://h.test/%23/09?a=09&b=09", sequence.Expand("http://h.test/%23/#?a=#&b=#", 9));
         }
+
+        // The longest expansion uses the widest number, End, at every placeholder.
+        [Theory]
+        [InlineData("08-100", "http://h.test/#?a=#")]
+        [InlineData("8-11", "http://h.test/#?a=#")]
+        [InlineData("000-7", "http://h.test/#")]
+        public void MaxExpandedLength_IsTheLengthOfTheLastUrl(string range, string template)
+        {
+            Assert.True(ReplaySequence.TryParse(range, out ReplaySequence sequence));
+
+            Assert.Equal(sequence.Expand(template, sequence.End).Length, sequence.MaxExpandedLength(template));
+        }
     }
 }

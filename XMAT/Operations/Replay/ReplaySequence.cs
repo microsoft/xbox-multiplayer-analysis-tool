@@ -98,6 +98,14 @@ namespace XMAT.Operations.Replay
 
         internal string Format(long value) => value.ToString(CultureInfo.InvariantCulture).PadLeft(Width, '0');
 
+        // The length of the longest URL that the template expands to: End is the widest number.
+        internal long MaxExpandedLength(string template)
+        {
+            ArgumentNullException.ThrowIfNull(template);
+            long placeholders = template.Count(character => character == Placeholder);
+            return template.Length + placeholders * (Format(End).Length - 1);
+        }
+
         // The template with every '#' replaced by the number, formatted.
         internal string Expand(string template, long value)
         {

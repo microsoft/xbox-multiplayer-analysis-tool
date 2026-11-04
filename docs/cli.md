@@ -186,8 +186,10 @@ xmat --version
   the scheme, host or port is refused (exit code 2), and every number must keep the URL's scheme, host and port
   (`replay.sequence.invalid`). Write `%23` for a `#` that the URL should keep. The numbers times `--repeat` count
   toward the 10,000 sends of a run (`replay.plan.too-large`, exit code 3), which xmat checks before it builds any
-  request. The requests are planned in ascending order, round after round; with `--parallel` they can reach the
-  server in another order. Each send's `sequence` in the JSON output is its number.
+  request, and so does the length of the URLs that the sequence makes: together they may not exceed 16,777,216
+  characters, for example 10,000 URLs of up to about 1,600 characters. The requests are planned in ascending order,
+  round after round; with `--parallel` they can reach the server in another order. Each send's `sequence` in the
+  JSON output is its number.
 - `xmat doctor --for analyze` checks what `xmat analyze` needs and writes nothing: the analysis rules (`data.rules`),
   the API map (`data.apimap`) and the English strings (`localization.en-us`) installed next to `xmat.exe`, and a 64-bit
   process (`runtime.64-bit`). A missing or damaged file fails its check with a code such as `analysis.assets.rules` and

@@ -623,8 +623,8 @@ namespace XMAT.Tests.Replay
             byte[] body = "{\"n\":true}"u8.ToArray();
             var edits = new ReplayEdits(
                 Method: "POST", SetHeaders: new[] { new KeyValuePair<string, string>("X-Run", "seq") }, Body: body);
-            ReplaySource Source() =>
-                ReplaySource.FromTemplate(new RequestReplayDraft { Url = server.Origin + "/n/#" }, sequence);
+            var template = new RequestReplayDraft { Url = server.Origin + "/n/#" };
+            ReplaySource Source() => ReplaySource.FromTemplate(template, sequence);
             var sink = new RecordingSink();
 
             OperationResult<ReplayResult> denied = await Execute(new ReplayRequest(Source(), Edits: edits));
@@ -639,6 +639,35 @@ namespace XMAT.Tests.Replay
             Assert.All(server.Requests, request => Assert.Equal(("POST", "seq"), (request.Method, request.Header("X-Run"))));
             Assert.All(server.Requests, request => Assert.Equal(body, request.Body));
             Assert.All(sink.Exchanges, exchange => Assert.Same(body, exchange.Request.Body));
+
+            // The edits went to a copy: the caller's template is as it was.
+            Assert.Equal(("GET", "", ""), (template.Method, template.HeadersText, template.BodyText));
+        }
+
+        // The expanded URLs must fit a total length, checked before any is made: 6 URLs of 15 characters fit 90, 7 do not.
+        [Fact]
+        public async Task Sequence_UrlsMustFitTheirTotalLength()
+        {
+            var operation = new ReplayOperation
+            {
+                MaxSequenceUrlCharacters = 90,
+                SenderFactory = () => new ReplaySender(new HttpMessageInvoker(new FailingFirstHandler()), ownsInvoker: true),
+            };
+            async Task<OperationResult<ReplayResult>> Run(string range)
+            {
+                Assert.True(ReplaySequence.TryParse(range, out ReplaySequence sequence));
+                return await operation.ExecuteAsync(
+                    new ReplayRequest(ReplaySource.FromTemplate(new RequestReplayDraft { Url = "http://h.test/#" }, sequence)),
+                    OperationContext.None,
+                    CancellationToken.None);
+            }
+
+            OperationResult<ReplayResult> fits = await Run("1-6");
+            OperationResult<ReplayResult> tooLong = await Run("1-7");
+
+            Assert.True(fits.Succeeded, Describe(fits));
+            Assert.Equal(6, fits.Value.Items.Count);
+            AssertFailure(tooLong, OperationOutcome.InvalidInput, "replay.plan.too-large");
         }
 
         // A template's own headers and body go with every number, the body as one shared array.

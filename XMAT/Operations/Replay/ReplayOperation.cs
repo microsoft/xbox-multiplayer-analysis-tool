@@ -36,6 +36,9 @@ namespace XMAT.Operations.Replay
         // Verify decodes each body up to this size, or MaxResponseBytes if smaller; beyond it, bodies compare as stored.
         internal long MaxVerifyDecodedBytes { get; set; } = ReplayOptions.MaxVerifyDecodedBytes;
 
+        // The expanded URLs of a sequence are kept until the run ends, so their total length is bounded.
+        internal long MaxSequenceUrlCharacters { get; set; } = ReplayOptions.MaxSequenceUrlCharacters;
+
         public async Task<OperationResult<ReplayResult>> ExecuteAsync(
             ReplayRequest request,
             OperationContext context,
@@ -105,6 +108,7 @@ namespace XMAT.Operations.Replay
             string inputKind = null;
             string inputSha256 = null;
             List<ReplayItem> items;
+            bool edited = false;
             if (source.Path != null)
             {
                 AnalyzeCaptureOperation reader = CaptureReaderFactory() ??
@@ -133,9 +137,16 @@ namespace XMAT.Operations.Replay
             }
             else if (source.Sequence != null)
             {
-                // Checked before the template is expanded, so a sequence that is too large costs nothing to refuse.
+                // Checked before the template is expanded, so a sequence that is too large costs nothing to refuse. The
+                // edits apply once, to a copy of the template, so every expanded request shares its header text and body.
                 CheckPlanSize(source.Sequence.Count, options);
-                items = ExpandSequence(source.Draft, source.Sequence, cancellationToken);
+                RequestReplayDraft template = source.Draft.WithUrl(source.Draft.Url);
+                ApplyEdits(
+                    new[] { new ReplayItem(null, null, null, template) },
+                    request.Edits ?? ReplayEdits.None,
+                    cancellationToken);
+                items = ExpandSequence(template, source.Sequence, MaxSequenceUrlCharacters, cancellationToken);
+                edited = true;
             }
             else
             {
@@ -149,7 +160,11 @@ namespace XMAT.Operations.Replay
             }
 
             CheckPlanSize(items.Count, options);
-            ApplyEdits(items, request.Edits ?? ReplayEdits.None, cancellationToken);
+            if (!edited)
+            {
+                ApplyEdits(items, request.Edits ?? ReplayEdits.None, cancellationToken);
+            }
+
             Check(items, options, cancellationToken);
             if (options.Verify)
             {
@@ -266,10 +281,12 @@ namespace XMAT.Operations.Replay
 
         // One request per number of the sequence, in ascending order: the template with every '#' in its URL replaced. The
         // numbers may change only the path and query, so the template has its '#' there, and every expanded URL must keep
-        // the scheme, host and port of the first. The header text and body are shared, not copied.
+        // the scheme, host and port of the first. The header text and body are shared, not copied; the expanded URLs,
+        // which are kept until the run ends, are checked to fit maxUrlCharacters together before any is made.
         private static List<ReplayItem> ExpandSequence(
             RequestReplayDraft template,
             ReplaySequence sequence,
+            long maxUrlCharacters,
             CancellationToken cancellationToken)
         {
             if (!ReplaySequence.IsPathAndQueryTemplate(template.Url))
@@ -277,6 +294,13 @@ namespace XMAT.Operations.Replay
                 throw new ReplayInputException(
                     SequenceInvalidCode,
                     "A sequence needs a '#' in the path or query of the URL, and none in its scheme, host or port.");
+            }
+
+            if ((long)sequence.Count * sequence.MaxExpandedLength(template.Url) > maxUrlCharacters)
+            {
+                throw new ReplayInputException(
+                    "replay.plan.too-large",
+                    "The URLs of the sequence would be too long together; use fewer numbers or a shorter URL.");
             }
 
             var items = new List<ReplayItem>(sequence.Count);

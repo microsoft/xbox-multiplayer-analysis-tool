@@ -118,6 +118,9 @@ namespace XMAT.Operations.Replay
         // Reissue and verify decodes each body to compare it up to this size, or MaxResponseBytes if smaller.
         internal const long MaxVerifyDecodedBytes = 64L * 1024 * 1024;
 
+        // A sequence's expanded URLs together, in characters (32 MiB as UTF-16).
+        internal const long MaxSequenceUrlCharacters = 16L * 1024 * 1024;
+
         internal static TimeSpan MaxTimeout { get; } = TimeSpan.FromMinutes(10);
 
         internal static ReplayOptions Default { get; } = new();
