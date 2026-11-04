@@ -299,6 +299,54 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // A numbered URL whose request cannot be built says what is wrong as a single send of the request says it:
+        // what building it with the widest number says, not the operation's message for any request that cannot be
+        // built. Nothing is sent.
+        [Fact]
+        public Task NumberedUrl_ThatCannotBeBuilt_SaysWhyAsASingleSendDoes() => _application.RunAsync(async () =>
+        {
+            const string headers = "X-Kept: yes\r\nnot a header line";
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            using var client = new RequestReplayClient();
+            var window = RequestComposerWindow.ForNewRequest(client, NoQuestion);
+            int ranges = 0;
+            window.ChooseSequence = () =>
+            {
+                ranges++;
+                return "1-2";
+            };
+            try
+            {
+                Find<TextBox>(window, "HeadersBox").Text = headers;
+                Find<TextBox>(window, "UrlBox").Text = server.Origin + "/item/2";
+                await window.SendAsync();
+                string singleSend = Status(window);
+
+                Find<TextBox>(window, "UrlBox").Text = server.Origin + "/item/#";
+                await window.SendAsync();
+
+                Assert.Equal(1, ranges);
+                Assert.Equal(singleSend, Status(window));
+                var widest = new RequestReplayDraft { Url = server.Origin + "/item/2", HeadersText = headers };
+                FormatException built = Assert.Throws<FormatException>(() => widest.CreateRequestToSend());
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_ERROR", built.Message), singleSend);
+                Assert.True(ReplaySequence.TryParse("1-2", out ReplaySequence sequence));
+                var preview = client.Preview(
+                    ReplaySource.FromTemplate(
+                        new RequestReplayDraft { Url = server.Origin + "/item/#", HeadersText = headers }, sequence),
+                    0);
+                var refused = Assert.Single(preview.Diagnostics);
+                Assert.Equal(ReplayOperation.RequestInvalidCode, refused.Code);
+                Assert.NotEqual(Localization.GetLocalizedString("COMPOSER_ERROR", refused.Message), Status(window));
+                Assert.Equal(0, server.Connections);
+                Assert.Null(window.LastResult);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
         // Numbered URLs keep the captured-origin rule: a GET whose numbers go to another origin than the captured one, with
         // the captured headers, needs the run's one confirmation.
         [Theory]

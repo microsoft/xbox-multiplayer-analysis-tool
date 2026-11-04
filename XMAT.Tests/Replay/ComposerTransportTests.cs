@@ -435,6 +435,19 @@ namespace XMAT.Tests.Replay
             Assert.Null(ReplayRecorder.ToRow(2, ReplayProvenance.Composed, Answered(), sent: Sent("direct", "auto", "1.1")).ReplayNote);
         }
 
+        // A send that names no requested version asked for Automatic; a requested version that replay does not name is
+        // shown as Automatic, and a direct send with one still has a note.
+        [Fact]
+        public void TransportNote_ShowsAMissingOrUnnamedRequestedVersionAsAutomatic()
+        {
+            Assert.Null(ReplayRecorder.TransportNote(Sent("direct", null, "2")));
+            Assert.Equal(
+                ConnectToNote("COMPOSER_HTTP_VERSION_AUTO", "HTTP/1.1"), ReplayRecorder.TransportNote(Sent("connect-to", null, "1.1")));
+            Assert.Equal(VersionNote("COMPOSER_HTTP_VERSION_AUTO", "HTTP/2"), ReplayRecorder.TransportNote(Sent("direct", "3", "2")));
+            Assert.Equal(
+                ConnectToNote("COMPOSER_HTTP_VERSION_AUTO", "HTTP/2"), ReplayRecorder.TransportNote(Sent("connect-to", "AUTO", "2")));
+        }
+
         private static readonly Func<string, bool> NoQuestion =
             message => throw new Xunit.Sdk.XunitException("Nothing needs confirmation here: " + message);
 

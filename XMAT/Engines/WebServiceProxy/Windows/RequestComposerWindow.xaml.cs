@@ -26,14 +26,6 @@ namespace XMAT.WebServiceCapture
     /// </summary>
     public partial class RequestComposerWindow : Window
     {
-        // The operation's codes for a request that cannot be built, and for what the composer explains itself: Fiddler's
-        // control headers, and transport options that the URL cannot have (ReplayOperation).
-        private const string RequestInvalidCode = "replay.request.invalid";
-        private const string ControlHeaderCode = "replay.request.control-header";
-        private const string HttpVersionHttpsCode = "replay.http-version.https-required";
-        private const string ConnectToHttpsCode = "replay.connect-to.https-required";
-        private const string ConnectToDeniedCode = "replay.connect-to.target-denied";
-
         private readonly RequestReplayClient _client;
         private readonly bool _ownsClient;
         private readonly Func<string, bool> _confirm;
@@ -325,10 +317,10 @@ namespace XMAT.WebServiceCapture
         {
             string explained = diagnostic?.Code switch
             {
-                ControlHeaderCode => "COMPOSER_CONTROL_HEADER",
-                HttpVersionHttpsCode => "COMPOSER_HTTP_VERSION_HTTPS",
-                ConnectToHttpsCode => "COMPOSER_CONNECT_TO_HTTPS",
-                ConnectToDeniedCode => "COMPOSER_CONNECT_TO_DENIED",
+                ReplayOperation.ControlHeaderCode => "COMPOSER_CONTROL_HEADER",
+                ReplayOperation.Http2HttpsCode => "COMPOSER_HTTP_VERSION_HTTPS",
+                ReplayOperation.ConnectToHttpsCode => "COMPOSER_CONNECT_TO_HTTPS",
+                ReplayOperation.ConnectToDeniedCode => "COMPOSER_CONNECT_TO_DENIED",
                 _ => null,
             };
             if (explained != null)
@@ -336,7 +328,7 @@ namespace XMAT.WebServiceCapture
                 return Localization.GetLocalizedString(explained);
             }
 
-            if (diagnostic?.Code == RequestInvalidCode && sequence != null)
+            if (diagnostic?.Code == ReplayOperation.RequestInvalidCode && sequence != null)
             {
                 try
                 {

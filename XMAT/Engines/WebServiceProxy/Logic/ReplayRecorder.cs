@@ -144,12 +144,6 @@ namespace XMAT.WebServiceCapture
     {
         internal const long DefaultBodyBudgetBytes = 256L * 1024 * 1024;
 
-        // How ReplayItemResult names a send's transport and HTTP versions (ReplayOperation).
-        private const string ConnectToTransport = "connect-to";
-        private const string AutomaticVersion = "auto";
-        private const string Http11Version = "1.1";
-        private const string Http2Version = "2";
-
         private readonly WebServiceDeviceCaptureController _controller;
         private readonly IDataTable _table;
         private readonly Action<Action> _onUiThread;
@@ -285,23 +279,28 @@ namespace XMAT.WebServiceCapture
             };
         }
 
-        // How a send went with the composer's transport options, as the operation recorded it (ReplayItemResult): through
-        // another endpoint than the URL's host, and the HTTP version requested and the one that the response came with
-        // ("1.1" or "2", shown as HTTP/1.1 or HTTP/2). Null for a send with the default transport, directly to the URL's
-        // host with the version chosen automatically.
+        // How a send went with the composer's transport options, as the operation recorded it (ReplayItemResult, in the
+        // names of ReplayTransportOptions): through another endpoint than the URL's host, and the HTTP version requested
+        // and the one that the response came with ("1.1" or "2", shown as HTTP/1.1 or HTTP/2). Null for a send with the
+        // default transport, directly to the URL's host with the version chosen automatically; a requested version that
+        // replay does not name is shown as Automatic.
         internal static string TransportNote(ReplayItemResult sent)
         {
-            bool connectTo = sent?.Transport == ConnectToTransport;
-            string requestedVersion = sent?.HttpVersion ?? AutomaticVersion;
-            if (sent == null || (!connectTo && requestedVersion == AutomaticVersion))
+            bool connectTo = sent?.Transport == ReplayTransportOptions.ConnectToName;
+            string requestedName = sent?.HttpVersion ?? ReplayTransportOptions.AutoVersionName;
+            if (sent == null || (!connectTo && requestedName == ReplayTransportOptions.AutoVersionName))
             {
                 return null;
             }
 
+            ReplayHttpVersion requestedVersion =
+                ReplayTransportOptions.TryParseVersion(requestedName, out ReplayHttpVersion parsed)
+                    ? parsed
+                    : ReplayHttpVersion.Auto;
             string requested = Localization.GetLocalizedString(requestedVersion switch
             {
-                Http11Version => "COMPOSER_HTTP_VERSION_11",
-                Http2Version => "COMPOSER_HTTP_VERSION_2",
+                ReplayHttpVersion.Http11 => "COMPOSER_HTTP_VERSION_11",
+                ReplayHttpVersion.Http2 => "COMPOSER_HTTP_VERSION_2",
                 _ => "COMPOSER_HTTP_VERSION_AUTO",
             });
             string version = sent.ResponseVersion == null

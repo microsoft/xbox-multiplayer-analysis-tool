@@ -26,6 +26,7 @@ namespace XMAT.Operations.Replay
     internal sealed class ReplayOperation : IOperation<ReplayRequest, ReplayResult>
     {
         internal const string SkippedCode = "replay.request.skipped";
+        internal const string RequestInvalidCode = "replay.request.invalid";
         internal const string VerifySkippedCode = "replay.verify.skipped";
         internal const string SequenceInvalidCode = "replay.sequence.invalid";
         internal const string ControlHeaderCode = "replay.request.control-header";
@@ -664,7 +665,7 @@ namespace XMAT.Operations.Replay
 
         private static ReplayInputException Invalid(Exception inner) =>
             new(
-                "replay.request.invalid",
+                RequestInvalidCode,
                 "A selected request is not valid with the edits, such as an invalid URL, method, header or body.",
                 inner);
 
