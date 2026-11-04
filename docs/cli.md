@@ -122,8 +122,9 @@ xmat --version
   as `analyze` does, with the same limit options and `analysis.input.*` errors. `--request` selects requests by the
   number the GUI shows in its `#` column: `all`, or numbers and ranges such as `1,5,9-12` (at most 10,000 numbers). A
   number given on its own must exist (`replay.request.not-found`) and be an HTTP or HTTPS request without a protocol
-  upgrade (`replay.request.unsupported`); a range or `all` skips CONNECT tunnels, WebSocket handshakes and other
-  traffic with the warning `replay.request.skipped`. Unless `--request all`, a selected number that more than one
+  upgrade, recorded with its request body (`replay.request.unsupported`); a range or `all` skips CONNECT tunnels,
+  WebSocket handshakes, replays that XMAT recorded without their request body (`X-XMAT-Request-Body-Not-Kept`) and
+  other traffic with the warning `replay.request.skipped`. Unless `--request all`, a selected number that more than one
   request has is refused (`replay.request.ambiguous`), whether the requests are on one device or on several; in a
   capture of several devices, `--device` limits the selection to one of them. Each selected request is sent once per
   `--repeat` (1 by default, at most 1,000), all of them in turn before the next round, in capture order; `--parallel`

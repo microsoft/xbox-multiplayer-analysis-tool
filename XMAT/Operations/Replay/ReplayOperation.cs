@@ -220,7 +220,7 @@ namespace XMAT.Operations.Replay
                         throw new ReplayInputException(
                             "replay.request.unsupported",
                             "A selected request cannot be replayed: only HTTP and HTTPS requests without a protocol " +
-                                "upgrade can.");
+                                "upgrade, recorded with their request body, can.");
                     }
 
                     skipped = true;

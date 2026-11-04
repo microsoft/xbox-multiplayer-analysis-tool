@@ -67,7 +67,8 @@ namespace XMAT.WebServiceCapture
         {
             ArgumentNullException.ThrowIfNull(capture);
             if (!CanReplay(capture))
-                throw new ArgumentException("Only HTTP requests without a protocol upgrade can be replayed.");
+                throw new ArgumentException(
+                    "Only HTTP requests without a protocol upgrade, recorded with their request body, can be replayed.");
 
             // Captures can store either an absolute proxy URL or a path relative to the recorded host.
             string path = capture.Path ?? "";
@@ -143,8 +144,15 @@ namespace XMAT.WebServiceCapture
                 !string.IsNullOrWhiteSpace(capture.Method) &&
                 !string.Equals(capture.Method, "CONNECT", StringComparison.OrdinalIgnoreCase) &&
                 !capture.RequestHeaders.ContainsKey("Upgrade") &&
-                !capture.RequestHeaders.ContainsKey("Sec-WebSocket-Key");
+                !capture.RequestHeaders.ContainsKey("Sec-WebSocket-Key") &&
+                !capture.RequestHeaders.ContainsKey(RequestBodyNotKeptHeader);
         }
+
+        // The Replays tab records a send without a body that does not fit its body budget and says so with one of these
+        // headers in the stored request or response head, which saved captures and exports keep. A request recorded
+        // without its body is never sent again: it would go out with an empty body.
+        internal const string RequestBodyNotKeptHeader = "X-XMAT-Request-Body-Not-Kept";
+        internal const string ResponseBodyNotKeptHeader = "X-XMAT-Response-Body-Not-Kept";
 
         internal HttpRequestMessage CreateRequest()
         {

@@ -181,6 +181,33 @@ namespace XMAT.Tests.Replay
             Assert.Equal(new[] { "/shown", "/hidden" }, server.Requests.Select(request => request.Target));
         }
 
+        // A saved Replays tab can hold rows recorded without their request body: naming one is refused and a range skips
+        // it, so an empty body never goes out in place of the one that was not kept.
+        [Fact]
+        public async Task Selection_NeverSendsARequestRecordedWithoutItsBody()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string capture = ReplayCaptures.WriteXmatcap(
+                _directory,
+                "capture.xmatcap",
+                ("Replays", new[]
+                {
+                    new CapturedExchange("GET", server.Origin + "/kept"),
+                    new CapturedExchange(
+                        "POST", server.Origin + "/omitted", RequestReplayDraft.RequestBodyNotKeptHeader + ": 4096\r\n"),
+                }));
+
+            OperationResult<ReplayResult> named = await Execute(
+                new ReplayRequest(ReplaySource.FromFile(capture, Selection("2")), new ReplayOptions(AllowUnsafeMethods: true)));
+            OperationResult<ReplayResult> all = await Execute(new ReplayRequest(
+                ReplaySource.FromFile(capture, ReplaySelection.All), new ReplayOptions(AllowUnsafeMethods: true)));
+
+            AssertFailure(named, OperationOutcome.InvalidInput, "replay.request.unsupported");
+            Assert.True(all.Succeeded, Describe(all));
+            Assert.Contains(all.Diagnostics, diagnostic => diagnostic.Code == ReplayOperation.SkippedCode);
+            Assert.Equal(new[] { "/kept" }, server.Requests.Select(request => request.Target));
+        }
+
         // The plan size is checked before any request is prepared, so a selection that is too large is refused at once,
         // even when one of its requests could not be prepared.
         [Fact]

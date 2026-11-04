@@ -223,6 +223,24 @@ namespace XMAT.Tests.Replay
             Assert.Equal(unsafeMethod, new RequestReplayDraft { Method = method }.UsesUnsafeMethod);
         }
 
+        // A replay that the Replays tab recorded without its request body is never sent again, whatever the header's case;
+        // one recorded without only its response body still can be.
+        [Theory]
+        [InlineData("X-XMAT-Request-Body-Not-Kept: 1048576\r\n", false)]
+        [InlineData("x-xmat-request-body-not-kept: 1\r\n", false)]
+        [InlineData("X-XMAT-Response-Body-Not-Kept: 1048576\r\n", true)]
+        [InlineData("", true)]
+        public void Draft_NeverReplaysARequestRecordedWithoutItsBody(string headers, bool replayable)
+        {
+            ProxyConnectionModel capture = RequestReplayDraftTests.Capture("POST", "/", Array.Empty<byte>(), headers);
+
+            Assert.Equal(replayable, RequestReplayDraft.CanReplay(capture));
+            if (!replayable)
+            {
+                Assert.Throws<ArgumentException>(() => RequestReplayDraft.FromCapture(capture));
+            }
+        }
+
         [Fact]
         public void Draft_SeparatesUnsafeMethodsFromOriginChanges()
         {
