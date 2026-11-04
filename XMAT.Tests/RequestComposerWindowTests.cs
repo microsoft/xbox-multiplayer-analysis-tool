@@ -8,6 +8,8 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
+using XMAT.Models;
+using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -286,6 +288,97 @@ namespace XMAT.Tests
             }
         });
 
+        // Edit and resend and Compose a New Request record every send in the model's Replays tab, with where it comes from;
+        // the captured row is unchanged.
+        [Fact]
+        public Task Window_RecordsEachSendInTheReplaysTab_WithWhereItComesFrom() => OnDispatcher(async () =>
+        {
+            using var handler = new StubHandler((_, _) => Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.Created) { Content = new StringContent("made") }));
+            using var httpClient = new HttpClient(handler);
+            using var client = new RequestReplayClient(httpClient);
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            ReplayRecordingTarget recording = Recording(model);
+            var capture = new ProxyConnectionModel(7, "200", DateTime.UtcNow, TimeSpan.Zero, "http", "127.0.0.1:9", "POST",
+                "/original", "POST /original HTTP/1.1\r\n\r\n", "original"u8.ToArray(), "HTTP/1.1 200 OK\r\n\r\n",
+                "old response"u8.ToArray(), "127.0.0.1");
+            var edited = new RequestComposerWindow(capture, client, (_, _) => true, recording, "Local PC");
+            var composed = RequestComposerWindow.ForNewRequest(client, (_, _) => true, recording);
+            try
+            {
+                await edited.SendAsync();
+                Find<TextBox>(composed, "UrlBox").Text = "http://127.0.0.1:9/new";
+                await composed.SendAsync();
+
+                var replays = (WebServiceDeviceCaptureController)model
+                    .GetOrAddReplayContext(ReplayRecorder.DeviceName).CaptureController;
+                Assert.Equal(
+                    new[] { "Local PC #7, from the composer", "a request composed from scratch" },
+                    replays.ProxyConnections.Select(row => row.ReplaySource));
+                ProxyConnectionModel resent = replays.ProxyConnections[0];
+                Assert.Equal(
+                    (ReplaySourceKind.Edited, 7L, capture.RecordRowId),
+                    (resent.Replay.Kind, resent.Replay.RequestNumber.Value, resent.Replay.RecordRowId.Value));
+                Assert.Equal(("201", "POST", "/original"), (resent.Status, resent.Method, resent.Path));
+                Assert.Equal("original"u8.ToArray(), resent.RequestBody);
+                Assert.Equal("made"u8.ToArray(), replays.ProxyConnections[1].ResponseBody);
+                Assert.Equal(ReplaySourceKind.Composed, replays.ProxyConnections[1].Replay.Kind);
+                Assert.EndsWith("Recorded in the Replays tab.", Find<TextBlock>(edited, "StatusText").Text);
+                Assert.True(model.CanModifyCaptureData);
+                Assert.Equal("original"u8.ToArray(), capture.RequestBody);
+                Assert.Equal("old response"u8.ToArray(), capture.ResponseBody);
+                Assert.False(capture.IsReplay);
+            }
+            finally
+            {
+                edited.Close();
+                composed.Close();
+                await RemoveAllAsync(model);
+            }
+        });
+
+        // While another capture-data operation runs, such as an import or a replay, the composer sends nothing, since it
+        // could not record the send, and says so.
+        [Fact]
+        public Task Window_DoesNotSendWhileXmatIsBusy() => OnDispatcher(async () =>
+        {
+            using var handler = new StubHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
+            using var httpClient = new HttpClient(handler);
+            using var client = new RequestReplayClient(httpClient);
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            var window = new RequestComposerWindow(
+                new ProxyConnectionModel(7, "200", DateTime.UtcNow, TimeSpan.Zero, "http", "127.0.0.1:9", "GET", "/",
+                    "GET / HTTP/1.1\r\n\r\n", [], "HTTP/1.1 200 OK\r\n\r\n", [], "127.0.0.1"),
+                client,
+                (_, _) => true,
+                Recording(model),
+                "Local PC");
+            try
+            {
+                Assert.True(model.TryBeginCaptureDataOperation(out IDisposable import));
+                await window.SendAsync();
+
+                Assert.Equal(0, handler.CallCount);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_BUSY"), Find<TextBlock>(window, "StatusText").Text);
+                Assert.True(Find<Button>(window, "SendButton").IsEnabled);
+                Assert.Empty(model.CaptureDeviceContexts);
+
+                import.Dispose();
+                await window.SendAsync();
+
+                Assert.Equal(1, handler.CallCount);
+                var replays = (WebServiceDeviceCaptureController)model
+                    .GetOrAddReplayContext(ReplayRecorder.DeviceName).CaptureController;
+                Assert.Single(replays.ProxyConnections);
+                Assert.True(model.CanModifyCaptureData);
+            }
+            finally
+            {
+                window.Close();
+                await RemoveAllAsync(model);
+            }
+        });
+
         [Fact]
         public Task CaptureCommand_IsAvailableForHttpIncludingReadOnlyImports() => OnDispatcher(async () =>
         {
@@ -357,6 +450,21 @@ namespace XMAT.Tests
 
         private static T Find<T>(Window window, string name) where T : class =>
             Assert.IsType<T>(window.FindName(name));
+
+        // Records into the model's Replays tab, on this test's UI thread.
+        private static ReplayRecordingTarget Recording(CaptureAppModel model)
+        {
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            return new ReplayRecordingTarget(model, action => dispatcher.Invoke(action));
+        }
+
+        private static async Task RemoveAllAsync(CaptureAppModel model)
+        {
+            foreach (ICaptureDeviceContext context in model.CaptureDeviceContexts.ToList())
+            {
+                await model.RemoveDeviceContextAsync(context);
+            }
+        }
 
         private Task OnDispatcher(Func<Task> action) => _application.RunAsync(action);
 

@@ -5,6 +5,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture;
 
 namespace XMAT.Tests
@@ -105,6 +106,52 @@ namespace XMAT.Tests
                 new RequestReplayDraft { Url = "https://example.com/" }, false, CancellationToken.None));
         }
 
+        // Every send traverses the shared ReplayOperation, the one xmat replay and xmat compose use: the client creates it
+        // for the send, and the send's result is the operation's own (an id and iteration in its plan).
+        [Fact]
+        public async Task SendAsync_GoesThroughTheSharedReplayOperation()
+        {
+            using var handler = new StubHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
+            using var httpClient = new HttpClient(handler);
+            using var client = new RequestReplayClient(httpClient);
+            var operations = new List<ReplayOperation>();
+            client.OperationFactory = () =>
+            {
+                var operation = new ReplayOperation();
+                operations.Add(operation);
+                return operation;
+            };
+            var recorder = new RecordingSink();
+
+            var result = await client.SendAsync(
+                new RequestReplayDraft { Url = "http://127.0.0.1:9/" }, false, CancellationToken.None, recorder);
+
+            Assert.Equal("200", result.Response.Status);
+            Assert.Single(operations);
+            (ReplayItemResult item, ReplayExchange exchange) = Assert.Single(recorder.Sends);
+            Assert.Equal((1, 1, ReplayOutcome.Completed, 200), (item.Id, item.Iteration, item.Outcome, item.StatusCode));
+            Assert.Equal("http://127.0.0.1:9/", exchange.RequestUri.AbsoluteUri);
+            Assert.Equal(1, handler.CallCount);
+        }
+
+        // A send without a response is a send too: the recorder gets it before the window gets the error.
+        [Fact]
+        public async Task SendAsync_PassesFailedSendsToTheRecorderToo()
+        {
+            using var handler = new StubHandler((_, _) => throw new HttpRequestException("test failure"));
+            using var httpClient = new HttpClient(handler);
+            using var client = new RequestReplayClient(httpClient);
+            var recorder = new RecordingSink();
+
+            await Assert.ThrowsAsync<HttpRequestException>(() => client.SendAsync(
+                new RequestReplayDraft { Url = "http://127.0.0.1:9/" }, false, CancellationToken.None, recorder));
+
+            (ReplayItemResult item, ReplayExchange exchange) = Assert.Single(recorder.Sends);
+            Assert.Equal(ReplayOutcome.Failed, item.Outcome);
+            Assert.Null(exchange.Response);
+            Assert.NotNull(exchange.Request);
+        }
+
         [Fact]
         public async Task DefaultClient_DoesNotFollowRedirectsOrReuseResponseCookies()
         {
@@ -160,6 +207,13 @@ namespace XMAT.Tests
                 ++CallCount;
                 return Callback(request, cancellationToken);
             }
+        }
+
+        private sealed class RecordingSink : IReplayExchangeSink
+        {
+            internal List<(ReplayItemResult Result, ReplayExchange Exchange)> Sends { get; } = new();
+
+            public void Add(ReplayItemResult result, ReplayExchange exchange) => Sends.Add((result, exchange));
         }
     }
 }

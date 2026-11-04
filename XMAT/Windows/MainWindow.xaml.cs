@@ -101,10 +101,11 @@ namespace XMAT
             HostListManagerWindow.ShowOrActivate(this, CaptureAppModel.AppModel.HostListPolicy);
         }
 
-        // Each new request gets its own non-modal composer, like Edit and resend.
+        // Each new request gets its own non-modal composer, like Edit and resend; its sends are recorded in the Replays tab.
         private void ComposeRequest_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var composer = RequestComposerWindow.ForNewRequest();
+            var composer = RequestComposerWindow.ForNewRequest(
+                recording: CaptureConnectionView.ApplicationReplayTarget(Dispatcher));
             composer.Owner = this;
             composer.Show();
         }

@@ -178,6 +178,7 @@
             <TabItem x:Name="ReqestResponseTab" Header="Request/Response">
                 <Grid>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition/>
                         <RowDefinition Height="4"/>
                         <RowDefinition/>
@@ -187,31 +188,46 @@
                         <ColumnDefinition Width="300"/>
                     </Grid.ColumnDefinitions>
 
+                    <!-- Rows of the Replays tab: where the row comes from, and what the tab did not keep. -->
+                    <Border x:Name="ReplayDetails" Grid.Row="0" Grid.ColumnSpan="2" Padding="10,4" BorderThickness="0,0,0,1"
+                            BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource PanelBackgroundBrush}"
+                            Visibility="{Binding SelectedItem.IsReplay, ElementName=ConnectionList, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}, FallbackValue=Collapsed}">
+                        <StackPanel>
+                            <TextBlock TextWrapping="Wrap">
+                                <Run x:Name="ReplayOfLabel" Text="Replay of:" FontWeight="Bold"/>
+                                <Run Text="{Binding SelectedItem.ReplaySource, ElementName=ConnectionList, Mode=OneWay}" d:Text="Local PC #12"/>
+                            </TextBlock>
+                            <TextBlock x:Name="ReplayNoteText" TextWrapping="Wrap" FontStyle="Italic"
+                                       Text="{Binding SelectedItem.ReplayNote, ElementName=ConnectionList, Mode=OneWay}"
+                                       Visibility="{Binding SelectedItem.HasReplayNote, ElementName=ConnectionList, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                        </StackPanel>
+                    </Border>
+
                     <!--
                     NOTE: someday we can get rid of the BodyText binding if the JsonConverter can be made into a MultiValueConverter like
                     the way that the BodyConverter works off of the HeadersDictionary and BodyBytes.
                     -->
-                    <local:RequestResponseView x:Name="RequestViewControl" Grid.Row="0" Grid.ColumnSpan="2" Title="Request"
+                    <local:RequestResponseView x:Name="RequestViewControl" Grid.Row="1" Grid.ColumnSpan="2" Title="Request"
                                                FirstLineAndHeaders="{Binding SelectedItem.RequestLineAndHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                HeaderDictionary="{Binding SelectedItem.RequestHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.RequestBody, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyText="{Binding SelectedItem.RequestText, ElementName=ConnectionList, Mode=OneWay}"
                                                />
 
-                    <GridSplitter Grid.Row="1" Grid.ColumnSpan="2" Height="4" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                    <GridSplitter Grid.Row="2" Grid.ColumnSpan="2" Height="4" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
 
                     <!--
                     NOTE: someday we can get rid of the BodyText binding if the JsonConverter can be made into a MultiValueConverter like
                     the way that the BodyConverter works off of the HeadersDictionary and BodyBytes.
                     -->
-                    <local:RequestResponseView x:Name="ResponseViewControl" Grid.Row="2" Grid.ColumnSpan="2" Title="Response"
+                    <local:RequestResponseView x:Name="ResponseViewControl" Grid.Row="3" Grid.ColumnSpan="2" Title="Response"
                                                FirstLineAndHeaders="{Binding SelectedItem.ResponseLineAndHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                HeaderDictionary="{Binding SelectedItem.ResponseHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.ResponseBody, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyText="{Binding SelectedItem.ResponseText, ElementName=ConnectionList, Mode=OneWay}"
                                                />
 
-                    <Grid Grid.Row="0" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch">
+                    <Grid Grid.Row="1" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="150"/>
                             <ColumnDefinition/>
@@ -223,11 +239,6 @@
                         <TextBlock Grid.Row="0" Grid.Column="0">
                                 <Run x:Name="RequestIdLabel" Text="Request ID:" FontWeight="Bold"/>
                                 <Run Text="{Binding SelectedItem.RequestNumber, ElementName=ConnectionList, Mode=OneWay}" d:Text="1000"/>
-                        </TextBlock>
-                        <TextBlock Grid.Row="1" Grid.Column="0"
-                                   Visibility="{Binding SelectedItem.IsReplay, ElementName=ConnectionList, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}, FallbackValue=Collapsed}">
-                                <Run x:Name="ReplayOfLabel" Text="Replay of:" FontWeight="Bold"/>
-                                <Run Text="{Binding SelectedItem.ReplayOf, ElementName=ConnectionList, Mode=OneWay, StringFormat='#{0}'}" d:Text="#12"/>
                         </TextBlock>
                         <TextBlock Grid.Row="0" Grid.Column="1">
                                 <Run x:Name="TimeLabel" Text="Time:" FontWeight="Bold"/>

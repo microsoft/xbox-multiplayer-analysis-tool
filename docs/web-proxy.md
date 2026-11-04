@@ -172,6 +172,11 @@ limit. Cancelling or timing out cannot undo changes already processed by the ser
 To send a request that was never captured, select **Actions > Compose a New Request**.
 The composer opens with an empty GET request and works the same way.
 
+Each send from the composer is also recorded in the **Replays** tab, like the requests
+that **Replay** sends (see below), unless you cancel it first. While a replay, an
+analysis, or a capture file operation such as an import runs, the composer does not
+send and says so; send again when it has finished.
+
 ## Replay requests
 
 Right-click a request, or one of several selected requests, and open **Replay**:
@@ -187,11 +192,32 @@ Right-click a request, or one of several selected requests, and open **Replay**:
   turn before the next round.
 - **Cancel replay** stops a replay that is running.
 
-Replays are sent the way the composer sends requests, and methods other than GET, HEAD,
-and OPTIONS need confirmation. Each request that was sent appears in the read-only
-**Replays** tab with its response. **Replay of** in the request details shows which
-captured request it replays. You can inspect and analyze replays like captured traffic,
-and edit and resend them.
+Replays are sent the way the composer sends requests. Methods other than GET, HEAD, and
+OPTIONS need confirmation, which states how many requests the replay sends, repeats
+included, and how many of them can change server data. The requests are copied when
+you choose the menu item, so the confirmed requests are exactly the ones sent, even if
+a running capture updates their rows meanwhile.
+
+Each request that was sent appears in the read-only **Replays** tab, with its response,
+or without one when the request failed or timed out; a request cancelled while it is
+being sent is not recorded. **Replay of** in the request details shows where it comes
+from: the tab and request number of the captured request, or that the request was
+composed from scratch. This link is kept in memory only, and loading a saved capture
+does not restore the **Replays** tab. The tab belongs to the replay feature: a loaded
+or imported tab that happens to have the same name is never used for replays, and
+loads and imports never change the replay tab. You can inspect and analyze replays
+like captured traffic, and edit and resend them.
+
+The **Replays** tab keeps at most 256 MiB of request and response bodies, counting the
+rows it already has. A request whose bodies do not fit still gets its row, with the
+status, headers, and timing but without those bodies, and a note in the request
+details says so; after the replay, XMAT tells you how many bodies were not kept. Close
+the **Replays** tab to free the space: the next replay starts a new one.
+
+While a replay or a send from the composer is in progress, XMAT does not load, import,
+save, or export captures, analyze, start a capture, or close tabs; **Cancel replay**
+stops a replay. Exiting XMAT cancels a replay or send in progress and waits for it to
+stop before closing.
 
 The command line does the same with `xmat replay` and `xmat compose`; see
 [Command line](cli.md).

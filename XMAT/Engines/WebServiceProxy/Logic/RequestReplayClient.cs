@@ -22,8 +22,8 @@ namespace XMAT.WebServiceCapture
 
     /// <summary>
     /// The composer's adapter over the shared ReplayOperation (the command line's is CliReplayCommand): sends one draft
-    /// without invoking capture callbacks or modifying stored traffic, and reports failures as exceptions for the window
-    /// to show.
+    /// without invoking capture callbacks or changing captured traffic, passes the send to the window's recorder for the
+    /// Replays tab, and reports failures as exceptions for the window to show.
     /// </summary>
     internal sealed class RequestReplayClient : IDisposable
     {
@@ -47,8 +47,15 @@ namespace XMAT.WebServiceCapture
         // Certificate validation remains the platform default; response encodings stay available to inspectors.
         internal static SocketsHttpHandler CreateHandler() => ReplaySender.CreateHandler();
 
+        // Creates the shared operation that every send goes through; tests observe it.
+        internal Func<ReplayOperation> OperationFactory { get; set; } = static () => new ReplayOperation();
+
+        // recorder, when given, also receives the send, for the Replays tab, whatever its outcome.
         internal async Task<RequestReplayResult> SendAsync(
-            RequestReplayDraft draft, bool confirmed, CancellationToken cancellationToken)
+            RequestReplayDraft draft,
+            bool confirmed,
+            CancellationToken cancellationToken,
+            IReplayExchangeSink recorder = null)
         {
             ArgumentNullException.ThrowIfNull(draft);
             using (draft.CreateRequestToSend())
@@ -61,8 +68,10 @@ namespace XMAT.WebServiceCapture
 
             // The user's confirmation is the permission that xmat.exe takes from --allow-unsafe-methods and
             // --allow-origin-change. Bound both waiting time and buffered response size for interactive sends.
-            var sink = new LastExchange();
-            var operation = new ReplayOperation { SenderFactory = () => new ReplaySender(_invoker) };
+            var sink = new LastExchange(recorder);
+            ReplayOperation operation = OperationFactory() ??
+                throw new InvalidOperationException("The replay operation factory returned no operation.");
+            operation.SenderFactory = () => new ReplaySender(_invoker);
             OperationResult<ReplayResult> result = await operation.ExecuteAsync(
                 new ReplayRequest(
                     ReplaySource.FromDraft(draft),
@@ -119,11 +128,23 @@ namespace XMAT.WebServiceCapture
             return response;
         }
 
+        // Keeps the send for the window and passes it on to the recorder, if any.
         private sealed class LastExchange : IReplayExchangeSink
         {
+            private readonly IReplayExchangeSink _recorder;
+
+            internal LastExchange(IReplayExchangeSink recorder)
+            {
+                _recorder = recorder;
+            }
+
             internal ReplayExchange Exchange { get; private set; }
 
-            public void Add(ReplayItemResult result, ReplayExchange exchange) => Exchange = exchange;
+            public void Add(ReplayItemResult result, ReplayExchange exchange)
+            {
+                Exchange = exchange;
+                _recorder?.Add(result, exchange);
+            }
         }
     }
 }

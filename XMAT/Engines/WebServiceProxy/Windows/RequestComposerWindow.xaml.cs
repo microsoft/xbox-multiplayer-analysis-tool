@@ -17,7 +17,8 @@ using XMAT.WebServiceCapture.Models;
 namespace XMAT.WebServiceCapture
 {
     /// <summary>
-    /// Edits an isolated request draft and displays its latest replay response separately from capture.
+    /// Edits an isolated request draft and displays its latest replay response separately from capture. Each send is also
+    /// recorded in the Replays tab.
     /// </summary>
     public partial class RequestComposerWindow : Window
     {
@@ -25,27 +26,49 @@ namespace XMAT.WebServiceCapture
         private readonly RequestReplayClient _client;
         private readonly bool _ownsClient;
         private readonly Func<string, string, bool> _confirm;
+        private readonly ReplayRecordingTarget _recording;
+        private readonly ReplayProvenance _provenance;
         private CancellationTokenSource _sendingCancellation;
         private bool _closed;
         private string _bodyTextInEditor;
 
         // The draft is built before the base Window constructor registers this window with the application: a capture
         // that cannot be replayed must not leave a hidden window behind that keeps XMAT running after its last close.
+        // recording is where sends are recorded, as edited replays of the capture in the tab named sourceName; without it
+        // nothing is recorded, which only tests do.
         internal RequestComposerWindow(
-            ProxyConnectionModel capture, RequestReplayClient client = null, Func<string, string, bool> confirm = null)
-            : this(RequestReplayDraft.FromCapture(capture), client, confirm)
+            ProxyConnectionModel capture,
+            RequestReplayClient client = null,
+            Func<string, string, bool> confirm = null,
+            ReplayRecordingTarget recording = null,
+            string sourceName = null)
+            : this(
+                RequestReplayDraft.FromCapture(capture),
+                client,
+                confirm,
+                recording,
+                ReplayProvenance.Of(ReplaySourceKind.Edited, sourceName, capture))
         {
         }
 
         // Compose a new request: an empty GET with nothing captured behind it.
         internal static RequestComposerWindow ForNewRequest(
-            RequestReplayClient client = null, Func<string, string, bool> confirm = null) =>
-            new(new RequestReplayDraft(), client, confirm);
+            RequestReplayClient client = null,
+            Func<string, string, bool> confirm = null,
+            ReplayRecordingTarget recording = null) =>
+            new(new RequestReplayDraft(), client, confirm, recording, ReplayProvenance.Composed);
 
-        private RequestComposerWindow(RequestReplayDraft draft, RequestReplayClient client, Func<string, string, bool> confirm)
+        private RequestComposerWindow(
+            RequestReplayDraft draft,
+            RequestReplayClient client,
+            Func<string, string, bool> confirm,
+            ReplayRecordingTarget recording,
+            ReplayProvenance provenance)
         {
             InitializeComponent();
             _draft = draft;
+            _recording = recording;
+            _provenance = provenance;
             _ownsClient = client == null;
             _client = client ?? new RequestReplayClient();
             _confirm = confirm ?? ((method, url) =>
@@ -97,6 +120,15 @@ namespace XMAT.WebServiceCapture
             }
 
             using var cancellation = new CancellationTokenSource();
+            // The recording keeps the Replays tab from being closed or replaced until the send ends; closing XMAT cancels
+            // the send through cancellation and waits for it. While XMAT is busy nothing is sent, so nothing goes unrecorded.
+            using ReplayRecording recording = _recording?.TryBegin(cancellation, _ => _provenance);
+            if (_recording != null && recording == null)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_BUSY");
+                return;
+            }
+
             _sendingCancellation = cancellation;
             // A failed new send must not leave the previous response looking like its result.
             LastResult = null;
@@ -108,7 +140,7 @@ namespace XMAT.WebServiceCapture
             StatusText.Text = Localization.GetLocalizedString("COMPOSER_SENDING");
             try
             {
-                var result = await _client.SendAsync(_draft, confirmed: true, cancellation.Token);
+                var result = await _client.SendAsync(_draft, confirmed: true, cancellation.Token, recording?.Recorder);
                 // Closing cancels the request, but completion may race with that cancellation.
                 if (!_closed)
                 {
@@ -122,22 +154,27 @@ namespace XMAT.WebServiceCapture
                     ResponseView.BodyText = (string)new BodyConverter().Convert(
                         new object[] { headers, response.BodyBytes }, typeof(string), null, CultureInfo.CurrentCulture);
                     LastResult = result;
-                    StatusText.Text = Localization.GetLocalizedString("COMPOSER_COMPLETED",
-                        response.Status, result.Duration.TotalMilliseconds.ToString("F0"), response.BodyBytes.Length);
+                    StatusText.Text = WithRecording(
+                        Localization.GetLocalizedString("COMPOSER_COMPLETED",
+                            response.Status, result.Duration.TotalMilliseconds.ToString("F0"), response.BodyBytes.Length),
+                        recording);
                 }
             }
             catch (OperationCanceledException)
             {
                 if (!_closed)
                 {
-                    StatusText.Text = Localization.GetLocalizedString(
-                        cancellation.IsCancellationRequested ? "COMPOSER_CANCELLED" : "COMPOSER_TIMEOUT");
+                    // A timeout is a send without a response, which the Replays tab records; a cancelled send usually is not.
+                    StatusText.Text = WithRecording(
+                        Localization.GetLocalizedString(
+                            cancellation.IsCancellationRequested ? "COMPOSER_CANCELLED" : "COMPOSER_TIMEOUT"),
+                        recording);
                 }
             }
             catch (Exception exception) when (IsInputError(exception) || exception is HttpRequestException or IOException)
             {
                 if (!_closed)
-                    ShowError(exception);
+                    StatusText.Text = WithRecording(ErrorText(exception), recording);
             }
             finally
             {
@@ -145,6 +182,23 @@ namespace XMAT.WebServiceCapture
                 if (!_closed)
                     SetSending(false);
             }
+        }
+
+        // The status followed by what the Replays tab did with the send: recorded, recorded without bodies that did not
+        // fit, or not recorded because the tab was closed.
+        private static string WithRecording(string status, ReplayRecording recording)
+        {
+            ReplayRecorder recorder = recording?.Recorder;
+            string note = recorder switch
+            {
+                null => null,
+                { NotRecorded: > 0 } => Localization.GetLocalizedString("COMPOSER_NOT_RECORDED", recorder.Destination),
+                { OmittedBodies: > 0 } => Localization.GetLocalizedString(
+                    "COMPOSER_RECORDED_WITHOUT_BODIES", recorder.Destination, recorder.BodyBudgetBytes / (1024 * 1024)),
+                { Recorded: > 0 } => Localization.GetLocalizedString("COMPOSER_RECORDED", recorder.Destination),
+                _ => null,
+            };
+            return note == null ? status : status + " " + note;
         }
 
         internal void CancelSend()
@@ -218,8 +272,10 @@ namespace XMAT.WebServiceCapture
         private void CancelSend_Click(object sender, RoutedEventArgs e) => CancelSend();
         private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
-        private void ShowError(Exception exception) =>
-            StatusText.Text = Localization.GetLocalizedString("COMPOSER_ERROR", exception.Message);
+        private void ShowError(Exception exception) => StatusText.Text = ErrorText(exception);
+
+        private static string ErrorText(Exception exception) =>
+            Localization.GetLocalizedString("COMPOSER_ERROR", exception.Message);
 
         private static bool IsInputError(Exception exception) =>
             exception is ArgumentException or FormatException or InvalidOperationException or NotSupportedException;
