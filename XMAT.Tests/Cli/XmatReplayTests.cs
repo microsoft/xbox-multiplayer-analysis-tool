@@ -75,6 +75,7 @@ namespace XMAT.Tests.Cli
                 Assert.DoesNotContain(Canary, text, StringComparison.OrdinalIgnoreCase);
                 Assert.DoesNotContain(directory.Name, text, StringComparison.OrdinalIgnoreCase);
                 Assert.DoesNotContain(server.Port.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("127.0.0.1", text, StringComparison.Ordinal);
             }
 
             CliAssert.OnlyCurrentUserCanOpen(published);

@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using XMAT.Operations;
+using XMAT.Operations.Analysis;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Proxy;
@@ -103,6 +104,8 @@ namespace XMAT.Cli
         internal static readonly CliLimitOption FollowRedirectsOption =
             new("--follow-redirects", string.Empty, 0, ReplayOptions.MaxRedirectLimit);
 
+        internal const string FollowRedirectsRangeMessage = "--follow-redirects takes a whole number from 0 to 10.";
+
         // Unknown commands, options and doctor targets get fixed messages.
         internal const string UnknownCommandMessage = "Unknown command. Run xmat help for the commands.";
         internal const string UnknownOptionMessage = "Unknown option. Run xmat help for the options.";
@@ -154,13 +157,12 @@ namespace XMAT.Cli
 
         private static readonly HashSet<string> RepeatableOptions = new(StringComparer.Ordinal) { HeaderOption, RemoveHeaderOption };
 
-        private static readonly HashSet<string> ComposeSwitches = new(StringComparer.Ordinal)
-        {
-            AllowUnsafeMethodsSwitch,
-            AllowOriginChangeSwitch,
-        };
+        // compose has no captured origin to change, and replay never follows a redirect to another origin, so only replay
+        // takes --allow-origin-change.
+        private static readonly HashSet<string> ComposeSwitches = new(StringComparer.Ordinal) { AllowUnsafeMethodsSwitch };
 
-        private static readonly HashSet<string> ReplaySwitches = new(ComposeSwitches.Concat(new[] { UnconditionalSwitch, VerifySwitch }), StringComparer.Ordinal);
+        private static readonly HashSet<string> ReplaySwitches = new(
+            ComposeSwitches.Concat(new[] { AllowOriginChangeSwitch, UnconditionalSwitch, VerifySwitch }), StringComparer.Ordinal);
 
         // The options that analyze accepts; its command line in the capability registry names exactly these.
         internal static IReadOnlySet<string> AnalyzeOptionNames => AnalyzeOptions;
@@ -488,14 +490,30 @@ namespace XMAT.Cli
             var values = new int[numbers.Length];
             for (int index = 0; index < numbers.Length; index++)
             {
+                // Only --follow-redirects can be 0, its default: follow no redirect.
+                bool zeroAllowed = numbers[index] == FollowRedirectsOption;
                 if (!arguments.Options.TryGetValue(numbers[index].Name, out string text))
                 {
                     values[index] = numbers[index].Default;
                 }
+                else if (zeroAllowed && text == "0")
+                {
+                    values[index] = 0;
+                }
                 else if (!CliLimits.TryParse(text, numbers[index].Maximum, out values[index]))
                 {
-                    return CliParseResult.UsageError(command, "cli.usage.invalid-value", numbers[index].RangeMessage);
+                    return CliParseResult.UsageError(
+                        command,
+                        "cli.usage.invalid-value",
+                        zeroAllowed ? FollowRedirectsRangeMessage : numbers[index].RangeMessage);
                 }
+            }
+
+            // Every send in flight may hold a whole response: their total is bounded (ReplayOptions.MaxInFlightResponseBytes).
+            if ((long)values[1] * values[3] * AnalysisLimits.BytesPerMib > ReplayOptions.MaxInFlightResponseBytes)
+            {
+                return CliParseResult.UsageError(
+                    command, "cli.usage.invalid-value", "--parallel times --max-response-mib must not exceed 1,024 MiB.");
             }
 
             if (arguments.Options.TryGetValue(UrlOption, out string url) && !IsHttpUrl(url))
@@ -518,7 +536,7 @@ namespace XMAT.Cli
                     return CliParseResult.UsageError(
                         command,
                         "cli.usage.invalid-value",
-                        "--header takes NAME: VALUE, with a valid header name and no line breaks; it cannot set Host, " +
+                        "--header takes NAME: VALUE, with a valid header name and a printable ASCII value; it cannot set Host, " +
                             "Content-Length or connection headers.");
                 }
 
@@ -559,8 +577,9 @@ namespace XMAT.Cli
             }
 
             string name = text[..separator];
-            string value = text[(separator + 1)..].Trim();
+            string value = text[(separator + 1)..].Trim(' ', '\t');
             if (!RequestReplayDraft.IsValidHeader(name, value) ||
+                !RequestReplayDraft.IsSendableHeaderValue(value) ||
                 name.Equals("Host", StringComparison.OrdinalIgnoreCase) ||
                 name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
                 ProxyHeaderUtilities.IsHopByHopHeader(name))

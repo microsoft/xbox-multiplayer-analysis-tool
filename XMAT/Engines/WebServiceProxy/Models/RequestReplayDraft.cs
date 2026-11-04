@@ -27,11 +27,25 @@ namespace XMAT.WebServiceCapture
         };
 
         private string _originalAuthority;
+        private string _bodyText = "";
+
+        // The exact bytes that SetBodyBytes gave, shared rather than copied, so one large body can serve many drafts.
+        private byte[] _sharedBody;
 
         internal string Method { get; set; } = "GET";
         internal string Url { get; set; } = "";
         internal string HeadersText { get; set; } = "";
-        internal string BodyText { get; set; } = "";
+
+        internal string BodyText
+        {
+            get => _bodyText ?? (_sharedBody == null ? "" : Convert.ToBase64String(_sharedBody));
+            set
+            {
+                _bodyText = value;
+                _sharedBody = null;
+            }
+        }
+
         internal bool BodyIsBase64 { get; set; }
 
         // Methods other than GET, HEAD and OPTIONS can change server state.
@@ -248,14 +262,17 @@ namespace XMAT.WebServiceCapture
                 "} finally {\r\n[System.IO.File]::Delete($xmatBodyFile)\r\n}\r\n}";
         }
 
+        // The body as it is sent. A body from SetBodyBytes is returned as the same array, which callers must not change.
         internal byte[] GetBodyBytes() =>
-            BodyIsBase64 ? Convert.FromBase64String(BodyText ?? "") : StrictUtf8.GetBytes(BodyText ?? "");
+            _sharedBody ??
+            (BodyIsBase64 ? Convert.FromBase64String(BodyText ?? "") : StrictUtf8.GetBytes(BodyText ?? ""));
 
-        // Replaces the body with these exact bytes; Base64 keeps binary content lossless.
+        // Replaces the body with these exact bytes, without copying them; BodyText shows them as Base64.
         internal void SetBodyBytes(byte[] body)
         {
             ArgumentNullException.ThrowIfNull(body);
-            BodyText = Convert.ToBase64String(body);
+            _sharedBody = body;
+            _bodyText = null;
             BodyIsBase64 = true;
         }
 
@@ -266,7 +283,7 @@ namespace XMAT.WebServiceCapture
             var headers = ParseHeaders();
             int index = headers.FindIndex(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase));
             headers.RemoveAll(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase));
-            headers.Insert(index < 0 ? headers.Count : index, new(name, (value ?? "").Trim()));
+            headers.Insert(index < 0 ? headers.Count : index, new(name, (value ?? "").Trim(' ', '\t')));
             HeadersText = FormatHeaders(headers);
         }
 
@@ -289,15 +306,37 @@ namespace XMAT.WebServiceCapture
             !string.IsNullOrEmpty(name) && name.All(IsTokenCharacter) &&
             value != null && !value.Any(c => (char.IsControl(c) && c != '\t') || c == '\u007f');
 
+        // The HTTP stack sends header values as ASCII only, and refuses others after it has connected.
+        internal static bool IsSendableHeaderValue(string value) =>
+            value != null && value.All(c => c == '\t' || (c >= ' ' && c <= '~'));
+
         internal static bool IsValidMethod(string method) =>
             !string.IsNullOrEmpty(method) && method.All(IsTokenCharacter) &&
             !string.Equals(method, "CONNECT", StringComparison.OrdinalIgnoreCase);
 
+        // The request to send, refused before anything is sent when a header value is one the HTTP stack cannot send.
+        // ToCurlCommand uses CreateRequest instead: curl sends such values as they are.
+        internal HttpRequestMessage CreateRequestToSend()
+        {
+            HttpRequestMessage message = CreateRequest();
+            bool sendable = message.Headers.NonValidated.Concat(message.Content.Headers.NonValidated)
+                .All(header => header.Value.All(IsSendableHeaderValue));
+            if (!sendable)
+            {
+                message.Dispose();
+                throw new FormatException("Header values can only be sent as ASCII characters.");
+            }
+
+            return message;
+        }
+
         private static void ValidateHeader(string name, string value)
         {
             if (!IsValidHeader(name, value))
-                throw new FormatException("Enter one valid 'Name: value' header per line.");
+                throw new FormatException(InvalidHeaderMessage);
         }
+
+        private const string InvalidHeaderMessage = "Enter one valid 'Name: value' header per line.";
 
         private static string FormatHeaders(IEnumerable<KeyValuePair<string, string>> headers) =>
             string.Join("\r\n", headers.Select(header => $"{header.Key}: {header.Value}"));
@@ -317,9 +356,10 @@ namespace XMAT.WebServiceCapture
                 int separator = line.IndexOf(':');
                 if (separator <= 0 || !IsValidHeader(line[..separator], line[(separator + 1)..]))
                 {
-                    throw new FormatException("Enter one valid 'Name: value' header per line.");
+                    throw new FormatException(InvalidHeaderMessage);
                 }
-                result.Add(new(line[..separator], line[(separator + 1)..].Trim()));
+                // Only HTTP's optional whitespace, spaces and tabs, is trimmed; other characters stay and are checked before sending.
+                result.Add(new(line[..separator], line[(separator + 1)..].Trim(' ', '\t')));
             }
             return result;
         }

@@ -22,7 +22,7 @@ xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--paralle
             [--max-record-mib N] [--max-records N]
 xmat compose --url URL --out DIR [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N]
              [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
-             [--allow-unsafe-methods] [--allow-origin-change]
+             [--allow-unsafe-methods]
 xmat doctor --for analyze
 xmat help [COMMAND]
 xmat --version
@@ -123,31 +123,40 @@ xmat --version
   number the GUI shows in its `#` column: `all`, or numbers and ranges such as `1,5,9-12` (at most 10,000 numbers). A
   number given on its own must exist (`replay.request.not-found`) and be an HTTP or HTTPS request without a protocol
   upgrade (`replay.request.unsupported`); a range or `all` skips CONNECT tunnels, WebSocket handshakes and other
-  traffic with the warning `replay.request.skipped`. In a capture of several devices, a number that more than one
-  device has needs `--device` (`replay.request.ambiguous`). Each selected request is sent once per `--repeat`
-  (1 by default, at most 1,000), all of them in turn before the next round, in capture order; `--parallel` sends up
-  to that many at a time (1 by default, at most 16). A run sends at most 10,000 requests (`replay.plan.too-large`).
+  traffic with the warning `replay.request.skipped`. Unless `--request all`, a selected number that more than one
+  request has is refused (`replay.request.ambiguous`), whether the requests are on one device or on several; in a
+  capture of several devices, `--device` limits the selection to one of them. Each selected request is sent once per
+  `--repeat` (1 by default, at most 1,000), all of them in turn before the next round, in capture order; `--parallel`
+  sends up to that many at a time (1 by default, at most 16), and `--parallel` times `--max-response-mib` may not
+  exceed 1,024 MiB. A run makes at most 10,000 sends (`replay.plan.too-large`), which xmat checks before it prepares
+  any request, counting every selected request, including any that a range or `all` would skip; each send can follow up to `--follow-redirects` redirects, so with `--follow-redirects 10` a run makes
+  at most 110,000 HTTP requests.
 - Edits apply to every selected request before anything is sent: `--method`; `--header "NAME: VALUE"`, which replaces
-  every header of that name or adds it (repeat it for more headers; `Host`, `Content-Length` and connection headers
-  cannot be set); `--remove-header`; `--body-file`, whose bytes replace the body (at most 64 MiB, read before
-  anything else happens); `--unconditional`, which removes `If-Match`, `If-None-Match`, `If-Modified-Since`,
-  `If-Unmodified-Since` and `If-Range` so the server cannot answer 304 or 412; `--url`, which replaces the whole URL
-  of a single selected request (`replay.edit.url-needs-one-request` otherwise); and `--origin`, which sends every
-  selected request to another scheme, host and port with its path and query, for example to replay captured traffic
-  against a local test server.
+  every header of that name or adds it (repeat it for more headers; the value must be printable ASCII, and `Host`,
+  `Content-Length` and connection headers cannot be set); `--remove-header`; `--body-file`, whose bytes replace the
+  body (at most 64 MiB, read before anything else happens); `--unconditional`, which removes `If-Match`,
+  `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since` and `If-Range` so the server cannot answer 304 or 412;
+  `--url`, which replaces the whole URL of a single selected request (`replay.edit.url-needs-one-request` otherwise);
+  and `--origin`, which sends every selected request to another scheme, host and port with its path and query, for
+  example to replay captured traffic against a local test server.
 - Every selected request is checked before the first one is sent, and nothing is sent when one fails a check (exit
-  code 3). A request that is not valid after the edits fails with `replay.request.invalid`. Unless you allow it, xmat
+  code 3). A request that is not valid after the edits, for example one with a header value that is not ASCII, which
+  the HTTP stack cannot send, fails with `replay.request.invalid`. Unless you allow it, xmat
   refuses to send a method other than GET, HEAD and OPTIONS, which can change data on the server
   (`replay.policy.unsafe-method`; `--allow-unsafe-methods` allows it), or captured headers, such as credentials, to
-  another origin than the one they were captured for (`replay.policy.origin-change`; `--allow-origin-change` allows
-  it). Redirects are returned, not followed, unless `--follow-redirects N` follows up to `N` of them (at most 10): a
-  303, and a 301 or 302 to a POST, continue as GET without the body, as browsers do. A redirect to another origin is
-  followed only with `--allow-origin-change`, and then without the `Authorization`, `Proxy-Authorization` and
-  `Cookie` headers; a redirect from HTTPS to HTTP or to anything other than HTTP and HTTPS is never followed. A
-  redirect that is not followed is the result, with the code `replay.redirect.origin-change`,
-  `replay.redirect.insecure`, `replay.redirect.unsupported` or `replay.redirect.limit`.
+  another origin than the one they were captured for (`replay.policy.origin-change`; `--allow-origin-change`, which
+  only `replay` takes, allows the origins that `--url` or `--origin` name). Redirects are returned, not followed,
+  unless `--follow-redirects N` follows up to `N` of them (0 by default, at most 10), and only within the origin that
+  was sent to: a 303 continues as GET (a HEAD stays a HEAD) and a 301 or 302 to a POST continues as GET, both without
+  the body, as browsers do, while a 307 or 308 keeps the method and the body. A redirect to another origin is never
+  followed, whatever the options, so a server never decides where the headers and body of a request go next; nor is
+  a redirect from HTTPS to HTTP, to anything other than HTTP and HTTPS, to a URL with credentials, or without exactly
+  one usable `Location`. A redirect that is not followed is the result, with the code
+  `replay.redirect.origin-change`, `replay.redirect.insecure`, `replay.redirect.unsupported` or
+  `replay.redirect.limit`.
 - Each request waits for its response up to `--timeout` seconds (30 by default, at most 600) and keeps a body of up to
-  `--max-response-mib` (16 by default, at most 512). A request without a complete response is a result too: its
+  `--max-response-mib` (16 by default, at most 512). HEAD, 1xx, 204 and 304 responses have no body, whatever their
+  `Content-Length` says. A request without a complete response is a result too: its
   `outcome` is `failed` (`replay.send.failed`), `timedOut` (`replay.response.timeout`) or `tooLarge`
   (`replay.response.too-large`, which keeps the status and headers but not the body). Once every request was sent,
   xmat publishes `DIR` with `summary.json` (schema `xmat-replay/1`) and, for each send, `replays/NNNNN/request.http`
@@ -156,10 +165,12 @@ xmat --version
   credentials and cookies from the capture: `DIR` is private to your account as for `analyze`, so keep it that way.
   The exit code is 12 when a request got no complete response; otherwise, with `--verify`, it is 11 when a response
   differs from the response captured for its request in its status code or body. Bodies are compared without their
-  chunked framing and gzip, deflate or Brotli content coding; headers are not compared, since dates, request ids and
-  cookies differ on every response. The JSON output and `summary.json` hold only request numbers, ordinal device ids,
-  outcomes, status codes, durations, sizes, codes and the options that are numbers or switches, never URLs, methods,
-  headers, bodies or the `--body-file` path. Cancelling a run publishes nothing, but requests already sent stay sent.
+  chunked framing and gzip, deflate or Brotli content coding, each decoded up to 64 MiB (or `--max-response-mib` if
+  that is smaller); a body that does not decode within that size is compared as received. Headers are not compared,
+  since dates, request ids and cookies differ on every response. The JSON output and `summary.json` hold only request
+  numbers, ordinal device ids, outcomes, status codes, durations, sizes, codes and the options that are numbers or
+  switches, never URLs, methods, headers, bodies or the `--body-file` path. Cancelling a run publishes nothing, but
+  requests already sent stay sent.
 - `xmat doctor --for analyze` checks what `xmat analyze` needs and writes nothing: the analysis rules (`data.rules`),
   the API map (`data.apimap`) and the English strings (`localization.en-us`) installed next to `xmat.exe`, and a 64-bit
   process (`runtime.64-bit`). A missing or damaged file fails its check with a code such as `analysis.assets.rules` and
@@ -312,7 +323,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
-| Compose and send a new request (`request.compose`) | `xmat compose --url URL --out DIR [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--allow-unsafe-methods] [--allow-origin-change]` | Supported (S9) |
+| Compose and send a new request (`request.compose`) | `xmat compose --url URL --out DIR [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--allow-unsafe-methods]` | Supported (S9) |
 | Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--allow-unsafe-methods] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |

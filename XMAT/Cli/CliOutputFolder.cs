@@ -258,12 +258,16 @@ namespace XMAT.Cli
             exception is IOException or UnauthorizedAccessException or SecurityException;
 
         // relativePath uses '/' separators, as in the JSON document.
-        internal void WriteFile(string relativePath, byte[] contents)
+        internal void WriteFile(string relativePath, byte[] contents) =>
+            WriteFile(relativePath, stream => stream.Write(contents, 0, contents.Length));
+
+        // Writes a new file with what write puts in its stream, so large contents need not be assembled in memory first.
+        internal void WriteFile(string relativePath, Action<Stream> write)
         {
-            string path = Path.Combine(StagingPath, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            string path = Path.Join(StagingPath, relativePath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            stream.Write(contents, 0, contents.Length);
+            write(stream);
             stream.Flush(flushToDisk: true);
         }
 

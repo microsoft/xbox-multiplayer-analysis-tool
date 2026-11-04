@@ -86,7 +86,7 @@ namespace XMAT.WebServiceCapture
             try
             {
                 // Reject invalid input before asking permission or entering the sending state.
-                using var validated = _draft.CreateRequest();
+                using var validated = _draft.CreateRequestToSend();
                 if (_draft.RequiresConfirmation && !_confirm(_draft.Method, _draft.Url))
                     return;
             }

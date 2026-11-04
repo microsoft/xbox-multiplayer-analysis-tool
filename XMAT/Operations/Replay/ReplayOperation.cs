@@ -30,6 +30,9 @@ namespace XMAT.Operations.Replay
         internal Func<AnalyzeCaptureOperation> CaptureReaderFactory { get; set; } =
             static () => new AnalyzeCaptureOperation();
 
+        // Verify decodes each body up to this size, or MaxResponseBytes if smaller; beyond it, bodies compare as stored.
+        internal long MaxVerifyDecodedBytes { get; set; } = ReplayOptions.MaxVerifyDecodedBytes;
+
         public async Task<OperationResult<ReplayResult>> ExecuteAsync(
             ReplayRequest request,
             OperationContext context,
@@ -113,11 +116,17 @@ namespace XMAT.Operations.Replay
                 diagnostics.AddRange(read.Diagnostics);
                 inputKind = read.Value.InputKind;
                 inputSha256 = read.Value.InputSha256;
-                items = SelectFromCapture(read.Value, source, diagnostics, cancellationToken);
+                List<(string DeviceId, long Number, IDataRecord Record)> selected =
+                    SelectRecords(read.Value, source, cancellationToken);
+
+                // Checked before any draft exists, so a selection that is too large costs nothing to refuse.
+                CheckPlanSize(selected.Count, options);
+                items = CreateItems(selected, source.Selection, diagnostics, cancellationToken);
             }
             else if (source.Captures != null)
             {
-                items = SelectCaptures(source.Captures, diagnostics);
+                CheckPlanSize(source.Captures.Count, options);
+                items = SelectCaptures(source.Captures, diagnostics, cancellationToken);
             }
             else
             {
@@ -130,21 +139,26 @@ namespace XMAT.Operations.Replay
                     "replay.request.none", "The selection contains no request that can be replayed.");
             }
 
-            ApplyEdits(items, request.Edits ?? ReplayEdits.None);
-            Check(items, options);
-            if ((long)items.Count * options.Repeat > ReplayOptions.MaxSends)
+            CheckPlanSize(items.Count, options);
+            ApplyEdits(items, request.Edits ?? ReplayEdits.None, cancellationToken);
+            Check(items, options, cancellationToken);
+            return new Prepared(items, inputKind, inputSha256, null);
+        }
+
+        private static void CheckPlanSize(int requests, ReplayOptions options)
+        {
+            if ((long)requests * options.Repeat > ReplayOptions.MaxSends)
             {
                 throw new ReplayInputException(
                     "replay.plan.too-large", "The selected requests, repeated, would exceed 10,000 sends.");
             }
-
-            return new Prepared(items, inputKind, inputSha256, null);
         }
 
-        private static List<ReplayItem> SelectFromCapture(
+        // The records that the selection names, checked against the capture: every number named on its own exists, and
+        // unless everything is replayed, no selected number belongs to two records, whether on one device or on several.
+        private static List<(string DeviceId, long Number, IDataRecord Record)> SelectRecords(
             CaptureRecordSet capture,
             ReplaySource source,
-            List<OperationDiagnostic> diagnostics,
             CancellationToken cancellationToken)
         {
             IReadOnlyList<CaptureDeviceRecords> devices = capture.Devices;
@@ -171,25 +185,33 @@ namespace XMAT.Operations.Replay
                 }
             }
 
-            Dictionary<long, int> devicesPerNumber = selected
-                .GroupBy(item => item.Number)
-                .ToDictionary(group => group.Key, group => group.Select(item => item.DeviceId).Distinct().Count());
-            if (selected.Count == 0 || selection.Numbers.Any(number => !devicesPerNumber.ContainsKey(number)))
+            var selectedNumbers = new HashSet<long>(selected.Select(item => item.Number));
+            if (selected.Count == 0 || selection.Numbers.Any(number => !selectedNumbers.Contains(number)))
             {
                 throw new ReplayInputException("replay.request.not-found", "A selected request is not in the capture.");
             }
 
-            if (!selection.IsAll && devicesPerNumber.Values.Any(count => count > 1))
+            // On different devices or on one, two requests with a selected number leave unclear which one to send.
+            if (!selection.IsAll && selectedNumbers.Count != selected.Count)
             {
                 throw new ReplayInputException(
-                    "replay.request.ambiguous",
-                    "A selected request number belongs to more than one device in the capture; select one device.");
+                    "replay.request.ambiguous", "A selected request number belongs to more than one request in the capture.");
             }
 
+            return selected;
+        }
+
+        private static List<ReplayItem> CreateItems(
+            List<(string DeviceId, long Number, IDataRecord Record)> selected,
+            ReplaySelection selection,
+            List<OperationDiagnostic> diagnostics,
+            CancellationToken cancellationToken)
+        {
             var items = new List<ReplayItem>();
             bool skipped = false;
             foreach ((string deviceId, long number, IDataRecord record) in selected)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 ProxyConnectionModel model = ToModel(record);
                 if (!RequestReplayDraft.CanReplay(model))
                 {
@@ -218,14 +240,18 @@ namespace XMAT.Operations.Replay
 
         // The GUI selects rows itself; rows that cannot be replayed are skipped with a warning.
         private static List<ReplayItem> SelectCaptures(
-            IReadOnlyList<ProxyConnectionModel> captures, List<OperationDiagnostic> diagnostics)
+            IReadOnlyList<ProxyConnectionModel> captures,
+            List<OperationDiagnostic> diagnostics,
+            CancellationToken cancellationToken)
         {
             var items = new List<ReplayItem>();
-            foreach (ProxyConnectionModel capture in captures)
+            for (int index = 0; index < captures.Count; index++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                ProxyConnectionModel capture = captures[index];
                 if (RequestReplayDraft.CanReplay(capture))
                 {
-                    items.Add(new ReplayItem(null, capture.RequestNumber, capture, CreateDraft(capture)));
+                    items.Add(new ReplayItem(null, capture.RequestNumber, capture, CreateDraft(capture), index));
                 }
             }
 
@@ -270,7 +296,7 @@ namespace XMAT.Operations.Replay
             }
         }
 
-        private static void ApplyEdits(IReadOnlyList<ReplayItem> items, ReplayEdits edits)
+        private static void ApplyEdits(IReadOnlyList<ReplayItem> items, ReplayEdits edits, CancellationToken cancellationToken)
         {
             if (edits.Url != null && edits.Origin != null)
             {
@@ -297,6 +323,7 @@ namespace XMAT.Operations.Replay
 
             foreach (ReplayItem item in items)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 RequestReplayDraft draft = item.Draft;
                 try
                 {
@@ -358,13 +385,14 @@ namespace XMAT.Operations.Replay
             return true;
         }
 
-        private static void Check(IReadOnlyList<ReplayItem> items, ReplayOptions options)
+        private static void Check(IReadOnlyList<ReplayItem> items, ReplayOptions options, CancellationToken cancellationToken)
         {
             foreach (ReplayItem item in items)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    using (item.Draft.CreateRequest())
+                    using (item.Draft.CreateRequestToSend())
                     {
                         // Building the request validates the method, URL, headers and body.
                     }
@@ -408,6 +436,7 @@ namespace XMAT.Operations.Replay
             var plan = new List<(int Id, ReplayItem Item, int Iteration)>(items.Count * options.Repeat);
             for (int iteration = 1; iteration <= options.Repeat; iteration++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 foreach (ReplayItem item in items)
                 {
                     plan.Add((plan.Count + 1, item, iteration));
@@ -430,7 +459,11 @@ namespace XMAT.Operations.Replay
                         await sender.SendAsync(step.Item.Draft, sendOptions, token).ConfigureAwait(false);
                     ReplayVerification verification =
                         options.Verify && step.Item.Original != null && exchange.Outcome == ReplayOutcome.Completed
-                            ? ReplayVerifier.Compare(step.Item.Original, exchange, options.MaxResponseBytes)
+                            ? ReplayVerifier.Compare(
+                                step.Item.Original,
+                                exchange,
+                                Math.Min(options.MaxResponseBytes, MaxVerifyDecodedBytes),
+                                token)
                             : null;
                     var result = new ReplayItemResult(
                         step.Id,
@@ -443,7 +476,8 @@ namespace XMAT.Operations.Replay
                         exchange.Response?.Body.LongLength ?? 0,
                         exchange.Redirects,
                         exchange.Code,
-                        verification);
+                        verification,
+                        step.Item.SourceIndex);
                     lock (gate)
                     {
                         token.ThrowIfCancellationRequested();
@@ -484,7 +518,11 @@ namespace XMAT.Operations.Replay
             OperationResult<ReplayResult>.Failure(outcome, new OperationDiagnostic(code, severity, message));
 
         private sealed record ReplayItem(
-            string DeviceId, long? RequestNumber, ProxyConnectionModel Original, RequestReplayDraft Draft);
+            string DeviceId,
+            long? RequestNumber,
+            ProxyConnectionModel Original,
+            RequestReplayDraft Draft,
+            int? SourceIndex = null);
 
         private sealed record Prepared(
             IReadOnlyList<ReplayItem> Items,

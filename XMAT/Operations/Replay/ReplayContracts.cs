@@ -97,20 +97,28 @@ namespace XMAT.Operations.Replay
         internal const int MaxRedirectLimit = 10;
         internal const long MaxResponseLimit = 512L * 1024 * 1024;
 
+        // The responses that sends in flight may hold together: Parallelism x MaxResponseBytes. A payload budget, not a
+        // bound on the process's memory.
+        internal const long MaxInFlightResponseBytes = 1024L * 1024 * 1024;
+
+        // Reissue and verify decodes each body to compare it up to this size, or MaxResponseBytes if smaller.
+        internal const long MaxVerifyDecodedBytes = 64L * 1024 * 1024;
+
         internal static TimeSpan MaxTimeout { get; } = TimeSpan.FromMinutes(10);
 
         internal static ReplayOptions Default { get; } = new();
 
         internal TimeSpan EffectiveTimeout => Timeout ?? ReplaySendOptions.DefaultTimeout;
 
-        internal ReplaySendOptions ToSendOptions() =>
-            new(EffectiveTimeout, MaxResponseBytes, MaxRedirects, AllowOriginChange);
+        // AllowOriginChange applies to the requests the caller edits: replay never follows a redirect to another origin.
+        internal ReplaySendOptions ToSendOptions() => new(EffectiveTimeout, MaxResponseBytes, MaxRedirects);
 
         internal bool IsValid =>
             Repeat is >= 1 and <= MaxRepeat &&
             Parallelism is >= 1 and <= MaxParallelism &&
             EffectiveTimeout > TimeSpan.Zero && EffectiveTimeout <= MaxTimeout &&
             MaxResponseBytes is > 0 and <= MaxResponseLimit &&
+            (long)Parallelism * MaxResponseBytes <= MaxInFlightResponseBytes &&
             MaxRedirects is >= 0 and <= MaxRedirectLimit;
     }
 
@@ -128,7 +136,8 @@ namespace XMAT.Operations.Replay
         IReplayExchangeSink Sink = null);
 
     // One send, without its messages. Id numbers the sends of a run from 1, in plan order: every selected request once per
-    // iteration, iterations in turn. DeviceId and RequestNumber are null for a composed request.
+    // iteration, iterations in turn. DeviceId and RequestNumber are null for a composed request. SourceIndex is the
+    // position of the sent request in ReplaySource.Captures (the GUI's rows), and null for other sources.
     internal sealed record ReplayItemResult(
         int Id,
         string DeviceId,
@@ -140,7 +149,8 @@ namespace XMAT.Operations.Replay
         long ResponseBytes,
         int Redirects,
         string Code,
-        ReplayVerification Verification);
+        ReplayVerification Verification,
+        int? SourceIndex = null);
 
     // InputKind and InputSha256 describe a capture file and are null for other sources.
     internal sealed record ReplayResult(string InputKind, string InputSha256, IReadOnlyList<ReplayItemResult> Items)

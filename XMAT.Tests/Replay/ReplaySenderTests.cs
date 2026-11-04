@@ -73,6 +73,7 @@ namespace XMAT.Tests.Replay
 
         [Theory]
         [InlineData(303, "PUT", "GET", false)]
+        [InlineData(303, "HEAD", "HEAD", false)]
         [InlineData(302, "POST", "GET", false)]
         [InlineData(301, "POST", "GET", false)]
         [InlineData(302, "PUT", "PUT", true)]
@@ -102,37 +103,41 @@ namespace XMAT.Tests.Replay
             Assert.Equal(keepsBody ? "text/plain" : null, redirected.Header("Content-Type"));
         }
 
-        [Fact]
-        public async Task SendAsync_CrossOriginRedirect_StopsUnlessAllowed_AndThenDropsCredentials()
+        // A server never decides where a request's headers and body go next: no redirect to another origin is followed,
+        // whatever it carries and however many redirects may be followed.
+        [Theory]
+        [InlineData(302, "GET")]
+        [InlineData(307, "POST")]
+        [InlineData(308, "PUT")]
+        public async Task SendAsync_NeverFollowsARedirectToAnotherOrigin(int status, string method)
         {
             await using var target = new LoopbackHttpServer(_ => LoopbackResponse.Ok("other origin"));
-            await using var origin = new LoopbackHttpServer(_ => LoopbackResponse.Redirect(302, target.Origin + "/landing"));
+            await using var origin = new LoopbackHttpServer(_ => LoopbackResponse.Redirect(status, target.Origin + "/landing"));
             using var sender = new ReplaySender();
             var draft = new RequestReplayDraft
             {
+                Method = method,
                 Url = origin.Origin + "/start",
-                HeadersText = "Authorization: Bearer secret\r\nCookie: session=secret\r\nX-Trace: kept",
+                HeadersText = "Authorization: Bearer secret\r\nCookie: session=secret\r\nX-Authorization: playfab-secret\r\n" +
+                    "X-EntityToken: entity-secret\r\nContent-Type: application/json",
+                BodyText = "{\"secret\":\"body\"}",
             };
 
-            ReplayExchange blocked = await sender.SendAsync(
-                draft, ReplaySendOptions.Default with { MaxRedirects = 3 }, CancellationToken.None);
-            Assert.Equal((302, 0, ReplaySender.RedirectOriginChangeCode), (blocked.StatusCode, blocked.Redirects, blocked.Code));
-            Assert.Empty(target.Requests);
+            ReplayExchange exchange = await sender.SendAsync(
+                draft, ReplaySendOptions.Default with { MaxRedirects = 10 }, CancellationToken.None);
 
-            ReplayExchange allowed = await sender.SendAsync(
-                draft, ReplaySendOptions.Default with { MaxRedirects = 3, AllowOriginChange = true }, CancellationToken.None);
-            Assert.Equal((200, 1, null), (allowed.StatusCode, allowed.Redirects, allowed.Code));
-            LoopbackRequest landed = Assert.Single(target.Requests);
-            Assert.Null(landed.Header("Authorization"));
-            Assert.Null(landed.Header("Cookie"));
-            Assert.Equal("kept", landed.Header("X-Trace"));
-            Assert.All(origin.Requests, request => Assert.Equal("Bearer secret", request.Header("Authorization")));
+            Assert.Equal((status, 0, ReplaySender.RedirectOriginChangeCode), (exchange.StatusCode, exchange.Redirects, exchange.Code));
+            Assert.Equal(0, target.Connections);
+            LoopbackRequest sent = Assert.Single(origin.Requests);
+            Assert.Equal("playfab-secret", sent.Header("X-Authorization"));
         }
 
         [Theory]
         [InlineData("http://example.test/next", ReplaySender.RedirectInsecureCode)]
         [InlineData("ftp://example.test/next", ReplaySender.RedirectUnsupportedCode)]
         [InlineData("https://user:pass@example.test/next", ReplaySender.RedirectUnsupportedCode)]
+        [InlineData("https://[bad", ReplaySender.RedirectUnsupportedCode)]
+        [InlineData("https://other.test/next", ReplaySender.RedirectOriginChangeCode)]
         public async Task SendAsync_NeverFollowsDowngradesCredentialsOrOtherSchemes(string location, string code)
         {
             using var handler = new StubHandler((_, _) =>
@@ -146,11 +151,91 @@ namespace XMAT.Tests.Replay
 
             ReplayExchange exchange = await sender.SendAsync(
                 new RequestReplayDraft { Url = "https://example.test/start" },
-                ReplaySendOptions.Default with { MaxRedirects = 5, AllowOriginChange = true },
+                ReplaySendOptions.Default with { MaxRedirects = 5 },
                 CancellationToken.None);
 
             Assert.Equal((302, code), (exchange.StatusCode, exchange.Code));
             Assert.Equal(1, handler.CallCount);
+        }
+
+        // Which Location to follow must be unambiguous: none, or more than one, is not followed.
+        [Theory]
+        [InlineData(0)]
+        [InlineData(2)]
+        public async Task SendAsync_NeedsExactlyOneLocationToFollowARedirect(int locations)
+        {
+            using var handler = new StubHandler((_, _) =>
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.TemporaryRedirect);
+                for (int index = 0; index < locations; index++)
+                {
+                    response.Headers.TryAddWithoutValidation("Location", $"/next{index}");
+                }
+
+                return Task.FromResult(response);
+            });
+            using var invoker = new HttpMessageInvoker(handler);
+            using var sender = new ReplaySender(invoker);
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Url = "https://example.test/start" },
+                ReplaySendOptions.Default with { MaxRedirects = 5 },
+                CancellationToken.None);
+
+            Assert.Equal((307, ReplaySender.RedirectUnsupportedCode), (exchange.StatusCode, exchange.Code));
+            Assert.Equal(1, handler.CallCount);
+        }
+
+        // A fragment in Location is never sent; the request goes to the path and query.
+        [Fact]
+        public async Task SendAsync_FollowsALocationWithAFragmentWithoutSendingIt()
+        {
+            await using var server = new LoopbackHttpServer(request => request.Target == "/start"
+                ? LoopbackResponse.Redirect(302, "/next?x=1#fragment")
+                : LoopbackResponse.Ok());
+            using var sender = new ReplaySender();
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Url = server.Origin + "/start" },
+                ReplaySendOptions.Default with { MaxRedirects = 1 },
+                CancellationToken.None);
+
+            Assert.Equal((200, 1), (exchange.StatusCode, exchange.Redirects));
+            Assert.Equal("/next?x=1", server.Requests[1].Target);
+            Assert.Equal("GET /next?x=1 HTTP/1.1", exchange.Request.StartLine);
+        }
+
+        // Anything other than the caller's cancellation that a send provokes ends that send as failed, with its error.
+        [Fact]
+        public async Task SendAsync_AnyOtherFailureOfTheSendIsAResult()
+        {
+            using var handler = new StubHandler((_, _) => throw new InvalidOperationException("stub failure"));
+            using var invoker = new HttpMessageInvoker(handler);
+            using var sender = new ReplaySender(invoker);
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Url = "https://example.test/" }, ReplaySendOptions.Default, CancellationToken.None);
+
+            Assert.Equal((ReplayOutcome.Failed, ReplaySender.SendFailedCode), (exchange.Outcome, exchange.Code));
+            Assert.IsType<InvalidOperationException>(exchange.Error);
+        }
+
+        // A response without a body is never read, so a server cannot make one look too large or fail it.
+        [Fact]
+        public async Task SendAsync_NeverReadsTheBodyOfAHeadResponse()
+        {
+            using var handler = new StubHandler((_, _) => Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new UnreadableContent(33_554_432) }));
+            using var invoker = new HttpMessageInvoker(handler);
+            using var sender = new ReplaySender(invoker);
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Method = "HEAD", Url = "https://example.test/" },
+                ReplaySendOptions.Default with { MaxResponseBytes = 1024 },
+                CancellationToken.None);
+
+            Assert.Equal((ReplayOutcome.Completed, 200), (exchange.Outcome, exchange.StatusCode));
+            Assert.Empty(exchange.Response.Body);
         }
 
         [Fact]
@@ -192,6 +277,65 @@ namespace XMAT.Tests.Replay
             Assert.Equal((ReplayOutcome.Completed, 2048), (fits.Outcome, fits.Response.Body.Length));
         }
 
+        // HEAD, 204 and 304 responses have no body, so a Content-Length over the limit is no reason to refuse them.
+        [Theory]
+        [InlineData("HEAD", 200, "OK")]
+        [InlineData("GET", 304, "Not Modified")]
+        public async Task SendAsync_ResponsesWithoutABodyAreNeverTooLarge(string method, int status, string reason)
+        {
+            await using var server = new LoopbackHttpServer(
+                _ => new LoopbackResponse(status, reason, "Content-Length: 33554432\r\n", NoLength: true));
+            using var sender = new ReplaySender();
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Method = method, Url = server.Origin + "/large" },
+                ReplaySendOptions.Default with { MaxResponseBytes = 1024 },
+                CancellationToken.None);
+
+            Assert.Equal((ReplayOutcome.Completed, status, null), (exchange.Outcome, exchange.StatusCode, exchange.Code));
+            Assert.Empty(exchange.Response.Body);
+        }
+
+        // A Location that the URL parser cannot take back in its escaped form ends that send, never the whole run.
+        [Fact]
+        public async Task SendAsync_AnUnusableRedirectTargetIsAResult()
+        {
+            await using var server = new LoopbackHttpServer(request => request.Target == "/start"
+                ? LoopbackResponse.Redirect(302, "/a" + new string(' ', 22000) + "b")
+                : LoopbackResponse.Ok());
+            using var sender = new ReplaySender();
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Url = server.Origin + "/start" },
+                ReplaySendOptions.Default with { MaxRedirects = 1 },
+                CancellationToken.None);
+
+            Assert.True(
+                exchange.Outcome is ReplayOutcome.Completed or ReplayOutcome.Failed,
+                $"{exchange.Outcome} {exchange.Code}");
+            Assert.Equal("/start", server.Requests[0].Target);
+        }
+
+        // The body that SetBodyBytes gave goes out unchanged, and the draft keeps the same array instead of a copy.
+        [Fact]
+        public async Task SendAsync_SendsASharedBodyWithoutCopyingItIntoTheDraft()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            using var sender = new ReplaySender();
+            byte[] body = Enumerable.Range(0, 70_000).Select(index => (byte)index).ToArray();
+            var draft = new RequestReplayDraft { Method = "PUT", Url = server.Origin + "/upload" };
+
+            draft.SetBodyBytes(body);
+            ReplayExchange exchange = await sender.SendAsync(draft, ReplaySendOptions.Default, CancellationToken.None);
+
+            Assert.Same(body, draft.GetBodyBytes());
+            Assert.True(draft.BodyIsBase64);
+            Assert.Equal(Convert.ToBase64String(body), draft.BodyText);
+            Assert.Equal(ReplayOutcome.Completed, exchange.Outcome);
+            Assert.Equal(body, Assert.Single(server.Requests).Body);
+            Assert.Same(body, exchange.Request.Body);
+        }
+
         [Fact]
         public async Task SendAsync_ConnectionFailureIsAResultWithItsError()
         {
@@ -221,6 +365,27 @@ namespace XMAT.Tests.Replay
                 ++CallCount;
                 return callback(request, cancellationToken);
             }
+        }
+
+        // Content that declares a length but fails if anything reads it.
+        private sealed class UnreadableContent : HttpContent
+        {
+            internal UnreadableContent(long length)
+            {
+                Headers.ContentLength = length;
+            }
+
+            protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext context) =>
+                throw new Xunit.Sdk.XunitException("A body without content was read.");
+
+            protected override bool TryComputeLength(out long length)
+            {
+                length = Headers.ContentLength ?? 0;
+                return true;
+            }
+
+            protected override Task<Stream> CreateContentReadStreamAsync() =>
+                throw new Xunit.Sdk.XunitException("A body without content was read.");
         }
     }
 }

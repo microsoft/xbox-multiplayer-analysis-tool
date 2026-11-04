@@ -131,6 +131,80 @@ namespace XMAT.Tests.Replay
             Assert.Equal("X-Keep: 1", draft.HeadersText);
         }
 
+        // The HTTP stack sends ASCII header values only, and refuses others after it has connected; a captured or typed
+        // value outside ASCII must fail before anything is sent.
+        [Theory]
+        [InlineData("caf\u00e9")]
+        [InlineData("line\u2028separator")]
+        public void Draft_RefusesNonAsciiHeaderValuesBeforeSending(string value)
+        {
+            var draft = new RequestReplayDraft { Url = "https://example.test/", HeadersText = "X-Name: " + value };
+
+            Assert.Throws<FormatException>(() => draft.CreateRequestToSend());
+            using (HttpRequestMessage forCurl = draft.CreateRequest())
+            {
+                // Copy as cURL still exports it: curl sends the value as it is.
+                Assert.Equal(value, Assert.Single(forCurl.Headers.NonValidated["X-Name"]));
+            }
+
+            draft.HeadersText = "X-Name: cafe\tau lait";
+            using HttpRequestMessage request = draft.CreateRequestToSend();
+            Assert.Equal("cafe\tau lait", Assert.Single(request.Headers.NonValidated["X-Name"]));
+        }
+
+        // Only tab and printable ASCII can be sent. Only spaces and tabs around a value are trimmed, so a value that ends
+        // in another kind of space keeps it and is refused rather than silently changed.
+        [Theory]
+        [InlineData("~", true)]
+        [InlineData(" !\t", true)]
+        [InlineData("a\tb", true)]
+        [InlineData("\u00a1", false)]
+        [InlineData("a\u00a0", false)]
+        [InlineData("\u00a0a", false)]
+        [InlineData("\u4e2d", false)]
+        public void Draft_SendsOnlyPrintableAsciiHeaderValues(string value, bool sendable)
+        {
+            var draft = new RequestReplayDraft { Url = "https://example.test/" };
+            draft.SetHeader("X-Value", value);
+
+            if (sendable)
+            {
+                using HttpRequestMessage request = draft.CreateRequestToSend();
+                Assert.Equal(value.Trim(' ', '\t'), Assert.Single(request.Headers.NonValidated["X-Value"]));
+            }
+            else
+            {
+                Assert.Throws<FormatException>(() => draft.CreateRequestToSend());
+            }
+        }
+
+        [Theory]
+        [InlineData("\u001f")]
+        [InlineData("\u007f")]
+        public void Draft_RejectsControlCharactersInHeaderValues(string value)
+        {
+            Assert.Throws<FormatException>(() => new RequestReplayDraft().SetHeader("X-Value", value));
+        }
+
+        // A shared body serves sends as it is; editing the body in the composer replaces it with the edited bytes.
+        [Fact]
+        public void Draft_EditingASharedBodyKeepsExactBytes()
+        {
+            byte[] shared = "hello"u8.ToArray();
+            var draft = new RequestReplayDraft { Url = "https://example.test/" };
+
+            draft.SetBodyBytes(shared);
+            draft.SetBodyFormat(base64: false);
+            Assert.Equal(("hello", false), (draft.BodyText, draft.BodyIsBase64));
+            byte[] asText = draft.GetBodyBytes();
+            Assert.Equal(shared, asText);
+            Assert.NotSame(shared, asText);
+
+            draft.SetBodyFormat(base64: true);
+            draft.BodyText = Convert.ToBase64String(new byte[] { 0, 255 });
+            Assert.Equal(new byte[] { 0, 255 }, draft.GetBodyBytes());
+            Assert.Equal("hello"u8.ToArray(), shared);
+        }
         [Fact]
         public void Draft_SeparatesUnsafeMethodsFromOriginChanges()
         {
@@ -180,7 +254,7 @@ namespace XMAT.Tests.Replay
                     body),
             };
 
-        private static byte[] Gzip(byte[] content)
+        internal static byte[] Gzip(byte[] content)
         {
             using var output = new MemoryStream();
             using (var gzip = new GZipStream(output, CompressionLevel.Optimal, leaveOpen: true))

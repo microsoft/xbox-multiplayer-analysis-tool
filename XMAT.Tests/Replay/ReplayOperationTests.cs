@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using XMAT.Operations;
@@ -149,6 +150,193 @@ namespace XMAT.Tests.Replay
             Assert.Equal(new[] { "/b1", "/a1", "/b1" }, server.Requests.Select(request => request.Target));
         }
 
+        // A capture can number two requests of one device alike; naming that number must not send both.
+        [Fact]
+        public async Task Selection_RefusesANumberThatTwoRequestsOfOneDeviceShare()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string capture = ReplayCaptures.WriteXmatcap(
+                _directory,
+                "capture.xmatcap",
+                ("Console A", new[]
+                {
+                    new CapturedExchange("GET", server.Origin + "/shown", Number: 1),
+                    new CapturedExchange("GET", server.Origin + "/hidden", Number: 1),
+                }));
+
+            OperationResult<ReplayResult> named = await Execute(
+                new ReplayRequest(ReplaySource.FromFile(capture, Selection("1"))));
+            OperationResult<ReplayResult> ranged = await Execute(
+                new ReplayRequest(ReplaySource.FromFile(capture, Selection("1-2"))));
+            OperationResult<ReplayResult> onTheDevice = await Execute(
+                new ReplayRequest(ReplaySource.FromFile(capture, Selection("1"), "d1")));
+            AssertFailure(named, OperationOutcome.InvalidInput, "replay.request.ambiguous");
+            AssertFailure(ranged, OperationOutcome.InvalidInput, "replay.request.ambiguous");
+            AssertFailure(onTheDevice, OperationOutcome.InvalidInput, "replay.request.ambiguous");
+            Assert.Empty(server.Requests);
+
+            OperationResult<ReplayResult> all = await Execute(
+                new ReplayRequest(ReplaySource.FromFile(capture, ReplaySelection.All)));
+            Assert.True(all.Succeeded, Describe(all));
+            Assert.Equal(new[] { "/shown", "/hidden" }, server.Requests.Select(request => request.Target));
+        }
+
+        // The plan size is checked before any request is prepared, so a selection that is too large is refused at once,
+        // even when one of its requests could not be prepared.
+        [Fact]
+        public async Task Plan_IsCheckedBeforeAnyRequestIsPrepared()
+        {
+            ProxyConnectionModel Row(long number, string authority) =>
+                new(number, "200", DateTime.UtcNow, TimeSpan.Zero, "http", authority, "GET", "/", "GET / HTTP/1.1\r\n", [],
+                    "HTTP/1.1 200 OK\r\n", [], "127.0.0.1");
+            // Eleven rows, the last of which cannot be prepared: 11 x 1,000 sends exceed the plan, 11 x 909 do not.
+            ProxyConnectionModel[] rows = Enumerable.Range(1, 10).Select(number => Row(number, "127.0.0.1:9"))
+                .Append(Row(11, "127.0.0.1:not-a-port")).ToArray();
+
+            OperationResult<ReplayResult> tooLarge = await Execute(new ReplayRequest(
+                ReplaySource.FromCaptures(rows), new ReplayOptions(Repeat: 1000)));
+            OperationResult<ReplayResult> fits = await Execute(new ReplayRequest(
+                ReplaySource.FromCaptures(rows), new ReplayOptions(Repeat: 909)));
+
+            AssertFailure(tooLarge, OperationOutcome.InvalidInput, "replay.plan.too-large");
+            AssertFailure(fits, OperationOutcome.InvalidInput, "replay.request.malformed");
+
+            // From a capture file the same holds: the eleventh request, named on its own, cannot be replayed.
+            string capture = ReplayCaptures.WriteSaz(
+                _directory,
+                "capture.saz",
+                Enumerable.Range(1, 10).Select(number => new CapturedExchange("GET", $"http://127.0.0.1:9/{number}"))
+                    .Append(new CapturedExchange("GET", "http://127.0.0.1:9/socket", "Upgrade: websocket\r\n"))
+                    .ToArray());
+            OperationResult<ReplayResult> fileTooLarge = await Execute(new ReplayRequest(
+                ReplaySource.FromFile(capture, Selection("1-10,11")), new ReplayOptions(Repeat: 1000)));
+            OperationResult<ReplayResult> fileFits = await Execute(new ReplayRequest(
+                ReplaySource.FromFile(capture, Selection("1-10,11")), new ReplayOptions(Repeat: 909)));
+
+            AssertFailure(fileTooLarge, OperationOutcome.InvalidInput, "replay.plan.too-large");
+            AssertFailure(fileFits, OperationOutcome.InvalidInput, "replay.request.unsupported");
+        }
+
+        // Preparation honours cancellation too: a run cancelled before it starts sends nothing.
+        [Fact]
+        public async Task Cancellation_BeforeSendingSendsNothing()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string capture = ReplayCaptures.WriteSaz(
+                _directory, "capture.saz", new CapturedExchange("GET", server.Origin + "/one"));
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            OperationResult<ReplayResult> result = await new ReplayOperation().ExecuteAsync(
+                new ReplayRequest(ReplaySource.FromFile(capture, ReplaySelection.All)), OperationContext.None, cancellation.Token);
+
+            AssertFailure(result, OperationOutcome.Cancelled, "replay.cancelled");
+            Assert.Equal(0, server.Connections);
+        }
+
+        // One request that the HTTP stack could not send keeps every request of the run from connecting.
+        [Fact]
+        public async Task Check_AHeaderValueThatCannotBeSentStopsTheWholeRun()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string capture = ReplayCaptures.WriteXmatcap(
+                _directory,
+                "capture.xmatcap",
+                ("Console A", new[]
+                {
+                    new CapturedExchange("GET", server.Origin + "/fine"),
+                    new CapturedExchange("GET", server.Origin + "/latin", "X-Name: caf\u00e9\r\n"),
+                }));
+
+            OperationResult<ReplayResult> result = await Execute(
+                new ReplayRequest(ReplaySource.FromFile(capture, ReplaySelection.All)));
+
+            AssertFailure(result, OperationOutcome.InvalidInput, "replay.request.invalid");
+            Assert.Equal(0, server.Connections);
+        }
+
+        // A send that fails in any other way is that send's result; the run goes on and succeeds.
+        [Fact]
+        public async Task Run_ContinuesAfterASendFailsInAnUnexpectedWay()
+        {
+            var operation = new ReplayOperation
+            {
+                SenderFactory = () => new ReplaySender(new HttpMessageInvoker(new FailingFirstHandler()), ownsInvoker: true),
+            };
+            var drafts = new[] { "https://replay.test/boom", "https://replay.test/fine" };
+            var sink = new RecordingSink();
+
+            OperationResult<ReplayResult> result = await operation.ExecuteAsync(
+                new ReplayRequest(
+                    ReplaySource.FromCaptures(drafts.Select((url, index) => Row(index + 1, url)).ToArray()), Sink: sink),
+                OperationContext.None,
+                CancellationToken.None);
+
+            Assert.True(result.Succeeded, Describe(result));
+            Assert.Equal(
+                new[] { ReplayOutcome.Failed, ReplayOutcome.Completed },
+                result.Value.Items.Select(item => item.Outcome));
+            Assert.Equal(ReplaySender.SendFailedCode, result.Value.Items[0].Code);
+            Assert.Equal(new int?[] { 0, 1 }, result.Value.Items.Select(item => item.SourceIndex));
+            Assert.Equal(2, sink.Results.Count);
+        }
+
+        // One body edit serves every send as the same bytes; nothing is copied per request.
+        [Fact]
+        public async Task Edits_ShareOneBodyAcrossEveryRequest()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string capture = ReplayCaptures.WriteSaz(
+                _directory,
+                "capture.saz",
+                new CapturedExchange("GET", server.Origin + "/one"),
+                new CapturedExchange("GET", server.Origin + "/two"),
+                new CapturedExchange("GET", server.Origin + "/three"));
+            byte[] body = Enumerable.Range(0, 4096).Select(index => (byte)index).ToArray();
+            var sink = new RecordingSink();
+
+            OperationResult<ReplayResult> result = await Execute(new ReplayRequest(
+                ReplaySource.FromFile(capture, ReplaySelection.All),
+                new ReplayOptions(Repeat: 2),
+                new ReplayEdits(Body: body),
+                sink));
+
+            Assert.True(result.Succeeded, Describe(result));
+            Assert.Equal(6, sink.Exchanges.Count);
+            Assert.All(sink.Exchanges, exchange => Assert.Same(body, exchange.Request.Body));
+            Assert.All(server.Requests, request => Assert.Equal(body, request.Body));
+        }
+
+        // Every send in flight may hold a whole response, so their total is bounded.
+        [Theory]
+        [InlineData(2, 512, true)]
+        [InlineData(3, 512, false)]
+        [InlineData(16, 64, true)]
+        [InlineData(16, 65, false)]
+        public async Task Options_BoundTheResponsesInFlight(int parallelism, int maxResponseMib, bool valid)
+        {
+            var operation = new ReplayOperation
+            {
+                SenderFactory = () => new ReplaySender(new HttpMessageInvoker(new FailingFirstHandler()), ownsInvoker: true),
+            };
+
+            OperationResult<ReplayResult> result = await operation.ExecuteAsync(
+                new ReplayRequest(
+                    ReplaySource.FromCaptures(new[] { Row(1, "https://replay.test/") }),
+                    new ReplayOptions(Parallelism: parallelism, MaxResponseBytes: maxResponseMib * 1024L * 1024)),
+                OperationContext.None,
+                CancellationToken.None);
+
+            if (valid)
+            {
+                Assert.True(result.Succeeded, Describe(result));
+                Assert.Equal(ReplayOutcome.Completed, Assert.Single(result.Value.Items).Outcome);
+            }
+            else
+            {
+                AssertFailure(result, OperationOutcome.InvalidInput, "replay.options.invalid");
+            }
+        }
         [Fact]
         public async Task Edits_ApplyToEveryRequestBeforeItIsSent()
         {
@@ -241,6 +429,33 @@ namespace XMAT.Tests.Replay
                 new[] { "", "status", "body", "" },
                 result.Value.Items.Select(item => string.Join(",", item.Verification.Differences)));
             Assert.Equal((2, 2), (result.Value.Matched, result.Value.Mismatched));
+        }
+
+        // Verify decodes each body only up to its limit; beyond it, the bodies are compared as stored.
+        [Fact]
+        public async Task Verify_ComparesBodiesBeyondTheDecodeLimitAsStored()
+        {
+            byte[] content = new byte[4096];
+            await using var server = new LoopbackHttpServer(_ => new LoopbackResponse(Body: content));
+            string capture = ReplayCaptures.WriteSaz(
+                _directory,
+                "capture.saz",
+                new CapturedExchange(
+                    "GET",
+                    server.Origin + "/zeros",
+                    ResponseHead: "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n",
+                    ResponseBody: ReplayCoreTests.Gzip(content)));
+            var request = new ReplayRequest(
+                ReplaySource.FromFile(capture, ReplaySelection.All), new ReplayOptions(Verify: true));
+
+            OperationResult<ReplayResult> decoded = await Execute(request);
+            OperationResult<ReplayResult> stored = await new ReplayOperation { MaxVerifyDecodedBytes = 1024 }
+                .ExecuteAsync(request, OperationContext.None, CancellationToken.None);
+
+            Assert.True(Assert.Single(decoded.Value.Items).Verification.Matches, Describe(decoded));
+            Assert.Equal(
+                new[] { ReplayVerifier.BodyDifference },
+                Assert.Single(stored.Value.Items).Verification.Differences);
         }
 
         [Fact]
@@ -401,6 +616,23 @@ namespace XMAT.Tests.Replay
                 Encoding.UTF8.GetString(Exchanges[Results.FindIndex(result => result.Id == id)].Response.Body);
         }
 
+        private static ProxyConnectionModel Row(long number, string url)
+        {
+            var uri = new Uri(url);
+            return new ProxyConnectionModel(
+                number, "200", DateTime.UtcNow, TimeSpan.Zero, uri.Scheme, uri.Authority, "GET", uri.PathAndQuery,
+                $"GET {uri.PathAndQuery} HTTP/1.1\r\nHost: {uri.Authority}\r\n", [], "HTTP/1.1 200 OK\r\n", [], "127.0.0.1");
+        }
+
+        // Throws something unexpected for /boom and answers everything else, without any network.
+        private sealed class FailingFirstHandler : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request, CancellationToken cancellationToken) =>
+                request.RequestUri.AbsolutePath == "/boom"
+                    ? throw new InvalidOperationException("stub failure")
+                    : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        }
         private sealed class FailingSink : IReplayExchangeSink
         {
             public void Add(ReplayItemResult result, ReplayExchange exchange) => throw new IOException("The disk is full.");

@@ -260,12 +260,12 @@ namespace XMAT.Cli
                 string folder = FolderOf(result.Id);
                 if (exchange.Request != null)
                 {
-                    _output.WriteFile(folder + "/" + RequestFile, exchange.Request.ToBytes());
+                    _output.WriteFile(folder + "/" + RequestFile, exchange.Request.WriteTo);
                 }
 
                 if (exchange.Response != null)
                 {
-                    _output.WriteFile(folder + "/" + ResponseFile, exchange.Response.ToBytes());
+                    _output.WriteFile(folder + "/" + ResponseFile, exchange.Response.WriteTo);
                 }
             }
         }

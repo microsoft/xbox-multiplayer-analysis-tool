@@ -13,14 +13,16 @@ using XMAT.WebServiceCapture.Models;
 namespace XMAT.Tests.Replay
 {
     // One captured exchange for a replay test. Url points at a loopback test server; for CONNECT only its host and port
-    // count. Headers holds complete header lines besides Host ("Name: value\r\n").
+    // count. Headers holds complete header lines besides Host ("Name: value\r\n"). Number replaces the request number
+    // that an XMAT capture would give it (its position from 1).
     internal sealed record CapturedExchange(
         string Method,
         string Url,
         string Headers = "",
         byte[] Body = null,
         string ResponseHead = "HTTP/1.1 200 OK\r\n",
-        byte[] ResponseBody = null);
+        byte[] ResponseBody = null,
+        long? Number = null);
 
     // Capture files whose requests target loopback servers, so replay tests never reach real services.
     internal static class ReplayCaptures
@@ -85,9 +87,10 @@ namespace XMAT.Tests.Replay
                     CapturedExchange exchange = exchanges[index];
                     var uri = new Uri(exchange.Url);
                     DateTime started = Start.AddSeconds(index + 1);
+                    long number = exchange.Number ?? index + 1;
                     captures.AddRow(
                         device,
-                        (long)(index + 1),
+                        number,
                         (long)(index + 1),
                         ProxyConnectionModel.ToDateTimeString(started),
                         ProxyConnectionModel.ToDateTimeString(started.AddMilliseconds(25)),

@@ -49,9 +49,10 @@ namespace XMAT.Operations.Replay
         internal byte[] Body { get; }
 
         // The message in HTTP/1.1 form: the start line, the header lines, an empty line and the body as it is. Header
-        // text is written as Latin-1, the encoding the HTTP stack reads it with.
-        internal byte[] ToBytes()
+        // text is written as Latin-1, the encoding the HTTP stack reads it with. The body is written, never copied.
+        internal void WriteTo(Stream stream)
         {
+            ArgumentNullException.ThrowIfNull(stream);
             var head = new StringBuilder(StartLine).Append("\r\n");
             foreach (KeyValuePair<string, string> header in Headers)
             {
@@ -64,9 +65,15 @@ namespace XMAT.Operations.Replay
             }
 
             head.Append("\r\n");
+            stream.Write(Encoding.Latin1.GetBytes(head.ToString()));
+            stream.Write(Body);
+        }
+
+        // WriteTo into memory, for callers that need the whole message at once.
+        internal byte[] ToBytes()
+        {
             using var bytes = new MemoryStream();
-            bytes.Write(Encoding.Latin1.GetBytes(head.ToString()));
-            bytes.Write(Body);
+            WriteTo(bytes);
             return bytes.ToArray();
         }
 

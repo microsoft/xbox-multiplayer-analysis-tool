@@ -57,7 +57,8 @@ namespace XMAT.Tests.Cli
         [InlineData("replay a.saz --request 1 --out results --parallel 17", "cli.usage.invalid-value")]
         [InlineData("replay a.saz --request 1 --out results --timeout 601", "cli.usage.invalid-value")]
         [InlineData("replay a.saz --request 1 --out results --max-response-mib 513", "cli.usage.invalid-value")]
-        [InlineData("replay a.saz --request 1 --out results --follow-redirects 0", "cli.usage.invalid-value")]
+        [InlineData("replay a.saz --request 1 --out results --follow-redirects 00", "cli.usage.invalid-value")]
+        [InlineData("replay a.saz --request 1 --out results --header X-Name:caf\u00e9", "cli.usage.invalid-value")]
         [InlineData("replay a.saz --request 1 --out results --follow-redirects 11", "cli.usage.invalid-value")]
         [InlineData("replay a.saz --request 1 --out results --max-records 0", "cli.usage.invalid-value")]
         [InlineData("replay a.saz --request 1 --out results --url http://a.test/ --origin http://b.test", "cli.usage.conflicting-options")]
@@ -84,6 +85,9 @@ namespace XMAT.Tests.Cli
         [InlineData("compose --url http://a.test/ --out results --request 1", "cli.usage.unknown-option")]
         [InlineData("compose --url http://a.test/ --out results --remove-header X", "cli.usage.unknown-option")]
         [InlineData("compose --url http://a.test/ --out results --origin http://b.test", "cli.usage.unknown-option")]
+        [InlineData("compose --url http://a.test/ --out results --allow-origin-change", "cli.usage.unknown-option")]
+        [InlineData("replay a.saz --request 1 --out results --parallel 3 --max-response-mib 512", "cli.usage.invalid-value")]
+        [InlineData("compose --url http://a.test/ --out results --parallel 16 --max-response-mib 65", "cli.usage.invalid-value")]
         public void Parse_RejectsInvalidCommandLinesWithExitCode2(string commandLine, string code)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));
@@ -189,6 +193,14 @@ namespace XMAT.Tests.Cli
             Assert.Null(minimal.Limits);
             Assert.Equal(CliLimits.Default, replay.Limits);
             Assert.Equal("all", replay.Replay.Selection);
+            Assert.Equal(
+                0,
+                CliCommandLine.Parse(new[] { "compose", "--url", "https://a.test/", "--out", "r", "--follow-redirects", "0" })
+                    .Request.Replay.FollowRedirects);
+            Assert.True(CliCommandLine.Parse(
+                new[] { "replay", "a.saz", "--request", "1", "--out", "r", "--parallel", "2", "--max-response-mib", "512" }).Succeeded);
+            Assert.True(CliCommandLine.Parse(
+                new[] { "compose", "--url", "https://a.test/", "--out", "r", "--parallel", "16", "--max-response-mib", "64" }).Succeeded);
         }
 
         // Errors name commands and options but never repeat values, which can be paths.

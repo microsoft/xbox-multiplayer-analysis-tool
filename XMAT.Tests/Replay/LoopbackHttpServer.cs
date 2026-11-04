@@ -19,9 +19,16 @@ namespace XMAT.Tests.Replay
                 .FirstOrDefault();
     }
 
-    // Headers holds complete header lines ("Name: value\r\n"). Hang never answers; Chunked sends the body as one chunk.
+    // Headers holds complete header lines ("Name: value\r\n"). Hang never answers; Chunked sends the body as one chunk;
+    // NoLength sends no Content-Length of its own, for responses whose Headers declare one without a body (HEAD, 304).
     internal sealed record LoopbackResponse(
-        int Status = 200, string Reason = "OK", string Headers = "", byte[] Body = null, bool Chunked = false, bool Hang = false)
+        int Status = 200,
+        string Reason = "OK",
+        string Headers = "",
+        byte[] Body = null,
+        bool Chunked = false,
+        bool Hang = false,
+        bool NoLength = false)
     {
         internal static LoopbackResponse Ok(string body = "") => new(Body: Encoding.UTF8.GetBytes(body));
 
@@ -39,8 +46,9 @@ namespace XMAT.Tests.Replay
         private readonly CancellationTokenSource _stop = new();
         private readonly Func<LoopbackRequest, Task<LoopbackResponse>> _respond;
         private readonly ConcurrentQueue<LoopbackRequest> _requests = new();
-        private readonly ConcurrentBag<Task> _connections = new();
+        private readonly ConcurrentBag<Task> _serving = new();
         private readonly Task _accepting;
+        private int _connections;
 
         internal LoopbackHttpServer(Func<LoopbackRequest, LoopbackResponse> respond)
             : this(request => Task.FromResult(respond(request)))
@@ -63,12 +71,15 @@ namespace XMAT.Tests.Replay
         // In arrival order.
         internal IReadOnlyList<LoopbackRequest> Requests => _requests.ToArray();
 
+        // Every connection accepted, including those that never sent a complete request.
+        internal int Connections => Volatile.Read(ref _connections);
+
         public async ValueTask DisposeAsync()
         {
             _stop.Cancel();
             _listener.Stop();
             await _accepting;
-            await Task.WhenAll(_connections);
+            await Task.WhenAll(_serving);
             _stop.Dispose();
         }
 
@@ -86,7 +97,8 @@ namespace XMAT.Tests.Replay
                     return;
                 }
 
-                _connections.Add(ServeAsync(client));
+                Interlocked.Increment(ref _connections);
+                _serving.Add(ServeAsync(client));
             }
         }
 
@@ -172,7 +184,14 @@ namespace XMAT.Tests.Replay
         {
             byte[] body = response.Body ?? Array.Empty<byte>();
             var head = new StringBuilder($"HTTP/1.1 {response.Status} {response.Reason}\r\n").Append(response.Headers);
-            head.Append(response.Chunked ? "Transfer-Encoding: chunked\r\n" : $"Content-Length: {body.Length}\r\n");
+            if (response.Chunked)
+            {
+                head.Append("Transfer-Encoding: chunked\r\n");
+            }
+            else if (!response.NoLength)
+            {
+                head.Append($"Content-Length: {body.Length}\r\n");
+            }
             head.Append("Connection: close\r\n\r\n");
             var message = new MemoryStream();
             message.Write(Encoding.Latin1.GetBytes(head.ToString()));

@@ -8,6 +8,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Threading;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -28,7 +29,11 @@ namespace XMAT.Operations.Replay
         // Compares the status code, and the bodies once the stored chunked framing and a gzip, deflate or Brotli content
         // coding on either side are removed, each within maxDecodedBytes; a body that cannot be decoded is compared as it
         // is. Headers are not compared: dates, request ids and cookies differ on every response.
-        internal static ReplayVerification Compare(ProxyConnectionModel original, ReplayExchange replay, long maxDecodedBytes)
+        internal static ReplayVerification Compare(
+            ProxyConnectionModel original,
+            ReplayExchange replay,
+            long maxDecodedBytes,
+            CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(original);
             ArgumentNullException.ThrowIfNull(replay);
@@ -57,8 +62,8 @@ namespace XMAT.Operations.Replay
                 .Select(header => header.Value)
                 .LastOrDefault();
             byte[] replayBody = replay.Response?.Body ?? Array.Empty<byte>();
-            if (!Decode(originalEncoding, originalBody, maxDecodedBytes).AsSpan().SequenceEqual(
-                Decode(replayEncoding, replayBody, maxDecodedBytes)))
+            if (!Decode(originalEncoding, originalBody, maxDecodedBytes, cancellationToken).AsSpan().SequenceEqual(
+                Decode(replayEncoding, replayBody, maxDecodedBytes, cancellationToken)))
             {
                 differences.Add(BodyDifference);
             }
@@ -68,7 +73,7 @@ namespace XMAT.Operations.Replay
 
         // The body without its content coding, or the body as it is when the coding is not one replay decodes or the
         // decoded content is malformed or larger than maxBytes.
-        private static byte[] Decode(string contentEncoding, byte[] body, long maxBytes)
+        private static byte[] Decode(string contentEncoding, byte[] body, long maxBytes, CancellationToken cancellationToken)
         {
             string coding = contentEncoding?.Trim().ToLowerInvariant();
             if (string.IsNullOrEmpty(coding) || coding == "identity" || body.Length == 0)
@@ -96,6 +101,7 @@ namespace XMAT.Operations.Replay
                 int read;
                 while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (output.Length + read > maxBytes)
                     {
                         return body;

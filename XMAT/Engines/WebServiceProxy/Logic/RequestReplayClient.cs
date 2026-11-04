@@ -51,7 +51,7 @@ namespace XMAT.WebServiceCapture
             RequestReplayDraft draft, bool confirmed, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(draft);
-            using (draft.CreateRequest())
+            using (draft.CreateRequestToSend())
             {
                 // Invalid input is reported, with what is wrong, before the confirmation check.
             }

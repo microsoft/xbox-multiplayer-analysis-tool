@@ -214,7 +214,7 @@ namespace XMAT.Operations.Capabilities
                 "request.compose", "Compose and send a new request", "S9",
                 cli: "compose --url URL --out DIR [--method METHOD] [--header \"NAME: VALUE\"]... [--body-file FILE] " +
                     "[--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] " +
-                    "[--allow-unsafe-methods] [--allow-origin-change]",
+                    "[--allow-unsafe-methods]",
                 operation: ReplayOperation,
                 gui: new[]
                 {
