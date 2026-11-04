@@ -44,6 +44,12 @@ namespace XMAT.WebServiceCapture.Models
         public byte[] ResponseBody { get; private set; }
         public string ClientIP { get; private set; }
 
+        // The number of the captured request that this row replays, for rows of the Replays tab; null otherwise. It is
+        // kept in memory only.
+        public long? ReplayOf { get; internal set; }
+
+        public bool IsReplay => ReplayOf.HasValue;
+
         private Dictionary<string, string> _requestHeaders;
         private Dictionary<string, string> _responseHeaders;
 
@@ -156,6 +162,7 @@ namespace XMAT.WebServiceCapture.Models
             RequestBody = model.RequestBody;
             ResponseBody = model.ResponseBody;
             ClientIP = model.ClientIP;
+            ReplayOf = model.ReplayOf;
 
             _requestHeaders = model.RequestHeaders;
             _responseHeaders = model.ResponseHeaders;

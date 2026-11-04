@@ -26,6 +26,8 @@
     </UserControl.Resources>
     <UserControl.CommandBindings>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.EditAndResend}" Executed="EditAndResend_Executed" CanExecute="EditAndResend_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.Reissue}" Executed="Reissue_Executed" CanExecute="Reissue_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelReissue}" Executed="CancelReissue_Executed" CanExecute="CancelReissue_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ChangePort}" Executed="ChangePort_Executed" CanExecute="ChangePort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}" Executed="DiscardPort_Executed" CanExecute="DiscardPort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}" Executed="CancelPort_Executed" CanExecute="CancelPort_CanExecute"/>
@@ -221,6 +223,11 @@
                         <TextBlock Grid.Row="0" Grid.Column="0">
                                 <Run x:Name="RequestIdLabel" Text="Request ID:" FontWeight="Bold"/>
                                 <Run Text="{Binding SelectedItem.RequestNumber, ElementName=ConnectionList, Mode=OneWay}" d:Text="1000"/>
+                        </TextBlock>
+                        <TextBlock Grid.Row="1" Grid.Column="0"
+                                   Visibility="{Binding SelectedItem.IsReplay, ElementName=ConnectionList, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}, FallbackValue=Collapsed}">
+                                <Run x:Name="ReplayOfLabel" Text="Replay of:" FontWeight="Bold"/>
+                                <Run Text="{Binding SelectedItem.ReplayOf, ElementName=ConnectionList, Mode=OneWay, StringFormat='#{0}'}" d:Text="#12"/>
                         </TextBlock>
                         <TextBlock Grid.Row="0" Grid.Column="1">
                                 <Run x:Name="TimeLabel" Text="Time:" FontWeight="Bold"/>

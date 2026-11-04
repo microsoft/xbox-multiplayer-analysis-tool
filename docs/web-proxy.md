@@ -172,6 +172,27 @@ limit. Cancelling or timing out cannot undo changes already processed by the ser
 To send a request that was never captured, select **Actions > Compose a New Request**.
 The composer opens with an empty GET request and works the same way.
 
+## Replay requests
+
+Right-click a request, or one of several selected requests, and open **Replay**:
+
+- **Reissue** sends the selected requests again, as captured, one after another.
+- **Reissue unconditionally** first removes `If-Match`, `If-None-Match`,
+  `If-Modified-Since`, `If-Unmodified-Since` and `If-Range`, so the server sends a full
+  response instead of 304 Not Modified.
+- **Reissue and verify** then compares each response with the captured one, by status
+  code and body (without chunked framing or gzip, deflate or Brotli encoding), and lists
+  the requests whose response differs. Headers are not compared.
+- **Reissue several times** sends the selected requests 2 to 100 times, all of them in
+  turn before the next round.
+- **Cancel replay** stops a replay that is running.
+
+Replays are sent the way the composer sends requests, and methods other than GET, HEAD,
+and OPTIONS need confirmation. Each request that was sent appears in the read-only
+**Replays** tab with its response. **Replay of** in the request details shows which
+captured request it replays. You can inspect and analyze replays like captured traffic,
+and edit and resend them.
+
 The command line does the same with `xmat replay` and `xmat compose`; see
 [Command line](cli.md).
 

@@ -202,6 +202,8 @@ namespace XMAT.Operations.Capabilities
                 gui: new[]
                 {
                     Command(ProxyCommandsPrefix + "EditAndResend"),
+                    Command(ProxyCommandsPrefix + "Reissue"),
+                    Command(ProxyCommandsPrefix + "CancelReissue"),
                     Window("XMAT.WebServiceCapture.RequestComposerWindow"),
                     Click(ComposerXaml, "Send_Click"),
                     Click(ComposerXaml, "CancelSend_Click"),

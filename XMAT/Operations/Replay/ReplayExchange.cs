@@ -90,6 +90,12 @@ namespace XMAT.Operations.Replay
         // The last request sent, as replay built it.
         internal ReplayMessage Request { get; init; }
 
+        // The URL of the last request sent, after any redirects that were followed.
+        internal Uri RequestUri { get; init; }
+
+        // When the first request went out (UTC).
+        internal DateTime Started { get; init; }
+
         // The final response; null when none arrived.
         internal ReplayMessage Response { get; init; }
 

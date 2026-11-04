@@ -89,6 +89,7 @@ namespace XMAT.Operations.Replay
             HttpRequestMessage request = draft.CreateRequest();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(options.Timeout);
+            DateTime started = DateTime.UtcNow;
             var stopwatch = Stopwatch.StartNew();
             int redirects = 0;
             ReplayMessage sent = null;
@@ -130,6 +131,8 @@ namespace XMAT.Operations.Replay
                         Outcome = tooLarge ? ReplayOutcome.TooLarge : ReplayOutcome.Completed,
                         Code = tooLarge ? TooLargeCode : stopCode,
                         Request = sent,
+                        RequestUri = request.RequestUri,
+                        Started = started,
                         Response = DescribeResponse(response, responseBody),
                         StatusCode = (int)response.StatusCode,
                         ReasonPhrase = response.ReasonPhrase,
@@ -141,11 +144,11 @@ namespace XMAT.Operations.Replay
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                return Failure(ReplayOutcome.TimedOut, TimeoutCode, sent, redirects, stopwatch, error: null);
+                return Failure(ReplayOutcome.TimedOut, TimeoutCode, sent, request.RequestUri, started, redirects, stopwatch, error: null);
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException)
             {
-                return Failure(ReplayOutcome.Failed, SendFailedCode, sent, redirects, stopwatch, ex);
+                return Failure(ReplayOutcome.Failed, SendFailedCode, sent, request.RequestUri, started, redirects, stopwatch, ex);
             }
             finally
             {
@@ -162,12 +165,21 @@ namespace XMAT.Operations.Replay
         }
 
         private static ReplayExchange Failure(
-            ReplayOutcome outcome, string code, ReplayMessage sent, int redirects, Stopwatch stopwatch, Exception error) =>
+            ReplayOutcome outcome,
+            string code,
+            ReplayMessage sent,
+            Uri requestUri,
+            DateTime started,
+            int redirects,
+            Stopwatch stopwatch,
+            Exception error) =>
             new()
             {
                 Outcome = outcome,
                 Code = code,
                 Request = sent,
+                RequestUri = requestUri,
+                Started = started,
                 Duration = stopwatch.Elapsed,
                 Redirects = redirects,
                 Error = error,
