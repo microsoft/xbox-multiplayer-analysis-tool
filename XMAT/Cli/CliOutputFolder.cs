@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Security;
 using System.Security.AccessControl;
@@ -19,39 +21,44 @@ namespace XMAT.Cli
     // local NTFS volume keeps that access control and the guarantees below, so CliStagedRun checks the storage and reads
     // the access control back (IsPrivate) before anything is written, and refuses to continue otherwise.
     //
-    // From the moment Reserve creates it until it is published or removed, the staging folder is held open through one
-    // handle (CliDirectoryHandle), and every path xmat uses is the folder's final path, with junctions and links
-    // resolved. While the handle is open, Windows refuses to rename or remove the staging folder or any folder that
-    // contains it, so another account cannot swap one of them for a folder of its own between the privacy check and the
-    // writes. Publication renames the folder through the handle and cleanup removes it through the handle, so neither
-    // looks up a path that could have changed.
+    // --out is admitted without following anything: CheckTarget reads it without touching the file system and refuses
+    // network and device paths; TryReserve checks that its drive or volume name stands for a local volume, opens that
+    // volume's root by its device path, and opens and holds each folder down to the parent of --out relative to the one
+    // above it, refusing junctions, mounted folders, symbolic links and any reparse point that is not known to leave
+    // names alone. It then creates the staging folder relative to the held parent and holds it too. Held folders cannot
+    // be renamed or removed, and each contains the next, so none can become a link either; publication renames the
+    // staging folder relative to the parent, and every path xmat uses is the staging folder's verbatim volume path
+    // (\\?\Volume{...}\...), which Windows uses as it is.
     internal sealed class CliOutputFolder : IDisposable
     {
         internal const string StagingPrefix = ".xmat-staging-";
         private const int Attempts = 10;
+        private const string LocalVolumePrefix = @"\Device\HarddiskVolume";
         private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(100);
 
+        private readonly string _name;
+        private SafeFileHandle[] _folders;
         private SafeFileHandle _handle;
         private bool _published;
 
-        private CliOutputFolder(string target, string stagingPath, SafeFileHandle handle)
+        private CliOutputFolder(string name, string stagingPath, SafeFileHandle[] folders, SafeFileHandle handle)
         {
-            Target = target;
+            _name = name;
             StagingPath = stagingPath;
+            _folders = folders;
             _handle = handle;
         }
 
-        // --out, in the folder that the staging folder really is in.
-        internal string Target { get; }
-
-        // The staging folder's final path.
+        // The staging folder's verbatim volume path.
         internal string StagingPath { get; }
 
         // Where the legacy statics keep files during the run (HeadlessStorage). Removed before publishing.
         internal string WorkPath => Path.Join(StagingPath, "work");
 
-        // Checks --out without writing anything: it must not exist yet, and the folder that contains it must.
-        internal static CliFailure CheckTarget(string output, out string target)
+        // Reads --out without touching the file system: a path on a drive (C:\...), or a verbatim one on a drive or volume
+        // (\\?\C:\..., \\?\Volume{...}\...). Network paths, mapped through UNC or not, and device paths are refused before
+        // anything could reach them; whether --out and its parent exist is TryReserve's to find out.
+        internal static CliFailure CheckTarget(string output, out CliOutputTarget target)
         {
             target = null;
             string fullPath;
@@ -61,53 +68,135 @@ namespace XMAT.Cli
             }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or SecurityException)
             {
-                return new CliFailure(CliExitCodes.Usage, "cli.usage.invalid-value", "--out is not a valid folder path.");
+                return InvalidPath();
             }
 
-            if (Directory.Exists(fullPath) || File.Exists(fullPath))
+            bool verbatim = fullPath.StartsWith(@"\\?\", StringComparison.Ordinal);
+            string rest = verbatim ? fullPath[4..] : fullPath;
+            string volume = DriveName(rest) ?? (verbatim ? VolumeName(rest) : null);
+            if (volume == null)
             {
-                return new CliFailure(
-                    CliExitCodes.Conflict, "cli.output.exists", "The --out folder already exists; xmat never overwrites output.");
+                return Unprotected();
             }
 
-            string parent = Path.GetDirectoryName(fullPath);
-            if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+            rest = rest.Length > volume.Length + 1 ? rest[(volume.Length + 1)..] : "";
+            string[] names = rest.Length == 0 ? Array.Empty<string>() : rest.Split('\\');
+            if (names.Length == 0)
             {
-                return new CliFailure(
-                    CliExitCodes.Usage, "cli.output.parent-missing", "The folder that should contain the --out folder does not exist.");
+                return ParentMissing();
             }
 
-            target = fullPath;
+            if (!names.All(IsFolderName))
+            {
+                return InvalidPath();
+            }
+
+            target = new CliOutputTarget(volume, names[..^1], names[^1]);
             return null;
         }
 
-        // Creates the private staging folder next to target and holds it open, in one step that never adopts a folder or
-        // link that is already there. When the folder's path cannot be read, the new, empty folder goes again.
-        internal static CliOutputFolder Reserve(string target, string runId)
+        // Creates the private staging folder next to --out and holds it open, with every folder above it, as the class
+        // comment describes, in steps that never follow a link nor adopt anything that is already there. A failure is the
+        // reason that --out was refused: its parent does not exist (exit code 2), it exists (5), or it is not where xmat
+        // can keep its output private (6). Other errors are thrown, and leave nothing behind but, at worst, an empty private
+        // staging folder. checkpoint lets tests act between each check and its use: it is called with the name of each
+        // folder above --out once that folder is held and checked, and with the staging folder's name right before it is
+        // created.
+        internal static CliFailure TryReserve(
+            CliOutputTarget target, string runId, out CliOutputFolder folder, Action<string> checkpoint = null)
         {
-            string stagingPath = Path.Join(Path.GetDirectoryName(target), StagingPrefix + runId);
-            SafeFileHandle handle = CliDirectoryHandle.CreateNew(stagingPath, CurrentUserOnly());
+            ArgumentNullException.ThrowIfNull(target);
+            folder = null;
+            string device = CliDirectoryHandle.QueryDosDevice(target.Volume);
+            if (device == null)
+            {
+                return ParentMissing();
+            }
+
+            if (!IsLocalVolumeDevice(device))
+            {
+                return Unprotected();
+            }
+
+            var folders = new List<SafeFileHandle>();
+            SafeFileHandle staging = null;
             try
             {
-                string finalPath = CliDirectoryHandle.FinalPath(handle);
-                return new CliOutputFolder(
-                    Path.Join(Path.GetDirectoryName(finalPath), Path.GetFileName(target)), finalPath, handle);
+                folders.Add(CliDirectoryHandle.OpenVolumeRoot(device));
+                foreach (string name in target.Folders)
+                {
+                    SafeFileHandle next = CliDirectoryHandle.OpenFolder(folders[^1], name);
+                    if (next == null)
+                    {
+                        return ParentMissing();
+                    }
+
+                    folders.Add(next);
+                    if (!IsAdmittedReparseTag(CliDirectoryHandle.ReparseTag(next)))
+                    {
+                        return Unprotected();
+                    }
+
+                    checkpoint?.Invoke(name);
+                }
+
+                if (CliDirectoryHandle.Exists(folders[^1], target.Name))
+                {
+                    return new CliFailure(
+                        CliExitCodes.Conflict, "cli.output.exists", "The --out folder already exists; xmat never overwrites output.");
+                }
+
+                checkpoint?.Invoke(StagingPrefix + runId);
+                staging = CliDirectoryHandle.CreateNew(folders[^1], StagingPrefix + runId, CurrentUserOnly());
+
+                // A folder that became a link after it was checked fails the creation above. Checked again now that each
+                // held folder contains the next and the parent contains the staging folder, so none can become one any more.
+                if (!folders.Skip(1).All(handle => IsAdmittedReparseTag(CliDirectoryHandle.ReparseTag(handle))))
+                {
+                    Remove(staging);
+                    staging = null;
+                    return Unprotected();
+                }
+
+                folder = new CliOutputFolder(target.Name, CliDirectoryHandle.FinalPath(staging), folders.ToArray(), staging);
+                return null;
             }
             catch
             {
-                try
+                if (staging != null)
                 {
-                    CliDirectoryHandle.MarkForDeletion(handle);
-                }
-                catch (IOException)
-                {
-                    // The folder stays behind, empty and private.
+                    Remove(staging);
                 }
 
-                handle.Dispose();
                 throw;
             }
+            finally
+            {
+                if (folder == null)
+                {
+                    foreach (SafeFileHandle handle in folders)
+                    {
+                        handle.Dispose();
+                    }
+                }
+            }
         }
+
+        // The device of a local volume, as a drive or volume name stands for it: \Device\HarddiskVolumeN, and nothing else,
+        // such as a network redirector, a substituted drive (\??\C:\...) or a shadow copy.
+        internal static bool IsLocalVolumeDevice(string device) =>
+            device != null &&
+            device.Length > LocalVolumePrefix.Length &&
+            device.StartsWith(LocalVolumePrefix, StringComparison.OrdinalIgnoreCase) &&
+            device[LocalVolumePrefix.Length..].All(char.IsAsciiDigit);
+
+        // A folder above --out may be a reparse point only of a kind that leaves names alone: Cloud Files (OneDrive), data
+        // deduplication and Windows Overlay Filter compression. Junctions, mounted folders, symbolic links, any other name
+        // surrogate and any unknown kind are refused.
+        internal static bool IsAdmittedReparseTag(uint? tag) =>
+            tag is null ||
+            (tag.Value & 0xFFFF0FFF) == 0x9000001A ||
+            tag.Value is 0x80000013 or 0x80000017;
 
         // Whether the staging folder can keep the output private: it is on a local NTFS volume (IsSupportedStorage), and
         // its owner and access control, read through the handle, are the current user's alone (IsPrivateDescriptor).
@@ -189,23 +278,23 @@ namespace XMAT.Cli
             }
         }
 
-        // The commit: renames the staging folder to --out in one step, through the handle that holds it, retrying for
-        // about a second. Cancellation is checked before each attempt (OperationCanceledException); returns false when
-        // --out appeared meanwhile, which is never replaced. A rename that succeeded is the publication: from then on
-        // nothing removes the folder, whatever follows.
+        // The commit: renames the staging folder to --out in one step, through the handle that holds it and relative to the
+        // held parent, retrying for about a second. Cancellation is checked before each attempt (OperationCanceledException);
+        // returns false when --out appeared meanwhile, a dangling link included, which is never replaced. A rename that
+        // succeeded is the publication: from then on nothing removes the folder, whatever follows.
         internal bool TryCommit(ICliCommitObserver observer, CancellationToken cancellationToken)
         {
             for (int attempt = 1; ; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (Directory.Exists(Target) || File.Exists(Target))
+                if (CliDirectoryHandle.Exists(Parent, _name))
                 {
                     return false;
                 }
 
                 try
                 {
-                    CliDirectoryHandle.Rename(Handle, Target);
+                    CliDirectoryHandle.Rename(Handle, Parent, _name);
                     _published = true;
                     Release();
                     return true;
@@ -255,12 +344,78 @@ namespace XMAT.Cli
             }
         }
 
-        // Closes the handle without removing anything, if a commit or discard has not already.
+        // Closes the handles without removing anything, if a commit or discard has not already.
         public void Dispose() => Release();
 
         private SafeFileHandle Handle => _handle ?? throw new ObjectDisposedException(nameof(CliOutputFolder));
 
-        private void Release() => Interlocked.Exchange(ref _handle, null)?.Dispose();
+        private SafeFileHandle Parent => _folders?[^1] ?? throw new ObjectDisposedException(nameof(CliOutputFolder));
+
+        // Lets go of the staging folder, then of the folders above it.
+        private void Release()
+        {
+            Interlocked.Exchange(ref _handle, null)?.Dispose();
+            foreach (SafeFileHandle folder in Interlocked.Exchange(ref _folders, null) ?? Array.Empty<SafeFileHandle>())
+            {
+                folder.Dispose();
+            }
+        }
+
+        // Removes a staging folder that is still empty, and lets go of it.
+        private static void Remove(SafeFileHandle staging)
+        {
+            try
+            {
+                CliDirectoryHandle.MarkForDeletion(staging);
+            }
+            catch (IOException)
+            {
+                // The folder stays behind, empty and private.
+            }
+
+            staging.Dispose();
+        }
+
+        private static CliFailure InvalidPath() =>
+            new(CliExitCodes.Usage, "cli.usage.invalid-value", "--out is not a valid folder path.");
+
+        private static CliFailure ParentMissing() =>
+            new(CliExitCodes.Usage, "cli.output.parent-missing", "The folder that should contain the --out folder does not exist.");
+
+        private static CliFailure Unprotected() =>
+            new(
+                CliExitCodes.Failed,
+                "cli.output.unprotected",
+                "xmat cannot keep its output private there: the --out folder must be on a local NTFS volume and reached " +
+                    "without a network path, a mapped or substituted drive, a junction, a mounted folder or a symbolic link.");
+
+        // "C:" when path starts with a drive's root (C:\) or is the drive itself.
+        private static string DriveName(string path) =>
+            path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':' && (path.Length == 2 || path[2] == '\\')
+                ? path[..2]
+                : null;
+
+        // "Volume{...}" when path starts with a volume name, as in \\?\Volume{...}\.
+        private static string VolumeName(string path)
+        {
+            const string Prefix = "Volume{";
+            int length = Prefix.Length + 37;
+            return path.Length >= length &&
+                path.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase) &&
+                path[length - 1] == '}' &&
+                (path.Length == length || path[length] == '\\') &&
+                Guid.TryParseExact(path[Prefix.Length..(length - 1)], "D", out _)
+                ? path[..length]
+                : null;
+        }
+
+        // One folder name, used as it is, so nothing that Windows would read otherwise: not "." or "..", and no separator,
+        // stream (':'), wildcard or control character.
+        private static bool IsFolderName(string name) =>
+            name.Length is > 0 and <= 255 &&
+            name != "." &&
+            name != ".." &&
+            name.All(character => character >= ' ' && character is not ('"' or '*' or '/' or ':' or '<' or '>' or '?' or '\\' or '|'));
 
         // Deletes a file, or a folder and everything in it; a junction or link is removed itself and never followed.
         private static void DeleteEntry(string path)
@@ -343,4 +498,8 @@ namespace XMAT.Cli
             return security;
         }
     }
+
+    // --out as CheckTarget reads it, without touching the file system: the drive (C:) or volume name (Volume{...}) that
+    // holds it, the folders from that volume's root down to the one that contains it, and its own name.
+    internal sealed record CliOutputTarget(string Volume, IReadOnlyList<string> Folders, string Name);
 }

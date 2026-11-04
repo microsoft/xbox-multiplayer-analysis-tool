@@ -12,9 +12,11 @@ using Microsoft.Win32.SafeHandles;
 
 namespace XMAT.Cli
 {
-    // Creates a folder and acts on it only through the handle that creating it returned (CliOutputFolder). The handle
-    // shares reading and writing but not deletion, so while it is open Windows refuses to rename or remove the folder or
-    // any folder that contains it. Errors are IOException without paths in their messages.
+    // The folder operations behind the --out folder (CliOutputFolder), each relative to a folder that xmat holds open, so
+    // that no path is looked up again: opening a folder never follows a link, creating one never adopts what is already
+    // there, and renaming one never replaces anything. A folder held through OpenVolumeRoot or OpenFolder cannot be
+    // renamed or removed while it is held, nor can any folder that contains it. Errors are IOException without paths in
+    // their messages.
     internal static class CliDirectoryHandle
     {
         private const uint Delete = 0x00010000;
@@ -27,81 +29,178 @@ namespace XMAT.Cli
         private const uint ReadAttributes = 0x0080;
         private const uint ShareRead = 0x00000001;
         private const uint ShareWrite = 0x00000002;
+        private const uint ShareDelete = 0x00000004;
+        private const uint FileOpen = 1;
         private const uint FileCreate = 2;
         private const uint DirectoryFile = 0x00000001;
         private const uint SynchronousIoNonAlert = 0x00000020;
         private const uint OpenReparsePoint = 0x00200000;
         private const uint ObjectCaseInsensitive = 0x00000040;
+        private const uint FileAttributeReparsePoint = 0x00000400;
+        private const uint VolumeNameGuid = 0x1;
         private const uint VolumeNameNt = 0x2;
-        private const int FileRenameInfoClass = 3;
         private const int FileDispositionInfoClass = 4;
+        private const int FileAttributeTagInfoClass = 9;
+        private const int FileRenameInformationClass = 10;
         private const int FileObject = 1;
         private const uint OwnerSecurityInformation = 0x1;
         private const uint DaclSecurityInformation = 0x4;
+        private const int ErrorFileNotFound = 2;
+        private const int ErrorInsufficientBuffer = 122;
+        private const int StatusObjectNameNotFound = unchecked((int)0xC0000034);
+        private const int StatusObjectPathNotFound = unchecked((int)0xC000003A);
+        private const int StatusNotADirectory = unchecked((int)0xC0000103);
+        private const int StatusAccessDenied = unchecked((int)0xC0000022);
+        private const int StatusSharingViolation = unchecked((int)0xC0000043);
+        private const int StatusDeletePending = unchecked((int)0xC0000056);
 
-        // Creates a new folder at path with security, and returns the handle to it. Never opens a folder or link that is
-        // already there, nor creates the folder that a dangling link points to: then it fails, and nothing is changed.
-        // Links in the folders that contain path are followed.
-        internal static SafeFileHandle CreateNew(string path, DirectorySecurity security)
+        // A held folder can be listed and shares reading and writing but not deletion: while it is held, it cannot be
+        // renamed or removed. Its own share mode counts only because of the listing access.
+        private const uint HoldAccess = ListDirectory | ReadAttributes | Synchronize;
+        private const uint HoldShare = ShareRead | ShareWrite;
+
+        // The NT device that a drive (C:) or volume name (Volume{...}) stands for in this logon session, such as
+        // \Device\HarddiskVolume3, or null when it stands for none. Reads only the name's link: no volume is opened.
+        internal static string QueryDosDevice(string name)
         {
-            ArgumentException.ThrowIfNullOrEmpty(path);
-            ArgumentNullException.ThrowIfNull(security);
-            byte[] descriptor = security.GetSecurityDescriptorBinaryForm();
-            string name = ToNtPath(Path.GetFullPath(path));
-            IntPtr nameBuffer = Marshal.StringToHGlobalUni(name);
-            IntPtr descriptorBuffer = Marshal.AllocHGlobal(descriptor.Length);
-            IntPtr unicodeString = Marshal.AllocHGlobal(Marshal.SizeOf<UnicodeString>());
-            try
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            for (int size = 512; ; size *= 2)
             {
-                Marshal.Copy(descriptor, 0, descriptorBuffer, descriptor.Length);
-                Marshal.StructureToPtr(
-                    new UnicodeString
-                    {
-                        Length = checked((ushort)(name.Length * sizeof(char))),
-                        MaximumLength = checked((ushort)((name.Length + 1) * sizeof(char))),
-                        Buffer = nameBuffer,
-                    },
-                    unicodeString,
-                    false);
-                var attributes = new ObjectAttributes
+                var buffer = new char[size];
+                uint length = NativeMethods.QueryDosDeviceW(name, buffer, (uint)buffer.Length);
+                if (length != 0)
                 {
-                    Length = Marshal.SizeOf<ObjectAttributes>(),
-                    ObjectName = unicodeString,
-                    Attributes = ObjectCaseInsensitive,
-                    SecurityDescriptor = descriptorBuffer,
-                };
-                int status = NativeMethods.NtCreateFile(
-                    out SafeFileHandle handle,
-                    Delete | ReadControl | Synchronize | ListDirectory | AddFile | AddSubdirectory | Traverse | ReadAttributes,
-                    ref attributes,
-                    out IoStatusBlock _,
-                    IntPtr.Zero,
-                    0,
-                    ShareRead | ShareWrite,
-                    FileCreate,
-                    DirectoryFile | SynchronousIoNonAlert | OpenReparsePoint,
-                    IntPtr.Zero,
-                    0);
-                if (status < 0)
-                {
-                    handle.Dispose();
-                    throw new IOException(
-                        "The folder could not be created.",
-                        new Win32Exception(NativeMethods.RtlNtStatusToDosError(status)));
+                    int end = Array.IndexOf(buffer, '\0');
+                    return new string(buffer, 0, end < 0 ? (int)length : end);
                 }
 
-                return handle;
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(unicodeString);
-                Marshal.FreeHGlobal(descriptorBuffer);
-                Marshal.FreeHGlobal(nameBuffer);
+                int error = Marshal.GetLastWin32Error();
+                if (error == ErrorFileNotFound)
+                {
+                    return null;
+                }
+
+                if (error != ErrorInsufficientBuffer || size >= 32768)
+                {
+                    throw new IOException("The volume could not be identified.", new Win32Exception(error));
+                }
             }
         }
 
-        // The folder's path with every junction and link resolved, as a plain drive or UNC path.
-        internal static string FinalPath(SafeFileHandle handle) => WithoutExtendedPrefix(FinalPath(handle, 0));
+        // Opens and holds the root folder of the volume that devicePath (\Device\HarddiskVolumeN) names, by that path, so
+        // no drive letter or volume name is looked up again.
+        internal static SafeFileHandle OpenVolumeRoot(string devicePath)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(devicePath);
+            SafeFileHandle handle = Open(
+                null,
+                devicePath + @"\",
+                HoldAccess,
+                HoldShare,
+                FileOpen,
+                DirectoryFile | SynchronousIoNonAlert | OpenReparsePoint,
+                null,
+                out int status);
+            return handle ?? throw Failure("The volume could not be opened.", status);
+        }
+
+        // Opens and holds the folder name in parent as itself: a link is opened, never followed. Null when parent has no
+        // folder by that name.
+        internal static SafeFileHandle OpenFolder(SafeFileHandle parent, string name)
+        {
+            ArgumentNullException.ThrowIfNull(parent);
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            SafeFileHandle handle = Open(
+                parent,
+                name,
+                HoldAccess,
+                HoldShare,
+                FileOpen,
+                DirectoryFile | SynchronousIoNonAlert | OpenReparsePoint,
+                null,
+                out int status);
+            if (handle != null)
+            {
+                return handle;
+            }
+
+            if (status is StatusObjectNameNotFound or StatusObjectPathNotFound or StatusNotADirectory)
+            {
+                return null;
+            }
+
+            throw Failure("A folder that contains the --out folder could not be opened.", status);
+        }
+
+        // The reparse tag of the folder, or null when it has none.
+        internal static uint? ReparseTag(SafeFileHandle handle)
+        {
+            ArgumentNullException.ThrowIfNull(handle);
+            if (!NativeMethods.GetFileInformationByHandleEx(
+                    handle,
+                    FileAttributeTagInfoClass,
+                    out FileAttributeTagInformation information,
+                    (uint)Marshal.SizeOf<FileAttributeTagInformation>()))
+            {
+                throw new IOException("The folder could not be examined.", new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+
+            return (information.FileAttributes & FileAttributeReparsePoint) != 0 ? information.ReparseTag : null;
+        }
+
+        // Whether parent has an entry by that name, of any kind, a dangling link included. Follows nothing.
+        internal static bool Exists(SafeFileHandle parent, string name)
+        {
+            ArgumentNullException.ThrowIfNull(parent);
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            SafeFileHandle handle = Open(
+                parent,
+                name,
+                ReadAttributes | Synchronize,
+                ShareRead | ShareWrite | ShareDelete,
+                FileOpen,
+                SynchronousIoNonAlert | OpenReparsePoint,
+                null,
+                out int status);
+            if (handle != null)
+            {
+                handle.Dispose();
+                return true;
+            }
+
+            return status switch
+            {
+                StatusObjectNameNotFound => false,
+
+                // There, but not openable now.
+                StatusAccessDenied or StatusSharingViolation or StatusDeletePending => true,
+                _ => throw Failure("The folder that contains the --out folder could not be examined.", status),
+            };
+        }
+
+        // Creates the folder name in parent with security, and returns the handle to it. Never opens a folder or link
+        // that is already there, nor creates the folder that a dangling link points to: then it fails, and nothing is
+        // changed.
+        internal static SafeFileHandle CreateNew(SafeFileHandle parent, string name, DirectorySecurity security)
+        {
+            ArgumentNullException.ThrowIfNull(parent);
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            ArgumentNullException.ThrowIfNull(security);
+            SafeFileHandle handle = Open(
+                parent,
+                name,
+                Delete | ReadControl | Synchronize | ListDirectory | AddFile | AddSubdirectory | Traverse | ReadAttributes,
+                ShareRead | ShareWrite,
+                FileCreate,
+                DirectoryFile | SynchronousIoNonAlert | OpenReparsePoint,
+                security.GetSecurityDescriptorBinaryForm(),
+                out int status);
+            return handle ?? throw Failure("The folder could not be created.", status);
+        }
+
+        // The folder's path with its volume's name, \\?\Volume{...}\..., which Windows uses as it is: no drive letter or
+        // mounted folder is looked up, and no folder name loses a trailing dot.
+        internal static string FinalPath(SafeFileHandle handle) => FinalPath(handle, VolumeNameGuid);
 
         // The folder's path on its device, such as \Device\HarddiskVolume3\... or, on a network share, \Device\Mup\....
         internal static string DevicePath(SafeFileHandle handle) => FinalPath(handle, VolumeNameNt);
@@ -153,15 +252,17 @@ namespace XMAT.Cli
             }
         }
 
-        // Renames the folder that the handle holds to target, which must not exist, without looking up its current path.
-        internal static void Rename(SafeFileHandle handle, string target)
+        // Renames the folder that the handle holds to name in parent, which must not exist, without looking up any path.
+        internal static void Rename(SafeFileHandle handle, SafeFileHandle parent, string name)
         {
             ArgumentNullException.ThrowIfNull(handle);
-            ArgumentException.ThrowIfNullOrEmpty(target);
-            byte[] name = Encoding.Unicode.GetBytes(ToNtPath(target));
+            ArgumentNullException.ThrowIfNull(parent);
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            byte[] fileName = Encoding.Unicode.GetBytes(name);
             int offset = (int)Marshal.OffsetOf<FileRenameInformation>(nameof(FileRenameInformation.FileName));
-            int size = offset + name.Length + sizeof(char);
+            int size = offset + fileName.Length + sizeof(char);
             IntPtr buffer = Marshal.AllocHGlobal(size);
+            bool added = false;
             try
             {
                 for (int index = 0; index < size; index++)
@@ -169,19 +270,31 @@ namespace XMAT.Cli
                     Marshal.WriteByte(buffer, index, 0);
                 }
 
-                // ReplaceIfExists and RootDirectory stay zero: never replace, and the name is a full path.
+                // ReplaceIfExists stays zero: never replace.
+                parent.DangerousAddRef(ref added);
+                Marshal.WriteIntPtr(
+                    buffer,
+                    (int)Marshal.OffsetOf<FileRenameInformation>(nameof(FileRenameInformation.RootDirectory)),
+                    parent.DangerousGetHandle());
                 Marshal.WriteInt32(
                     buffer,
                     (int)Marshal.OffsetOf<FileRenameInformation>(nameof(FileRenameInformation.FileNameLength)),
-                    name.Length);
-                Marshal.Copy(name, 0, buffer + offset, name.Length);
-                if (!NativeMethods.SetFileInformationByHandle(handle, FileRenameInfoClass, buffer, (uint)size))
+                    fileName.Length);
+                Marshal.Copy(fileName, 0, buffer + offset, fileName.Length);
+                int status = NativeMethods.NtSetInformationFile(
+                    handle, out IoStatusBlock _, buffer, (uint)size, FileRenameInformationClass);
+                if (status < 0)
                 {
-                    throw new IOException("The folder could not be renamed.", new Win32Exception(Marshal.GetLastWin32Error()));
+                    throw Failure("The folder could not be renamed.", status);
                 }
             }
             finally
             {
+                if (added)
+                {
+                    parent.DangerousRelease();
+                }
+
                 Marshal.FreeHGlobal(buffer);
             }
         }
@@ -205,6 +318,90 @@ namespace XMAT.Cli
             }
         }
 
+        // NtCreateFile for name: a single name in root, or a full NT path when root is null. Null on failure, with status.
+        private static SafeFileHandle Open(
+            SafeFileHandle root,
+            string name,
+            uint access,
+            uint share,
+            uint disposition,
+            uint options,
+            byte[] descriptor,
+            out int status)
+        {
+            IntPtr nameBuffer = Marshal.StringToHGlobalUni(name);
+            IntPtr descriptorBuffer = descriptor == null ? IntPtr.Zero : Marshal.AllocHGlobal(descriptor.Length);
+            IntPtr unicodeString = Marshal.AllocHGlobal(Marshal.SizeOf<UnicodeString>());
+            bool added = false;
+            try
+            {
+                if (descriptor != null)
+                {
+                    Marshal.Copy(descriptor, 0, descriptorBuffer, descriptor.Length);
+                }
+
+                Marshal.StructureToPtr(
+                    new UnicodeString
+                    {
+                        Length = checked((ushort)(name.Length * sizeof(char))),
+                        MaximumLength = checked((ushort)((name.Length + 1) * sizeof(char))),
+                        Buffer = nameBuffer,
+                    },
+                    unicodeString,
+                    false);
+                if (root != null)
+                {
+                    root.DangerousAddRef(ref added);
+                }
+
+                var attributes = new ObjectAttributes
+                {
+                    Length = Marshal.SizeOf<ObjectAttributes>(),
+                    RootDirectory = root == null ? IntPtr.Zero : root.DangerousGetHandle(),
+                    ObjectName = unicodeString,
+                    Attributes = ObjectCaseInsensitive,
+                    SecurityDescriptor = descriptorBuffer,
+                };
+                status = NativeMethods.NtCreateFile(
+                    out SafeFileHandle handle,
+                    access,
+                    ref attributes,
+                    out IoStatusBlock _,
+                    IntPtr.Zero,
+                    0,
+                    share,
+                    disposition,
+                    options,
+                    IntPtr.Zero,
+                    0);
+                if (status < 0)
+                {
+                    handle.Dispose();
+                    return null;
+                }
+
+                return handle;
+            }
+            finally
+            {
+                if (added)
+                {
+                    root.DangerousRelease();
+                }
+
+                Marshal.FreeHGlobal(unicodeString);
+                if (descriptorBuffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(descriptorBuffer);
+                }
+
+                Marshal.FreeHGlobal(nameBuffer);
+            }
+        }
+
+        private static IOException Failure(string message, int status) =>
+            new(message, new Win32Exception(NativeMethods.RtlNtStatusToDosError(status)));
+
         private static string FinalPath(SafeFileHandle handle, uint flags)
         {
             ArgumentNullException.ThrowIfNull(handle);
@@ -225,27 +422,6 @@ namespace XMAT.Cli
 
                 buffer.Capacity = (int)length + 1;
             }
-        }
-
-        private static string WithoutExtendedPrefix(string path)
-        {
-            if (path.StartsWith(@"\\?\UNC\", StringComparison.Ordinal))
-            {
-                return @"\\" + path[8..];
-            }
-
-            return path.StartsWith(@"\\?\", StringComparison.Ordinal) ? path[4..] : path;
-        }
-
-        // The NT name of a drive or UNC path, which NtCreateFile and renaming through a handle need.
-        private static string ToNtPath(string path)
-        {
-            if (path.StartsWith(@"\\?\", StringComparison.Ordinal))
-            {
-                return @"\??\" + path[4..];
-            }
-
-            return path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\??\UNC\" + path[2..] : @"\??\" + path;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -274,7 +450,14 @@ namespace XMAT.Cli
             internal IntPtr Information;
         }
 
-        // FILE_RENAME_INFO, for its field offsets; the name follows FileNameLength.
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileAttributeTagInformation
+        {
+            internal uint FileAttributes;
+            internal uint ReparseTag;
+        }
+
+        // FILE_RENAME_INFORMATION, for its field offsets; the name follows FileNameLength.
         [StructLayout(LayoutKind.Sequential)]
         private struct FileRenameInformation
         {
@@ -303,7 +486,29 @@ namespace XMAT.Cli
 
             [DllImport("ntdll.dll", ExactSpelling = true)]
             [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+            internal static extern int NtSetInformationFile(
+                SafeFileHandle fileHandle,
+                out IoStatusBlock ioStatusBlock,
+                IntPtr fileInformation,
+                uint length,
+                int fileInformationClass);
+
+            [DllImport("ntdll.dll", ExactSpelling = true)]
+            [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
             internal static extern int RtlNtStatusToDosError(int status);
+
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+            [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+            internal static extern uint QueryDosDeviceW(string deviceName, [Out] char[] targetPath, uint max);
+
+            [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+            [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool GetFileInformationByHandleEx(
+                SafeFileHandle file,
+                int fileInformationClass,
+                out FileAttributeTagInformation information,
+                uint bufferSize);
 
             [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
             [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

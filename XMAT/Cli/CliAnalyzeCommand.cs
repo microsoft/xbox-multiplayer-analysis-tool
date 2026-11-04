@@ -32,7 +32,7 @@ namespace XMAT.Cli
                 return report;
             }
 
-            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out string target);
+            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
             if (targetFailure != null)
             {
                 report.Fail(targetFailure.ExitCode, targetFailure.Code, targetFailure.Message);
@@ -48,7 +48,12 @@ namespace XMAT.Cli
             CliOutputFolder output;
             try
             {
-                output = CliOutputFolder.Reserve(target, runId);
+                CliFailure refused = CliOutputFolder.TryReserve(target, runId, out output);
+                if (refused != null)
+                {
+                    report.Fail(refused.ExitCode, refused.Code, refused.Message);
+                    return report;
+                }
             }
             catch (Exception ex) when (CliOutputFolder.IsFileSystemFailure(ex))
             {

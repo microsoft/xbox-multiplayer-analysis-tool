@@ -6,26 +6,29 @@ using System.Diagnostics;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 using XMAT.Cli;
 
 namespace XMAT.Tests.Cli
 {
-    // The staging folder is created and held open in one step (CliOutputFolder, CliDirectoryHandle), so that it cannot be
-    // swapped for another folder, by renames or junctions, between the privacy check and the writes, the publication or
-    // the cleanup. These tests attack as the same user, so they show only what Windows does with the folders' names
-    // while the staging folder is held; that another account is refused alike is not tested here.
+    // --out is admitted without following anything, and the staging folder is created and held relative to the held
+    // folders above it (CliOutputFolder, CliDirectoryHandle): no rename, junction, symbolic link or name that Windows would
+    // read otherwise sends the writes, the publication or the cleanup elsewhere. These tests attack as the same user, so
+    // they show what Windows does with the folders while xmat holds them; that another account is refused alike is not
+    // tested here. Nothing reaches a network: 192.0.2.1 is reserved for documentation and never routed.
     public class CliOutputFolderAnchorTests
     {
         private const string Results = "results";
+        private const int ErrorDirectoryNotEmpty = 145;
 
         [Fact]
-        public async Task WhileHeld_NeitherTheStagingFolderNorItsParentCanBeRenamed()
+        public async Task WhileHeld_NeitherTheStagingFolderNorTheFoldersAboveItCanBeRenamed()
         {
             using var directory = new CliTestDirectory();
             string parent = Path.Join(directory.Root, "parent");
             Directory.CreateDirectory(parent);
             var report = NewReport();
-            using CliOutputFolder output = CliOutputFolder.Reserve(Path.Join(parent, Results), report.RunId);
+            using CliOutputFolder output = CliTestOutput.Reserve(Path.Join(parent, Results), report.RunId);
             Exception parentRename = null;
             Exception stagingRename = null;
 
@@ -48,77 +51,180 @@ namespace XMAT.Tests.Cli
             Assert.Equal(new[] { "parent" }, directory.Entries());
         }
 
-        // --out is reached through a junction that is pointed elsewhere mid-run, at a folder where a staging folder of the
-        // same name waits: the writes and the publication still go to the folder that was created, and the decoy gets
-        // nothing.
+        // A folder above --out is held from the moment it is checked, before the staging folder exists: it cannot be
+        // renamed away while the folders below it are opened.
         [Fact]
-        public async Task AJunctionPointedElsewhereMidRun_CannotRedirectTheWritesOrThePublication()
+        public void AFolderAboveTheOutFolder_CannotBeRenamedOnceItIsHeld()
         {
             using var directory = new CliTestDirectory();
-            (string real, string decoy, string link) = Folders(directory);
-            var report = NewReport();
-            string decoyStaging = Path.Join(decoy, CliOutputFolder.StagingPrefix + report.RunId);
+            string parent = Path.Join(directory.Root, "parent");
+            Directory.CreateDirectory(parent);
+            Exception rename = null;
+
+            using CliOutputFolder output = CliTestOutput.Reserve(
+                Path.Join(parent, Results),
+                Guid.NewGuid().ToString("N"),
+                name =>
+                {
+                    if (name == "parent")
+                    {
+                        rename = Record.Exception(() => Directory.Move(parent, parent + "-moved"));
+                    }
+                });
+
+            Assert.True(rename is IOException or UnauthorizedAccessException, $"{rename}");
+            Assert.True(output.TryDiscard());
+            Assert.Equal(new[] { "parent" }, directory.Entries());
+            Assert.Empty(Directory.GetFileSystemEntries(parent));
+        }
+
+        // A junction anywhere above --out, dangling or not, is refused before anything is created, and never followed.
+        [Theory]
+        [InlineData("parent")]
+        [InlineData("ancestor")]
+        [InlineData("dangling")]
+        public void AJunctionAboveTheOutFolder_IsRefusedAndNeverFollowed(string where)
+        {
+            using var directory = new CliTestDirectory();
+            string real = Path.Join(directory.Root, "real");
+            Directory.CreateDirectory(Path.Join(real, "sub"));
+            string link = Path.Join(directory.Root, "link");
+            Links.Junction(link, where == "dangling" ? Path.Join(directory.Root, "missing") : real);
             try
             {
-                using CliOutputFolder output = CliOutputFolder.Reserve(Path.Join(link, Results), report.RunId);
+                (CliFailure failure, Exception error) = CliTestOutput.Attempt(
+                    where == "ancestor" ? Path.Join(link, "sub", Results) : Path.Join(link, Results));
 
-                await CliStagedRun.CompleteAsync(
-                    report,
-                    output,
-                    _ =>
-                    {
-                        Junction.Retarget(link, decoy);
-                        Directory.CreateDirectory(decoyStaging);
-                        return Produce(report);
-                    },
-                    null,
-                    CancellationToken.None);
-
-                Assert.Equal(CliExitCodes.Success, report.ExitCode);
-                Assert.Equal("{}", File.ReadAllText(Path.Join(real, Results, "summary.json")));
-                Assert.Empty(Directory.GetFileSystemEntries(decoyStaging));
-                Assert.False(Directory.Exists(Path.Join(decoy, Results)));
+                Assert.Null(error);
+                Assert.Equal(("cli.output.unprotected", CliExitCodes.Failed), (failure?.Code, failure?.ExitCode));
+                Assert.Equal(new[] { "sub" }, Directory.GetFileSystemEntries(real).Select(Path.GetFileName));
+                Assert.Empty(Directory.GetFileSystemEntries(Path.Join(real, "sub")));
+                Assert.Equal(new[] { "link", "real" }, directory.Entries());
             }
             finally
             {
-                Junction.Remove(link);
+                Links.Remove(link);
             }
         }
 
-        // The same swap in a run that fails: cleanup removes the folder that was created, and nothing in the decoy.
-        [Fact]
-        public async Task AfterAJunctionSwap_CleanupRemovesOnlyTheFolderItCreated()
+        // The same for a symbolic link, even one to a network share, which following would make Windows sign in to: the
+        // link is refused without being opened through, so the refusal is immediate.
+        [SymbolicLinkTheory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ASymbolicLinkAboveTheOutFolder_IsRefusedAndNeverFollowed(bool remote)
         {
             using var directory = new CliTestDirectory();
-            (string real, string decoy, string link) = Folders(directory);
-            var report = NewReport();
-            string decoyStaging = Path.Join(decoy, CliOutputFolder.StagingPrefix + report.RunId);
+            string real = Path.Join(directory.Root, "real");
+            Directory.CreateDirectory(real);
+            string link = Path.Join(directory.Root, "link");
+            Links.SymbolicLink(link, remote ? @"\\192.0.2.1\share" : real);
             try
             {
-                using CliOutputFolder output = CliOutputFolder.Reserve(Path.Join(link, Results), report.RunId);
+                var watch = Stopwatch.StartNew();
+                (CliFailure failure, Exception error) = CliTestOutput.Attempt(Path.Join(link, Results));
+
+                Assert.Null(error);
+                Assert.Equal("cli.output.unprotected", failure?.Code);
+                Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"{watch.Elapsed}");
+                Assert.Empty(Directory.GetFileSystemEntries(real));
+            }
+            finally
+            {
+                Links.Remove(link);
+            }
+        }
+
+        // An empty parent that becomes a junction or a symbolic link right after xmat checked it, or right before xmat
+        // creates the staging folder in it: nothing can be created through the folder that xmat holds, so reserving fails,
+        // and what the link points to is never touched, not even for a moment.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void AParentThatBecomesAJunctionAfterItWasChecked_IsNeverWrittenThrough(bool beforeCreating) =>
+            ConversionRace(symbolic: false, beforeCreating);
+
+        [SymbolicLinkTheory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void AParentThatBecomesASymbolicLinkAfterItWasChecked_IsNeverWrittenThrough(bool beforeCreating) =>
+            ConversionRace(symbolic: true, beforeCreating);
+
+        // Once the staging folder exists, no folder above it can become a junction or a symbolic link: each contains the
+        // next, and Windows turns only empty folders into links.
+        [Fact]
+        public void AParentThatHoldsTheStagingFolder_CannotBecomeAJunction() => NoConversion(symbolic: false);
+
+        [SymbolicLinkFact]
+        public void AParentThatHoldsTheStagingFolder_CannotBecomeASymbolicLink() => NoConversion(symbolic: true);
+
+        // A folder whose name ends with a dot can be reached only by a verbatim path (\\?\...); Windows removes that dot
+        // from an ordinary path, which then names another folder. xmat uses verbatim paths only, so the writes, the
+        // publication and the cleanup stay in the folder it created, and the decoy that the ordinary path names stays
+        // empty. A trailing space, which Windows keeps in the folders above, behaves the same.
+        [Theory]
+        [InlineData("real.", true)]
+        [InlineData("real.", false)]
+        [InlineData("real ", true)]
+        public async Task ATrailingDotOrSpace_NeverRedirectsTheRunToAnotherFolder(string name, bool succeeds)
+        {
+            using var directory = new CliTestDirectory();
+            string real = Path.Join(@"\\?\" + directory.Root, name);
+            string decoy = Path.Join(directory.Root, "real");
+            Directory.CreateDirectory(real);
+            Directory.CreateDirectory(decoy);
+            var report = NewReport();
+            try
+            {
+                using CliOutputFolder output = CliTestOutput.Reserve(Path.Join(real, Results), report.RunId);
 
                 await CliStagedRun.CompleteAsync(
                     report,
                     output,
                     _ =>
                     {
-                        File.WriteAllText(Path.Join(output.StagingPath, "partial.bin"), "partial");
-                        Junction.Retarget(link, decoy);
-                        Directory.CreateDirectory(decoyStaging);
-                        File.WriteAllText(Path.Join(decoyStaging, "victim.txt"), "keep");
-                        return Fail(report);
+                        Directory.CreateDirectory(output.WorkPath);
+                        File.WriteAllText(Path.Join(output.WorkPath, "work.bin"), "work");
+                        return succeeds ? Produce(report) : Fail(report);
                     },
                     null,
                     CancellationToken.None);
 
                 Assert.Equal(CliCleanupStates.Completed, report.CleanupState);
-                Assert.Empty(Directory.GetFileSystemEntries(real));
-                Assert.Equal("keep", File.ReadAllText(Path.Join(decoyStaging, "victim.txt")));
+                Assert.Empty(Directory.GetFileSystemEntries(decoy));
+                Assert.Equal(
+                    succeeds ? new[] { Results } : Array.Empty<string>(),
+                    Directory.GetFileSystemEntries(real).Select(Path.GetFileName));
+                if (succeeds)
+                {
+                    Assert.Equal(
+                        new[] { "summary.json" },
+                        Directory.GetFileSystemEntries(Path.Join(real, Results)).Select(Path.GetFileName));
+                }
             }
             finally
             {
-                Junction.Remove(link);
+                // Only its verbatim path names it; an ordinary one would remove the decoy instead.
+                Directory.Delete(real, recursive: true);
             }
+        }
+
+        // --out given by its volume's name rather than a drive letter is used as it is, and every path xmat uses is a
+        // verbatim volume path, never one that a drive letter or mounted folder could change.
+        [Fact]
+        public async Task AVolumePath_IsUsedAsItIs()
+        {
+            using var directory = new CliTestDirectory();
+            var report = NewReport();
+            string output = Path.Join(Volumes.NameOf(directory.Root), Volumes.Relative(directory.Root), Results);
+            using CliOutputFolder folder = CliTestOutput.Reserve(output, report.RunId);
+
+            await CliStagedRun.CompleteAsync(report, folder, _ => Produce(report), null, CancellationToken.None);
+
+            Assert.StartsWith(Volumes.NameOf(directory.Root), folder.StagingPath, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(CliExitCodes.Success, report.ExitCode);
+            Assert.Equal("{}", File.ReadAllText(Path.Join(directory.Root, Results, "summary.json")));
+            Assert.Equal(new[] { Results }, directory.Entries());
         }
 
         // A folder, even one private to the same user, or a junction already where the staging folder would go is never
@@ -142,15 +248,18 @@ namespace XMAT.Tests.Cli
 
             if (existing != "folder")
             {
-                Junction.Create(staging, victim);
+                Links.Junction(staging, victim);
             }
 
             string[] before = directory.Entries();
             try
             {
-                // Disposed if it unexpectedly succeeds, so that the folder it holds can be cleaned up.
-                Exception reserving = Record.Exception(
-                    () => CliOutputFolder.Reserve(Path.Join(directory.Root, Results), runId).Dispose());
+                Assert.Null(CliOutputFolder.CheckTarget(Path.Join(directory.Root, Results), out CliOutputTarget target));
+                Exception reserving = Record.Exception(() =>
+                {
+                    CliOutputFolder.TryReserve(target, runId, out CliOutputFolder folder);
+                    folder?.Dispose();
+                });
 
                 Assert.IsAssignableFrom<IOException>(reserving);
                 Assert.Equal(before, directory.Entries());
@@ -163,7 +272,7 @@ namespace XMAT.Tests.Cli
             {
                 if (existing != "folder")
                 {
-                    Junction.Remove(staging);
+                    Links.Remove(staging);
                 }
             }
         }
@@ -180,7 +289,8 @@ namespace XMAT.Tests.Cli
             Directory.CreateDirectory(victim);
             File.WriteAllText(Path.Join(victim, "victim.txt"), "keep");
             var report = NewReport();
-            using CliOutputFolder output = CliOutputFolder.Reserve(Path.Join(directory.Root, Results), report.RunId);
+            string staging = Path.Join(directory.Root, CliOutputFolder.StagingPrefix + report.RunId);
+            using CliOutputFolder output = CliTestOutput.Reserve(Path.Join(directory.Root, Results), report.RunId);
 
             await CliStagedRun.CompleteAsync(
                 report,
@@ -188,10 +298,10 @@ namespace XMAT.Tests.Cli
                 _ =>
                 {
                     Directory.CreateDirectory(output.WorkPath);
-                    Junction.Create(Path.Join(output.WorkPath, "link"), victim);
+                    Links.Junction(Path.Join(staging, "work", "link"), victim);
                     if (!succeeds)
                     {
-                        Junction.Create(Path.Join(output.StagingPath, "link"), victim);
+                        Links.Junction(Path.Join(staging, "link"), victim);
                     }
 
                     return succeeds ? Produce(report) : Fail(report);
@@ -210,32 +320,59 @@ namespace XMAT.Tests.Cli
             }
         }
 
-        // A folder that appears at --out during the run is never replaced: exit code 5, and the staging folder goes.
-        [Fact]
-        public async Task AFolderThatAppearsAtTheTarget_IsNeverReplaced()
+        // A folder, or a link that leads nowhere, that appears at --out during the run is never replaced: exit code 5, and
+        // the staging folder goes.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task AFolderOrLinkThatAppearsAtTheTarget_IsNeverReplaced(bool link)
         {
             using var directory = new CliTestDirectory();
             string target = Path.Join(directory.Root, Results);
             var report = NewReport();
-            using CliOutputFolder output = CliOutputFolder.Reserve(target, report.RunId);
+            using CliOutputFolder output = CliTestOutput.Reserve(target, report.RunId);
+            try
+            {
+                await CliStagedRun.CompleteAsync(
+                    report,
+                    output,
+                    _ =>
+                    {
+                        if (link)
+                        {
+                            Links.Junction(target, Path.Join(directory.Root, "missing"));
+                        }
+                        else
+                        {
+                            Directory.CreateDirectory(target);
+                            File.WriteAllText(Path.Join(target, "theirs.txt"), "keep");
+                        }
 
-            await CliStagedRun.CompleteAsync(
-                report,
-                output,
-                _ =>
+                        return Produce(report);
+                    },
+                    null,
+                    CancellationToken.None);
+
+                Assert.Equal(CliExitCodes.Conflict, report.ExitCode);
+                Assert.Equal(new[] { "cli.output.exists" }, report.Errors.Select(error => error.Code));
+                Assert.Equal(CliCleanupStates.Completed, report.CleanupState);
+                Assert.Equal(new[] { Results }, directory.Entries());
+                if (link)
                 {
-                    Directory.CreateDirectory(target);
-                    File.WriteAllText(Path.Join(target, "theirs.txt"), "keep");
-                    return Produce(report);
-                },
-                null,
-                CancellationToken.None);
-
-            Assert.Equal(CliExitCodes.Conflict, report.ExitCode);
-            Assert.Equal(new[] { "cli.output.exists" }, report.Errors.Select(error => error.Code));
-            Assert.Equal(CliCleanupStates.Completed, report.CleanupState);
-            Assert.Equal(new[] { "theirs.txt" }, Directory.GetFileSystemEntries(target).Select(Path.GetFileName));
-            Assert.Equal(new[] { Results }, directory.Entries());
+                    Assert.True(File.GetAttributes(target).HasFlag(FileAttributes.ReparsePoint));
+                }
+                else
+                {
+                    Assert.Equal(new[] { "theirs.txt" }, Directory.GetFileSystemEntries(target).Select(Path.GetFileName));
+                }
+            }
+            finally
+            {
+                if (link)
+                {
+                    Links.Remove(target);
+                }
+            }
         }
 
         // The commit checks --out first, but a folder or a file can still appear between that check and the rename.
@@ -253,11 +390,18 @@ namespace XMAT.Tests.Cli
             }
 
             File.WriteAllText(kept, "keep");
-            string created = Path.Join(directory.Root, "created");
-
-            using (var handle = CliDirectoryHandle.CreateNew(created, PrivateTo(CurrentUser())))
+            SafeFileHandle[] held = Hold(directory.Root);
+            try
             {
-                Assert.ThrowsAny<IOException>(() => CliDirectoryHandle.Rename(handle, taken));
+                using SafeFileHandle created = CliDirectoryHandle.CreateNew(held[^1], "created", PrivateTo(CurrentUser()));
+                Assert.ThrowsAny<IOException>(() => CliDirectoryHandle.Rename(created, held[^1], "taken"));
+            }
+            finally
+            {
+                foreach (SafeFileHandle handle in held)
+                {
+                    handle.Dispose();
+                }
             }
 
             Assert.Equal("keep", File.ReadAllText(kept));
@@ -271,7 +415,7 @@ namespace XMAT.Tests.Cli
         {
             using var directory = new CliTestDirectory();
             var report = NewReport();
-            using CliOutputFolder output = CliOutputFolder.Reserve(Path.Join(directory.Root, Results), report.RunId);
+            using CliOutputFolder output = CliTestOutput.Reserve(Path.Join(directory.Root, Results), report.RunId);
             var observer = new AfterCommitThrows();
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -282,12 +426,15 @@ namespace XMAT.Tests.Cli
             Assert.Equal(new[] { Results }, directory.Entries());
         }
 
-        // Disposing lets go of the staging folder without removing it, and a discard after that removes nothing.
+        // Disposing lets go of the staging folder and the folders above it without removing anything, and a discard after
+        // that removes nothing.
         [Fact]
         public void Dispose_LetsGoOfTheStagingFolderWithoutRemovingIt()
         {
             using var directory = new CliTestDirectory();
-            CliOutputFolder output = CliOutputFolder.Reserve(Path.Join(directory.Root, Results), Guid.NewGuid().ToString("N"));
+            string parent = Path.Join(directory.Root, "parent");
+            Directory.CreateDirectory(parent);
+            CliOutputFolder output = CliTestOutput.Reserve(Path.Join(parent, Results), Guid.NewGuid().ToString("N"));
             Assert.ThrowsAny<IOException>(() => Directory.Delete(output.StagingPath));
 
             output.Dispose();
@@ -295,7 +442,68 @@ namespace XMAT.Tests.Cli
             Assert.False(output.TryDiscard());
             Assert.True(Directory.Exists(output.StagingPath));
             Directory.Delete(output.StagingPath);
+            Directory.Move(parent, parent + "-moved");
         }
+
+        // --out is read without touching the file system: network and device paths are refused before anything could reach
+        // them (exit code 6), names that Windows would read otherwise are not valid (2), and a volume's root has no parent
+        // to create --out in (2).
+        [Theory]
+        [InlineData(@"\\192.0.2.1\share\results", "cli.output.unprotected")]
+        [InlineData(@"\\?\UNC\192.0.2.1\share\results", "cli.output.unprotected")]
+        [InlineData(@"\\.\C:\results", "cli.output.unprotected")]
+        [InlineData(@"\\?\GLOBALROOT\Device\HarddiskVolume1\results", "cli.output.unprotected")]
+        [InlineData(@"\\?\C:\folder\..\results", "cli.usage.invalid-value")]
+        [InlineData(@"\\?\C:\folder\stream:x\results", "cli.usage.invalid-value")]
+        [InlineData(@"C:\folder\stream:x\results", "cli.usage.invalid-value")]
+        [InlineData(@"C:\", "cli.output.parent-missing")]
+        [InlineData(@"\\?\C:\", "cli.output.parent-missing")]
+        public void CheckTarget_RefusesWithoutTouchingTheFileSystem(string output, string code) =>
+            Assert.Equal(code, CliOutputFolder.CheckTarget(output, out _)?.Code);
+
+        // A verbatim path keeps every name as it is written, a trailing dot or space included.
+        [Theory]
+        [InlineData(@"C:\folder\results", "C:", "folder", "results")]
+        [InlineData(@"\\?\C:\folder.\results ", "C:", "folder.", "results ")]
+        [InlineData(
+            @"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\folder\results",
+            "Volume{01234567-89ab-cdef-0123-456789abcdef}",
+            "folder",
+            "results")]
+        public void CheckTarget_ReadsTheVolumeTheFoldersAndTheName(string output, string volume, string folder, string name)
+        {
+            Assert.Null(CliOutputFolder.CheckTarget(output, out CliOutputTarget target));
+            Assert.Equal(volume, target.Volume);
+            Assert.Equal(new[] { folder }, target.Folders);
+            Assert.Equal(name, target.Name);
+        }
+
+        // Only a local volume's device: not a network redirector, a substituted drive or a shadow copy.
+        [Theory]
+        [InlineData(@"\Device\HarddiskVolume3", true)]
+        [InlineData(@"\Device\HarddiskVolume12", true)]
+        [InlineData(@"\Device\HarddiskVolumeShadowCopy1", false)]
+        [InlineData(@"\Device\HarddiskVolume", false)]
+        [InlineData(@"\??\C:\work", false)]
+        [InlineData(@"\Device\LanmanRedirector\;Z:0000000000012345\server\share", false)]
+        [InlineData(@"\Device\Mup\server\share", false)]
+        [InlineData(@"\Device\CdRom0", false)]
+        [InlineData(null, false)]
+        public void IsLocalVolumeDevice_IsOnlyAHarddiskVolume(string device, bool expected) =>
+            Assert.Equal(expected, CliOutputFolder.IsLocalVolumeDevice(device));
+
+        // Folders above --out may be reparse points only of the kinds that leave names alone.
+        [Theory]
+        [InlineData(null, true)]
+        [InlineData(0x9000001Au, true)]
+        [InlineData(0x9000F01Au, true)]
+        [InlineData(0x80000013u, true)]
+        [InlineData(0x80000017u, true)]
+        [InlineData(0xA0000003u, false)]
+        [InlineData(0xA000000Cu, false)]
+        [InlineData(0x8000001Bu, false)]
+        public void IsAdmittedReparseTag_AdmitsOnlyKindsThatLeaveNamesAlone(uint? tag, bool expected) =>
+            Assert.Equal(expected, CliOutputFolder.IsAdmittedReparseTag(tag));
 
         // The owner can always change the folder's access control, so it must be the current user too.
         [Theory]
@@ -324,6 +532,72 @@ namespace XMAT.Tests.Cli
         public void IsSupportedStorage_IsOnlyLocalNtfs(string fileSystem, string devicePath, bool expected) =>
             Assert.Equal(expected, CliOutputFolder.IsSupportedStorage(fileSystem, devicePath));
 
+        private static void ConversionRace(bool symbolic, bool beforeCreating)
+        {
+            using var directory = new CliTestDirectory();
+            string parent = Path.Join(directory.Root, "parent");
+            string decoy = Path.Join(directory.Root, "decoy");
+            Directory.CreateDirectory(parent);
+            Directory.CreateDirectory(decoy);
+
+            // Adding or removing an entry would set the decoy's last write time to now.
+            var untouched = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            Directory.SetLastWriteTimeUtc(decoy, untouched);
+            int converted = -1;
+            try
+            {
+                (CliFailure failure, Exception error) = CliTestOutput.Attempt(
+                    Path.Join(parent, Results),
+                    name =>
+                    {
+                        if (beforeCreating ? name.StartsWith(CliOutputFolder.StagingPrefix, StringComparison.Ordinal) : name == "parent")
+                        {
+                            converted = Links.Convert(parent, decoy, symbolic);
+                        }
+                    });
+
+                Assert.Equal(0, converted);
+                Assert.True(error is IOException || failure?.Code == "cli.output.unprotected", $"{failure?.Code} {error}");
+                Assert.Empty(Directory.GetFileSystemEntries(decoy));
+                Assert.Equal(untouched, Directory.GetLastWriteTimeUtc(decoy));
+            }
+            finally
+            {
+                Links.Remove(parent);
+            }
+        }
+
+        private static void NoConversion(bool symbolic)
+        {
+            using var directory = new CliTestDirectory();
+            string parent = Path.Join(directory.Root, "parent");
+            string decoy = Path.Join(directory.Root, "decoy");
+            Directory.CreateDirectory(parent);
+            Directory.CreateDirectory(decoy);
+            using CliOutputFolder output = CliTestOutput.Reserve(Path.Join(parent, Results), Guid.NewGuid().ToString("N"));
+
+            Assert.Equal(ErrorDirectoryNotEmpty, Links.Convert(parent, decoy, symbolic));
+            Assert.False(File.GetAttributes(parent).HasFlag(FileAttributes.ReparsePoint));
+            Assert.True(output.TryDiscard());
+            Assert.Empty(Directory.GetFileSystemEntries(parent));
+        }
+
+        // Holds folder and every folder above it, as xmat does.
+        private static SafeFileHandle[] Hold(string folder)
+        {
+            Assert.Null(CliOutputFolder.CheckTarget(Path.Join(folder, Results), out CliOutputTarget target));
+            var held = new List<SafeFileHandle>
+            {
+                CliDirectoryHandle.OpenVolumeRoot(CliDirectoryHandle.QueryDosDevice(target.Volume)),
+            };
+            foreach (string name in target.Folders)
+            {
+                held.Add(CliDirectoryHandle.OpenFolder(held[^1], name));
+            }
+
+            return held.ToArray();
+        }
+
         private static CliReport NewReport() => new(CliCommands.Analyze, Guid.NewGuid().ToString("N"));
 
         private static Task<IReadOnlyList<CliStagedFile>> Produce(CliReport report)
@@ -339,18 +613,6 @@ namespace XMAT.Tests.Cli
         {
             report.Fail(CliExitCodes.InvalidInput, "test.failed", "The test failed the run.");
             return Task.FromResult<IReadOnlyList<CliStagedFile>>(null);
-        }
-
-        // A real folder, a decoy folder, and a junction to the real one.
-        private static (string Real, string Decoy, string Link) Folders(CliTestDirectory directory)
-        {
-            string real = Path.Join(directory.Root, "real");
-            string decoy = Path.Join(directory.Root, "decoy");
-            string link = Path.Join(directory.Root, "link");
-            Directory.CreateDirectory(real);
-            Directory.CreateDirectory(decoy);
-            Junction.Create(link, real);
-            return (real, decoy, link);
         }
 
         private static SecurityIdentifier CurrentUser()
@@ -386,49 +648,6 @@ namespace XMAT.Tests.Cli
             }
 
             public void AfterCommit() => throw new InvalidOperationException("Injected right after the commit.");
-        }
-
-        // mklink /J needs no privilege, unlike a symbolic link.
-        private static class Junction
-        {
-            internal static void Create(string link, string target)
-            {
-                var start = new ProcessStartInfo(Path.Join(Environment.SystemDirectory, "cmd.exe"))
-                {
-                    CreateNoWindow = true,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                };
-                foreach (string argument in new[] { "/c", "mklink", "/J", link, target })
-                {
-                    start.ArgumentList.Add(argument);
-                }
-
-                using Process process = Process.Start(start);
-                string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-                process.WaitForExit();
-                Assert.True(process.ExitCode == 0, output);
-            }
-
-            internal static void Retarget(string link, string target)
-            {
-                Remove(link);
-                Create(link, target);
-            }
-
-            // Removes the junction itself, dangling or not; what it points to stays.
-            internal static void Remove(string link)
-            {
-                try
-                {
-                    Directory.Delete(link);
-                }
-                catch (DirectoryNotFoundException)
-                {
-                    // Already gone.
-                }
-            }
         }
     }
 }

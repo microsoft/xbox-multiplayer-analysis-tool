@@ -217,10 +217,10 @@ namespace XMAT.Tests.Cli
             Assert.Equal("failed", report.Status);
         }
 
-        // Storage without Windows permissions (FAT, exFAT, some shares) silently drops the access control that Reserve sets,
-        // and storage that maps permissions imperfectly can drop their inheritance. A staging folder whose access control
-        // changed after Reserve stands in for both: the run refuses before it produces anything, publishes nothing and
-        // removes the staging folder. The folder as Reserve made it reads back as private.
+        // Storage without Windows permissions (FAT, exFAT) is refused by its file system, but storage that maps permissions
+        // imperfectly can still drop the access control that Reserve sets, or its inheritance. A staging folder whose access
+        // control changed after Reserve stands in for that: the run refuses before it produces anything, publishes nothing
+        // and removes the staging folder. The folder as Reserve made it reads back as private.
         [Theory]
         [InlineData("inherits")]
         [InlineData("grants-everyone")]
@@ -337,7 +337,7 @@ namespace XMAT.Tests.Cli
         private static CliReport NewReport() => new(CliCommands.Analyze, Guid.NewGuid().ToString("N"));
 
         private static CliOutputFolder Reserve(CliTestDirectory directory, CliReport report) =>
-            CliOutputFolder.Reserve(Path.Combine(directory.Root, Results), report.RunId);
+            CliTestOutput.Reserve(Path.Join(directory.Root, Results), report.RunId);
 
         private static Task<IReadOnlyList<CliStagedFile>> Produce(CliReport report, int exitCode)
         {
