@@ -25,7 +25,7 @@ namespace XMAT.WebServiceCapture.Models
         public readonly string UnknownStringValue = string.Empty;
         public const Int64 UnknownRowId = -1;
 
-        public Int64 RecordRowId { get; private set; }
+        public Int64 RecordRowId { get; internal set; }
 
         public Int64 RequestNumber { get; private set; }
         public Int64 Id { get; private set; }
@@ -45,6 +45,10 @@ namespace XMAT.WebServiceCapture.Models
 
         public Dictionary<string, string> RequestHeaders { get; private set; }
         public Dictionary<string, string> ResponseHeaders { get; private set; }
+
+        // The host offered by host-list menus (DNS spelling kept, IP literals canonical), or
+        // null when the row has no valid host.
+        public string ActionableHost => HostAuthority.TryNormalizeHost(Host, out string host) ? host : null;
 
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -94,9 +98,19 @@ namespace XMAT.WebServiceCapture.Models
             RequestTime = requestTime;
             Duration = duration;
             Scheme = scheme;
-            var hostAndPortSplit = hostAndPort.Split(':');
-            Host = hostAndPortSplit[0];
-            Port = hostAndPortSplit.Length > 1 ? hostAndPortSplit[1] : string.Empty;
+            if (HostAuthority.TryParse(hostAndPort, out string host, out int? port))
+            {
+                Host = host;
+                Port = port?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+            }
+            else
+            {
+                // Without a parsable authority, such as a SAZ frame with no Host header, keep the
+                // former split; a missing value gives an empty host and port.
+                var hostAndPortSplit = (hostAndPort ?? string.Empty).Split(':');
+                Host = hostAndPortSplit[0];
+                Port = hostAndPortSplit.Length > 1 ? hostAndPortSplit[1] : string.Empty;
+            }
             Method = method;
             // TODO: possibly remove the host & port?
             Path = call;
@@ -174,12 +188,18 @@ namespace XMAT.WebServiceCapture.Models
 
         internal void AddToDataTable(string deviceName, IDataTable dataTable)
         {
+            RecordRowId = dataTable.AddRow(ToDataTableValues(deviceName));
+        }
+
+        internal object[] ToDataTableValues(string deviceName)
+        {
             var requestBodyAsBase64 = RequestBody != null && RequestBody.Length > 0 ? Convert.ToBase64String(RequestBody) : string.Empty;
             var responseBodyAsBase64 = ResponseBody != null && ResponseBody.Length > 0 ? Convert.ToBase64String(ResponseBody) : string.Empty;
 
             // see layout in WebServiceCaptureMethod.InitializeDataTables()
 
-            RecordRowId = dataTable.AddRow(
+            return new object[]
+            {
                 deviceName,
                 RequestNumber,
                 Id,
@@ -196,7 +216,7 @@ namespace XMAT.WebServiceCapture.Models
                 ResponseLineAndHeaders,
                 responseBodyAsBase64,
                 ClientIP
-            );
+            };
         }
 
         internal void UpdateFromDataRecord(IDataRecord dataRecord)

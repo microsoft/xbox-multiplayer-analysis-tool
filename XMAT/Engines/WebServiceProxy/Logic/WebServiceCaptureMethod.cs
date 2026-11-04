@@ -4,6 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using XMAT.SharedInterfaces;
@@ -56,7 +59,11 @@ namespace XMAT.WebServiceCapture
 
         public void Shutdown()
         {
-            InternetProxy.Disable();
+            // Undo only this process's own, unchanged Local PC proxy; never a proxy XMAT did not set.
+            if (PcProxyRecovery.Current.RestoreOnShutdown() == RecoveryResult.Failed)
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, "Could not restore the Windows proxy settings during shutdown.");
+            }
         }
 
         public bool OwnsDataTable(string tableName)
@@ -93,9 +100,20 @@ namespace XMAT.WebServiceCapture
             );
         }
 
-        public async Task<bool> ImportFromFiddlerAsync(string fromFilePath, ICaptureDeviceContext context)
+        public async Task ImportFromFiddlerAsync(string fromFilePath, ICaptureDeviceContext context)
         {
-            // get the controller for this imported data...
+            using (PublicUtilities.BlockingOperation())
+            {
+                await ImportFromFiddlerAsync(fromFilePath, context, WebProxyConnectionsTable);
+            }
+        }
+
+        internal async Task ImportFromFiddlerAsync(
+            string fromFilePath,
+            ICaptureDeviceContext context,
+            IDataTable dataTable,
+            Action<string> logError = null)
+        {
             var captureController = context.CaptureController as WebServiceDeviceCaptureController;
 
             if (captureController == null)
@@ -103,18 +121,113 @@ namespace XMAT.WebServiceCapture
                 throw new InvalidOperationException("WebServiceCaptureMethod does not have a corresponding WebServiceDeviceCaptureController.");
             }
 
-            // TODO: if the controller is currently importing, then cancel if the user does not
-            // wish to interrupt it
-
-            // destroy existing captures for that controller and cancel an existing import
-            // and wait until that is done...
-            captureController.CancelExistingFiddlerImport();
-            captureController.ClearAllCaptures();
-
-            // ...then kick off another import
-            using (var bo = PublicUtilities.BlockingOperation())
+            if (dataTable is not IImportedCaptureTable importTable)
             {
-                return await Task.Run(() => captureController.ImportFromFiddler(fromFilePath));
+                throw new InvalidOperationException("The capture table does not support atomic imports.");
+            }
+
+            captureController.CancelExistingFiddlerImport();
+
+            var imported = await Task.Run(() =>
+            {
+                FiddlerSazImportResult import;
+                try
+                {
+                    import = FiddlerSazHandler.ImportSazFileWithDiagnostics(
+                        fromFilePath,
+                        CancellationToken.None);
+                }
+                catch (FiddlerSazHeaderLimitException ex)
+                {
+                    throw new InvalidDataException(
+                        Localization.GetLocalizedString(
+                            "WEBCAP_IMPORT_HEADER_LIMIT"),
+                        ex);
+                }
+                catch (SazArchiveException ex)
+                {
+                    throw new InvalidDataException(
+                        Localization.GetLocalizedString(
+                            ex.Failure == SazArchiveFailure.Malformed
+                                ? "WEBCAP_IMPORT_ARCHIVE_INVALID"
+                                : "WEBCAP_IMPORT_ARCHIVE_LIMIT"),
+                        ex);
+                }
+                var connections = import.Records;
+                var hostFilters = captureController.UpdateFilter(
+                    connections.Select(connection => connection.Host).Distinct().ToList());
+                var statusFilters = captureController.UpdateFilter(
+                    connections.Select(connection => connection.Status).Distinct().ToList());
+                var methodFilters = captureController.UpdateFilter(
+                    connections.Select(connection => connection.Method).Distinct().ToList());
+                var rows = connections.Select(
+                    connection => connection.ToDataTableValues(captureController.DeviceName));
+                var rowIds = importTable.ReplaceImportedRows(
+                    new FieldValue<string>(FieldKey_DeviceName, captureController.DeviceName),
+                    rows);
+                for (int index = 0; index < connections.Count; index++)
+                {
+                    connections[index].RecordRowId = rowIds[index];
+                }
+                return (Connections: connections, HostFilters: hostFilters,
+                    StatusFilters: statusFilters, MethodFilters: methodFilters,
+                    SkippedIncompleteFrames:
+                        import.SkippedIncompleteFrames,
+                    SkippedMalformedHeaderLines:
+                        import.SkippedMalformedHeaderLines);
+            });
+
+            captureController.PrepareForActiveCaptureData();
+            captureController.ProxyConnections = imported.Connections;
+            captureController.HostFilterList = imported.HostFilters;
+            captureController.StatusFilterList = imported.StatusFilters;
+            captureController.MethodFilterList = imported.MethodFilters;
+            TryNotifyCaptureReplacement(
+                () => captureController.SetImportNotice(
+                    imported.SkippedIncompleteFrames > 0 ||
+                    imported.SkippedMalformedHeaderLines > 0
+                        ? Localization.GetLocalizedString(
+                            "WEBCAP_IMPORT_SKIPPED_DATA_NOTICE")
+                        : null),
+                logError);
+            TryNotifyCaptureReplacement(
+                () => captureController.RaisePropertyChange(
+                    nameof(WebServiceDeviceCaptureController.HostFilterList)),
+                logError);
+            TryNotifyCaptureReplacement(
+                () => captureController.RaisePropertyChange(
+                    nameof(WebServiceDeviceCaptureController.StatusFilterList)),
+                logError);
+            TryNotifyCaptureReplacement(
+                () => captureController.RaisePropertyChange(
+                    nameof(WebServiceDeviceCaptureController.MethodFilterList)),
+                logError);
+            TryNotifyCaptureReplacement(
+                () => captureController.SelectedConnectionModel = null,
+                logError);
+            TryNotifyCaptureReplacement(
+                () => captureController.RaisePropertyChange(
+                    nameof(WebServiceDeviceCaptureController.ProxyConnections)),
+                logError);
+        }
+
+        private static void TryNotifyCaptureReplacement(Action notification, Action<string> logError)
+        {
+            try
+            {
+                notification();
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                string message = $"Failed to notify the capture view after import: {ex}";
+                if (logError != null)
+                {
+                    logError(message);
+                }
+                else
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, message);
+                }
             }
         }
 

@@ -146,20 +146,13 @@ namespace XboxClient
 
         public static void CopyFile(string ipAddress, string srcPath, string destPath)
         {
-            try
-            {
-                GDKXHelper.CreateFileIOClient(ipAddress, out Assembly loadedAssembly, out Type FileIOClientType, out object FileIOClientInstance);
+            GDKXHelper.CreateFileIOClient(ipAddress, out Assembly loadedAssembly, out Type FileIOClientType, out object FileIOClientInstance);
 
-                Type enumType = loadedAssembly.GetType("Microsoft.Xbox.XTF.IO.CopyFileFlags");
-                object enumFlag = Convert.ChangeType(0x00000000, Enum.GetUnderlyingType(enumType));
+            Type enumType = loadedAssembly.GetType("Microsoft.Xbox.XTF.IO.CopyFileFlags");
+            object enumFlag = Convert.ChangeType(0x00000000, Enum.GetUnderlyingType(enumType));
 
-                MethodInfo method = FileIOClientType.GetMethod("CopyFiles", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-                method.Invoke(FileIOClientInstance, new object[] { srcPath, (FileAttributes)(-1), FileAttributes.System | FileAttributes.Hidden, (uint)1, destPath, enumFlag, null, null });
-            }
-            catch
-            {
-
-            }
+            MethodInfo method = FileIOClientType.GetMethod("CopyFiles", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            method.Invoke(FileIOClientInstance, new object[] { srcPath, (FileAttributes)(-1), FileAttributes.System | FileAttributes.Hidden, (uint)1, destPath, enumFlag, null, null });
         }
 
         public static void DeleteFile(string ipAddress, string path)
@@ -174,29 +167,30 @@ namespace XboxClient
                 MethodInfo method = FileIOClientType.GetMethod("DeleteFiles", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
                 method.Invoke(FileIOClientInstance, new object[] { path, (FileAttributes)(-1), FileAttributes.System | FileAttributes.Hidden, (uint)1, enumFlag, null });
             }
-            catch
+            catch (Exception ex) when (IsMissingFile(ex))
             {
-
+                // Removing an already absent configuration is idempotent.
             }
+        }
+
+        internal static bool IsMissingFile(Exception exception)
+        {
+            var cause = exception.GetBaseException();
+            return cause is FileNotFoundException or DirectoryNotFoundException ||
+                (cause is COMException &&
+                 (cause.HResult == unchecked((int)0x80070002) || cause.HResult == unchecked((int)0x80070003)));
         }
 
         public static void Reboot(string ipAddress)
         {
-            try
-            {
-                GDKXHelper.CreateConsoleControlClient(ipAddress, out Assembly loadedAssembly, out Type ConsoleControlClientType, out object ConsoleControlClientInstance);
+            GDKXHelper.CreateConsoleControlClient(ipAddress, out Assembly loadedAssembly, out Type ConsoleControlClientType, out object ConsoleControlClientInstance);
 
-                // get the ShutdownConsoleFlags type
-                Type enumType = loadedAssembly.GetType("Microsoft.Xbox.XTF.Console.ShutdownConsoleFlags");
-                object enumFlag = Convert.ChangeType(0x00000001, Enum.GetUnderlyingType(enumType));
+            // get the ShutdownConsoleFlags type
+            Type enumType = loadedAssembly.GetType("Microsoft.Xbox.XTF.Console.ShutdownConsoleFlags");
+            object enumFlag = Convert.ChangeType(0x00000001, Enum.GetUnderlyingType(enumType));
 
-                MethodInfo method = ConsoleControlClientType.GetMethod("ShutdownConsole", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-                method.Invoke(ConsoleControlClientInstance, new object[] { enumFlag });
-            }
-            catch
-            {
-
-            }
+            MethodInfo method = ConsoleControlClientType.GetMethod("ShutdownConsole", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            method.Invoke(ConsoleControlClientInstance, new object[] { enumFlag });
         }
 
         // TODO: Better handling of when the console is offline. Enable proxy for example shows no error message
@@ -230,15 +224,17 @@ namespace XboxClient
             ProxyEnabled,
             ProxyingGenericDevice
         }
+        public static string GetProxySetting(string ipAddress)
+        {
+            GDKXHelper.CreateConsoleControlClient(ipAddress, out Assembly loadedAssembly, out Type clientType, out object client);
+            var method = clientType.GetMethod("GetSetting", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            return (string)method.Invoke(client, new object[] { "httpproxyhost" });
+        }
         public static EProxyEnabledCheckResult IsProxyEnabled(string ipAddress)
         {
             try
             {
-                GDKXHelper.CreateConsoleControlClient(ipAddress, out Assembly loadedAssembly, out Type ConsoleControlClientType, out object ConsoleControlClientInstance);
-
-                MethodInfo method = ConsoleControlClientType.GetMethod("GetSetting", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-                object retVal = method.Invoke(ConsoleControlClientInstance, new object[] { "httpproxyhost" });
-                string proxyVal = (string)retVal;
+                var proxyVal = GetProxySetting(ipAddress);
                 return String.IsNullOrEmpty(proxyVal) ? EProxyEnabledCheckResult.ProxyDisabled : EProxyEnabledCheckResult.ProxyEnabled;
             }
             catch

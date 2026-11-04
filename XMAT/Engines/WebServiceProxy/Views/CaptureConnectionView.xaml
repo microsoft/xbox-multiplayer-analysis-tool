@@ -8,6 +8,8 @@
              xmlns:app="clr-namespace:XMAT"
              mc:Ignorable="d" 
              Loaded="UserControl_Loaded"
+             Unloaded="UserControl_Unloaded"
+             DataContextChanged="UserControl_DataContextChanged"
              x:Name="CaptureConnectionControl"
              FocusManager.FocusedElement="{Binding ElementName=ConnectionList}"
              d:DesignHeight="720" d:DesignWidth="1280">
@@ -17,12 +19,19 @@
         <Style x:Key="CenterGridHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
         </Style>
+        <!-- Filled for the right-clicked or focused row when it opens. -->
+        <ContextMenu x:Key="HostListRowMenu"
+                     Background="{DynamicResource MenuBackgroundBrush}"
+                     Foreground="{DynamicResource MenuForegroundBrush}"/>
     </UserControl.Resources>
     <UserControl.CommandBindings>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ChangePort}" Executed="ChangePort_Executed" CanExecute="ChangePort_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}" Executed="DiscardPort_Executed" CanExecute="DiscardPort_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}" Executed="CancelPort_Executed" CanExecute="CancelPort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.EnableDevice}"     Executed="EnableDevice_Executed"     CanExecute="Enable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DisableDevice}"    Executed="DisableDevice_Executed"    CanExecute="Disable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}" Executed="StartStopCapture_Executed" CanExecute="StartStopCapture_CanExecute"/>
-        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CheckDevice}"    Executed="CheckDevice_Executed" />
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CheckDevice}" Executed="CheckDevice_Executed" CanExecute="CheckDevice_CanExecute"/>
     </UserControl.CommandBindings>
 
     <Grid>
@@ -54,7 +63,7 @@
         Visibility="{Binding Path=IsEnabled, RelativeSource={RelativeSource Self}, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}}">Check Xbox Proxy Status</Button>
             <Separator Visibility="{Binding Path=IsEnabled, ElementName=DisableButton, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}}"/>
 
-            <ToggleButton x:Name="StartButton" IsChecked="{Binding CaptureController.IsRunning}" Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}"
+            <ToggleButton x:Name="StartButton" IsChecked="{Binding CaptureController.IsRunning, Mode=OneWay}" Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}"
                           CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}" CommandTarget="{Binding ElementName=CaptureConnectionControl}">
                 <ToggleButton.Style>
                     <Style TargetType="{x:Type ToggleButton}" BasedOn="{StaticResource {x:Static ToolBar.ToggleButtonStyleKey}}">
@@ -82,7 +91,16 @@
                 </ToggleButton.Style>
             </ToggleButton>
             <Separator/>
-            <Button x:Name="AnalyzeButton" Command="{x:Static app:AppCommands.AnalyzeCaptures}" CommandTarget="{Binding ElementName=CaptureConnectionControl}">Analyze Capture</Button>
+            <Button x:Name="DiscardPortButton" Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}"
+                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    Visibility="{Binding CaptureController.HasPendingPort, Converter={StaticResource booleanToVisibilityConverter}}"/>
+            <Button x:Name="CancelPortButton" Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}"
+                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    Visibility="{Binding CaptureController.IsPortChangeInProgress, Converter={StaticResource booleanToVisibilityConverter}}"/>
+            <Button x:Name="AnalyzeButton"
+                    Command="{x:Static app:AppCommands.AnalyzeCaptures}"
+                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    ToolTipService.ShowOnDisabled="True">Analyze Capture</Button>
             <Separator/>
             <Button x:Name="ClearButton" Command="{x:Static app:AppCommands.ClearAllCaptures}" CommandTarget="{Binding ElementName=CaptureConnectionControl}">Clear Capture</Button>
             <Separator/>
@@ -98,27 +116,13 @@
                 <app:CheckBoxFilters x:Name="HostFilters"   FilterDesc="Host"   FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.HostFilterList}"/>
                 <app:CheckBoxFilters x:Name="MethodFilters" FilterDesc="Method" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.MethodFilterList}"/>
             </StackPanel>
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock x:Name="DetailsText" FontWeight="Bold" Margin="20,0" Text="Details"/>
-                <TextBlock x:Name="PortText" Text="Port: "/>
-                <TextBlock>
-                    <TextBlock.Style>
-                        <Style TargetType="{x:Type TextBlock}">
-                            <Setter Property="Text" Value="{Binding CaptureController.Port}"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsReadOnly}" Value="True">
-                                    <Setter Property="Text" Value="None"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
-            </StackPanel>
         </StackPanel>
 
         <!-- Timeline -->
         <local:CaptureTimelineView x:Name="TimelineView" Grid.Row="2"
                                    ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
+                                   IsCaptureRunning="{Binding CaptureController.IsRunning, Mode=OneWay}"
+                                   HostListPolicy="{Binding CaptureController.HostListPolicy, Mode=OneWay}"
                                    SelectedItem="{Binding CaptureController.SelectedConnectionModel}"/>
 
         <GridSplitter Grid.Row="3" Height="4" HorizontalAlignment="Stretch" VerticalAlignment="Center" ResizeDirection="Rows"/>
@@ -128,6 +132,7 @@
                   d:ItemsSource="{d:SampleData}" 
                   ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"
+                  ContextMenuOpening="ConnectionList_ContextMenuOpening"
                   AutoGenerateColumns="False" GridLinesVisibility="None" ScrollViewer.ScrollChanged="ConnectionList_ScrollChanged">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="30"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
@@ -149,6 +154,7 @@
                             </MultiBinding>
                         </Setter.Value>
                     </Setter>
+                    <Setter Property="ContextMenu" Value="{StaticResource HostListRowMenu}"/>
                 </Style>
             </DataGrid.RowStyle>
         </DataGrid>
@@ -222,6 +228,11 @@
                     SelectedItem="{Binding CaptureController.SelectedWebSocketMessage, Mode=TwoWay}"/>
             </TabItem>
             <TabItem x:Name="ScriptEditorTab" Header="Script Editor">
+                <TabItem.HeaderTemplate>
+                    <DataTemplate>
+                        <TextBlock><Run Text="{Binding Mode=OneWay}"/><Run Text="{Binding DataContext.CaptureController.Scripts.ActiveCountText, RelativeSource={RelativeSource AncestorType=TabItem}, Mode=OneWay}"/></TextBlock>
+                    </DataTemplate>
+                </TabItem.HeaderTemplate>
                 <app:ScriptEditorView ScriptCollection="{Binding CaptureController.Scripts}" ScriptTypeCollection="{Binding CaptureController.ScriptTypes}" TabSize="4"/>
             </TabItem>
             <TabItem x:Name="BlockListTab" Header="Block List">

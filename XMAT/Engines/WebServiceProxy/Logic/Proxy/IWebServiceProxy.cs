@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture.Proxy
@@ -25,9 +27,14 @@ namespace XMAT.WebServiceCapture.Proxy
 
         BypassListModel BypassList { get; set; }
 
-        void StartProxy(WebServiceProxyOptions options);
+        Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> SslConnectionRequestPolicyAsync { get; set; }
+        Func<HttpRequestEventArgs, CancellationToken, Task<bool>> WebRequestPolicyAsync { get; set; }
+        Func<HttpResponseEventArgs, CancellationToken, Task<bool>> WebResponsePolicyAsync { get; set; }
 
-        void StopProxy();
+        // Completes only after both listeners are bound. On failure, partial startup is rolled back and the exception propagates.
+        Task StartProxyAsync(WebServiceProxyOptions options, CancellationToken cancellationToken = default);
+
+        Task StopProxyAsync(IProgress<WebProxyStopProgress> progress = null);
 
         void Reset();
     }

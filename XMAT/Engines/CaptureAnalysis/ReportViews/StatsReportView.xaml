@@ -11,7 +11,6 @@
     <Grid>
         <wv2:WebView2
             Name="webView"
-            Source="{Binding ReportUrl}"
             NavigationStarting="Navigation_Starting"
             NavigationCompleted="Navigation_Completed"
         />

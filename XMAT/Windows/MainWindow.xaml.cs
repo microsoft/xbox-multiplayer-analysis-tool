@@ -3,18 +3,20 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.Telemetry;
 using XMAT.WebServiceCapture;
-using XMAT.NetworkTrace;
 
 namespace XMAT
 {
@@ -25,10 +27,16 @@ namespace XMAT
     {
         private const string XMATCaptureFileExtension = "xmatcap";
         private const string FiddlerFileExtension = "saz";
+        private const string NetTraceFileExtension = "etl";
         private readonly string XMATFilter = $"{PublicUtilities.AppName} files (*.{XMATCaptureFileExtension})|*.{XMATCaptureFileExtension}";
         private readonly string FiddlerFilter = $"Fiddler SAZ files (*.{FiddlerFileExtension})|*.{FiddlerFileExtension}";
+        private readonly string NetTraceFilter = $"Network trace files (*.{NetTraceFileExtension})|*.{NetTraceFileExtension}";
+        private readonly AnalysisReportExportWorkflow
+            _analysisReportExportWorkflow;
 
         private Cursor _originalCursor;
+        private bool _isCloseInProgress;
+        private bool _closeConfirmed;
 
         public MainWindow()
         {
@@ -36,6 +44,12 @@ namespace XMAT
 
             // Apply theme after preferences are deserialized
             ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
+
+            _analysisReportExportWorkflow =
+                new AnalysisReportExportWorkflow(
+                    this,
+                    new WpfAnalysisReportExportDialogService(),
+                    ExportAnalysisReportAsync);
 
             InitializeComponent();
 
@@ -47,19 +61,46 @@ namespace XMAT
             FileSaveCaptures.Header = Localization.GetLocalizedString("FILE_SAVE_CAPTURES");
             FileImportCaptures.Header = Localization.GetLocalizedString("FILE_IMPORT_CAPTURES");
             FileExportCaptures.Header = Localization.GetLocalizedString("FILE_EXPORT_CAPTURES");
+            FileExportSanitizedCaptures.Header = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED");
+            FileExportSanitizedCaptures.ToolTip = Localization.GetLocalizedString("SANITIZED_EXPORT_TOOLTIP");
             FileExit.Header = Localization.GetLocalizedString("FILE_EXIT");
             ViewClearCaptures.Header = Localization.GetLocalizedString("VIEW_CLEAR_CAPTURES");
             EditPreferences.Header = Localization.GetLocalizedString("EDIT_PREFERENCES");
             AnalysisMenu.Header = Localization.GetLocalizedString("ANALYSIS_MENU");
             ViewAnalyzeCaptures.Header = Localization.GetLocalizedString("VIEW_ANALYZE_CAPTURES");
+            ViewAnalyzeCaptures.ToolTip = Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
+            AnalysisExportReport.Header = Localization.GetLocalizedString("ANALYSIS_EXPORT_REPORT");
+            AnalysisExportReport.ToolTip = Localization.GetLocalizedString("ANALYSIS_EXPORT_REPORT_TOOLTIP");
             HelpMenu.Header = Localization.GetLocalizedString("HELP_MENU");
             CollectLogs.Header = Localization.GetLocalizedString("COLLECT_LOGS");
             ViewGDKXInfo.Header = Localization.GetLocalizedString("GDKX_INFO");
             ActionsMenu.Header = Localization.GetLocalizedString("ACTIONS_MENU");
+            ChangeProxyPort.Header = Localization.GetLocalizedString("PROXY_PORT_CHANGE");
+            ChangeProxyPort.ToolTip = Localization.GetLocalizedString("PROXY_PORT_CHANGE_TOOLTIP");
             ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
 
             // Sync dark mode checkbox with saved preference
             ToggleDarkMode.IsChecked = CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark";
+        }
+
+        private void ChangeProxyPort_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureConnectionView.CanChangeProxyPort(CaptureAppModel.AppModel.SelectedDeviceContext);
+        }
+
+        private async void ChangeProxyPort_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (CaptureConnectionView.TryGetCaptureContext(
+                CaptureAppModel.AppModel.SelectedDeviceContext, out var context, out var controller))
+            {
+                await CaptureConnectionView.ShowPortChangeAsync(context, controller);
+            }
+        }
+
+        // One non-modal manager for the application's session host lists, brought back if open.
+        private void ManageHostLists_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            HostListManagerWindow.ShowOrActivate(this, CaptureAppModel.AppModel.HostListPolicy);
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -92,16 +133,116 @@ namespace XMAT
                 };
         }
 
-        private void AllCaptureDevicesPanel_TabClosed(object sender, RoutedEventArgs e)
+        private async void Window_Closing(object sender, CancelEventArgs e)
         {
-            var args = (e as TabClosedRoutedEventArgs);
-            HandleCloseDeviceTab(args.CaptureDeviceContext);
+            if (_closeConfirmed)
+            {
+                return;
+            }
+
+            e.Cancel = true;
+            if (_isCloseInProgress)
+            {
+                return;
+            }
+
+            if (!await _analysisReportExportWorkflow.RequestCloseAsync())
+            {
+                return;
+            }
+
+            _isCloseInProgress = true;
+            var wasEnabled = IsEnabled;
+            IsEnabled = false;
+
+            try
+            {
+                // Let WPF finish the synchronous Closing event before showing dialogs or closing again.
+                await Task.Yield();
+
+                if (!await CaptureAppModel.AppModel.CanCloseAsync())
+                {
+                    if (CaptureAppModel.AppModel.IsCaptureDataOperationRunning)
+                    {
+                        MessageBox.Show(
+                            Localization.GetLocalizedString("CAPTURE_DATA_BUSY_CLOSE"),
+                            Localization.GetLocalizedString("FILE_EXIT"),
+                            MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
+                    return;
+                }
+
+                if (!CaptureAppSettings.Serialize(CaptureAppModel.AppModel))
+                {
+                    return;
+                }
+                _closeConfirmed = true;
+                Close();
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                _closeConfirmed = false;
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Failed to close the application: {ex}");
+                MessageBox.Show(
+                    Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_MESSAGE", ex.Message),
+                    Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_TITLE"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+            finally
+            {
+                if (!_closeConfirmed)
+                {
+                    _analysisReportExportWorkflow.CancelClosing();
+                }
+                _isCloseInProgress = false;
+                IsEnabled = wasEnabled;
+            }
         }
 
-        private void HandleCloseDeviceTab(ICaptureDeviceContext captureDevice)
+        private async void AllCaptureDevicesPanel_TabClosed(object sender, RoutedEventArgs e)
         {
-            CaptureAppModel.AppModel.RemoveDeviceContext(captureDevice);
-            CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+            var args = (e as TabClosedRoutedEventArgs);
+            if (args?.CaptureDeviceContext == null)
+            {
+                return;
+            }
+
+            await HandleCloseDeviceTabAsync(args.CaptureDeviceContext);
+        }
+
+        private async Task HandleCloseDeviceTabAsync(ICaptureDeviceContext captureDevice)
+        {
+            if (captureDevice?.CaptureController == null ||
+                !CaptureAppModel.AppModel.TryBeginCaptureDataOperation(out var operationLease))
+            {
+                return;
+            }
+
+            using (operationLease)
+            {
+                try
+                {
+                    if (!await captureDevice.CaptureController.CanCloseAsync())
+                    {
+                        return;
+                    }
+
+                    await CaptureAppModel.AppModel.RemoveDeviceContextAsync(captureDevice);
+                    CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+                }
+                catch (Exception ex)
+                {
+                    PublicUtilities.AppLog(
+                        LogLevel.ERROR,
+                        $"Failed to close capture '{captureDevice.DeviceName}': {ex}");
+                    MessageBox.Show(
+                        Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_MESSAGE", ex.Message),
+                        Localization.GetLocalizedString("CAPTURE_CLOSE_ERROR_TITLE"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
+            }
         }
 
         private void CaptureErrorsPanel_TabAdded(object sender, RoutedEventArgs e)
@@ -117,6 +258,11 @@ namespace XMAT
 
         private void New_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.DeviceAdd);
             AddDeviceWindow deviceSelector = new()
             {
@@ -130,7 +276,8 @@ namespace XMAT
                 if (context != null)
                 {
                     operation.Complete(TelemetryOutcome.Failed, TelemetryError.AlreadyExists);
-                    MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    CaptureAppModel.AppModel.SelectedDeviceContext = context;
+                    MessageBox.Show(Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_MESSAGE"), Localization.GetLocalizedString("DEVICE_CAPTURE_ALREADY_EXISTS_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
                 else
@@ -167,6 +314,11 @@ namespace XMAT
 
         private void Open_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             string filename = string.Empty;
             if (e is ExecutedRoutedEventArgs args)
                 filename = args.Parameter as string;
@@ -187,10 +339,46 @@ namespace XMAT
 
             if (!string.IsNullOrEmpty(filename))
             {
-                ExecuteFileOperation(TelemetryOperationKind.LoadCaptures, filename,
-                    () => CaptureAppModel.AppModel.LoadDataCaptures(filename), entryPoint);
-                if (CaptureAppModel.AppModel.CaptureDeviceContexts.Any())
-                    CaptureAppModel.AppModel.SelectedDeviceContext = CaptureAppModel.AppModel.CaptureDeviceContexts.Last();
+                try
+                {
+                    ExecuteFileOperation(TelemetryOperationKind.LoadCaptures, filename,
+                        () => CaptureAppModel.AppModel.LoadDataCaptures(filename), entryPoint);
+                    if (CaptureAppModel.AppModel
+                        .CaptureDeviceContexts.Any())
+                    {
+                        CaptureAppModel.AppModel
+                            .SelectedDeviceContext =
+                            CaptureAppModel.AppModel
+                                .CaptureDeviceContexts.Last();
+                    }
+                }
+                catch (SqLtSchemaException ex)
+                {
+                    PublicUtilities.AppLog(
+                        LogLevel.ERROR,
+                        $"Capture open rejected ({ex.Failure}).");
+                    MessageBox.Show(
+                        Localization.GetLocalizedString(
+                            CaptureOpenErrorKey(ex.Failure)),
+                        Localization.GetLocalizedString(
+                            "CAPTURE_OPEN_ERROR_TITLE"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
+                catch (Exception ex) when (
+                    !ExceptionUtilities.IsFatal(ex))
+                {
+                    PublicUtilities.AppLog(
+                        LogLevel.ERROR,
+                        $"Capture open failed ({ex.GetType().FullName}).");
+                    MessageBox.Show(
+                        Localization.GetLocalizedString(
+                            "CAPTURE_OPEN_ERROR"),
+                        Localization.GetLocalizedString(
+                            "CAPTURE_OPEN_ERROR_TITLE"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
             }
             else
             {
@@ -198,8 +386,26 @@ namespace XMAT
             }
         }
 
+        internal static string CaptureOpenErrorKey(
+            SqLtSchemaFailure failure) =>
+            failure switch
+            {
+                SqLtSchemaFailure.Limit =>
+                    "CAPTURE_OPEN_SCHEMA_LIMIT",
+                SqLtSchemaFailure.Sidecar =>
+                    "CAPTURE_OPEN_SIDECAR",
+                SqLtSchemaFailure.UnsupportedLocation =>
+                    "CAPTURE_OPEN_LOCATION",
+                _ => "CAPTURE_OPEN_SCHEMA_ERROR",
+            };
+
         private void Save_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             var saveFileDialog = new SaveFileDialog
             {
                 Filter = XMATFilter
@@ -218,6 +424,11 @@ namespace XMAT
 
         private async void Import_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanBeginCaptureDataOperation)
+            {
+                return;
+            }
+
             string filename = string.Empty;
             if (e is ExecutedRoutedEventArgs args)
                 filename = args.Parameter as string;
@@ -227,7 +438,7 @@ namespace XMAT
             {
                 var openFileDialog = new OpenFileDialog
                 {
-                    Filter = FiddlerFilter
+                    Filter = $"{FiddlerFilter}|{NetTraceFilter}"
                 };
 
                 if (openFileDialog.ShowDialog() == true)
@@ -238,10 +449,43 @@ namespace XMAT
 
             if (!string.IsNullOrEmpty(filename))
             {
-                // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
-                // setup the filter above and call export with the appropriate type
-                await ExecuteFileOperationAsync(TelemetryOperationKind.ImportSaz, filename,
-                    () => CaptureAppModel.AppModel.ImportDataCapturesAsync(ImportType.Fiddler, filename), entryPoint);
+                if (!CaptureAppModel.AppModel.TryBeginCaptureDataOperation(
+                    out var operationLease,
+                    requireAllCapturesStopped: true))
+                {
+                    return;
+                }
+
+                using (operationLease)
+                {
+                    var importType = filename.EndsWith(
+                        $".{NetTraceFileExtension}",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? ImportType.NetTrace
+                        : ImportType.Fiddler;
+
+                    try
+                    {
+                        if (importType == ImportType.Fiddler)
+                        {
+                            await ExecuteFileOperationAsync(TelemetryOperationKind.ImportSaz, filename,
+                                () => CaptureAppModel.AppModel.ImportDataCapturesAsync(importType, filename), entryPoint);
+                        }
+                        else
+                        {
+                            await CaptureAppModel.AppModel.ImportDataCapturesAsync(importType, filename);
+                        }
+                    }
+                    catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                    {
+                        PublicUtilities.AppLog(LogLevel.ERROR, $"Capture import failed: {ex}");
+                        MessageBox.Show(
+                            Localization.GetLocalizedString("WEBCAP_IMPORT_ERROR", ex.Message),
+                            Localization.GetLocalizedString("WEBCAP_IMPORT_ERROR_TITLE"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error);
+                    }
+                }
             }
             else
             {
@@ -251,6 +495,11 @@ namespace XMAT
 
         private void Export_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             var saveFileDialog = new SaveFileDialog
             {
                 Filter = FiddlerFilter
@@ -270,9 +519,76 @@ namespace XMAT
             }
         }
 
+        private void ExportSanitized_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureAppModel.AppModel.CanExportSanitizedCaptures;
+        }
+
+        private async void ExportSanitized_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (!CaptureAppModel.AppModel.CanExportSanitizedCaptures)
+            {
+                return;
+            }
+            if (MessageBox.Show(
+                Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM"),
+                Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
+            {
+                return;
+            }
+            var dialog = new SaveFileDialog
+            {
+                Filter = FiddlerFilter,
+                DefaultExt = ".saz",
+                AddExtension = true,
+                FileName = "sanitized-capture.saz",
+                Title = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED")
+            };
+            if (dialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+            using var cancellation = new CancellationTokenSource();
+            try
+            {
+                WebServiceCapture.SanitizedExportSummary summary;
+                using (PublicUtilities.BlockingOperation())
+                {
+                    var operation = CaptureAppModel.AppModel.ExportSanitizedDataCapturesAsync(dialog.FileName, cancellation.Token);
+                    if (await Task.WhenAny(operation, Task.Delay(250)) != operation && !operation.IsCompleted)
+                    {
+                        var progress = new SanitizedExportProgressWindow(operation, cancellation.Cancel) { Owner = this };
+                        progress.ShowDialog();
+                    }
+                    summary = await operation;
+                }
+                MessageBox.Show(
+                    Localization.GetLocalizedString("SANITIZED_EXPORT_COMPLETE",
+                        summary.Sessions, summary.RedactedValues, summary.OmittedBodies, summary.OmittedHeaders),
+                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                MessageBox.Show(
+                    Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLED"),
+                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Sanitized export failed: {exception}");
+                MessageBox.Show(
+                    Localization.GetLocalizedString("SANITIZED_EXPORT_FAILED", exception.Message),
+                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         private void Exit_Executed(object sender, RoutedEventArgs e)
         {
-            Application.Current.Shutdown();
+            Close();
         }
 
         private void Preferences_Executed(object sender, RoutedEventArgs e)
@@ -314,24 +630,46 @@ namespace XMAT
         private void ClearAllCaptures_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
             e.CanExecute = CaptureAppModel.AppModel.SelectedDeviceContext != null &&
-                          !CaptureAppModel.AppModel.SelectedDeviceContext.IsReadOnly;
+                          !CaptureAppModel.AppModel.SelectedDeviceContext.IsReadOnly &&
+                          CaptureAppModel.AppModel.CanModifyCaptureData;
         }
 
         private void ClearAllCaptures_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController.ClearAllCaptures();
             XmatTelemetryService.Current.Use(TelemetryFeature.ClearCaptures);
         }
 
         private void AnalyzeCaptures_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            e.CanExecute = CaptureAppModel.AppModel.SelectedDeviceContext != null;
+            e.CanExecute = CaptureAppModel.AppModel.CanAnalyzeCaptures;
+        }
+
+        private void CaptureDataCommand_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureAppModel.AppModel.CanModifyCaptureData;
+        }
+
+        private void Import_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = CaptureAppModel.AppModel.CanBeginCaptureDataOperation;
         }
 
         private async void AnalyzeCaptures_Executed(object sender, RoutedEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanAnalyzeCaptures)
+            {
+                return;
+            }
+
+            var captureDeviceContext = CaptureAppModel.AppModel.SelectedDeviceContext;
             var list = from ca in CaptureAppModel.AppModel.CaptureAnalyzers
-                       where ca.SupportedCaptureMethod == CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController.CaptureMethod
+                       where ca.SupportedCaptureMethod == captureDeviceContext.CaptureController.CaptureMethod
                        select ca;
 
             if (list.Any())
@@ -352,56 +690,31 @@ namespace XMAT
             {
                 ICaptureAnalyzer selected = list.Where(x => x.IsSelected).First();
 
-                var analysisRun = CaptureAppModel.AppModel.AddAnalysisRun(selected);
-                CaptureErrorsPanel.AddedAnalysis(analysisRun);
-                await HandleAnalyzerChosen(
-                    analysisRun,
-                    selected,
-                    CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController);
+                if (!CaptureAppModel.AppModel.TryBeginAnalysis(out var analysisLease))
+                {
+                    return;
+                }
+
+                using (analysisLease)
+                {
+                    var analysisRun = CaptureAppModel.AppModel.AddAnalysisRun(selected);
+                    CaptureErrorsPanel.AddedAnalysis(analysisRun);
+                    await HandleAnalyzerChosen(
+                        analysisRun,
+                        captureDeviceContext.CaptureController);
+                }
             }
         }
 
         private async Task HandleAnalyzerChosen(
             AnalysisRunModel analysisRun,
-            ICaptureAnalyzer captureAnalyzer,
             IDeviceCaptureController captureController)
         {
-            using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.Analysis,
-                captureController is WebServiceDeviceCaptureController ? TelemetryFeature.XboxLiveAnalysis : TelemetryFeature.NetworkTraceAnalysis,
-                XmatTelemetryService.ContextFor(captureController));
-            analysisRun.TelemetryOperation = operation;
-            analysisRun.IsProcessing = true;
-            ECaptureAnalyzerResult analyzerResult;
-            try
-            {
-                analyzerResult = await captureAnalyzer.RunAsync(analysisRun, captureController);
-                var count = captureController is WebServiceDeviceCaptureController web
-                    ? web.ProxyConnections.Count
-                    : (captureController as NetworkTraceCaptureController)?.FilteredItems?.Count ?? 0;
-                operation.Complete(analyzerResult switch
-                {
-                    ECaptureAnalyzerResult.Success => TelemetryOutcome.Succeeded,
-                    ECaptureAnalyzerResult.NoSuitableData => TelemetryOutcome.NoData,
-                    _ => TelemetryOutcome.Failed
-                }, analyzerResult == ECaptureAnalyzerResult.UnknownError ? TelemetryError.Unknown : TelemetryError.None, items: count);
-            }
-            catch (Exception ex)
-            {
-                operation.Fail(ex);
-                throw;
-            }
-            finally
-            {
-                analysisRun.IsProcessing = false;
-                analysisRun.TelemetryOperation = null;
-            }
+            ECaptureAnalyzerResult analyzerResult = await CaptureAppModel.AppModel.RunAnalysisAsync(
+                analysisRun, captureController);
 
             void OnError(string strErrorMsg)
             {
-                // remove entry
-                CaptureAppModel.AppModel.RemoveAnalysisRun(analysisRun);
-
-                // show error msg
                 MessageBox.Show(
                     strErrorMsg,
                     Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_TITLE"),
@@ -428,12 +741,15 @@ namespace XMAT
                     break;
                 }
             }
-
-            analysisRun.IsProcessing = false;
         }
 
         private void Window_Drop(object sender, DragEventArgs e)
         {
+            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
+            {
+                return;
+            }
+
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 var files = e.Data.GetData(DataFormats.FileDrop) as string[];
@@ -441,7 +757,8 @@ namespace XMAT
                 {
                     foreach (string file in files)
                     {
-                        if (file.EndsWith($".{FiddlerFileExtension}"))
+                        if (file.EndsWith($".{FiddlerFileExtension}", StringComparison.OrdinalIgnoreCase) ||
+                            file.EndsWith($".{NetTraceFileExtension}", StringComparison.OrdinalIgnoreCase))
                             AppCommands.Import.Execute(file, this);
                         else if (file.EndsWith($".{XMATCaptureFileExtension}"))
                             ApplicationCommands.Open.Execute(file, this);
@@ -526,6 +843,57 @@ namespace XMAT
             XmatTelemetryService.Current.Use(TelemetryFeature.CaptureFiles);
             XmatTelemetryService.Current.Track(new(TelemetryEventKind.Counter, TelemetryFeature.CaptureFiles,
                 Operation: kind, Outcome: TelemetryOutcome.Cancelled, Count: 1, EntryPoint: TelemetryEntryPoint.Menu));
+        }
+
+        private void ExportAnalysisReport_CanExecute(
+            object sender,
+            CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute =
+                !_analysisReportExportWorkflow.IsRunning &&
+                !_analysisReportExportWorkflow.ClosingStarted &&
+                AnalysisReportExportCommand.CanExecute(
+                    CaptureAppModel.AppModel.AnalysisRuns);
+        }
+
+        private async void ExportAnalysisReport_Executed(
+            object sender,
+            ExecutedRoutedEventArgs e)
+        {
+            try
+            {
+                AnalysisExportSource source =
+                    AnalysisReportExportCommand.SnapshotSelected(
+                    CaptureAppModel.AppModel.AnalysisRuns);
+                if (source == null ||
+                    _analysisReportExportWorkflow.ClosingStarted)
+                {
+                    return;
+                }
+
+                await _analysisReportExportWorkflow.RunAsync(
+                    source);
+            }
+            catch (Exception exception) when (
+                !ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"Analysis report export workflow failed: {exception}");
+            }
+        }
+
+        private async Task<string> ExportAnalysisReportAsync(
+            AnalysisExportSource source,
+            string destinationParent)
+        {
+            using (PublicUtilities.BlockingOperation())
+            {
+                return await Task.Run(() =>
+                    new AnalysisReportExporter().Export(
+                        source,
+                        destinationParent));
+            }
         }
     }
 }

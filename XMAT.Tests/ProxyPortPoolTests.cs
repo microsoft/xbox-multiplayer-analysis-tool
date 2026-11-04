@@ -8,90 +8,105 @@ namespace XMAT.Tests
 {
     public class ProxyPortPoolTests
     {
-        [Fact]
-        public void ObtainPort_ThrowsBeforeInitialization()
+        [Theory]
+        [InlineData(9000, 9004)]
+        [InlineData(65535, 65535)]
+        [InlineData(65534, 65535)]
+        [InlineData(1, 1)]
+        public void ObtainPort_ReturnsEveryPortThenReportsExhaustion(int first, int last)
         {
-            // ProxyPortPool is static, and may already be initialized from other tests.
-            // We test the core behaviors here.
-        }
-
-        [Fact]
-        public void Initialize_SetsPortRange()
-        {
-            ProxyPortPool.Initialize(9000, 9004);
-
-            Assert.Equal(9000, ProxyPortPool.FirstPort);
-            Assert.Equal(9004, ProxyPortPool.LastPort);
-        }
-
-        [Fact]
-        public void ObtainPort_ReturnsPortInRange()
-        {
-            ProxyPortPool.Initialize(9100, 9104);
-
-            ushort port = ProxyPortPool.ObtainPort();
-            Assert.InRange(port, (ushort)9100, (ushort)9104);
-
-            ProxyPortPool.ReleasePort(port);
-        }
-
-        [Fact]
-        public void ObtainPort_ReturnsDistinctPorts()
-        {
-            ProxyPortPool.Initialize(9200, 9204);
-
-            var ports = new HashSet<ushort>();
-            for (int i = 0; i < 5; i++)
+            var pool = new ProxyPortPool();
+            pool.Initialize((ushort)first, (ushort)last);
+            var reservations = new List<ProxyPortPool.Reservation>();
+            try
             {
-                ushort port = ProxyPortPool.ObtainPort();
-                Assert.True(ports.Add(port), $"Port {port} was returned twice");
+                for (var port = first; port <= last; port++)
+                {
+                    var reservation = pool.ObtainPort($"owner-{port}");
+                    reservations.Add(reservation);
+                    Assert.Equal(port, reservation.Port);
+                }
+                Assert.Throws<InvalidOperationException>(() => pool.ObtainPort("exhausted"));
             }
+            finally
+            {
+                reservations.ForEach(reservation => reservation.Dispose());
+            }
+            using var reused = pool.ObtainPort("new owner");
+            Assert.Equal(first, reused.Port);
+        }
 
-            foreach (var port in ports)
-                ProxyPortPool.ReleasePort(port);
+        [Theory]
+        [InlineData(9000, 9008)]
+        [InlineData(9000, 9000)]
+        [InlineData(9100, 9102)]
+        public void RangeChange_PreservesOwnershipEvenOutsideNewRange(int first, int last)
+        {
+            var pool = new ProxyPortPool();
+            pool.Initialize(9000, 9004);
+            using var original = pool.ObtainPort("original");
+            pool.Initialize((ushort)first, (ushort)last);
+            Assert.Throws<InvalidOperationException>(() => pool.ReservePort(original.Port, "duplicate"));
+            if (first != last)
+            {
+                using var next = pool.ObtainPort("new");
+                Assert.NotEqual(original.Port, next.Port);
+            }
         }
 
         [Fact]
-        public void ObtainPort_ReturnsZero_WhenPoolExhausted()
+        public void RestoredAndManualPorts_AreProtectedIndependentlyOfRange()
         {
-            ProxyPortPool.Initialize(9300, 9301);
-
-            ushort port1 = ProxyPortPool.ObtainPort();
-            ushort port2 = ProxyPortPool.ObtainPort();
-            ushort port3 = ProxyPortPool.ObtainPort();
-
-            Assert.Equal(0, port3);
-
-            ProxyPortPool.ReleasePort(port1);
-            ProxyPortPool.ReleasePort(port2);
+            var pool = new ProxyPortPool();
+            pool.Initialize(9000, 9002);
+            using var restored = pool.ReservePort(9000, "restored");
+            using var manual = pool.ReservePort(65535, "manual");
+            using var next = pool.ObtainPort("new tab");
+            Assert.Equal(9001, next.Port);
+            Assert.Throws<InvalidOperationException>(() => pool.ReservePort(65535, "other"));
         }
 
         [Fact]
-        public void ReleasePort_MakesPortAvailableAgain()
+        public void StaleOrWrongToken_CannotReleaseANewerOwner()
         {
-            ProxyPortPool.Initialize(9400, 9400);
+            var pool = new ProxyPortPool();
+            var first = pool.ReservePort(9000, "first");
+            new ProxyPortPool.Reservation(pool, 9000, "forged").Dispose();
+            Assert.Throws<InvalidOperationException>(() => pool.ReservePort(9000, "duplicate"));
+            first.Dispose();
+            using var second = pool.ReservePort(9000, "second");
+            first.Dispose();
+            Assert.Throws<InvalidOperationException>(() => pool.ReservePort(9000, "third"));
+        }
 
-            ushort port = ProxyPortPool.ObtainPort();
-            Assert.NotEqual(0, port);
-
-            ushort noPort = ProxyPortPool.ObtainPort();
-            Assert.Equal(0, noPort);
-
-            ProxyPortPool.ReleasePort(port);
-
-            ushort portAgain = ProxyPortPool.ObtainPort();
-            Assert.Equal(port, portAgain);
-
-            ProxyPortPool.ReleasePort(portAgain);
+        [Theory]
+        [InlineData(0, 9000)]
+        [InlineData(9000, 8999)]
+        public void InvalidRange_DoesNotChangeRangeOrOwnership(int first, int last)
+        {
+            var pool = new ProxyPortPool();
+            using var current = pool.ReservePort(9000, "owner");
+            Assert.Throws<ArgumentOutOfRangeException>(() => pool.Initialize((ushort)first, (ushort)last));
+            Assert.Equal(8880, pool.FirstPort);
+            Assert.Throws<InvalidOperationException>(() => pool.ReservePort(9000, "other"));
         }
 
         [Fact]
-        public void Initialize_HandlesMinPortRange()
+        public void Zero_IsNeverAReservation()
         {
-            ProxyPortPool.Initialize(9500, 9500);
-            ushort port = ProxyPortPool.ObtainPort();
-            Assert.Equal(9500, port);
-            ProxyPortPool.ReleasePort(port);
+            var pool = new ProxyPortPool();
+            Assert.Throws<ArgumentOutOfRangeException>(() => pool.ReservePort(0, "owner"));
+        }
+
+        [Fact]
+        public void FullPortRange_DoesNotWrap()
+        {
+            var pool = new ProxyPortPool();
+            pool.Initialize(1, 65535);
+            using var port = pool.ObtainPort("first");
+            Assert.Equal(1, port.Port);
+            using var upper = pool.ReservePort(65535, "last");
+            Assert.Equal(65535, upper.Port);
         }
     }
 }

@@ -15,8 +15,16 @@
         <CommandBinding Command="{x:Static local:ScriptCommands.ValidateScript}"      Executed="ValidateScript_Executed"      CanExecute="ValidateScript_CanExecute"/>
         <CommandBinding Command="{x:Static local:ScriptCommands.ScriptErrorSelected}" Executed="ScriptErrorSelected_Executed"/>
     </UserControl.CommandBindings>
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </UserControl.Resources>
 
     <StackPanel Orientation="Vertical" Background="{DynamicResource PanelBackgroundBrush}" DockPanel.Dock="Top">
+        <StackPanel Margin="5">
+            <TextBlock x:Name="ActiveScriptsSummary" TextWrapping="Wrap" Text="{Binding ScriptCollection.ActiveScriptsText, ElementName=ScriptEditorViewControl}"/>
+            <TextBlock x:Name="AllHostsWarning" TextWrapping="Wrap" FontWeight="Bold" Text="{x:Static script:ScriptCollection.AllHostsWarningText}"
+                       Visibility="{Binding ScriptCollection.HasActiveScripts, ElementName=ScriptEditorViewControl, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+        </StackPanel>
         <StackPanel Orientation="Horizontal">
             <Label x:Name="EventSelectorLabel" Target="{Binding ElementName=EventSelector}"/>
             <ComboBox x:Name="EventSelector" Width="200" SelectedIndex="0" IsSynchronizedWithCurrentItem="True" ItemsSource="{Binding ScriptCollection, ElementName=ScriptEditorViewControl}" DisplayMemberPath="DisplayName"/>
@@ -75,7 +83,7 @@
                 </Style>
             </StackPanel.Resources>
 
-            <ToggleButton x:Name="ScriptEnabled" Padding="5" Margin="5" Width="100" IsChecked="{Binding SelectedItem.IsEnabled, ElementName=EventSelector}"
+            <ToggleButton x:Name="ScriptEnabled" Padding="5" Margin="5" Width="100" IsChecked="{Binding SelectedItem.IsEnabled, ElementName=EventSelector, Mode=OneWay}"
                                       Command="{x:Static local:ScriptCommands.ValidateScript}" CommandParameter="{Binding SelectedItem, ElementName=EventSelector}">
                 <ToggleButton.Style>
                     <Style TargetType="{x:Type ToggleButton}">
@@ -96,6 +104,16 @@
                                     </Setter.Value>
                                 </Setter>
                             </Trigger>
+                            <DataTrigger Binding="{Binding SelectedItem.IsCompiling, ElementName=EventSelector}" Value="True">
+                                <Setter Property="IsEnabled" Value="False"/>
+                                <Setter Property="Content">
+                                    <Setter.Value>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{x:Static local:ScriptEditorView.CompilingText}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Setter.Value>
+                                </Setter>
+                            </DataTrigger>
                         </Style.Triggers>
                     </Style>
                 </ToggleButton.Style>
@@ -106,8 +124,12 @@
             <Button Content="{Binding RelativeSource={RelativeSource Self}, Path=Command.Text}" Command="{x:Static local:ScriptCommands.SaveScript}"   CommandParameter="{Binding SelectedItem, ElementName=EventSelector}"/>
         </StackPanel>
         <Label x:Name="ScriptStatusLabel" Target="{Binding ElementName=ScriptOutput}"/>
-        <TextBox x:Name="ScriptSuccess" Height="100" FontFamily="Consolas" IsReadOnly="True" Visibility="Collapsed"/>
-        <ListBox x:Name="ScriptOutput" Height="100" FontFamily="Consolas" ItemsSource="{Binding SelectedItem.CompilationStatus, ElementName=EventSelector}">
+        <TextBox x:Name="ScriptSuccess" Height="100" FontFamily="Consolas" IsReadOnly="True"
+                 Text="{Binding SelectedItem.CompilationMessage, ElementName=EventSelector, Mode=OneWay}"
+                 Visibility="{Binding SelectedItem.HasCompilationMessage, ElementName=EventSelector, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+        <ListBox x:Name="ScriptOutput" Height="100" FontFamily="Consolas"
+                 ItemsSource="{Binding SelectedItem.CompilationStatus, ElementName=EventSelector}"
+                 Visibility="{Binding SelectedItem.HasCompilationDiagnostics, ElementName=EventSelector, Converter={StaticResource BooleanToVisibilityConverter}}">
             <ListBox.ItemTemplate>
                 <DataTemplate>
                     <TextBlock Text="{Binding}">

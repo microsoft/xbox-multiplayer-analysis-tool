@@ -103,6 +103,9 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 PublicUtilities.StorageDirectoryPath,
                 $"xlca_{analysisRun.Id}");
 
+            analysisResultsModel.OutputDirectory =
+                analysisRunStorageDirectory;
+            analysisResultsModel.SourceCaptureName = sourceCaptureName;
             Directory.CreateDirectory(analysisRunStorageDirectory);
 
             // TODO: support cancellation of the analysis processing
@@ -111,14 +114,11 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 var rulesEngine = new RulesEngine(isInternal);
                 var serviceCallData = new ServiceCallData(allEndpoints);
 
-                // TODO: the service call items need to derive from the data table, not from
-                // the view model and also need to be snapshot before the process takes place
-                // since the table can change whilst the processing is on-going
+                // The application holds an analysis lease while converting these records,
+                // so writable capture data remains quiescent without a second full copy.
                 SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.ConvertingProxyConnectionsToServiceCallItems);
                 List<ServiceCallItem> serviceCallItems =
-                    GetServiceCallItemsForProxyConnections(
-                        WebServiceCaptureMethod.TableName,
-                        controller.DeviceName);
+                    GetServiceCallItemsForProxyConnections(controller);
 
                 SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.CreatingServiceDataFromCallItems);
                 serviceCallData.CreateFromServiceCallItems(serviceCallItems);
@@ -159,36 +159,27 @@ namespace XMAT.XboxLiveCaptureAnalysis
             // NOTE: for now we are just showing the reports for the first
             // console that we found in the data
 
-            try
-            {
-                var firstReports = perConsoleReports.First();
-
-                firstReports.Value.ToList().ForEach(
-                report =>
-                {
-                    ReportViewModel model = ReportViewModelFactory.CreateForDocument(
-                        _captureAppModel,
-                        sourceCaptureName,
-                        analysisRunStorageDirectory,
-                        report);
-                    if (model != null && model.Show)
-                    {
-                        analysisResultsModel.Reports.Add(model);
-                    }
-                });
-
-                SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.Complete);
-                return ECaptureAnalyzerResult.Success;
-            }
-            catch (InvalidOperationException)
+            if (perConsoleReports.Count == 0)
             {
                 return ECaptureAnalyzerResult.NoSuitableData;
             }
-            catch (ArgumentNullException)
+
+            var firstReports = perConsoleReports.First();
+            foreach (var report in firstReports.Value)
             {
-                return ECaptureAnalyzerResult.UnknownError;
+                ReportViewModel model = ReportViewModelFactory.CreateForDocument(
+                    _captureAppModel,
+                    sourceCaptureName,
+                    analysisRunStorageDirectory,
+                    report);
+                if (model != null && model.Show)
+                {
+                    analysisResultsModel.Reports.Add(model);
+                }
             }
 
+            SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.Complete);
+            return ECaptureAnalyzerResult.Success;
         }
 
         public void Shutdown()
@@ -202,18 +193,11 @@ namespace XMAT.XboxLiveCaptureAnalysis
         }
 
         private List<ServiceCallItem> GetServiceCallItemsForProxyConnections(
-            string tableName, string deviceName)
+            WebServiceDeviceCaptureController controller)
         {
             List<ServiceCallItem> items = new();
 
-            IDatabase activeDB = _captureAppModel.ActiveDatabase;
-            IDataTable connectionsTable = activeDB.TableByName(tableName);
-            IEnumerable<IDataRecord> records = connectionsTable.Dataset.DataRecordsWhen(
-                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName,
-                deviceName)
-                );
-
-            foreach (IDataRecord record in records)
+            foreach (IDataRecord record in controller.GetCaptureRecords())
             {
                 ServiceCallItem item = ProxyConnectionModelToServiceCallItem(record);
                 if (item != null)
@@ -225,7 +209,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
         }
 
         // TODO: move this to a more appropriate place
-        private WebHeaderCollection GetRequestHeadersForString(
+        private static WebHeaderCollection GetRequestHeadersForString(
             string requestLineAndHeaders)
         {
             var headers = new WebHeaderCollection();
@@ -246,7 +230,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         private static string[] AllowedNonAnalyzedHosts = { "playfab.com", "playfabapi.com" };
 
-        private ServiceCallItem ProxyConnectionModelToServiceCallItem(
+        internal static ServiceCallItem ProxyConnectionModelToServiceCallItem(
             IDataRecord dataRecord)
         {
             var requestNumber = dataRecord.Int(WebServiceCaptureMethod.FieldKey_RequestNumber);
@@ -296,22 +280,27 @@ namespace XMAT.XboxLiveCaptureAnalysis
             var requestTime = DateTime.Parse(requestTimestamp);
             var duration = DateTime.Parse(responseTimestamp) - requestTime;
 
-            // note: obtained from "Host" request header if possible
-            if (requestHeaders[HttpRequestHeader.Host] != null)
-            {
-                item.Host = requestHeaders[HttpRequestHeader.Host];
-            }
-            else
-            {
-                item.Host = requestHost.Split(':')[0];
-            }
+            // note: obtained from "Host" request header if possible. A stored hostless capture remains hostless.
+            item.Host = string.IsNullOrWhiteSpace(requestHost)
+                ? string.Empty
+                : requestHeaders[HttpRequestHeader.Host] ??
+                    requestHost.Split(':')[0];
 
-            // note: obtained from the .Scheme & .Call
-            item.Uri = UriUtils.GetAbsoluteUri(
-                requestScheme,
-                requestHost,
-                requestPort,
-                requestPath);
+            // The logical Host label above keeps the captured-header behavior; host-list actions use provenance: a
+            // structured capture host that is a host identity wins, otherwise the captured Host header parsed as an
+            // authority is used. Text that is not a host identity is kept but never actionable.
+            item.EndpointKind = EndpointKind.Captured;
+            item.PhysicalHost = GetPhysicalHost(requestHost, requestHeaders[HttpRequestHeader.Host]);
+
+            // note: obtained from the .Scheme & .Call. A hostless capture keeps its request path without
+            // reconstructing an authority.
+            item.Uri = string.IsNullOrEmpty(item.Host)
+                ? requestPath ?? string.Empty
+                : UriUtils.GetAbsoluteUri(
+                    requestScheme,
+                    requestHost,
+                    requestPort,
+                    requestPath);
 
             item.XboxUserId = Utils.GetXboxUserID(requestPath);
             item.ReqHeader = requestLineAndHeaders;
@@ -330,6 +319,15 @@ namespace XMAT.XboxLiveCaptureAnalysis
             item.Method = requestMethod;
 
             return item;
+        }
+
+        private static string GetPhysicalHost(string structuredHost, string hostHeader)
+        {
+            if (HostAuthority.TryNormalizeHost(structuredHost, out string host))
+            {
+                return host;
+            }
+            return HostAuthority.TryParse(hostHeader, out host, out _) ? host : null;
         }
     }
 }

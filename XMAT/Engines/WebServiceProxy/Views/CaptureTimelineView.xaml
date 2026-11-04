@@ -28,20 +28,18 @@
         </Border>
 
         <!-- Timeline scroll area -->
-        <ScrollViewer Grid.Row="1"
+        <ScrollViewer x:Name="TimelineScrollViewer" Grid.Row="1"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
+                      ScrollChanged="TimelineScrollChanged"
+                      SizeChanged="TimelineSizeChanged"
                       Background="{DynamicResource PanelBackgroundBrush}">
-            <Grid x:Name="TimelineGrid">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="20"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <Canvas x:Name="TimeAxisCanvas" Grid.Row="0" Height="20"
+            <Canvas x:Name="TimelineExtent">
+                <Canvas x:Name="TimeAxisCanvas" Height="20" ClipToBounds="True"
                         Background="{DynamicResource PanelBackgroundBrush}"/>
-                <Canvas x:Name="TimelineCanvas" Grid.Row="1"
+                <Canvas x:Name="TimelineCanvas" ClipToBounds="True"
                         Background="{DynamicResource PanelBackgroundBrush}"/>
-            </Grid>
+            </Canvas>
         </ScrollViewer>
     </Grid>
 </UserControl>

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Net;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -39,6 +40,23 @@ namespace XMAT.Tests
 
             Assert.True(hostNotAfterUtc <= rootNotAfterUtc);
             Assert.True(rootNotAfterUtc - hostNotAfterUtc < CertificateExpirationTolerance);
+        }
+
+        [Theory]
+        [InlineData("::1", "::1")]
+        [InlineData("[2001:db8::1]", "2001:db8::1")]
+        [InlineData("10.0.0.1", "10.0.0.1")]
+        public void HostCertificates_ForIpLiterals_NameTheAddress(string host, string address)
+        {
+            using var manager = new CertificateManager(storeCerts: false);
+            using var rootCert = CreateTestRootCertificate(DateTimeOffset.UtcNow.AddYears(4));
+            SetRootCertificate(manager, rootCert);
+
+            X509Certificate2 hostCert = manager.GetCertificateForHost(host);
+
+            var names = Assert.Single(hostCert.Extensions.OfType<X509SubjectAlternativeNameExtension>());
+            Assert.Contains(IPAddress.Parse(address), names.EnumerateIPAddresses());
+            Assert.Equal(address, hostCert.GetNameInfo(X509NameType.SimpleName, false));
         }
 
         private static X509Certificate2 CreateTestRootCertificate(DateTimeOffset notAfter)

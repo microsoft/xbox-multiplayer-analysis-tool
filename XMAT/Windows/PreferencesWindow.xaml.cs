@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.Windows;
 using XMAT.Models;
 
@@ -25,8 +26,21 @@ namespace XMAT
 
         private void Save_Executed(object sender, RoutedEventArgs e)
         {
+            try
+            {
+                ProxyOptions.CommitPortRange();
+            }
+            catch (ArgumentException ex)
+            {
+                MessageBox.Show(ex.Message, Localization.GetLocalizedString("PROXY_CAPTURE_ERROR_TITLE"),
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
             // settings and preferences models
-            CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+            if (!CaptureAppSettings.Serialize(CaptureAppModel.AppModel))
+            {
+                return;
+            }
 
             MessageBox.Show(Localization.GetLocalizedString("PREFERENCES_SAVED_MESSAGE"), Localization.GetLocalizedString("PREFERENCES_SAVED_TITLE"), MessageBoxButton.OK, MessageBoxImage.Information);
         }

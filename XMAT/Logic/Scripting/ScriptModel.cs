@@ -8,44 +8,145 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using XMAT.Telemetry;
 
 namespace XMAT.Scripting
 {
+    internal enum ScriptActivationResult
+    {
+        Superseded,
+        Failed,
+        Enabled
+    }
+
     public class ScriptModel : INotifyPropertyChanged
     {
-        private readonly ScriptHost _host = new();
+        private readonly ScriptHost _host;
+        private readonly object _syncRoot = new();
 
         private string _filename;
         private string _script;
+        private string _compiledScript;
         private bool _isEnabled;
+        private bool _isCompiling;
         private Diagnostic[] _compilationStatus;
+        private string _compilationMessage;
+        private long _activationVersion;
 
         public string DisplayName { get; private set; }
         public string Description { get; private set; }
         public string Filename { get => _filename; set { _filename = value; RaisePropertyChange(); } }
-        public string Script { get => _script; set { _script = value; RaisePropertyChange(); } }
-        public bool IsEnabled
+        internal TelemetryFeature Feature { get; }
+        public string Script
         {
-            get => _isEnabled;
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _script;
+                }
+            }
             set
             {
-                if (_isEnabled != value)
+                bool wasEnabled;
+                lock (_syncRoot)
                 {
-                    XmatTelemetryService.Current.Interact(Feature,
-                        value ? TelemetryInteraction.Enabled : TelemetryInteraction.Disabled);
+                    if (string.Equals(_script, value, StringComparison.Ordinal))
+                        return;
+
+                    // Source edits invalidate the executable immediately; enabling recompiles it.
+                    _script = value;
+                    ++_activationVersion;
+                    _compiledScript = null;
+                    wasEnabled = _isEnabled;
+                    _isEnabled = false;
+                    _isCompiling = false;
+                    _compilationStatus = Array.Empty<Diagnostic>();
+                    _compilationMessage = null;
+                    _host.ClearScript();
                 }
-                _isEnabled = value;
+
                 RaisePropertyChange();
+                if (wasEnabled)
+                {
+                    XmatTelemetryService.Current.Interact(Feature, TelemetryInteraction.Disabled);
+                    RaisePropertyChange(nameof(IsEnabled));
+                }
+                RaisePropertyChange(nameof(IsCompiling));
+                RaiseCompilationStatusChanged();
             }
         }
-        internal TelemetryFeature Feature { get; }
-        public Diagnostic[] CompilationStatus { get => _compilationStatus; set { _compilationStatus = value; RaisePropertyChange(); } }
-
-        public ScriptModel(Enum eventType)
+        public bool IsEnabled
         {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _isEnabled;
+                }
+            }
+        }
+        public bool IsCompiling
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _isCompiling;
+                }
+            }
+        }
+        public Diagnostic[] CompilationStatus
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _compilationStatus;
+                }
+            }
+        }
+        public string CompilationMessage
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _compilationMessage;
+                }
+            }
+        }
+        public bool HasCompilationDiagnostics
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _compilationStatus.Length > 0;
+                }
+            }
+        }
+        public bool HasCompilationMessage
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return !string.IsNullOrEmpty(_compilationMessage);
+                }
+            }
+        }
+
+        public ScriptModel(Enum eventType) : this(eventType, new ScriptHost())
+        {
+        }
+
+        internal ScriptModel(Enum eventType, ScriptHost host)
+        {
+            _host = host ?? throw new ArgumentNullException(nameof(host));
             Feature = eventType switch
             {
                 WebServiceCaptureScriptableEventType.SslConnectionRequest => TelemetryFeature.SslScript,
@@ -55,25 +156,149 @@ namespace XMAT.Scripting
             };
             DisplayName = Localization.GetLocalizedString(GetEnumAttribute<DisplayAttribute>(eventType).Name);
             Description = Localization.GetLocalizedString(GetEnumAttribute<DescriptionAttribute>(eventType).Description);
-            Script = Localization.GetLocalizedString(GetEnumAttribute<DefaultValueAttribute>(eventType).Value as string);
-            CompilationStatus = Array.Empty<Diagnostic>();
+            _script = Localization.GetLocalizedString(GetEnumAttribute<DefaultValueAttribute>(eventType).Value as string);
+            _compilationStatus = Array.Empty<Diagnostic>();
         }
 
-        public async Task CompileScriptAsync<T>()
+        internal async Task<ScriptActivationResult> EnableScriptAsync<T>()
         {
             using var operation = XmatTelemetryService.Current.Begin(TelemetryOperationKind.CompileScript, Feature);
+            long activationVersion;
+            string script;
+            bool wasEnabled;
+            lock (_syncRoot)
+            {
+                activationVersion = ++_activationVersion;
+                script = _script;
+                _compiledScript = null;
+                wasEnabled = _isEnabled;
+                _isEnabled = false;
+                _isCompiling = true;
+                _compilationStatus = Array.Empty<Diagnostic>();
+                _compilationMessage = null;
+                _host.ClearScript();
+            }
+            if (wasEnabled)
+            {
+                XmatTelemetryService.Current.Interact(Feature, TelemetryInteraction.Disabled);
+            }
+            RaisePropertyChange(nameof(IsEnabled));
+            RaisePropertyChange(nameof(IsCompiling));
+            RaiseCompilationStatusChanged();
+
+            Diagnostic[] diagnostics;
             try
             {
-                CompilationStatus = await _host.CompileScriptAsync<T>(Script);
-                var errors = CompilationStatus.Count(x => x.Severity == DiagnosticSeverity.Error);
-                operation.Complete(errors > 0 ? TelemetryOutcome.Failed : TelemetryOutcome.Succeeded,
-                    errors > 0 ? TelemetryError.Compilation : TelemetryError.None, items: errors);
+                diagnostics = await _host.CompileScriptAsync<T>(script);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"Unexpected script compilation failure: {ex}");
+                lock (_syncRoot)
+                {
+                    if (activationVersion != _activationVersion ||
+                        !string.Equals(script, _script, StringComparison.Ordinal))
+                    {
+                        operation.Complete(TelemetryOutcome.Cancelled, TelemetryError.Cancelled);
+                        return ScriptActivationResult.Superseded;
+                    }
+
+                    _compiledScript = null;
+                    _isEnabled = false;
+                    _isCompiling = false;
+                    _compilationStatus = Array.Empty<Diagnostic>();
+                    _compilationMessage = Localization.GetLocalizedString(
+                        "SCRIPT_COMPILE_UNEXPECTED_FAILURE");
+                    _host.ClearScript();
+                }
+
                 operation.Fail(ex);
-                throw;
+                RaisePropertyChange(nameof(IsEnabled));
+                RaisePropertyChange(nameof(IsCompiling));
+                RaiseCompilationStatusChanged();
+                return ScriptActivationResult.Failed;
             }
+
+            ScriptActivationResult result;
+            lock (_syncRoot)
+            {
+                if (activationVersion != _activationVersion ||
+                    !string.Equals(script, _script, StringComparison.Ordinal))
+                {
+                    operation.Complete(TelemetryOutcome.Cancelled, TelemetryError.Cancelled);
+                    return ScriptActivationResult.Superseded;
+                }
+
+                _compilationStatus = diagnostics;
+                _isCompiling = false;
+                bool hasErrors = diagnostics.Any(
+                    diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+                if (string.IsNullOrEmpty(script) || hasErrors)
+                {
+                    _compiledScript = null;
+                    _isEnabled = false;
+                    _compilationMessage = null;
+                    result = ScriptActivationResult.Failed;
+                }
+                else
+                {
+                    _compiledScript = script;
+                    _isEnabled = true;
+                    _compilationMessage = diagnostics.Any(
+                        diagnostic => diagnostic.Severity == DiagnosticSeverity.Warning)
+                        ? Localization.GetLocalizedString("SCRIPT_SUCCESS_WITH_WARNINGS")
+                        : Localization.GetLocalizedString("SCRIPT_SUCCESS");
+                    result = ScriptActivationResult.Enabled;
+                }
+            }
+
+            var errors = diagnostics.Count(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+            operation.Complete(
+                result == ScriptActivationResult.Enabled ? TelemetryOutcome.Succeeded : TelemetryOutcome.Failed,
+                result == ScriptActivationResult.Enabled ? TelemetryError.None : TelemetryError.Compilation,
+                items: errors);
+            if (result == ScriptActivationResult.Enabled)
+            {
+                XmatTelemetryService.Current.Interact(Feature, TelemetryInteraction.Enabled);
+            }
+            RaisePropertyChange(nameof(IsCompiling));
+            RaisePropertyChange(nameof(IsEnabled));
+            RaiseCompilationStatusChanged();
+            return result;
+        }
+
+        internal void DisableScript()
+        {
+            bool wasEnabled;
+            bool wasCompiling;
+            lock (_syncRoot)
+            {
+                ++_activationVersion;
+                _compiledScript = null;
+                wasEnabled = _isEnabled;
+                wasCompiling = _isCompiling;
+                _isEnabled = false;
+                _isCompiling = false;
+                _host.ClearScript();
+            }
+
+            if (wasEnabled)
+            {
+                XmatTelemetryService.Current.Interact(Feature, TelemetryInteraction.Disabled);
+                RaisePropertyChange(nameof(IsEnabled));
+            }
+            if (wasCompiling)
+                RaisePropertyChange(nameof(IsCompiling));
+        }
+
+        private void RaiseCompilationStatusChanged()
+        {
+            RaisePropertyChange(nameof(CompilationStatus));
+            RaisePropertyChange(nameof(HasCompilationDiagnostics));
+            RaisePropertyChange(nameof(CompilationMessage));
+            RaisePropertyChange(nameof(HasCompilationMessage));
         }
 
         private T GetEnumAttribute<T>(Enum enumType) where T : Attribute
@@ -83,12 +308,20 @@ namespace XMAT.Scripting
                            .GetCustomAttribute<T>();
         }
 
-        public Task<T> RunScriptAsync<T>(T input) where T : class
+        public Task<T> RunScriptAsync<T>(
+            T input,
+            CancellationToken cancellationToken = default) where T : class
         {
-            if (IsEnabled)
-                return _host.RunScriptAsync(input);
-            else
-                return Task.FromResult(input);
+            lock (_syncRoot)
+            {
+                if (!_isEnabled ||
+                    !string.Equals(_compiledScript, _script, StringComparison.Ordinal))
+                {
+                    return Task.FromResult(input);
+                }
+            }
+
+            return _host.RunScriptAsync(input, cancellationToken);
         }
 
         public event PropertyChangedEventHandler PropertyChanged;

@@ -34,6 +34,6 @@ namespace XMAT.SharedInterfaces
 
         Color DeviceColor { get; set; }
 
-        IDeviceCaptureController CaptureController { get; set; }
+        IDeviceCaptureController CaptureController { get; }
     }
 }

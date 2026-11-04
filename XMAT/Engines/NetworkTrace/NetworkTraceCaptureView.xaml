@@ -38,7 +38,7 @@
         </Grid.ColumnDefinitions>
 
         <ToolBar Grid.Row="0" Grid.ColumnSpan="2" ToolBarTray.IsLocked="True">
-            <ToggleButton IsChecked="{Binding CaptureController.IsRunning}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" Command="{x:Static logic:NetworkTraceCommands.StartStopCapture}" CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}">
+            <ToggleButton IsChecked="{Binding CaptureController.IsRunning, Mode=OneWay}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" Command="{x:Static logic:NetworkTraceCommands.StartStopCapture}" CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}">
                 <ToggleButton.Style>
                     <Style TargetType="{x:Type ToggleButton}">
                         <Setter Property="Content">
@@ -65,7 +65,11 @@
                 </ToggleButton.Style>
             </ToggleButton>
             <Separator/>
-            <Button x:Name="AnalyzeCaptureButton" Command="{x:Static app:AppCommands.AnalyzeCaptures}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" IsEnabled="{Binding CaptureController.HaveTraces}">Analyze Capture</Button>
+            <Button x:Name="AnalyzeCaptureButton"
+                    Command="{x:Static app:AppCommands.AnalyzeCaptures}"
+                    CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}"
+                    IsEnabled="{Binding CaptureController.HaveTraces}"
+                    ToolTipService.ShowOnDisabled="True">Analyze Capture</Button>
             <Separator/>
             <Button x:Name="ClearCapturesButton" Command="{x:Static app:AppCommands.ClearAllCaptures}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" IsEnabled="{Binding CaptureController.HaveTraces}">Clear Captures</Button>
         </ToolBar>

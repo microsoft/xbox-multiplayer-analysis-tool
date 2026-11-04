@@ -12,7 +12,7 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtDataTable : IDataTable
+    internal class SqLtDataTable : IDataTable, IImportedCaptureTable
     {
         public event Action<IDataTable, Int64> RowAdded;
         public event Action<IDataTable, Int64> RowUpdated;
@@ -145,6 +145,88 @@ namespace XMAT.DataAbstractionLayer
                     RowsRemoved?.Invoke(this, rowsModified);
                 }
             }
+        }
+
+        public IReadOnlyList<long> ReplaceImportedRows(
+            IFieldValue capture,
+            IEnumerable<object[]> rows)
+        {
+            lock (_lockObj)
+            {
+                var captureField = (FieldDefinition)_fieldDefinitions[capture.Name];
+                var fields = _fieldDefinitions.Values.Cast<FieldDefinition>().ToArray();
+                string fieldNames = string.Join(",", fields.Select(field => field.Name));
+                string[] parameterNames = fields.Select(
+                    (_, index) => $"$value{index}").ToArray();
+                var rowIds = new List<long>();
+
+                using var transaction = _connection.BeginTransaction();
+                using (var deleteCommand = _connection.CreateCommand())
+                {
+                    deleteCommand.Transaction = transaction;
+                    deleteCommand.CommandText =
+                        $"DELETE FROM {_name} WHERE {captureField.Name} = $capture";
+                    deleteCommand.Parameters.AddWithValue(
+                        "$capture",
+                        ImportedFieldValueAsParameter(captureField, capture.Value));
+                    deleteCommand.ExecuteNonQuery();
+                }
+
+                using var insertCommand = _connection.CreateCommand();
+                insertCommand.Transaction = transaction;
+                insertCommand.CommandText =
+                    $"INSERT INTO {_name}({fieldNames}) VALUES({string.Join(",", parameterNames)})";
+                var parameters = parameterNames.Select(name =>
+                {
+                    var parameter = insertCommand.CreateParameter();
+                    parameter.ParameterName = name;
+                    insertCommand.Parameters.Add(parameter);
+                    return parameter;
+                }).ToArray();
+
+                using var rowIdCommand = _connection.CreateCommand();
+                rowIdCommand.Transaction = transaction;
+                rowIdCommand.CommandText = "SELECT last_insert_rowid()";
+
+                foreach (object[] row in rows)
+                {
+                    if (row.Length != fields.Length)
+                    {
+                        throw new ArgumentException("Inequal number of values to table fields.", nameof(rows));
+                    }
+
+                    for (int index = 0; index < fields.Length; index++)
+                    {
+                        parameters[index].Value =
+                            ImportedFieldValueAsParameter(fields[index], row[index]);
+                    }
+
+                    insertCommand.ExecuteNonQuery();
+                    rowIds.Add((long)rowIdCommand.ExecuteScalar());
+                }
+
+                transaction.Commit();
+                return rowIds;
+            }
+        }
+
+        private static object ImportedFieldValueAsParameter(
+            FieldDefinition field,
+            object value)
+        {
+            if (value == null)
+            {
+                return string.Empty;
+            }
+
+            if (field.ValueType != FieldValueType.String)
+            {
+                return value;
+            }
+
+            // Preserve FieldValueAsString's stored text: doubled single quotes
+            // were SQL syntax, while doubled double quotes became data.
+            return value.ToString().Replace("\"", "\"\"");
         }
 
         private IDataset GetDataset()

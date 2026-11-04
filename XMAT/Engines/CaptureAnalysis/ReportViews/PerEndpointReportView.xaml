@@ -7,9 +7,14 @@
              xmlns:local="clr-namespace:XMAT.XboxLiveCaptureAnalysis"
              xmlns:logic="clr-namespace:XMAT.XboxLiveCaptureAnalysis"
              mc:Ignorable="d" 
+             ContextMenuOpening="HostListMenuOpening"
              d:DesignHeight="450" d:DesignWidth="800">
     <UserControl.Resources>
         <logic:ViolationLevelToColorBrushConverter x:Key="ViolationLevelToColorBrushConverter"/>
+        <!-- Filled for the right-clicked or focused summary row when it opens. -->
+        <ContextMenu x:Key="HostListRowMenu"
+                     Background="{DynamicResource MenuBackgroundBrush}"
+                     Foreground="{DynamicResource MenuForegroundBrush}"/>
     </UserControl.Resources>
     <UserControl.CommandBindings>
         <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToId}" Executed="GoToEndpoint_Id"/>
@@ -31,13 +36,18 @@
                 IsReadOnly="True"
                 ItemsSource="{Binding Summary.Endpoints}"
                 AutoGenerateColumns="False">
+                <DataGrid.RowStyle>
+                    <Style TargetType="DataGridRow">
+                        <Setter Property="ContextMenu" Value="{StaticResource HostListRowMenu}"/>
+                    </Style>
+                </DataGrid.RowStyle>
                 <DataGrid.Columns>
                     <DataGridTemplateColumn Header="Endpoint Name" Width="SizeToCells" IsReadOnly="True">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Button
-                                    Content="{Binding EndpointName}"
-                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpoint}" CommandParameter="{Binding EndpointName}"
+                                    Content="{Binding DisplayName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpoint}" CommandParameter="{Binding Key}"
                                     />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
@@ -49,7 +59,7 @@
                                     Content="{Binding BatchFrequencyIssueCount.ErrorsAndWarnings}"
                                     Background="{Binding BatchFrequencyIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
                                     Tag="{Binding EndpointName}"
-                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBfr}" CommandParameter="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBfr}" CommandParameter="{Binding Key}"
                                     />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
@@ -61,7 +71,7 @@
                                     Content="{Binding BurstDetectionIssueCount.ErrorsAndWarnings}"
                                     Background="{Binding BurstDetectionIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
                                     Tag="{Binding EndpointName}"
-                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBdr}" CommandParameter="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBdr}" CommandParameter="{Binding Key}"
                                     />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
@@ -73,7 +83,7 @@
                                     Content="{Binding CallFrequencyIssueCount.ErrorsAndWarnings}"
                                     Background="{Binding CallFrequencyIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
                                     Tag="{Binding EndpointName}"
-                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointCfr}" CommandParameter="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointCfr}" CommandParameter="{Binding Key}"
                                     />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
@@ -85,7 +95,7 @@
                                     Content="{Binding PollingDetectionIssueCount.ErrorsAndWarnings}"
                                     Background="{Binding PollingDetectionIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
                                     Tag="{Binding EndpointName}"
-                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointPdr}" CommandParameter="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointPdr}" CommandParameter="{Binding Key}"
                                     />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
@@ -97,7 +107,7 @@
                                     Content="{Binding RepeatedCallsIssueCount.ErrorsAndWarnings}"
                                     Background="{Binding RepeatedCallsIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
                                     Tag="{Binding EndpointName}"
-                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointRcr}" CommandParameter="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointRcr}" CommandParameter="{Binding Key}"
                                     />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
@@ -109,7 +119,7 @@
                                     Content="{Binding SmallBatchDetectionIssueCount.ErrorsAndWarnings}"
                                     Background="{Binding SmallBatchDetectionIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
                                     Tag="{Binding EndpointName}"
-                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointSbdr}" CommandParameter="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointSbdr}" CommandParameter="{Binding Key}"
                                     />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
@@ -121,7 +131,7 @@
                                     Content="{Binding ThrottledCallIssueCount.ErrorsAndWarnings}"
                                     Background="{Binding ThrottledCallIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
                                     Tag="{Binding EndpointName}"
-                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointTcr}" CommandParameter="{Binding EndpointName}"
+                                    Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointTcr}" CommandParameter="{Binding Key}"
                                     />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>

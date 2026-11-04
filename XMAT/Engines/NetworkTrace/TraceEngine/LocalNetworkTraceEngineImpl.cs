@@ -58,12 +58,17 @@ namespace XMAT.NetworkTrace.NTDE
 
         public event EventHandler<string> EventRecordAvailable;
 
+        // Microsoft-Windows-NDIS-PacketCapture
+        internal static readonly Guid NdisPacketCaptureProviderId = new Guid("2ED6006E-4729-4609-B423-3EE7BCD678EF");
+
         private long _startTimeTicks = 0;
+        private int _packetCount = 0;
         private string _sessionName;
 
         unsafe private void Dispatch(TraceEventNativeMethods.EVENT_RECORD* record)
         {
-            if ((record->EventHeader.Id != PacketFragment_value) ||
+            if ((record->EventHeader.ProviderId != NdisPacketCaptureProviderId) ||
+                (record->EventHeader.Id != PacketFragment_value) ||
                 (record->EventHeader.Version != 0) ||
                 (record->EventHeader.Channel != CHANNEL_PCAP) ||
                 (record->EventHeader.Level != WINEVENT_LEVEL_INFO) ||
@@ -84,7 +89,7 @@ namespace XMAT.NetworkTrace.NTDE
 
             DateTime timestamp = DateTime.FromFileTimeUtc(_startTimeTicks + record->EventHeader.TimeStamp);
 
-            json.Append(timestamp.ToString("yyyy-MM-ddThh:mm:ss.fffffffZ"));
+            json.Append(timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ"));
             json.Append("\" }, \"packet\": { \"mediaType\": \"");
 
             if ((record->EventHeader.Keyword & KW_MEDIA_802_3) != 0)
@@ -145,23 +150,42 @@ namespace XMAT.NetworkTrace.NTDE
 
             json.Append("\" } }\n");
 
+            _packetCount++;
             EventRecordAvailable?.Invoke(this, json.ToString());
         }
 
         public async Task GetAllEventsAsync()
         {
+            // netsh writes the file here:
+            // %LOCALAPPDATA%\Temp\NetTraces\[sessionname]NetTrace.etl
+            string etlPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                $"Temp\\NetTraces\\{_sessionName}NetTrace.etl");
+
+            await ReadEventsFromFileAsync(etlPath);
+        }
+
+        /// <summary>
+        /// Reads packet capture events from an existing .etl file (e.g. one produced by
+        /// "netsh trace start capture=yes" on another PC) and raises EventRecordAvailable
+        /// for each packet. Returns the number of packets found.
+        /// </summary>
+        public async Task<int> ReadEventsFromFileAsync(string etlPath)
+        {
+            if (!File.Exists(etlPath))
+            {
+                throw new FileNotFoundException(etlPath);
+            }
+
+            _packetCount = 0;
+
             await Task.Run(() =>
             {
                 unsafe
                 {
-                    // netsh writes the file here:
-                    // %LOCALAPPDATA%\Temp\NetTraces\[sessionname]NetTrace.etl
-
-                    string etlPath = $"Temp\\NetTraces\\{_sessionName}NetTrace.etl";
-
                     var logfile = new TraceEventNativeMethods.EVENT_TRACE_LOGFILEW
                     {
-                        LogFileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), etlPath),
+                        LogFileName = etlPath,
                         EventCallback = Dispatch,
                         LogFileMode = TraceEventNativeMethods.PROCESS_TRACE_MODE_EVENT_RECORD |
                                       TraceEventNativeMethods.PROCESS_TRACE_MODE_RAW_TIMESTAMP
@@ -175,17 +199,24 @@ namespace XMAT.NetworkTrace.NTDE
                         Marshal.ThrowExceptionForHR(TraceEventNativeMethods.GetHRForLastWin32Error());
                     }
 
-                    _startTimeTicks = logfile.LogfileHeader.StartTime;
-
-                    int dwErr = TraceEventNativeMethods.ProcessTrace(traceHandle, 1, (IntPtr)0, (IntPtr)0);
-                    if (dwErr != 0)
+                    try
                     {
-                        Marshal.ThrowExceptionForHR(TraceEventNativeMethods.GetHRFromWin32(dwErr));
-                    }
+                        _startTimeTicks = logfile.LogfileHeader.StartTime;
 
-                    TraceEventNativeMethods.CloseTrace(traceHandle[0]);
+                        int dwErr = TraceEventNativeMethods.ProcessTrace(traceHandle, 1, (IntPtr)0, (IntPtr)0);
+                        if (dwErr != 0)
+                        {
+                            Marshal.ThrowExceptionForHR(TraceEventNativeMethods.GetHRFromWin32(dwErr));
+                        }
+                    }
+                    finally
+                    {
+                        TraceEventNativeMethods.CloseTrace(traceHandle[0]);
+                    }
                 }
             });
+
+            return _packetCount;
         }
 
         private string CreateSessionName()

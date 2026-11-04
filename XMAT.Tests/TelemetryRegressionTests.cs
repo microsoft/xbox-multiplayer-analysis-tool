@@ -70,7 +70,7 @@ namespace XMAT.Tests
             using var capture = service.Begin(TelemetryOperationKind.Capture, TelemetryFeature.WebProxyCapture);
             var controller = new WebServiceDeviceCaptureController("test", DeviceType.LocalPC, true);
             List<Action> pendingUi = [];
-            controller.RecordCapturedRow(1, capture, callback =>
+            controller.RecordCapturedRow(null, capture, callback =>
             {
                 Assert.Single(reporter.Events, x => x.Kind == TelemetryEventKind.CaptureFirstData);
                 pendingUi.Add(callback);
@@ -170,7 +170,7 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void CollectorConnectRequestsAndResponsesDoNotReachCaptureOrScriptHandlers()
+        public async Task CollectorConnectRequestsAndResponsesDoNotReachCaptureOrScriptHandlers()
         {
             var proxy = new WebServiceProxy();
             var count = 0;
@@ -185,11 +185,13 @@ namespace XMAT.Tests
             {
                 using (TelemetryTraffic.Exclude(endpoint))
                 {
-                    Assert.True(proxy.RaiseReceivedSslConnectionRequest(1, "127.0.0.1", request));
+                    Assert.True(await proxy.RaiseReceivedSslConnectionRequestAsync(
+                        1, "127.0.0.1", request, CancellationToken.None));
                     proxy.RaiseCompletedSslConnectionRequest(1, request);
                     request.Method = "POST";
-                    Assert.True(proxy.RaiseReceivedWebRequest(1, request));
-                    Assert.True(proxy.RaiseReceivedWebResponse(1, request, new ServerResponse()));
+                    Assert.True(await proxy.RaiseReceivedWebRequestAsync(1, request, CancellationToken.None));
+                    Assert.True(await proxy.RaiseReceivedWebResponseAsync(
+                        1, request, new ServerResponse(), CancellationToken.None));
                     Assert.Equal(0, count);
                 }
                 Assert.True(TelemetryTraffic.IsExcluded(host.ToUpperInvariant(), 443));
@@ -197,12 +199,12 @@ namespace XMAT.Tests
                 Assert.False(TelemetryTraffic.IsExcluded($"{host}.other.test", 443));
             }
             Assert.False(TelemetryTraffic.IsExcluded(host, 443));
-            Assert.True(proxy.RaiseReceivedWebRequest(1, request));
+            Assert.True(await proxy.RaiseReceivedWebRequestAsync(1, request, CancellationToken.None));
             Assert.Equal(1, count);
         }
 
         [Fact]
-        public void OccupiedProxyPortFailsSynchronouslyAndCleansUpForRetry()
+        public async Task OccupiedProxyPortFailsAsynchronouslyAndCleansUpForRetry()
         {
             var logFile = Path.Combine(Path.GetTempPath(), $"xmat-startup-{Guid.NewGuid():N}.log");
             var proxy = new WebServiceProxy();
@@ -212,17 +214,17 @@ namespace XMAT.Tests
             try
             {
                 var options = new WebServiceProxyOptions { Port = port, LogFilePath = logFile };
-                Assert.ThrowsAny<IOException>(() => proxy.StartProxy(options));
+                await Assert.ThrowsAnyAsync<IOException>(() => proxy.StartProxyAsync(options));
                 Assert.False(proxy.IsProxyEnabled);
                 occupied.Stop();
-                proxy.StartProxy(options);
+                await proxy.StartProxyAsync(options);
                 Assert.True(proxy.IsProxyEnabled);
-                proxy.StopProxy();
+                await proxy.StopProxyAsync();
                 Assert.False(proxy.IsProxyEnabled);
             }
             finally
             {
-                proxy.StopProxy();
+                await proxy.StopProxyAsync();
                 File.Delete(logFile);
             }
         }
@@ -248,7 +250,7 @@ namespace XMAT.Tests
             proxy.ReceivedWebResponse += (_, _) => Interlocked.Increment(ref captured);
             try
             {
-                proxy.StartProxy(new() { Port = proxyPort, LogFilePath = log });
+                await proxy.StartProxyAsync(new() { Port = proxyPort, LogFilePath = log });
                 using var client = new TcpClient();
                 await client.ConnectAsync(IPAddress.Loopback, proxyPort, timeout.Token);
                 using var stream = client.GetStream();
@@ -269,7 +271,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                proxy.StopProxy();
+                await proxy.StopProxyAsync();
                 File.Delete(log);
             }
         }
