@@ -18,12 +18,25 @@ namespace XMAT.DataAbstractionLayer
             IFieldDefinition fieldDef;
             if (_fieldDefs.TryGetValue(fieldName, out fieldDef))
             {
-                return (Int64)_fieldValues[fieldDef.ColumnIndex];
+                object value =
+                    _fieldValues[fieldDef.ColumnIndex];
+                return value == null
+                    ? default
+                    : (Int64)value;
             }
             else
             {
                 return default(Int64);
             }
+        }
+
+        // Only an extension column can hold NULL; reading one yields null text or a zero integer.
+        internal bool IsNull(string fieldName)
+        {
+            return _fieldDefs.TryGetValue(
+                    fieldName,
+                    out IFieldDefinition fieldDef) &&
+                _fieldValues[fieldDef.ColumnIndex] == null;
         }
 
         public string Str(string fieldName)
@@ -50,8 +63,7 @@ namespace XMAT.DataAbstractionLayer
             {
                 _fieldValues[fieldDef.Value.ColumnIndex] = FieldValue.GetFieldValue(
                     recordReader,
-                    fieldDef.Value.ColumnIndex,
-                    fieldDef.Value.ValueType);
+                    fieldDef.Value);
             }
         }
 

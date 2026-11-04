@@ -276,29 +276,27 @@ namespace XMAT.XboxLiveCaptureAnalysis
             var requestTime = DateTime.Parse(requestTimestamp);
             var duration = DateTime.Parse(responseTimestamp) - requestTime;
 
-            // note: obtained from "Host" request header if possible
-            if (requestHeaders[HttpRequestHeader.Host] != null)
-            {
-                item.Host = requestHeaders[HttpRequestHeader.Host];
-            }
-            else
-            {
-                item.Host = requestHost.Split(':')[0];
-            }
+            // note: obtained from "Host" request header if possible. A stored hostless capture remains hostless.
+            item.Host = string.IsNullOrWhiteSpace(requestHost)
+                ? string.Empty
+                : requestHeaders[HttpRequestHeader.Host] ??
+                    requestHost.Split(':')[0];
 
-            // The logical Host label above is unchanged; host-list actions use provenance: a
-            // structured capture host that is a host identity wins, otherwise the captured Host
-            // header parsed as an authority is used. Text that is not a host identity is kept
-            // but never actionable.
+            // The logical Host label above keeps the captured-header behavior; host-list actions use provenance: a
+            // structured capture host that is a host identity wins, otherwise the captured Host header parsed as an
+            // authority is used. Text that is not a host identity is kept but never actionable.
             item.EndpointKind = EndpointKind.Captured;
             item.PhysicalHost = GetPhysicalHost(requestHost, requestHeaders[HttpRequestHeader.Host]);
 
-            // note: obtained from the .Scheme & .Call
-            item.Uri = UriUtils.GetAbsoluteUri(
-                requestScheme,
-                requestHost,
-                requestPort,
-                requestPath);
+            // note: obtained from the .Scheme & .Call. A hostless capture keeps its request path without
+            // reconstructing an authority.
+            item.Uri = string.IsNullOrEmpty(item.Host)
+                ? requestPath ?? string.Empty
+                : UriUtils.GetAbsoluteUri(
+                    requestScheme,
+                    requestHost,
+                    requestPort,
+                    requestPath);
 
             item.XboxUserId = Utils.GetXboxUserID(requestPath);
             item.ReqHeader = requestLineAndHeaders;

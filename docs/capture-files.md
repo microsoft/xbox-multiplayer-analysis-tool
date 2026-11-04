@@ -34,6 +34,33 @@ for that attempt. If re-importing a same-named `.SAZ` fails, the existing tab,
 selection, and data stay unchanged. Retry without restarting XMAT; details are in
 `application.log` in the application's `Logs` directory.
 
+XMAT checks capture files before reading them and never changes them:
+
+- A `.XMATCAP` file may contain only the tables and columns that XMAT writes, plus
+  extra untyped, TEXT or INTEGER columns, which can be empty (NULL). A file with any
+  other table, index, view, trigger, constraint or generated column, or with a schema
+  larger than XMAT supports, is refused. So is a file that another program has open
+  for writing, or one with SQLite journal or write-ahead log files next to it
+  (`-journal`, `-wal` or `-shm`): open a clean capture that has been closed or
+  exported instead; XMAT leaves those files unchanged. A capture in a location where
+  Windows cannot report a normalized path, such as some network shares, is refused
+  too; copy it to a local folder first. If loading fails, the open tabs are unchanged.
+  While a capture is open, XMAT reads only that file, and other programs can read it
+  but not change it. A loaded capture reuses the read-only tab of the same device
+  instead of opening a duplicate, and closing the last tab that shows a file releases
+  the file. While a network capture is running, a loaded tab for the same device shows
+  its new packets only from when the tab opens or reloads; packets that arrive while
+  the file loads appear in the running capture's tab, and every packet is still saved.
+- A `.SAZ` archive's directory is checked before it is read: an archive that lists
+  more than 750,064 files, has a directory larger than 80 MiB, spans several disks or
+  has an inconsistent directory is refused.
+- Each request or response in a `.SAZ` may have at most 16,384 header lines and 16 MiB
+  of header data (its first line, the header lines and the empty line that ends them);
+  a larger message stops the import rather than being truncated. Malformed header
+  lines and incomplete frames are skipped, and the status bar notes that data was
+  skipped. A request without a usable `Host` header is imported without a host;
+  analysis keeps its path, and the Block and Bypass actions do not apply to it.
+
 ## Export a sanitized capture
 
 1. Stop all captures and select the web proxy capture to share.
@@ -102,7 +129,9 @@ values or profile batches can therefore lose diagnostic content; these limits do
 guarantee diagnostic completeness.
 
 The completion dialog reports redactions and omissions, and SAZ session metadata
-identifies omitted request/response bodies.
+identifies omitted request/response bodies. Exports can retain headers exceeding the
+import limits (16,384 lines or 16 MiB, see above); XMAT refuses to import such an
+archive rather than truncating it.
 
 ### Cancellation and failures
 
