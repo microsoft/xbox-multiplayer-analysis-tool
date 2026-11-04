@@ -26,7 +26,8 @@ namespace XMAT.Cli
     }
 
     // Parses the command line, runs the command and writes its report. Help, --version, doctor and usage errors never
-    // write files or touch legacy statics; only analyze reserves a staging folder and isolates them (CliAnalyzeCommand).
+    // write files or touch legacy statics; only analyze, replay and compose reserve a staging folder and isolate them
+    // (CliAnalyzeCommand, CliReplayCommand).
     internal static class CliApplication
     {
         private static readonly byte[] NewLine = { (byte)'\r', (byte)'\n' };
@@ -50,6 +51,13 @@ namespace XMAT.Cli
                     var cancellation = new CancellationTokenSource();
                     signals = CliSignals.Register(cancellation);
                     report = await CliAnalyzeCommand.RunAsync(parsed.Request, runId, cancellation.Token).ConfigureAwait(false);
+                }
+                else if (parsed.Request.Command is CliCommands.Replay or CliCommands.Compose)
+                {
+                    // Not disposed: a late signal handler may still cancel it while the process exits.
+                    var cancellation = new CancellationTokenSource();
+                    signals = CliSignals.Register(cancellation);
+                    report = await CliReplayCommand.RunAsync(parsed.Request, runId, cancellation.Token).ConfigureAwait(false);
                 }
                 else if (parsed.Request.Command == CliCommands.Doctor)
                 {

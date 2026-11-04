@@ -15,6 +15,14 @@ both. Other capabilities move over time; the [capability table](#what-runs-headl
 ```
 xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N]
              [--max-record-mib N] [--max-records N]
+xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify]
+            [--url URL | --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]...
+            [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
+            [--allow-unsafe-methods] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N]
+            [--max-record-mib N] [--max-records N]
+xmat compose --url URL --out DIR [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N]
+             [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
+             [--allow-unsafe-methods] [--allow-origin-change]
 xmat doctor --for analyze
 xmat help [COMMAND]
 xmat --version
@@ -103,10 +111,55 @@ xmat --version
   with `analysis.rules.work-limit`. These two limits measure time, so whether a run reaches them depends on the
   machine and its load; the installed patterns never fall back. The budget bounds rule evaluation, not xmat's total
   time or memory use, so in automation run xmat with time and memory limits.
-- Neither the JSON output nor the published files contain captured content (hosts, URLs, headers, bodies, Xbox user
-  ids, IP addresses or device names) or local paths such as the input's; the only paths in them are artifact paths
-  relative to `DIR`, such as `summary.json`. They hold rule names, levels and counts, service labels, ordinal device
-  and console ids and the SHA-256 of the input. The input is never modified.
+- Neither the JSON output nor the published files of `xmat analyze` contain captured content (hosts, URLs, headers,
+  bodies, Xbox user ids, IP addresses or device names) or local paths such as the input's; the only paths in them are
+  artifact paths relative to `DIR`, such as `summary.json`. They hold rule names, levels and counts, service labels,
+  ordinal device and console ids and the SHA-256 of the input. The input is never modified.
+- `xmat replay` sends requests from a capture again, like Fiddler's Reissue, and `xmat compose` sends one new request,
+  like Fiddler's Composer. Both send directly from this PC, the way the GUI's request composer does: never through a
+  proxy (so XMAT's capture, scripts and host lists do not apply and the replays are not captured), without cookies of
+  their own, without decompressing responses, and with Windows' certificate validation. `replay` reads `INPUT` exactly
+  as `analyze` does, with the same limit options and `analysis.input.*` errors. `--request` selects requests by the
+  number the GUI shows in its `#` column: `all`, or numbers and ranges such as `1,5,9-12` (at most 10,000 numbers). A
+  number given on its own must exist (`replay.request.not-found`) and be an HTTP or HTTPS request without a protocol
+  upgrade (`replay.request.unsupported`); a range or `all` skips CONNECT tunnels, WebSocket handshakes and other
+  traffic with the warning `replay.request.skipped`. In a capture of several devices, a number that more than one
+  device has needs `--device` (`replay.request.ambiguous`). Each selected request is sent once per `--repeat`
+  (1 by default, at most 1,000), all of them in turn before the next round, in capture order; `--parallel` sends up
+  to that many at a time (1 by default, at most 16). A run sends at most 10,000 requests (`replay.plan.too-large`).
+- Edits apply to every selected request before anything is sent: `--method`; `--header "NAME: VALUE"`, which replaces
+  every header of that name or adds it (repeat it for more headers; `Host`, `Content-Length` and connection headers
+  cannot be set); `--remove-header`; `--body-file`, whose bytes replace the body (at most 64 MiB, read before
+  anything else happens); `--unconditional`, which removes `If-Match`, `If-None-Match`, `If-Modified-Since`,
+  `If-Unmodified-Since` and `If-Range` so the server cannot answer 304 or 412; `--url`, which replaces the whole URL
+  of a single selected request (`replay.edit.url-needs-one-request` otherwise); and `--origin`, which sends every
+  selected request to another scheme, host and port with its path and query, for example to replay captured traffic
+  against a local test server.
+- Every selected request is checked before the first one is sent, and nothing is sent when one fails a check (exit
+  code 3). A request that is not valid after the edits fails with `replay.request.invalid`. Unless you allow it, xmat
+  refuses to send a method other than GET, HEAD and OPTIONS, which can change data on the server
+  (`replay.policy.unsafe-method`; `--allow-unsafe-methods` allows it), or captured headers, such as credentials, to
+  another origin than the one they were captured for (`replay.policy.origin-change`; `--allow-origin-change` allows
+  it). Redirects are returned, not followed, unless `--follow-redirects N` follows up to `N` of them (at most 10): a
+  303, and a 301 or 302 to a POST, continue as GET without the body, as browsers do. A redirect to another origin is
+  followed only with `--allow-origin-change`, and then without the `Authorization`, `Proxy-Authorization` and
+  `Cookie` headers; a redirect from HTTPS to HTTP or to anything other than HTTP and HTTPS is never followed. A
+  redirect that is not followed is the result, with the code `replay.redirect.origin-change`,
+  `replay.redirect.insecure`, `replay.redirect.unsupported` or `replay.redirect.limit`.
+- Each request waits for its response up to `--timeout` seconds (30 by default, at most 600) and keeps a body of up to
+  `--max-response-mib` (16 by default, at most 512). A request without a complete response is a result too: its
+  `outcome` is `failed` (`replay.send.failed`), `timedOut` (`replay.response.timeout`) or `tooLarge`
+  (`replay.response.too-large`, which keeps the status and headers but not the body). Once every request was sent,
+  xmat publishes `DIR` with `summary.json` (schema `xmat-replay/1`) and, for each send, `replays/NNNNN/request.http`
+  (the request as xmat built it) and `replays/NNNNN/response.http` (the response, with the chunked framing removed)
+  whatever the responses were. Unlike the output of `analyze`, these files hold captured content, including
+  credentials and cookies from the capture: `DIR` is private to your account as for `analyze`, so keep it that way.
+  The exit code is 12 when a request got no complete response; otherwise, with `--verify`, it is 11 when a response
+  differs from the response captured for its request in its status code or body. Bodies are compared without their
+  chunked framing and gzip, deflate or Brotli content coding; headers are not compared, since dates, request ids and
+  cookies differ on every response. The JSON output and `summary.json` hold only request numbers, ordinal device ids,
+  outcomes, status codes, durations, sizes, codes and the options that are numbers or switches, never URLs, methods,
+  headers, bodies or the `--body-file` path. Cancelling a run publishes nothing, but requests already sent stay sent.
 - `xmat doctor --for analyze` checks what `xmat analyze` needs and writes nothing: the analysis rules (`data.rules`),
   the API map (`data.apimap`) and the English strings (`localization.en-us`) installed next to `xmat.exe`, and a 64-bit
   process (`runtime.64-bit`). A missing or damaged file fails its check with a code such as `analysis.assets.rules` and
@@ -157,16 +210,25 @@ An abridged result:
 }
 ```
 
-`status` is `succeeded`, `findingsFound`, `cancelled` or `failed`. `warnings` and `errors` hold stable codes, such as
-`analysis.input.not-found`, with fixed messages, and `artifacts` lists what was published. xmat publishes only when the
-run completes successfully: status `succeeded`, or `findingsFound` with `--fail-on findings`; otherwise `artifacts` is
-empty. Once its command line is valid, `analyze` reports the effective input limits in `limits`, even when it fails.
+`status` is `succeeded`, `findingsFound`, `mismatchFound`, `requestsFailed`, `cancelled` or `failed`. `warnings` and
+`errors` hold stable codes, such as `analysis.input.not-found`, with fixed messages, and `artifacts` lists what was
+published. `analyze` publishes only when the run completes successfully: status `succeeded`, or `findingsFound` with
+`--fail-on findings`; otherwise `artifacts` is empty. `replay` and `compose` publish once every request was sent,
+whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFailed`). Once its command line is valid, `analyze` reports the effective input limits in `limits`, even when it fails.
 `summary.json` holds `schema` (`xmat-analysis/1`), `command`, `runId`, `version`, the same `input`, `limits`,
 `devices` and `totals`, and the run's `warnings`. Instead of the analysis fields, `doctor` reports `target`, `checks`
 (each with its `id`, `status` and, when it failed, its `code`), `environment` (`framework`, the .NET runtime, and
 `architecture`, the process architecture such as `x64`) and `capabilities` (each with its `id`, `status` and
 `slice`); `help` reports `commands`, each with its `name`, `status` (`supported`), `usage` and `capabilities` (the ids
-of the capabilities that the command provides); and `--version` reports `version`.
+of the capabilities that the command provides); and `--version` reports `version`. Instead of the analysis fields,
+`replay` and `compose` report `options` (`repeat`, `parallel`, `timeoutSeconds`, `maxResponseMib`, `followRedirects`,
+`unconditional`, `verify`, `allowUnsafeMethods` and `allowOriginChange`), `replays` (one per send, in order, each with
+its `id`, `device` and `request` (null for `compose`), `iteration`, `outcome`, `status` (null without a response),
+`durationMs`, `responseBytes`, `redirects`, `code`, `verify` (null without `--verify`, otherwise its `result`, `match`
+or `mismatch`, and its `differences`, `status` and `body`) and, once published, its `files`) and `totals` (`replays`,
+`completed`, `failed`, `matched` and `mismatched`); `replay` also reports `input` and `limits` like `analyze`.
+`summary.json` of a replay holds `schema` (`xmat-replay/1`), `command`, `runId`, `version`, the same fields and the
+run's `warnings`.
 
 If xmat cannot produce this document (an internal error), it writes a fixed fallback document instead, with only
 `schema`, `command`, `runId`, `status`, `exitCode`, `artifacts`, `cleanup`, empty `warnings` and the error
@@ -180,21 +242,24 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 |---|---|
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
-| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device |
+| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device; for `replay` and `compose` also a selection, edit or `--body-file` that cannot be used, or a request that needs `--allow-unsafe-methods` or `--allow-origin-change` (nothing is sent) |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists |
 | 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
+| 11 | `--verify` and a replayed response differs from the captured one (the results are published) |
+| 12 | A replayed or composed request got no complete response (the results are published) |
 | 70 | Internal error, including a `help`, `--version` or passing `doctor` run whose JSON document could not be produced (`cli.internal.output`) |
 | 130 | Cancelled before the results were published |
 
 ## Compatibility
 
-- The JSON on standard output (`xmat-cli/1`) and `summary.json` (`xmat-analysis/1`) only grow within their version: a
-  release may add fields, diagnostic codes, commands and capabilities, so ignore what you do not know. A change that
-  removes or renames a field, changes its type or meaning, or changes what a status value means ships as a new schema
-  version (`xmat-cli/2`, `xmat-analysis/2`) together with migration guidance in this document.
+- The JSON on standard output (`xmat-cli/1`) and `summary.json` (`xmat-analysis/1`, `xmat-replay/1`) only grow within
+  their version: a release may add fields, diagnostic codes, commands and capabilities, so ignore what you do not know.
+  A change that removes or renames a field, changes its type or meaning, or changes what a status value means ships as
+  a new schema version (`xmat-cli/2`, `xmat-analysis/2`, `xmat-replay/2`) together with migration guidance in this
+  document.
 - Exit codes keep their meaning: new codes may be added, but a code is never renumbered or reused.
 - The command lines of available commands keep working.
 - Intentional diagnostic changes from the earlier headless draft: XMAT capture sidecars and WAL mode now report
@@ -247,7 +312,8 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
-| Edit and resend a captured request (`request.replay`) | (not available yet) | Planned (S9, TBD) |
+| Compose and send a new request (`request.compose`) | `xmat compose --url URL --out DIR [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--allow-unsafe-methods] [--allow-origin-change]` | Supported (S9) |
+| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--allow-unsafe-methods] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Report navigation and analysis tabs (`view.analysis-navigation`) | (none) | GUI only. Presentation: moves between report views and tabs |

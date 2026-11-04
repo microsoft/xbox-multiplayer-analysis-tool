@@ -66,7 +66,8 @@ namespace XMAT.Cli
             yield return string.Empty;
             yield return "Standard output carries one JSON document (schema xmat-cli/1); diagnostics go to standard error.";
             yield return "Exit codes: 0 success, 2 usage error, 3 invalid input, 4 missing prerequisite, 5 conflict, 6 failed,";
-            yield return "7 cleanup failed, 10 findings found (--fail-on findings), 70 internal error, 130 cancelled.";
+            yield return "7 cleanup failed, 10 findings found (--fail-on findings), 11 responses differ (--verify),";
+            yield return "12 requests without a response, 70 internal error, 130 cancelled.";
         }
 
         private static IEnumerable<string> Details(CliCommandHelp command)

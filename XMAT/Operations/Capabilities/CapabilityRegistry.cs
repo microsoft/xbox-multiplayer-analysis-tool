@@ -14,6 +14,7 @@ namespace XMAT.Operations.Capabilities
     internal static class CapabilityRegistry
     {
         internal const string AnalyzeCaptureOperation = "XMAT.Operations.Analysis.AnalyzeCaptureOperation";
+        internal const string ReplayOperation = "XMAT.Operations.Replay.ReplayOperation";
 
         private const string Owner = "XMAT-021";
         private const string MainWindowXaml = "Windows/MainWindow.xaml";
@@ -30,9 +31,6 @@ namespace XMAT.Operations.Capabilities
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
         private const string SanitizedExportXaml = "Windows/SanitizedExportProgressWindow.xaml";
         private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
-
-        // Replace with the SIG-XMAT task that owns composer and replay parity once it exists.
-        private const string ReplayOwner = "TBD";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
@@ -191,9 +189,16 @@ namespace XMAT.Operations.Capabilities
                     Click(BypassListXaml, "ClearAll_Click"),
                 }),
 
-            // The composer resends one captured request directly from this PC; the replay is not captured.
-            Capability.Planned(
-                "request.replay", "Edit and resend a captured request", "S9", ReplayOwner,
+            // Replay sends captured requests again, as captured or edited, directly from this PC through the shared
+            // ReplaySender; the replays are not captured. The composer is its GUI adapter for one request at a time.
+            Capability.Supported(
+                "request.replay", "Replay captured requests, as captured or edited", "S9",
+                cli: "replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
+                    "[--verify] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
+                    "[--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] " +
+                    "[--max-response-mib N] [--allow-unsafe-methods] [--allow-origin-change] [--max-input-mib N] " +
+                    "[--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: ReplayOperation,
                 gui: new[]
                 {
                     Command(ProxyCommandsPrefix + "EditAndResend"),
@@ -203,6 +208,12 @@ namespace XMAT.Operations.Capabilities
                     Click(ComposerXaml, "CopyCurl_Click"),
                     Click(ComposerXaml, "Close_Click"),
                 }),
+            Capability.Supported(
+                "request.compose", "Compose and send a new request", "S9",
+                cli: "compose --url URL --out DIR [--method METHOD] [--header \"NAME: VALUE\"]... [--body-file FILE] " +
+                    "[--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] " +
+                    "[--allow-unsafe-methods] [--allow-origin-change]",
+                operation: ReplayOperation),
 
             // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.
             Capability.Planned(

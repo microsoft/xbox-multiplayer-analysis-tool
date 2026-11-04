@@ -9,7 +9,8 @@ using System.Threading.Tasks;
 
 namespace XMAT.Cli
 {
-    // A file that a run publishes. Path is relative to --out and uses '/', as in the JSON document.
+    // A file that a run publishes. Path is relative to --out and uses '/', as in the JSON document. Contents is null for
+    // a folder or file that the run already wrote into the staging folder itself, such as replay's messages.
     internal sealed record CliStagedFile(string Kind, string Path, byte[] Contents);
 
     // Points in the publication of a run where tests synchronize; production passes none.
@@ -64,7 +65,11 @@ namespace XMAT.Cli
                     cancellationToken.ThrowIfCancellationRequested();
                     foreach (CliStagedFile file in files)
                     {
-                        output.WriteFile(file.Path, file.Contents);
+                        if (file.Contents != null)
+                        {
+                            output.WriteFile(file.Path, file.Contents);
+                        }
+
                         cancellationToken.ThrowIfCancellationRequested();
                     }
 

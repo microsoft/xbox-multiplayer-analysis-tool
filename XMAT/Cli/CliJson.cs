@@ -9,16 +9,21 @@ using System.Text.Json;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Capabilities;
+using XMAT.Operations.Replay;
 
 namespace XMAT.Cli
 {
     // Writes xmat's JSON field by field, so only allow-listed values reach the output: rule names, levels, counts,
-    // service labels, ordinal ids, the input kind and SHA-256, the effective limits, codes and fixed messages. Never
-    // AnalysisResult.Legacy, captured content or paths.
+    // service labels, ordinal ids, request numbers, outcomes and status codes, the input kind and SHA-256, the effective
+    // limits and options, codes and fixed messages. Never AnalysisResult.Legacy, captured content or paths other than
+    // artifact paths.
     internal static class CliJson
     {
         // summary.json in a published --out folder.
         internal const string SummarySchema = "xmat-analysis/1";
+
+        // summary.json of a published replay or compose run.
+        internal const string ReplaySummarySchema = "xmat-replay/1";
 
         // The only error of the fallback document (SerializeFallback).
         internal static readonly OperationDiagnostic OutputFailure = new(
@@ -49,6 +54,11 @@ namespace XMAT.Cli
                 if (report.Analysis != null)
                 {
                     WriteAnalysis(writer, report.Analysis);
+                }
+
+                if (report.Replay != null)
+                {
+                    WriteReplay(writer, report.Replay, includeFiles: report.Artifacts.Count != 0);
                 }
 
                 if (report.Doctor != null)
@@ -141,6 +151,139 @@ namespace XMAT.Cli
             return stream.ToArray();
         }
 
+        // summary.json of replay and compose: the results of every send and the run's warnings, without its status (the
+        // results are published whatever the responses were).
+        internal static byte[] SerializeReplaySummary(CliReport report)
+        {
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream, Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("schema", ReplaySummarySchema);
+                writer.WriteString("command", report.Command);
+                writer.WriteString("runId", report.RunId);
+                writer.WriteString("version", CliReport.ToolVersion);
+                WriteReplay(writer, report.Replay ?? new CliReplayReport(null, null), includeFiles: true);
+                WriteDiagnostics(writer, "warnings", report.Warnings);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+
+        private static void WriteLimits(Utf8JsonWriter writer, CliLimits limits)
+        {
+            writer.WriteStartObject("limits");
+            writer.WriteNumber("maxInputMib", limits.MaxInputMib);
+            writer.WriteNumber("maxDataMib", limits.MaxDataMib);
+            writer.WriteNumber("maxRecordMib", limits.MaxRecordMib);
+            writer.WriteNumber("maxRecords", limits.MaxRecords);
+            writer.WriteEndObject();
+        }
+
+        // Only numbers, ordinal ids, outcome names, codes and the artifact paths of each send: never the URL, method,
+        // headers or bodies, which are in the request and response files.
+        private static void WriteReplay(Utf8JsonWriter writer, CliReplayReport replay, bool includeFiles)
+        {
+            if (replay.Limits != null)
+            {
+                writer.WriteStartObject("input");
+                writer.WriteString("kind", replay.InputKind);
+                writer.WriteString("sha256", replay.InputSha256);
+                writer.WriteEndObject();
+                WriteLimits(writer, replay.Limits);
+            }
+
+            CliReplay options = replay.Options;
+            writer.WriteStartObject("options");
+            writer.WriteNumber("repeat", options.Repeat);
+            writer.WriteNumber("parallel", options.Parallel);
+            writer.WriteNumber("timeoutSeconds", options.TimeoutSeconds);
+            writer.WriteNumber("maxResponseMib", options.MaxResponseMib);
+            writer.WriteNumber("followRedirects", options.FollowRedirects);
+            writer.WriteBoolean("unconditional", options.Unconditional);
+            writer.WriteBoolean("verify", options.Verify);
+            writer.WriteBoolean("allowUnsafeMethods", options.AllowUnsafeMethods);
+            writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+            writer.WriteEndObject();
+
+            writer.WriteStartArray("replays");
+            foreach (ReplayItemResult item in replay.Items)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("id", item.Id);
+                writer.WriteString("device", item.DeviceId);
+                if (item.RequestNumber is long request)
+                {
+                    writer.WriteNumber("request", request);
+                }
+                else
+                {
+                    writer.WriteNull("request");
+                }
+
+                writer.WriteNumber("iteration", item.Iteration);
+                writer.WriteString("outcome", OutcomeName(item.Outcome));
+                if (item.StatusCode != 0)
+                {
+                    writer.WriteNumber("status", item.StatusCode);
+                }
+                else
+                {
+                    writer.WriteNull("status");
+                }
+
+                writer.WriteNumber("durationMs", (long)item.Duration.TotalMilliseconds);
+                writer.WriteNumber("responseBytes", item.ResponseBytes);
+                writer.WriteNumber("redirects", item.Redirects);
+                writer.WriteString("code", item.Code);
+                if (item.Verification == null)
+                {
+                    writer.WriteNull("verify");
+                }
+                else
+                {
+                    writer.WriteStartObject("verify");
+                    writer.WriteString("result", item.Verification.Matches ? "match" : "mismatch");
+                    WriteStrings(writer, "differences", item.Verification.Differences);
+                    writer.WriteEndObject();
+                }
+
+                if (includeFiles)
+                {
+                    string folder = CliReplayCommand.FolderOf(item.Id);
+                    writer.WriteStartObject("files");
+                    writer.WriteString("request", folder + "/" + CliReplayCommand.RequestFile);
+                    writer.WriteString(
+                        "response",
+                        item.Outcome is ReplayOutcome.Completed or ReplayOutcome.TooLarge
+                            ? folder + "/" + CliReplayCommand.ResponseFile
+                            : null);
+                    writer.WriteEndObject();
+                }
+
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            int completed = replay.Items.Count(item => item.Outcome == ReplayOutcome.Completed);
+            writer.WriteStartObject("totals");
+            writer.WriteNumber("replays", replay.Items.Count);
+            writer.WriteNumber("completed", completed);
+            writer.WriteNumber("failed", replay.Items.Count - completed);
+            writer.WriteNumber("matched", replay.Items.Count(item => item.Verification?.Matches == true));
+            writer.WriteNumber("mismatched", replay.Items.Count(item => item.Verification is { Matches: false }));
+            writer.WriteEndObject();
+        }
+
+        private static string OutcomeName(ReplayOutcome outcome) => outcome switch
+        {
+            ReplayOutcome.Completed => "completed",
+            ReplayOutcome.TimedOut => "timedOut",
+            ReplayOutcome.TooLarge => "tooLarge",
+            _ => "failed",
+        };
+
         private static void WriteAnalysis(Utf8JsonWriter writer, CliAnalysisReport analysis)
         {
             writer.WriteStartObject("input");
@@ -149,12 +292,7 @@ namespace XMAT.Cli
             writer.WriteEndObject();
             if (analysis.Limits != null)
             {
-                writer.WriteStartObject("limits");
-                writer.WriteNumber("maxInputMib", analysis.Limits.MaxInputMib);
-                writer.WriteNumber("maxDataMib", analysis.Limits.MaxDataMib);
-                writer.WriteNumber("maxRecordMib", analysis.Limits.MaxRecordMib);
-                writer.WriteNumber("maxRecords", analysis.Limits.MaxRecords);
-                writer.WriteEndObject();
+                WriteLimits(writer, analysis.Limits);
             }
 
             writer.WriteStartArray("devices");
