@@ -8,6 +8,7 @@ using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Capabilities;
 using XMAT.Operations.Captures;
+using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
 
 namespace XMAT.Cli
@@ -51,6 +52,21 @@ namespace XMAT.Cli
         internal ProcessFilterSpec ProcessFilter { get; set; }
 
         internal ProcessFilterScope ProcessScope { get; set; }
+    }
+
+    // The allow-listed facts of an export: its validated command line and the operation's result. Never a path or a
+    // captured value; the JSON writes counts for host, status and method values.
+    internal sealed class CliExportReport
+    {
+        internal CaptureExportFormat? Format { get; set; }
+
+        internal CliLimits Limits { get; set; }
+
+        internal string DeviceId { get; set; }
+
+        internal CaptureSelectionSpec Selection { get; set; }
+
+        internal ExportCaptureResult Result { get; set; }
     }
 
     internal sealed class CliDoctorReport
@@ -106,6 +122,8 @@ namespace XMAT.Cli
         internal List<string> HumanLines { get; } = new();
 
         internal CliAnalysisReport Analysis { get; set; }
+
+        internal CliExportReport Export { get; set; }
 
         internal CliDoctorReport Doctor { get; set; }
 

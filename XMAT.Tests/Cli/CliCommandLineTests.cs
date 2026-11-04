@@ -171,7 +171,9 @@ namespace XMAT.Tests.Cli
         {
             CliReport report = CliHelp.Create("run", topic: null);
 
-            Assert.Equal(new[] { CliCommands.Analyze, CliCommands.Doctor }, report.Commands.Select(command => command.Name));
+            Assert.Equal(
+                new[] { CliCommands.Analyze, CliCommands.Doctor, CliCommands.Export },
+                report.Commands.Select(command => command.Name));
             foreach (Capability capability in CapabilityRegistry.All.Where(item => item.Status == CapabilityStatus.Supported))
             {
                 Assert.Contains("  xmat " + capability.CliRoute, report.HumanLines);

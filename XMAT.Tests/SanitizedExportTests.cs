@@ -643,8 +643,9 @@ namespace XMAT.Tests
             });
         }
 
+        // A running capture can be exported too: its sessions without a recorded response are skipped and counted.
         [Fact]
-        public void CommandEligibility_RejectsEmptyRunningAndBusyCapturesButAllowsReadOnlyWebCapture()
+        public void CommandEligibility_RejectsEmptyAndBusyCapturesButAllowsRunningAndReadOnlyWebCaptures()
         {
             _application.Run(window =>
             {
@@ -658,7 +659,7 @@ namespace XMAT.Tests
                 controller.LoadCaptureDataset(new Dataset(new DataRecord(1, "selected")));
                 Assert.True(model.CanExportSanitizedCaptures);
                 controller.IsRunning = true;
-                Assert.False(model.CanExportSanitizedCaptures);
+                Assert.True(model.CanExportSanitizedCaptures);
                 controller.IsRunning = false;
                 Assert.True(model.TryBeginCaptureDataOperation(out var operation));
                 using (operation)

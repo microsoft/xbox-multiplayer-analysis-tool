@@ -234,6 +234,16 @@ namespace XMAT.Operations.Export
     internal sealed class ExportCaptureSessionsOperation :
         IOperation<ExportCaptureRequest, ExportCaptureResult>
     {
+        internal ICaptureExportPublisher Publisher { get; set; } = new CaptureExportPublisher();
+
+        internal Func<
+            CaptureExportFormat,
+            string,
+            ICaptureExportSnapshot,
+            long,
+            ICaptureExportWriter> WriterFactory { get; set; } =
+                static (_, _, _, _) => throw new NotImplementedException();
+
         internal const string SelectPhase = "export.select";
         internal const string ReadPhase = "export.read";
         internal const string WritePhase = "export.write";

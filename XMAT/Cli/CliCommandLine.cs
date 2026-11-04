@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using XMAT.Operations;
+using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
 
 namespace XMAT.Cli
@@ -13,6 +14,7 @@ namespace XMAT.Cli
     {
         internal const string Analyze = "analyze";
         internal const string Doctor = "doctor";
+        internal const string Export = "export";
         internal const string Help = "help";
         internal const string Version = "version";
 
@@ -29,7 +31,9 @@ namespace XMAT.Cli
         string Target = null,
         string Topic = null,
         CliLimits Limits = null,
-        ProcessFilterSpec ProcessFilter = null);
+        ProcessFilterSpec ProcessFilter = null,
+        CaptureExportFormat? Format = null,
+        CaptureSelectionSpec Selection = null);
 
     // A parsed request, or a data-free usage error (exit code 2).
     internal sealed record CliParseResult(CliRequest Request, string Command, OperationDiagnostic Error)
@@ -90,6 +94,9 @@ namespace XMAT.Cli
 
         // The options that analyze accepts; its command line in the capability registry names exactly these.
         internal static IReadOnlySet<string> AnalyzeOptionNames => AnalyzeOptions;
+
+        // The options that export accepts; the registry's export command lines name exactly these.
+        internal static IReadOnlySet<string> ExportOptionNames { get; } = new HashSet<string>(StringComparer.Ordinal);
 
         internal static CliParseResult Parse(IReadOnlyList<string> args)
         {

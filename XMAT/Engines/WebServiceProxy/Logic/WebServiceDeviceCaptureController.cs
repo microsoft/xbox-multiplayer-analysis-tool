@@ -20,7 +20,9 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations.Analysis;
 using XMAT.Operations.Captures;
+using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
 using XMAT.Scripting;
 using XMAT.SharedInterfaces;
@@ -158,6 +160,7 @@ namespace XMAT.WebServiceCapture
         public ProcessFilterSpec ProcessFilter { get; private set; }
         internal ClientProcessResolver ProcessResolverOverride { get; set; }
         internal TimeSpan? CaptureCallbackDrainTimeoutOverride { get; set; }
+        internal Action<int, long> ExportReadBatchObserver { get; set; }
         public ProxyConnectionModel SelectedConnectionModel
         {
             get => _selectedConnectionModel;
@@ -226,6 +229,9 @@ namespace XMAT.WebServiceCapture
                         return new CaptureSessionRef(model.RowKey, ordinalDeviceId, model.ClientProcess);
                     }).ToList();
         }
+
+        internal ICaptureExportSnapshot CreateExportSnapshot(string ordinalDeviceId, AnalysisLimits limits) =>
+            throw new NotImplementedException();
 
         internal bool IsCurrent(CaptureRowKey key) => key.SourceId != Guid.Empty &&
             (_captureRows.IsCurrent(key) || ProxyConnections.ByKey(key) != null);

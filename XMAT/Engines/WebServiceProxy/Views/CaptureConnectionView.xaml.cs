@@ -18,6 +18,7 @@ using System.Windows.Threading;
 using XMAT.Models;
 using XMAT.Operations;
 using XMAT.Operations.Captures;
+using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
@@ -90,6 +91,10 @@ namespace XMAT.WebServiceCapture
         // The shared selection that picks and counts the rows a new process filter shows; tests substitute it.
         internal Func<FilterCaptureSessionsRequest, CancellationToken, OperationResult<FilterCaptureSessionsResult>>
             ProcessSelection { get; set; } = FilterCaptureSessionsOperation.Select;
+
+        // The sessions that an export from this list covers: Visible follows every active filter (the Status, Host and
+        // Method checkboxes as exact values, and the process filter); Selected also keeps only the selected rows' keys.
+        internal CaptureSelectionSpec ExportSelection(CaptureExportScope scope) => throw new NotImplementedException();
 
         public CaptureConnectionView()
         {
