@@ -84,9 +84,9 @@ xmat --version
   `summary.json` report the effective values in `limits`. An XMAT capture's file may be as large as `--max-input-mib`,
   and SQLite may read values as large as `--max-record-mib` plus 1 MiB. Raising the limits lets xmat read larger
   captures, but it needs more memory and time: in testing with the limits at their maximums, xmat used up to about
-  2.4 GiB of memory and finished within about 25 seconds on the test machine. These are observations, not bounds.
-  The maximums, like the 750,064-entry and 80 MiB archive ceilings above, are policy ceilings, not a guaranteed
-  capacity or a bound on memory use, so still run xmat with time and memory limits. The limits do not
+  2.4 GiB of memory and took up to about 28 seconds on the test machine, depending on its load. These are observations,
+  not bounds. The maximums, like the 750,064-entry and 80 MiB archive ceilings above, are policy ceilings, not a
+  guaranteed capacity or a bound on memory use, so still run xmat with time and memory limits. The limits do not
   change the rule budget below, so a larger capture can still stop with `analysis.rules.work-limit`, nor the fixed
   limits above.
 - Exact rule evaluation has one work and live-memory budget shared across all selected devices, consoles, endpoints
