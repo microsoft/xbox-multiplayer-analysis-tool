@@ -76,12 +76,16 @@ namespace XMAT.Cli
                 return report;
             }
 
-            await CliStagedRun.CompleteAsync(
-                report,
-                output,
-                token => SendAsync(request, body, output, report, token),
-                null,
-                cancellationToken).ConfigureAwait(false);
+            using (output)
+            {
+                await CliStagedRun.CompleteAsync(
+                    report,
+                    output,
+                    token => SendAsync(request, body, output, report, token),
+                    null,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
             if (report.Artifacts.Count != 0)
             {
                 int sent = report.Replay.Items.Count;
