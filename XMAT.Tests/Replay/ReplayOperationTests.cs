@@ -786,6 +786,22 @@ namespace XMAT.Tests.Replay
                 server.Requests.Select(request => request.Method + " " + request.Target));
         }
 
+        // Each consent is named on its own: an unsafe method to the captured origin, a safe method to another origin.
+        [Theory]
+        [InlineData("POST", false)]
+        [InlineData("GET", true)]
+        public void Preview_NamesEachConsentOnItsOwn(string method, bool otherOrigin)
+        {
+            RequestReplayDraft draft = RequestReplayDraft.FromCapture(Row(1, "http://captured.test/items"));
+            draft.Method = method;
+            draft.Url = (otherOrigin ? "http://other.test" : "http://captured.test") + "/items/#";
+            Assert.True(ReplaySequence.TryParse("1-2", out ReplaySequence sequence));
+
+            ReplayPlanPreview preview = new ReplayOperation().Preview(ReplaySource.FromTemplate(draft, sequence)).Value;
+
+            Assert.Equal((method == "POST", otherOrigin), (preview.UsesUnsafeMethod, preview.ChangesOrigin));
+        }
+
         // A plan that the operation would refuse fails its preview with the same code, before anything is expanded or
         // sent.
         [Theory]
