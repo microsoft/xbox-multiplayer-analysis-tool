@@ -148,6 +148,27 @@ switching modes, and stopping refresh the visible timeline without waiting for t
 live-update cadence. Stopping displays final response statuses and durations even
 if no further requests arrive.
 
+## Edit and resend a request
+
+1. Right-click an HTTP request in the connections list and select **Edit and resend**.
+2. Edit the method, URL, headers, or body in the composer window.
+3. Click **Send** and inspect the new response. The original capture is not modified.
+
+Loaded and imported captures can be resent too. Binary, compressed, and non-UTF-8
+request bodies are preserved as editable Base64; text bodies use UTF-8.
+
+Requests are sent directly from this PC, bypassing system proxies and capture scripts.
+HTTPS certificates are validated, redirects are not followed, and response cookies
+are not reused. **Captured headers, including credentials, are sent to the edited URL.**
+Host and Content-Length are regenerated, and connection-only headers are omitted.
+Methods other than GET, HEAD, and OPTIONS require confirmation, as does changing the
+captured origin. CONNECT and WebSocket handshakes cannot be resent.
+
+Use **Cancel request** to stop waiting, or **Copy as cURL (PowerShell 7)** to copy a
+command for PowerShell 7 with `curl.exe` available. **Copied commands can contain
+credentials and body data.** Sending has a 30-second timeout and a 16 MiB response
+limit. Cancelling or timing out cannot undo changes already processed by the server.
+
 ## Block or bypass hosts
 
 The **Block List** and **Bypass List** are shared by every capture in the current

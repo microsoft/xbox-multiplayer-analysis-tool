@@ -185,6 +185,20 @@ namespace XMAT.Tests
             host._application.Dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
         }
 
+        // Async UI tests share this application's dispatcher and lifetime instead of creating another Application.
+        internal Task RunAsync(Func<Task> test)
+        {
+            var host = _shared ?? this;
+            if (host._stopped)
+            {
+                // A stopped dispatcher would skip the test without running it.
+                throw new InvalidOperationException(
+                    "The WPF test application has stopped; run the tests in a new process.");
+            }
+
+            return host._application.Dispatcher.InvokeAsync(test).Task.Unwrap().WaitAsync(TimeSpan.FromSeconds(30));
+        }
+
         public void Dispose()
         {
             (_shared ?? this).ThrowIfFailed();

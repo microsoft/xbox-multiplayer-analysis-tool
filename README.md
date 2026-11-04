@@ -37,7 +37,7 @@ proxy can lose access to Xbox services.
 | I want to... | Guide |
 |---|---|
 | Set up XMAT and make my first capture | [Getting started](docs/getting-started.md) |
-| Configure proxying, inspect requests or WebSockets, and manage hosts | [Web proxy](docs/web-proxy.md) |
+| Configure proxying, inspect, edit and resend requests, view WebSockets, and manage hosts | [Web proxy](docs/web-proxy.md) |
 | Modify requests and responses with C# | [Scripting](docs/scripting.md) |
 | Save, load, import, or safely share capture files | [Capture files and sanitized export](docs/capture-files.md) |
 | Analyze Xbox service calls and export reports | [Live trace analysis](docs/live-trace-analysis.md) |

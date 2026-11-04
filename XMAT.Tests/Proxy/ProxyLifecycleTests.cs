@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Linq;
+using System.Reflection;
 using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.Tests.Proxy
@@ -475,6 +476,37 @@ namespace XMAT.Tests.Proxy
             Assert.False(proxy.HasOutstandingResources);
             await proxy.StartProxyAsync(Options(port));
             await proxy.StopProxyAsync();
+        }
+
+        [Fact]
+        public async Task Faulted_LogConsumerFailure_RetiresLogAndAllowsStopRetryAndRestart()
+        {
+            int port = GetFreePort();
+            var proxy = new WebServiceProxy();
+            await proxy.StartProxyAsync(Options(port));
+            try
+            {
+                var logger = (Logger)typeof(WebServiceProxy)
+                    .GetField("_logger", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(proxy);
+                logger.CloseLog();
+                using var stream = new MemoryStream();
+                logger.InitLog(stream, LogLevel.DEBUG);
+                stream.Dispose();
+
+                await Assert.ThrowsAsync<ObjectDisposedException>(() => proxy.StopProxyAsync());
+                Assert.Equal(ProxyState.Faulted, proxy.State);
+                Assert.False(proxy.HasOutstandingResources);
+
+                await proxy.StopProxyAsync();
+                Assert.Equal(ProxyState.Stopped, proxy.State);
+                await proxy.StartProxyAsync(Options(port));
+            }
+            finally
+            {
+                await proxy.StopProxyAsync();
+            }
+            Assert.Equal(ProxyState.Stopped, proxy.State);
+            Assert.False(proxy.HasOutstandingResources);
         }
 
         [Fact]

@@ -542,8 +542,14 @@ namespace XMAT.WebServiceCapture.Proxy
                 LogLevel.INFO,
                 $"Proxy hosts stopped in {totalStopwatch.Elapsed}.");
             LogCloseFaultInjection?.Invoke();
-            await Task.Run(_logger.CloseLog).ConfigureAwait(false);
-            _logOpen = false;
+            try
+            {
+                await Task.Run(_logger.CloseLog).ConfigureAwait(false);
+            }
+            finally
+            {
+                _logOpen = false;
+            }
         }
 
         // Returns a disposal failure to report, or null. A host that stopped but failed to

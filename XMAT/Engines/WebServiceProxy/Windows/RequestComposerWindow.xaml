@@ -1,0 +1,69 @@
+<Window x:Class="XMAT.WebServiceCapture.RequestComposerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:XMAT.WebServiceCapture"
+        Title="Edit and resend" Width="1120" Height="760" MinWidth="800" MinHeight="550"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource PanelBackgroundBrush}"
+        Foreground="{DynamicResource PrimaryForegroundBrush}">
+  <Grid Margin="12">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <TextBlock x:Name="ReplayNotice" Margin="0,0,0,10" TextWrapping="Wrap"/>
+    <Grid Grid.Row="1">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="8"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+      <Grid x:Name="RequestEditor">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="2*"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="3*"/>
+        </Grid.RowDefinitions>
+        <Grid Grid.RowSpan="2">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="100"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <Label x:Name="MethodLabel" Target="{Binding ElementName=MethodBox}"/>
+          <Label x:Name="UrlLabel" Grid.Column="1" Target="{Binding ElementName=UrlBox}"/>
+          <TextBox x:Name="MethodBox" Grid.Row="1" Margin="0,0,6,0" VerticalContentAlignment="Center"/>
+          <TextBox x:Name="UrlBox" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center"/>
+        </Grid>
+        <Label x:Name="HeadersLabel" Grid.Row="2" Target="{Binding ElementName=HeadersBox}"/>
+        <TextBox x:Name="HeadersBox" Grid.Row="3" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
+                 HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
+        <DockPanel Grid.Row="4" Margin="0,6,0,0">
+          <Label x:Name="BodyLabel" Target="{Binding ElementName=BodyBox}"/>
+          <CheckBox x:Name="Base64Box" VerticalAlignment="Center" HorizontalAlignment="Right"
+                    Checked="BodyFormat_Changed" Unchecked="BodyFormat_Changed"/>
+        </DockPanel>
+        <TextBox x:Name="BodyBox" Grid.Row="5" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
+                 HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
+      </Grid>
+      <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" ResizeDirection="Columns"/>
+      <local:RequestResponseView x:Name="ResponseView" Grid.Column="2"/>
+    </Grid>
+    <TextBlock x:Name="StatusText" Grid.Row="2" Margin="0,10" TextWrapping="Wrap"
+               AutomationProperties.LiveSetting="Polite"/>
+    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button x:Name="CopyCurlButton" MinWidth="140" Margin="4" Padding="8,4" Click="CopyCurl_Click"/>
+      <Button x:Name="SendButton" MinWidth="90" Margin="4" Padding="8,4" Click="Send_Click"/>
+      <Button x:Name="CancelSendButton" MinWidth="110" Margin="4" Padding="8,4" IsEnabled="False" Click="CancelSend_Click"/>
+      <Button x:Name="CloseButton" MinWidth="90" Margin="4" Padding="8,4" IsCancel="True" Click="Close_Click"/>
+    </StackPanel>
+  </Grid>
+</Window>
