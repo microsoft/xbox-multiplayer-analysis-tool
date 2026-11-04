@@ -20,8 +20,17 @@ namespace XMAT.WebServiceCapture.Models
 
         internal static bool TryNormalize(string text, out string entry, out string error)
         {
+            bool valid = TryNormalizeValue(text, out entry, out bool portNotAllowed);
+            error = portNotAllowed
+                ? Localization.GetLocalizedString("HOST_LIST_PORT_NOT_ALLOWED", text?.Trim())
+                : null;
+            return valid;
+        }
+
+        internal static bool TryNormalizeValue(string text, out string entry, out bool portNotAllowed)
+        {
             entry = null;
-            error = null;
+            portNotAllowed = false;
             if (string.IsNullOrWhiteSpace(text))
             {
                 return false;
@@ -41,7 +50,7 @@ namespace XMAT.WebServiceCapture.Models
             if (IsPortAttempt(value))
             {
                 // Entries apply to every port; silently dropping the port would broaden the rule.
-                error = Localization.GetLocalizedString("HOST_LIST_PORT_NOT_ALLOWED", value);
+                portNotAllowed = true;
                 return false;
             }
 
@@ -83,7 +92,22 @@ namespace XMAT.WebServiceCapture.Models
 
         internal static Regex CreatePattern(string entry) =>
             new("^" + Regex.Escape(entry).Replace("\\*", ".*") + "$",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+
+        internal static bool Matches(Regex pattern, string host, string path = null)
+        {
+            string candidate = MatchCandidate(host) ?? string.Empty;
+            if (pattern.IsMatch(candidate))
+            {
+                return true;
+            }
+            if (string.IsNullOrEmpty(path))
+            {
+                return false;
+            }
+            string normalizedPath = path.StartsWith('/') ? path : "/" + path;
+            return pattern.IsMatch(candidate + normalizedPath);
+        }
     }
 
     /// <summary>

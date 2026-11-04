@@ -10,7 +10,6 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -23,11 +22,6 @@ using XMAT.WebServiceCapture;
 
 namespace XMAT.Models
 {
-    public enum ExportType : int
-    {
-        Fiddler = 0
-    }
-
     public enum ImportType : int
     {
         Fiddler = 0,
@@ -149,8 +143,9 @@ namespace XMAT.Models
             CanModifyCaptureData &&
             !IsAnyCaptureRunning;
         internal bool CanStopCaptures => !IsAnalysisRunning;
-        internal bool CanExportSanitizedCaptures =>
-            CanBeginCaptureDataOperation &&
+        // File > Export and Export Sanitized: the selected web capture, running or not, when it has sessions.
+        internal bool CanExportSelectedCapture =>
+            CanModifyCaptureData &&
             SelectedDeviceContext?.CaptureType == CaptureType.WebProxy &&
             SelectedDeviceContext.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController controller &&
             controller.ProxyConnections.Count > 0;
@@ -866,41 +861,6 @@ namespace XMAT.Models
             if (captureDevice != null)
             {
                 SelectedDeviceContext = captureDevice;
-            }
-        }
-
-        internal void ExportDataCaptures(ExportType exportType, string toFilePath)
-        {
-            switch (exportType)
-            {
-                case ExportType.Fiddler:
-                    (SelectedDeviceContext.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ExportToFiddler(toFilePath);
-                    break;
-            }
-        }
-
-        internal async Task<WebServiceCapture.SanitizedExportSummary> ExportSanitizedDataCapturesAsync(
-            string toFilePath, CancellationToken cancellationToken = default)
-        {
-            if (!CanExportSanitizedCaptures ||
-                !TryBeginCaptureDataOperation(out var operation, requireAllCapturesStopped: true))
-            {
-                throw new InvalidOperationException(Localization.GetLocalizedString("SANITIZED_EXPORT_UNAVAILABLE"));
-            }
-            using (operation)
-            {
-                var controller = (WebServiceCapture.WebServiceDeviceCaptureController)SelectedDeviceContext.CaptureController;
-                IEnumerable<WebServiceCapture.Models.ProxyConnectionModel> Records()
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    foreach (var record in controller.GetCaptureRecords())
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        yield return new WebServiceCapture.Models.ProxyConnectionModel(record);
-                    }
-                }
-                return await Task.Run(() => WebServiceCapture.FiddlerSazHandler.CreateSanitizedSazFile(toFilePath,
-                    Records(), cancellationToken));
             }
         }
 

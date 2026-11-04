@@ -4,6 +4,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.IO;
 using XMAT.Operations;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
@@ -19,7 +21,7 @@ namespace XMAT.Cli
         internal const string Version = "version";
 
         // The commands xmat.exe runs. Each one needs a Supported capability in the registry (XMAT.Tests/Cli checks it).
-        internal static IReadOnlyList<string> Implemented { get; } = new[] { Analyze, Doctor };
+        internal static IReadOnlyList<string> Implemented { get; } = new[] { Analyze, Doctor, Export };
     }
 
     internal sealed record CliRequest(
@@ -57,6 +59,13 @@ namespace XMAT.Cli
         internal const string ProcessOption = "--process";
         internal const string ExcludeProcessOption = "--exclude-process";
         internal const string ForOption = "--for";
+        internal const string FormatOption = "--format";
+        internal const string HostOption = "--host";
+        internal const string ExcludeHostOption = "--exclude-host";
+        internal const string HostModeOption = "--host-mode";
+        internal const string StatusOption = "--status";
+        internal const string MethodOption = "--method";
+        internal const string MatchNoneSwitch = "--match-none";
         internal const string VersionSwitch = "--version";
         internal const string FindingsValue = "findings";
 
@@ -69,6 +78,8 @@ namespace XMAT.Cli
         internal const string InvalidProcessSelectorMessage =
             "--process and --exclude-process take an image name such as game*.exe (* and ? are wildcards, .exe is " +
             "optional) or a process id, each at most 260 characters and at most 64 of each option.";
+
+        private const string DeviceMessage = "--device takes a device id such as d1 from a previous summary.";
 
         private static readonly HashSet<string> AnalyzeOptions = new(StringComparer.Ordinal)
         {
@@ -92,11 +103,57 @@ namespace XMAT.Cli
 
         private static readonly HashSet<string> DoctorOptions = new(StringComparer.Ordinal) { ForOption };
 
+        private static readonly HashSet<string> ExportOptions = new(StringComparer.Ordinal)
+        {
+            OutOption,
+            FormatOption,
+            DeviceOption,
+            ProcessOption,
+            ExcludeProcessOption,
+            HostOption,
+            ExcludeHostOption,
+            HostModeOption,
+            StatusOption,
+            MethodOption,
+            MatchNoneSwitch,
+            CliLimits.InputOption,
+            CliLimits.DataOption,
+            CliLimits.RecordOption,
+            CliLimits.RecordsOption,
+        };
+
+        private static readonly HashSet<string> RepeatableExportOptions = new(StringComparer.Ordinal)
+        {
+            ProcessOption,
+            ExcludeProcessOption,
+            HostOption,
+            ExcludeHostOption,
+            StatusOption,
+            MethodOption,
+        };
+
+        // The values the GUI can show as an empty choice (a session without a status, method or host) may be given
+        // empty, as --status= or --status "".
+        private static readonly HashSet<string> EmptyLiteralOptions = new(StringComparer.Ordinal)
+        {
+            HostOption,
+            ExcludeHostOption,
+            StatusOption,
+            MethodOption,
+        };
+
+        private static readonly HashSet<string> ExportSwitches = new(StringComparer.Ordinal) { MatchNoneSwitch };
+
+        // The --format values, in CaptureExportFormat order.
+        private static readonly string[] FormatNames = { "xmatcap", "saz", "sanitized-saz" };
+
         // The options that analyze accepts; its command line in the capability registry names exactly these.
         internal static IReadOnlySet<string> AnalyzeOptionNames => AnalyzeOptions;
 
         // The options that export accepts; the registry's export command lines name exactly these.
-        internal static IReadOnlySet<string> ExportOptionNames { get; } = new HashSet<string>(StringComparer.Ordinal);
+        internal static IReadOnlySet<string> ExportOptionNames => ExportOptions;
+
+        internal static string FormatName(CaptureExportFormat format) => FormatNames[(int)format];
 
         internal static CliParseResult Parse(IReadOnlyList<string> args)
         {
@@ -126,6 +183,11 @@ namespace XMAT.Cli
             if (first == CliCommands.Doctor)
             {
                 return ParseDoctor(args);
+            }
+
+            if (first == CliCommands.Export)
+            {
+                return ParseExport(args);
             }
 
             if (first.StartsWith('-'))
@@ -191,8 +253,7 @@ namespace XMAT.Cli
 
             if (arguments.Options.TryGetValue(DeviceOption, out string deviceId) && !IsDeviceId(deviceId))
             {
-                return CliParseResult.UsageError(
-                    command, "cli.usage.invalid-value", "--device takes a device id such as d1 from a previous summary.");
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", DeviceMessage);
             }
 
             bool failOnFindings = arguments.Options.TryGetValue(FailOnOption, out string failOn);
@@ -201,15 +262,10 @@ namespace XMAT.Cli
                 return CliParseResult.UsageError(command, "cli.usage.invalid-value", "--fail-on takes the value findings.");
             }
 
-            CliLimits limits = CliLimits.Read(arguments.Options, out CliLimitOption invalidLimit);
-            if (limits == null)
+            CliLimits limits = ReadLimits(arguments, command, out CliParseResult invalidLimit);
+            if (invalidLimit != null)
             {
-                return CliParseResult.UsageError(command, "cli.usage.invalid-value", invalidLimit.RangeMessage);
-            }
-
-            if (limits.MaxRecordMib > limits.MaxDataMib)
-            {
-                return CliParseResult.UsageError(command, "cli.usage.invalid-value", CliLimits.RecordOverDataMessage);
+                return invalidLimit;
             }
 
             ProcessFilterSpec processFilter = null;
@@ -234,6 +290,138 @@ namespace XMAT.Cli
                 FailOnFindings: failOnFindings,
                 Limits: limits,
                 ProcessFilter: processFilter));
+        }
+
+        private static CliParseResult ParseExport(IReadOnlyList<string> args)
+        {
+            const string command = CliCommands.Export;
+            var arguments = new CliArguments();
+            CliParseResult error = arguments.Read(
+                args, command, ExportOptions, RepeatableExportOptions, ExportSwitches, EmptyLiteralOptions);
+            if (error != null)
+            {
+                return error;
+            }
+
+            if (arguments.HelpRequested)
+            {
+                return HelpFor(command);
+            }
+
+            if (arguments.Positionals.Count != 1)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    arguments.Positionals.Count == 0 ? "cli.usage.missing-argument" : "cli.usage.unexpected-argument",
+                    "export takes a single INPUT capture file.");
+            }
+
+            if (!arguments.Options.TryGetValue(OutOption, out string output))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.missing-option", "export needs --out FILE.");
+            }
+
+            if (arguments.Options.TryGetValue(DeviceOption, out string deviceId) && !IsDeviceId(deviceId))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", DeviceMessage);
+            }
+
+            CaptureExportFormat? format = ExportFormat(output, arguments.Options.GetValueOrDefault(FormatOption));
+            if (format == null)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    "--out must end in .xmatcap or .saz, and --format (xmatcap, saz or sanitized-saz, which needs .saz) " +
+                        "must agree with it.");
+            }
+
+            string mode = arguments.Options.GetValueOrDefault(HostModeOption, "glob");
+            if (mode is not ("glob" or "exact"))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", "--host-mode takes glob or exact.");
+            }
+
+            CliLimits limits = ReadLimits(arguments, command, out CliParseResult invalidLimit);
+            if (invalidLimit != null)
+            {
+                return invalidLimit;
+            }
+
+            OperationResult<ProcessFilterSpec> process = ProcessFilter.Parse(
+                arguments.ValuesOf(ProcessOption),
+                arguments.ValuesOf(ExcludeProcessOption));
+            if (!process.Succeeded || process.Value == null)
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", InvalidProcessSelectorMessage);
+            }
+
+            OperationResult<CaptureSelectionSpec> selection = CaptureSelectionValidator.Validate(new CaptureSelectionSpec(
+                process.Value,
+                new HostSelection(
+                    mode == "exact" ? HostMatchMode.Exact : HostMatchMode.Glob,
+                    Given(arguments, HostOption),
+                    arguments.ValuesOf(ExcludeHostOption).ToImmutableArray()),
+                Given(arguments, StatusOption),
+                Given(arguments, MethodOption),
+                null,
+                arguments.Options.ContainsKey(MatchNoneSwitch)));
+            if (!selection.Succeeded || selection.Value == null)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    "--host and --exclude-host take host names or host/path patterns (an empty value only with " +
+                        "--host-mode exact); --status and --method take the values that the capture shows. Each value is " +
+                        "at most 260 characters, at most 64 of each option.");
+            }
+
+            return CliParseResult.Success(new CliRequest(
+                command,
+                Input: arguments.Positionals[0],
+                Output: output,
+                DeviceId: deviceId,
+                Limits: limits,
+                Format: format,
+                Selection: selection.Value));
+        }
+
+        // An ordinary format follows --out's extension; a sanitized archive is only made when asked for. A format that
+        // does not agree with the extension is null, so a file never gets a misleading name.
+        private static CaptureExportFormat? ExportFormat(string output, string format)
+        {
+            CaptureExportFormat? fromExtension = Path.GetExtension(output).ToUpperInvariant() switch
+            {
+                ".XMATCAP" => CaptureExportFormat.Xmatcap,
+                ".SAZ" => CaptureExportFormat.Saz,
+                _ => null,
+            };
+            if (format == null)
+            {
+                return fromExtension;
+            }
+
+            int index = Array.IndexOf(FormatNames, format);
+            CaptureExportFormat? chosen = index < 0 ? null : (CaptureExportFormat)index;
+            bool agrees = chosen == fromExtension ||
+                (chosen == CaptureExportFormat.SanitizedSaz && fromExtension == CaptureExportFormat.Saz);
+            return agrees ? chosen : null;
+        }
+
+        // A repeatable option that was given selects its values; one that was not leaves its filter off (null).
+        private static ImmutableArray<string>? Given(CliArguments arguments, string option) =>
+            arguments.RepeatedOptions.TryGetValue(option, out List<string> values) ? values.ToImmutableArray() : null;
+
+        // The input limits of analyze and export, with the usage error of an invalid one.
+        private static CliLimits ReadLimits(CliArguments arguments, string command, out CliParseResult error)
+        {
+            CliLimits limits = CliLimits.Read(arguments.Options, out CliLimitOption invalid);
+            error = limits == null
+                ? CliParseResult.UsageError(command, "cli.usage.invalid-value", invalid.RangeMessage)
+                : limits.MaxRecordMib > limits.MaxDataMib
+                    ? CliParseResult.UsageError(command, "cli.usage.invalid-value", CliLimits.RecordOverDataMessage)
+                    : null;
+            return limits;
         }
 
         private static CliParseResult ParseDoctor(IReadOnlyList<string> args)
@@ -306,12 +494,15 @@ namespace XMAT.Cli
         internal IReadOnlyList<string> ValuesOf(string option) =>
             RepeatedOptions.TryGetValue(option, out List<string> values) ? values : Array.Empty<string>();
 
-        // Returns null when the arguments are valid, otherwise the usage error.
+        // Returns null when the arguments are valid, otherwise the usage error. A switch takes no value; an option in
+        // emptyValues may be given an empty value.
         internal CliParseResult Read(
             IReadOnlyList<string> args,
             string command,
             IReadOnlySet<string> allowedOptions,
-            IReadOnlySet<string> repeatableOptions = null)
+            IReadOnlySet<string> repeatableOptions = null,
+            IReadOnlySet<string> switches = null,
+            IReadOnlySet<string> emptyValues = null)
         {
             bool onlyPositionals = false;
             for (int index = 1; index < args.Count; index++)
@@ -356,6 +547,21 @@ namespace XMAT.Cli
                         command, "cli.usage.unknown-option", $"{command} does not accept this option. Run xmat help {command}.");
                 }
 
+                if (switches != null && switches.Contains(name))
+                {
+                    if (value != null)
+                    {
+                        return CliParseResult.UsageError(command, "cli.usage.invalid-value", $"The {name} switch takes no value.");
+                    }
+
+                    if (!Options.TryAdd(name, string.Empty))
+                    {
+                        return CliParseResult.UsageError(command, "cli.usage.duplicate-option", $"The {name} option was given more than once.");
+                    }
+
+                    continue;
+                }
+
                 if (value == null)
                 {
                     if (index + 1 >= args.Count || IsOptionOrSwitch(args[index + 1]))
@@ -367,7 +573,7 @@ namespace XMAT.Cli
                     value = args[index] ?? string.Empty;
                 }
 
-                if (value.Length == 0)
+                if (value.Length == 0 && (emptyValues == null || !emptyValues.Contains(name)))
                 {
                     return CliParseResult.UsageError(command, "cli.usage.missing-value", $"The {name} option needs a value.");
                 }

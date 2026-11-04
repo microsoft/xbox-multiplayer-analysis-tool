@@ -15,6 +15,7 @@ namespace XMAT.Operations.Capabilities
     {
         internal const string AnalyzeCaptureOperation = "XMAT.Operations.Analysis.AnalyzeCaptureOperation";
         internal const string FilterCaptureSessionsOperation = "XMAT.Operations.Captures.FilterCaptureSessionsOperation";
+        internal const string ExportCaptureSessionsOperation = "XMAT.Operations.Export.ExportCaptureSessionsOperation";
 
         private const string Owner = "XMAT-021";
         private const string MainWindowXaml = "Windows/MainWindow.xaml";
@@ -103,22 +104,26 @@ namespace XMAT.Operations.Capabilities
                     EnumValue("XMAT.Models.ImportType", "NetTrace"),
                     EnumValue(DeviceTypeEnum, "Unknown"),
                 }),
-            Capability.Planned(
-                "capture-file.export-saz", "Export captures as Fiddler archives (.saz)", "S2", Owner,
-                gui: new[]
-                {
-                    Command(AppCommandsPrefix + "Export"),
-                    EnumValue("XMAT.Models.ExportType", "Fiddler"),
-                }),
-            // XMAT-019 implements sanitized export in the GUI; its headless support is not done yet.
-            Capability.Planned(
-                "capture-file.sanitize", "Sanitize a capture into a Fiddler archive", "S2", Owner,
-                gui: new[]
-                {
-                    Command(AppCommandsPrefix + "ExportSanitized"),
-                    Window("XMAT.SanitizedExportProgressWindow"),
-                    Click(SanitizedExportXaml, "CancelExport_Click"),
-                }),
+            // One operation exports every format: File > Export and Export Sanitized (the selected tab) and the capture
+            // list's row menu (the selected or the visible sessions), whose save dialog offers each format.
+            Capability.Supported(
+                "capture-file.export-xmatcap", "Export sessions as an XMAT capture (.xmatcap)", "S10",
+                cli: "export INPUT --out FILE [--format xmatcap|saz|sanitized-saz] [--device ID] " +
+                    "[--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]... [--host PATTERN]... " +
+                    "[--exclude-host PATTERN]... [--host-mode glob|exact] [--status VALUE]... [--method VALUE]... " +
+                    "[--match-none] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: ExportCaptureSessionsOperation,
+                gui: ExportEntryPoints("Export")),
+            Capability.Supported(
+                "capture-file.export-saz", "Export sessions as Fiddler archives (.saz)", "S2",
+                cli: "export INPUT --out FILE.saz",
+                operation: ExportCaptureSessionsOperation,
+                gui: ExportEntryPoints("Export")),
+            Capability.Supported(
+                "capture-file.sanitize", "Export sessions as a sanitized Fiddler archive", "S2",
+                cli: "export INPUT --out FILE.saz --format sanitized-saz",
+                operation: ExportCaptureSessionsOperation,
+                gui: ExportEntryPoints("ExportSanitized")),
             Capability.Planned(
                 "capture-file.save-xmatcap", "Save captures (.xmatcap)", "S5", Owner,
                 gui: new[] { WpfCommand("Save", MainWindowXaml) }),
@@ -345,6 +350,16 @@ namespace XMAT.Operations.Capabilities
             Capability.GuiOnly(
                 "view.capture-viewers", "Capture viewers",
                 "Presentation: filters, timeline and the request, response, WebSocket and packet views"),
+        };
+
+        // The file menu's command, the capture list's row commands and the progress window that every export shows.
+        private static string[] ExportEntryPoints(string fileCommand) => new[]
+        {
+            Command(AppCommandsPrefix + fileCommand),
+            Command(ProxyCommandsPrefix + "ExportSelectedSessions"),
+            Command(ProxyCommandsPrefix + "ExportVisibleSessions"),
+            Window("XMAT.SanitizedExportProgressWindow"),
+            Click(SanitizedExportXaml, "CancelExport_Click"),
         };
     }
 }

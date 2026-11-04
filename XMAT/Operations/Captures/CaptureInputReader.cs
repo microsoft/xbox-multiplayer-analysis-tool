@@ -130,7 +130,9 @@ namespace XMAT.Operations.Captures
                                 string.Empty,
                                 LoadSaz(snapshot, limits, diagnostics, cancellationToken),
                                 ownsRecords: true),
-                        }),
+                        },
+                        inputIdentity: SqLtFileIdentity.FromHandle(snapshot.SafeFileHandle),
+                        inputPath: input.Path),
                     _ => throw new CaptureInputException(
                         "analysis.input.unsupported",
                         "The analysis input format is unsupported."),
@@ -337,7 +339,15 @@ namespace XMAT.Operations.Captures
                         ownsRecords: true));
                 }
 
-                return new LoadedInput(AnalysisInputKind.XmatCapture, inputSha256, devices);
+                return new LoadedInput(
+                    AnalysisInputKind.XmatCapture,
+                    inputSha256,
+                    devices,
+                    ((SqLtReadonlyDataTable)webProxyTable).Columns,
+                    ((SqLtReadonlyDataTable)deviceTable).Columns,
+                    deviceRows,
+                    database.Identity,
+                    path);
             }
             catch (OperationCanceledException)
             {
@@ -510,6 +520,22 @@ namespace XMAT.Operations.Captures
             Add(sizeof(long));
             foreach (IFieldDefinition field in fields)
             {
+                if (record is IRawDataRecord raw &&
+                    raw.TryReadRaw(field.Name, out object rawValue))
+                {
+                    Add(rawValue switch
+                    {
+                        null => 0,
+                        string text => MeasureText(text),
+                        byte[] data => data.LongLength,
+                        long => sizeof(long),
+                        double => sizeof(double),
+                        _ => throw new CaptureInputException(
+                            "analysis.input.schema",
+                            "The capture database schema is invalid."),
+                    });
+                    continue;
+                }
                 if (record is INullableDataRecord nullable && nullable.IsNull(field.Name))
                 {
                     continue;
@@ -619,16 +645,31 @@ namespace XMAT.Operations.Captures
         internal LoadedInput(
             AnalysisInputKind kind,
             string inputSha256,
-            IReadOnlyList<LoadedDevice> devices)
+            IReadOnlyList<LoadedDevice> devices,
+            IReadOnlyList<SqLtSchemaColumn> captureFields = null,
+            IReadOnlyList<SqLtSchemaColumn> deviceFields = null,
+            IReadOnlyList<IDataRecord> deviceRecords = null,
+            SqLtFileIdentity? inputIdentity = null,
+            string inputPath = null)
         {
             Kind = kind;
             InputSha256 = inputSha256;
             Devices = devices;
+            CaptureFields = captureFields;
+            DeviceFields = deviceFields;
+            DeviceRecords = deviceRecords;
+            InputIdentity = inputIdentity;
+            InputPath = inputPath;
         }
 
         internal AnalysisInputKind Kind { get; }
         internal string InputSha256 { get; }
         internal IReadOnlyList<LoadedDevice> Devices { get; }
+        internal IReadOnlyList<SqLtSchemaColumn> CaptureFields { get; }
+        internal IReadOnlyList<SqLtSchemaColumn> DeviceFields { get; }
+        internal IReadOnlyList<IDataRecord> DeviceRecords { get; }
+        internal SqLtFileIdentity? InputIdentity { get; }
+        internal string InputPath { get; }
 
         public void Dispose()
         {

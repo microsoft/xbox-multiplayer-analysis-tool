@@ -2,19 +2,23 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Capabilities;
+using XMAT.Operations.Export;
 
 namespace XMAT.Cli
 {
     // Writes xmat's JSON field by field, so only allow-listed values reach the output: rule names, levels, counts,
     // service labels, ordinal ids, the input kind and SHA-256, the effective limits, the validated process selectors of
-    // the command line, codes and fixed messages. Never AnalysisResult.Legacy, captured content or paths.
+    // the command line, an export's format and its published file's size and SHA-256, codes and fixed messages. Never
+    // AnalysisResult.Legacy, captured content or paths.
     internal static class CliJson
     {
         // summary.json in a published --out folder.
@@ -49,6 +53,11 @@ namespace XMAT.Cli
                 if (report.Analysis != null)
                 {
                     WriteAnalysis(writer, report.Analysis);
+                }
+
+                if (report.Export != null)
+                {
+                    WriteExport(writer, report.Export);
                 }
 
                 if (report.Doctor != null)
@@ -147,15 +156,7 @@ namespace XMAT.Cli
             writer.WriteString("kind", analysis.InputKind);
             writer.WriteString("sha256", analysis.InputSha256);
             writer.WriteEndObject();
-            if (analysis.Limits != null)
-            {
-                writer.WriteStartObject("limits");
-                writer.WriteNumber("maxInputMib", analysis.Limits.MaxInputMib);
-                writer.WriteNumber("maxDataMib", analysis.Limits.MaxDataMib);
-                writer.WriteNumber("maxRecordMib", analysis.Limits.MaxRecordMib);
-                writer.WriteNumber("maxRecords", analysis.Limits.MaxRecords);
-                writer.WriteEndObject();
-            }
+            WriteLimits(writer, analysis.Limits);
 
             if (analysis.ProcessFilter != null)
             {
@@ -198,6 +199,118 @@ namespace XMAT.Cli
             writer.WriteNumber("calls", analysis.TotalCalls);
             writer.WriteNumber("findings", analysis.TotalFindings);
             writer.WriteEndObject();
+        }
+
+        // The export block: counts instead of the host, status and method values, the validated process selectors, and the
+        // publication. Null counts and output fields mean that the run ended before they were known.
+        private static void WriteExport(Utf8JsonWriter writer, CliExportReport export)
+        {
+            ExportCaptureResult result = export.Result;
+            CaptureSelectionSpec selection = export.Selection;
+            writer.WriteStartObject("export");
+            writer.WriteString("format", export.Format is { } format ? CliCommandLine.FormatName(format) : null);
+            writer.WriteStartObject("input");
+            writer.WriteString("kind", result?.InputKind);
+            writer.WriteString("sha256", result?.InputSha256);
+            writer.WriteEndObject();
+            WriteLimits(writer, export.Limits);
+            writer.WriteStartObject("selection");
+            writer.WriteString("device", export.DeviceId);
+            writer.WriteStartObject("host");
+            writer.WriteString("mode", selection?.Host.Mode == HostMatchMode.Exact ? "exact" : "glob");
+            WriteCount(writer, "include", selection?.Host.Include);
+            WriteCount(writer, "exclude", selection?.Host.Exclude ?? ImmutableArray<string>.Empty);
+            writer.WriteEndObject();
+            WriteCount(writer, "statuses", selection?.Statuses);
+            WriteCount(writer, "methods", selection?.Methods);
+            writer.WriteBoolean("matchNone", selection?.MatchNone ?? false);
+            writer.WriteEndObject();
+            writer.WritePropertyName("processFilter");
+            ProcessScopeJson.Write(writer, selection?.Process, result?.ProcessScope);
+            if (result?.Counts == null)
+            {
+                writer.WriteNull("counts");
+            }
+            else
+            {
+                writer.WriteStartObject("counts");
+                WriteCounts(writer, result.Counts);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteStartArray("devices");
+            foreach (KeyValuePair<string, CaptureExportCounts> device in
+                (result?.Devices ?? ImmutableDictionary<string, CaptureExportCounts>.Empty)
+                    .OrderBy(entry => entry.Key.Length)
+                    .ThenBy(entry => entry.Key, StringComparer.Ordinal))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("id", device.Key);
+                WriteCounts(writer, device.Value);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            if (export.Format == CaptureExportFormat.SanitizedSaz && result?.Sanitization is { } sanitization)
+            {
+                writer.WriteStartObject("sanitization");
+                writer.WriteNumber("redactedValues", sanitization.RedactedValues);
+                writer.WriteNumber("omittedBodies", sanitization.OmittedBodies);
+                writer.WriteNumber("omittedHeaders", sanitization.OmittedHeaders);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteStartObject("output");
+            writer.WriteBoolean("published", result?.Published ?? false);
+            if (result?.OutputBytes is long bytes)
+            {
+                writer.WriteNumber("bytes", bytes);
+            }
+            else
+            {
+                writer.WriteNull("bytes");
+            }
+
+            writer.WriteString("sha256", result?.OutputSha256);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+
+        private static void WriteCount(Utf8JsonWriter writer, string name, ImmutableArray<string>? values)
+        {
+            if (values is { IsDefault: false } given)
+            {
+                writer.WriteNumber(name, given.Length);
+            }
+            else
+            {
+                writer.WriteNull(name);
+            }
+        }
+
+        private static void WriteCounts(Utf8JsonWriter writer, CaptureExportCounts counts)
+        {
+            writer.WriteNumber("total", counts.Total);
+            writer.WriteNumber("matched", counts.Matched);
+            writer.WriteNumber("selected", counts.Selected);
+            writer.WriteNumber("eligible", counts.Eligible);
+            writer.WriteNumber("exported", counts.Exported);
+            writer.WriteNumber("unavailable", counts.Unavailable);
+            writer.WriteNumber("skippedIncomplete", counts.SkippedIncomplete);
+            writer.WriteNumber("noRecordedResponse", counts.NoRecordedResponse);
+        }
+
+        private static void WriteLimits(Utf8JsonWriter writer, CliLimits limits)
+        {
+            if (limits != null)
+            {
+                writer.WriteStartObject("limits");
+                writer.WriteNumber("maxInputMib", limits.MaxInputMib);
+                writer.WriteNumber("maxDataMib", limits.MaxDataMib);
+                writer.WriteNumber("maxRecordMib", limits.MaxRecordMib);
+                writer.WriteNumber("maxRecords", limits.MaxRecords);
+                writer.WriteEndObject();
+            }
         }
 
         private static void WriteDoctor(Utf8JsonWriter writer, CliDoctorReport doctor)

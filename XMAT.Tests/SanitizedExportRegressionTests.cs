@@ -2,16 +2,12 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System.Drawing;
 using System.IO.Compression;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
-using Microsoft.Data.Sqlite;
-using XMAT.Models;
-using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -20,11 +16,8 @@ namespace XMAT.Tests
     [Collection(CaptureUiApplicationCollection.Name)]
     public sealed class SanitizedExportRegressionTests
     {
-        private readonly CaptureUiApplicationFixture _application;
-
-        public SanitizedExportRegressionTests(CaptureUiApplicationFixture application)
+        public SanitizedExportRegressionTests()
         {
-            _application = application;
             Localization.LoadLanguage("en-us");
         }
 
@@ -88,7 +81,7 @@ namespace XMAT.Tests
                     method + " " + (method == "CONNECT" ? "example.test:443" : "/") + " HTTP/1.1\r\nHost: example.test\r\n\r\n",
                     Array.Empty<byte>(),
                     "HTTP/1.1 200 OK\r\nContent-Length: 12345\r\n\r\n", Array.Empty<byte>(), "0.0.0.0");
-                FiddlerSazHandler.CreateSanitizedSazFile(path, new[] { record });
+                SazArchive.Write(path, new[] { record }, sanitized: true);
                 using var archive = ZipFile.OpenRead(path);
                 using var reader = new StreamReader(archive.GetEntry("raw/1_s.txt").Open());
                 var response = reader.ReadToEnd();
@@ -428,136 +421,6 @@ namespace XMAT.Tests
         }
 
         [Theory]
-        [InlineData("extension")]
-        [InlineData("directory")]
-        public async Task EarlyDestinationFailure_DoesNotLeaveAReaderOrDatabaseLock(string failureMode)
-        {
-            var directory = Path.Join(Path.GetTempPath(), "XMAT-export-reader-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(directory);
-            try
-            {
-                using var dataset = new ReaderDataset(Path.Join(directory, "source.sqlite"));
-                Task<SanitizedExportSummary> exporting = null;
-                CaptureAppModel model = null;
-                _application.Run(window =>
-                {
-                    var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
-                    controller.LoadCaptureDataset(dataset);
-                    Assert.Equal(0, dataset.OpenReaders);
-                    var context = new Context(controller);
-                    model = new CaptureAppModel { SelectedDeviceContext = context };
-                    model.CaptureDeviceContexts.Add(context);
-                    var destination = failureMode == "extension"
-                        ? Path.Join(directory, "wrong.xmatcap") : Path.Join(directory, "missing", "output.saz");
-                    exporting = model.ExportSanitizedDataCapturesAsync(destination);
-                });
-                if (failureMode == "extension")
-                {
-                    await Assert.ThrowsAsync<ArgumentException>(() => exporting);
-                }
-                else
-                {
-                    await Assert.ThrowsAsync<DirectoryNotFoundException>(() => exporting);
-                }
-                Assert.Equal(0, dataset.OpenReaders);
-                using var external = new SqliteConnection(dataset.ConnectionString);
-                external.Open();
-                using var command = external.CreateCommand();
-                command.CommandText = "DROP TABLE SourceRows";
-                command.ExecuteNonQuery();
-                _application.Run(window =>
-                {
-                    Assert.False(model.IsCaptureDataOperationRunning);
-                    model.SelectedDeviceContext = null;
-                });
-            }
-            finally
-            {
-                Directory.Delete(directory, true);
-            }
-        }
-
-        [Fact]
-        public async Task Cancellation_KeepsTheOperationLeaseUntilReaderAndWorkerCleanupFinish()
-        {
-            var directory = Path.Join(Path.GetTempPath(), "XMAT-export-cancel-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(directory);
-            try
-            {
-                using var dataset = new ReaderDataset(Path.Join(directory, "source.sqlite"));
-                using var cancellation = new CancellationTokenSource();
-                using var releaseCleanup = new ManualResetEventSlim();
-                var cleanupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                var destination = Path.Join(directory, "existing.saz");
-                FiddlerSazHandler.CreateSanitizedSazFile(destination, new[] { new ProxyConnectionModel(new DataRecord()) });
-                var original = File.ReadAllBytes(destination);
-                Task<SanitizedExportSummary> exporting = null;
-                CaptureAppModel model = null;
-                try
-                {
-                    _application.Run(window =>
-                    {
-                        var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
-                        controller.LoadCaptureDataset(dataset);
-                        var context = new Context(controller);
-                        model = new CaptureAppModel { SelectedDeviceContext = context };
-                        model.CaptureDeviceContexts.Add(context);
-                        dataset.BeforeRead = cancellation.Cancel;
-                        dataset.BeforeDispose = () =>
-                        {
-                            cleanupStarted.TrySetResult();
-                            if (!releaseCleanup.Wait(TimeSpan.FromSeconds(30)))
-                            {
-                                throw new TimeoutException("The test did not release reader cleanup.");
-                            }
-                        };
-                        exporting = model.ExportSanitizedDataCapturesAsync(destination, cancellation.Token);
-                    });
-                    await cleanupStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
-
-                    Assert.True(cancellation.IsCancellationRequested);
-                    Assert.False(exporting.IsCompleted);
-                    Assert.Equal(1, dataset.OpenReaders);
-                    _application.Run(window =>
-                    {
-                        Assert.True(model.IsCaptureDataOperationRunning);
-                        Assert.False(model.CanExportSanitizedCaptures);
-                        Assert.False(model.CanModifyCaptureData);
-                        Assert.False(model.CanCloseAsync().GetAwaiter().GetResult());
-                        Assert.False(model.TryBeginCaptureDataOperation(out _));
-                    });
-                    Assert.Equal(original, File.ReadAllBytes(destination));
-                }
-                finally
-                {
-                    releaseCleanup.Set();
-                }
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => exporting);
-
-                Assert.Equal(0, dataset.OpenReaders);
-                Assert.Equal(original, File.ReadAllBytes(destination));
-                Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
-                Assert.Single(FiddlerSazHandler.ImportSazFile(destination, CancellationToken.None));
-                using var external = new SqliteConnection(dataset.ConnectionString);
-                external.Open();
-                using var command = external.CreateCommand();
-                command.CommandText = "DROP TABLE SourceRows";
-                command.ExecuteNonQuery();
-                _application.Run(window =>
-                {
-                    Assert.False(model.IsCaptureDataOperationRunning);
-                    Assert.True(model.CanCloseAsync().GetAwaiter().GetResult());
-                    Assert.True(model.CanExportSanitizedCaptures);
-                    model.SelectedDeviceContext = null;
-                });
-            }
-            finally
-            {
-                Directory.Delete(directory, true);
-            }
-        }
-
-        [Theory]
         [InlineData("timeout")]
         [InlineData("cancellation")]
         [InlineData("malformed-http")]
@@ -606,111 +469,5 @@ namespace XMAT.Tests
 
         private static string Request(string type, string extra = "") =>
             "POST / HTTP/1.1\r\nContent-Type: " + type + "\r\n" + extra + "\r\n";
-
-        private sealed class ReaderDataset : IDataset, IDisposable
-        {
-            private readonly SqliteConnection _connection;
-            private readonly List<SqliteDataReader> _readers = new();
-            private readonly List<SqliteCommand> _commands = new();
-            internal int OpenReaders { get; private set; }
-            internal string ConnectionString { get; }
-            internal Action BeforeRead { get; set; }
-            internal Action BeforeDispose { get; set; }
-
-            internal ReaderDataset(string path)
-            {
-                ConnectionString = $"Data Source={path};Pooling=False;Default Timeout=1";
-                _connection = new SqliteConnection(ConnectionString);
-                _connection.Open();
-                using var command = _connection.CreateCommand();
-                command.CommandText = "CREATE TABLE SourceRows (id INTEGER); INSERT INTO SourceRows VALUES (1);";
-                command.ExecuteNonQuery();
-            }
-
-            public IEnumerable<IFieldDefinition> FieldDefs => Array.Empty<IFieldDefinition>();
-            public IEnumerable<IDataRecord> DataRecords => DataRecordsWhen();
-            public IEnumerable<IDataRecord> DataRecordsFrom(long first) => DataRecords;
-            public IEnumerable<IDataRecord> DataRecordsFrom(long first, int limit) => DataRecords.Take(limit);
-            public IEnumerable<IDataRecord> DataRecordsWhen(params IFieldValue[] values)
-            {
-                var command = _connection.CreateCommand();
-                command.CommandText = "SELECT id FROM SourceRows";
-                var reader = command.ExecuteReader();
-                _readers.Add(reader);
-                _commands.Add(command);
-                OpenReaders++;
-                return Enumerate(reader, command);
-            }
-
-            private IEnumerable<IDataRecord> Enumerate(SqliteDataReader reader, SqliteCommand command)
-            {
-                try
-                {
-                    BeforeRead?.Invoke();
-                    while (reader.Read())
-                    {
-                        yield return new DataRecord();
-                    }
-                }
-                finally
-                {
-                    try
-                    {
-                        BeforeDispose?.Invoke();
-                    }
-                    finally
-                    {
-                        reader.Dispose();
-                        command.Dispose();
-                        OpenReaders--;
-                    }
-                }
-            }
-
-            public void Dispose()
-            {
-                foreach (var reader in _readers)
-                {
-                    reader.Dispose();
-                }
-                foreach (var command in _commands)
-                {
-                    command.Dispose();
-                }
-                _connection.Dispose();
-            }
-        }
-
-        private sealed class DataRecord : IDataRecord
-        {
-            public int RowId => 1;
-            public long Int(string name) => 1;
-            public string Str(string name) => name switch
-            {
-                WebServiceCaptureMethod.FieldKey_DeviceName => "selected",
-                WebServiceCaptureMethod.FieldKey_RequestTimestamp => "2026-01-01T00:00:00.0000000Z",
-                WebServiceCaptureMethod.FieldKey_ResponseTimestamp => "2026-01-01T00:00:00.0100000Z",
-                WebServiceCaptureMethod.FieldKey_RequestScheme => "https",
-                WebServiceCaptureMethod.FieldKey_RequestHost => "example.test",
-                WebServiceCaptureMethod.FieldKey_RequestPort => "443",
-                WebServiceCaptureMethod.FieldKey_RequestMethod => "GET",
-                WebServiceCaptureMethod.FieldKey_RequestPath => "/",
-                WebServiceCaptureMethod.FieldKey_RequestStatus => "200",
-                WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders => "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n",
-                WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders => "HTTP/1.1 200 OK\r\n\r\n",
-                _ => string.Empty
-            };
-        }
-
-        private sealed class Context(WebServiceDeviceCaptureController controller) : ICaptureDeviceContext
-        {
-            public DeviceType DeviceType => DeviceType.GenericProxyDevice;
-            public CaptureType CaptureType => CaptureType.WebProxy;
-            public string DeviceName => controller.DeviceName;
-            public bool IsSelected { get; set; }
-            public bool IsReadOnly { get; set; } = true;
-            public Color DeviceColor { get; set; }
-            public IDeviceCaptureController CaptureController => controller;
-        }
     }
 }

@@ -91,6 +91,15 @@ namespace XMAT.Cli
                 yield return "Sessions without process information (older captures, Fiddler archives without x-ProcessInfo,";
                 yield return "Xbox or other remote devices) never match --process; the JSON counts them as unknown.";
             }
+            else if (command.Name == CliCommands.Export)
+            {
+                yield return string.Empty;
+                yield return "Writes the selected sessions to a new FILE; it never replaces a file or changes INPUT. The format";
+                yield return "follows FILE's extension (.xmatcap or .saz); --format sanitized-saz must be asked for. --process,";
+                yield return "--host, --status and --method select as in the capture list; each is repeatable and exclusions win.";
+                yield return "An empty --status=, --method= or (with --host-mode exact) --host= selects sessions without one.";
+                yield return "--match-none selects nothing, so the JSON shows the counts without writing FILE.";
+            }
         }
     }
 }

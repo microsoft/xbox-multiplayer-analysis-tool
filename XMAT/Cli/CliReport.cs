@@ -67,6 +67,15 @@ namespace XMAT.Cli
         internal CaptureSelectionSpec Selection { get; set; }
 
         internal ExportCaptureResult Result { get; set; }
+
+        // The block of a run whose command line was valid, before the operation runs.
+        internal static CliExportReport From(CliRequest request) => new()
+        {
+            Format = request.Format,
+            Limits = request.Limits ?? CliLimits.Default,
+            DeviceId = request.DeviceId,
+            Selection = request.Selection,
+        };
     }
 
     internal sealed class CliDoctorReport
@@ -158,6 +167,10 @@ namespace XMAT.Cli
             {
                 report.Analysis = new CliAnalysisReport();
             }
+            else if (parsed.Command == CliCommands.Export)
+            {
+                report.Export = new CliExportReport();
+            }
 
             report.Errors.Add(parsed.Error);
             return report;
@@ -182,6 +195,10 @@ namespace XMAT.Cli
                     Limits = parsed.Request.Limits ?? CliLimits.Default,
                     ProcessFilter = parsed.Request.ProcessFilter ?? ProcessFilterSpec.Empty,
                 };
+            }
+            else if (parsed is { Succeeded: true, Request.Command: CliCommands.Export })
+            {
+                report.Export = CliExportReport.From(parsed.Request);
             }
 
             report.Fail(CliExitCodes.Internal, "cli.internal", "xmat stopped because of an internal error.");

@@ -167,9 +167,12 @@ the list. The process filter combines with the status, host and method filters, 
 **Show all processes** leaves those filters unchanged.
 
 The process filter only hides sessions: XMAT still forwards and records all traffic
-from every program, and saving, exporting and analysis use the full capture unless
-you choose to analyze only the filtered sessions (see
-[Live trace analysis](live-trace-analysis.md)). Each capture tab has its own process
+from every program, and saving, the **File** exports and analysis use the full capture
+unless you choose otherwise: analyze only the filtered sessions (see
+[Live trace analysis](live-trace-analysis.md)), or right-click a request and choose
+**Export Visible Sessions...**, which exports what every filter of the list shows, or
+**Export Selected Sessions...** (see
+[Capture files](capture-files.md#export-selected-or-visible-sessions)). Each capture tab has its own process
 filter, which [clearing the capture](#clear-a-capture) keeps and which is not saved.
 The timeline follows the process filter, but not the status, host and method filters.
 

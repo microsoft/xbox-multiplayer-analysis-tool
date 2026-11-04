@@ -126,7 +126,12 @@ namespace XMAT.Tests.Operations.Export
 
         private static SqliteConnection Open(string path)
         {
-            var connection = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
             connection.Open();
             return connection;
         }

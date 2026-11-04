@@ -5,7 +5,6 @@
 using System;
 using System.ComponentModel;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -491,93 +490,6 @@ namespace XMAT
                             MessageBoxImage.Error);
                     }
                 }
-            }
-        }
-
-        private void Export_Executed(object sender, RoutedEventArgs e)
-        {
-            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
-            {
-                return;
-            }
-
-            var saveFileDialog = new SaveFileDialog
-            {
-                Filter = FiddlerFilter
-            };
-
-            if (saveFileDialog.ShowDialog() == true && !string.IsNullOrEmpty(saveFileDialog.FileName))
-            {
-                // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
-                // setup the filter above and call export with the appropriate type
-                CaptureAppModel.AppModel.ExportDataCaptures(ExportType.Fiddler, saveFileDialog.FileName);
-            }
-        }
-
-        private void ExportSanitized_CanExecute(object sender, CanExecuteRoutedEventArgs e)
-        {
-            e.CanExecute = CaptureAppModel.AppModel.CanExportSanitizedCaptures;
-        }
-
-        private async void ExportSanitized_Executed(object sender, ExecutedRoutedEventArgs e)
-        {
-            if (!CaptureAppModel.AppModel.CanExportSanitizedCaptures)
-            {
-                return;
-            }
-            if (MessageBox.Show(
-                Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM"),
-                Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
-            {
-                return;
-            }
-            var dialog = new SaveFileDialog
-            {
-                Filter = FiddlerFilter,
-                DefaultExt = ".saz",
-                AddExtension = true,
-                FileName = "sanitized-capture.saz",
-                Title = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED")
-            };
-            if (dialog.ShowDialog(this) != true)
-            {
-                return;
-            }
-            using var cancellation = new CancellationTokenSource();
-            try
-            {
-                WebServiceCapture.SanitizedExportSummary summary;
-                using (PublicUtilities.BlockingOperation())
-                {
-                    var operation = CaptureAppModel.AppModel.ExportSanitizedDataCapturesAsync(dialog.FileName, cancellation.Token);
-                    if (await Task.WhenAny(operation, Task.Delay(250)) != operation && !operation.IsCompleted)
-                    {
-                        var progress = new SanitizedExportProgressWindow(operation, cancellation.Cancel) { Owner = this };
-                        progress.ShowDialog();
-                    }
-                    summary = await operation;
-                }
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_COMPLETE",
-                        summary.Sessions, summary.RedactedValues, summary.OmittedBodies, summary.OmittedHeaders),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-            {
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLED"),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
-            {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"Sanitized export failed: {exception}");
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_FAILED", exception.Message),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 

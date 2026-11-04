@@ -162,10 +162,7 @@ namespace XMAT.Tests
         {
             ProxyConnectionModel model = ProcessCaptures.ExportRecord((int)rowId);
             model.SetClientProcess(process ?? ClientProcessInfo.NotRecorded);
-            object[] stored = model.ToDataTableValues(device);
-            Dictionary<string, object> values = WebProxyCaptureSchema.Fields
-                .Select((field, index) => (field.Name, Value: stored[index]))
-                .ToDictionary(item => item.Name, item => item.Value, StringComparer.Ordinal);
+            Dictionary<string, object> values = SazArchive.Values(model, device);
             values[WebServiceCaptureMethod.FieldKey_RequestNumber] = requestNumber;
             change?.Invoke(values);
             return new RawExportRow(new CaptureRowKey(Source, 0, rowId, rowId), rowId, 1, values);
@@ -186,5 +183,33 @@ namespace XMAT.Tests
         private static Dictionary<string, string> Flags(string path) =>
             ProcessCaptures.SessionFlags(ProcessCaptures.Entries(path)["raw/1_m.xml"])
                 .ToDictionary(flag => flag.Key, flag => flag.Value, StringComparer.Ordinal);
+    }
+
+    // Writes Fiddler archives of records with the export writer, as the shared export operation does.
+    internal static class SazArchive
+    {
+        // Returns the sanitizer's summary of a sanitized archive; an ordinary archive has none.
+        internal static SanitizedExportSummary Write(string path, IEnumerable<ProxyConnectionModel> records, bool sanitized = false)
+        {
+            ProxyConnectionModel[] rows = records.ToArray();
+            using ICaptureExportWriter writer = FiddlerSazHandler.CreateExportWriter(path, sanitized, rows.Length);
+            foreach (ProxyConnectionModel record in rows)
+            {
+                writer.Write(
+                    new RawExportRow(new CaptureRowKey(Guid.Empty, 0, record.RecordRowId, 1), record.RecordRowId, 1, Values(record)),
+                    CancellationToken.None);
+            }
+
+            return writer.Complete(CancellationToken.None).Sanitization;
+        }
+
+        // A record's values as a capture file stores them, by column name.
+        internal static Dictionary<string, object> Values(ProxyConnectionModel record, string device = "Test device")
+        {
+            object[] stored = record.ToDataTableValues(device);
+            return WebProxyCaptureSchema.Fields
+                .Select((field, index) => (field.Name, Value: stored[index]))
+                .ToDictionary(item => item.Name, item => item.Value, StringComparer.Ordinal);
+        }
     }
 }
