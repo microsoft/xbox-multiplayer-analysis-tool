@@ -201,6 +201,7 @@ namespace XMAT.Tests
         [InlineData("ButtonForegroundBrush", "ButtonPressedBackgroundBrush")]
         [InlineData("TextBoxForegroundBrush", "TextBoxBackgroundBrush")]
         [InlineData("StatusBarForegroundBrush", "StatusBarBackgroundBrush")]
+        [InlineData("PrimaryForegroundBrush", "StatusBarBackgroundBrush")]
         public void DarkTheme_TextMeetsMinimumContrast(string foreground, string background)
         {
             _application.Run(_ =>
