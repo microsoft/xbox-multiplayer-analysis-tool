@@ -15,7 +15,7 @@
              d:DesignHeight="720" d:DesignWidth="1280">
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="booleanToVisibilityConverter" />
-        <local:ProxyConnectionModelToBrushConverter x:Key="proxyConnectionModelToBrushConverter" />
+        <local:ProxyStatusIsErrorConverter x:Key="proxyStatusIsErrorConverter" />
         <Style x:Key="CenterGridHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
         </Style>
@@ -138,16 +138,18 @@
             </DataGrid.Columns>
             <DataGrid.RowStyle>
                 <Style TargetType="DataGridRow">
-                    <Setter Property="Foreground">
-                        <Setter.Value>
-                            <MultiBinding Converter="{StaticResource proxyConnectionModelToBrushConverter}" Mode="OneWay">
-                                <MultiBinding.Bindings>
-                                    <Binding Path="Status" />
-                                    <Binding Path="Method" />
-                                </MultiBinding.Bindings>
-                            </MultiBinding>
-                        </Setter.Value>
-                    </Setter>
+                    <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding Method}" Value="CONNECT">
+                            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Status}" Value="">
+                            <Setter Property="Foreground" Value="{DynamicResource CapturePendingForegroundBrush}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Status, Converter={StaticResource proxyStatusIsErrorConverter}}" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource CaptureErrorForegroundBrush}"/>
+                        </DataTrigger>
+                    </Style.Triggers>
                 </Style>
             </DataGrid.RowStyle>
         </DataGrid>
