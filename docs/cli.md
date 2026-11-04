@@ -169,10 +169,15 @@ xmat --version
   differs from the response captured for its request in its status code or body. Bodies are compared without their
   chunked framing and gzip, deflate or Brotli content coding, each decoded up to 64 MiB (or `--max-response-mib` if
   that is smaller); a body that does not decode within that size is compared as received. Headers are not compared,
-  since dates, request ids and cookies differ on every response. The JSON output and `summary.json` hold only request
+  since dates, request ids and cookies differ on every response. A request whose captured response the GUI recorded
+  without its body (`X-XMAT-Response-Body-Not-Kept`) is not verified: its `verify` is null and the run warns
+  `replay.verify.skipped`. The JSON output and `summary.json` hold only request
   numbers, ordinal device ids, outcomes, status codes, durations, sizes, codes and the options that are numbers or
   switches, never URLs, methods, headers, bodies or the `--body-file` path. Cancelling a run publishes nothing, but
   requests already sent stay sent.
+- A capture that the GUI saved can include its replays as a device named `XMAT Replays`: `xmat analyze` reports it
+  like any other device, and `xmat replay` can select its requests. Their numbers can repeat those of another device,
+  so a selected number may need `--device` (`replay.request.ambiguous`).
 - `xmat doctor --for analyze` checks what `xmat analyze` needs and writes nothing: the analysis rules (`data.rules`),
   the API map (`data.apimap`) and the English strings (`localization.en-us`) installed next to `xmat.exe`, and a 64-bit
   process (`runtime.64-bit`). A missing or damaged file fails its check with a code such as `analysis.assets.rules` and

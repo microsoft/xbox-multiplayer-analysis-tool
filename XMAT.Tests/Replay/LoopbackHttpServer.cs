@@ -61,7 +61,10 @@ namespace XMAT.Tests.Replay
             _listener = new TcpListener(IPAddress.Loopback, 0);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
-            _accepting = AcceptAsync();
+
+            // On the thread pool, so a test that creates the server on a UI thread and then blocks that thread does not
+            // stop the server from answering.
+            _accepting = Task.Run(AcceptAsync);
         }
 
         internal int Port { get; }

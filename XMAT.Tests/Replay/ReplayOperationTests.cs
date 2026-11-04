@@ -485,6 +485,34 @@ namespace XMAT.Tests.Replay
                 Assert.Single(stored.Value.Items).Verification.Differences);
         }
 
+        // A captured response that the GUI recorded without its body cannot be compared: verify skips it, the run warns,
+        // and it counts neither as a match nor as a mismatch.
+        [Fact]
+        public async Task Verify_SkipsResponsesRecordedWithoutTheirBody()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok("{\"ok\":true}"));
+            string capture = ReplayCaptures.WriteXmatcap(
+                _directory,
+                "capture.xmatcap",
+                ("XMAT Replays", new[]
+                {
+                    new CapturedExchange("GET", server.Origin + "/kept", ResponseBody: "{\"ok\":true}"u8.ToArray()),
+                    new CapturedExchange(
+                        "GET",
+                        server.Origin + "/omitted",
+                        ResponseHead: "HTTP/1.1 200 OK\r\n" + RequestReplayDraft.ResponseBodyNotKeptHeader + ": 11\r\n"),
+                }));
+
+            OperationResult<ReplayResult> result = await Execute(new ReplayRequest(
+                ReplaySource.FromFile(capture, ReplaySelection.All), new ReplayOptions(Verify: true)));
+
+            Assert.True(result.Succeeded, Describe(result));
+            Assert.True(result.Value.Items[0].Verification.Matches);
+            Assert.Null(result.Value.Items[1].Verification);
+            Assert.Equal((1, 0), (result.Value.Matched, result.Value.Mismatched));
+            Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == ReplayOperation.VerifySkippedCode);
+        }
+
         [Fact]
         public async Task Parallelism_SendsConcurrentlyAndStillReportsInPlanOrder()
         {

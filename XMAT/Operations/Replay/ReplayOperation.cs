@@ -24,6 +24,7 @@ namespace XMAT.Operations.Replay
     internal sealed class ReplayOperation : IOperation<ReplayRequest, ReplayResult>
     {
         internal const string SkippedCode = "replay.request.skipped";
+        internal const string VerifySkippedCode = "replay.verify.skipped";
 
         internal Func<ReplaySender> SenderFactory { get; set; } = static () => new ReplaySender();
 
@@ -142,6 +143,23 @@ namespace XMAT.Operations.Replay
             CheckPlanSize(items.Count, options);
             ApplyEdits(items, request.Edits ?? ReplayEdits.None, cancellationToken);
             Check(items, options, cancellationToken);
+            if (options.Verify)
+            {
+                // Every captured response's headers are read here, before any parallel send reads them.
+                int notKept = 0;
+                foreach (ReplayItem item in items)
+                {
+                    notKept += item.ResponseBodyNotKept ? 1 : 0;
+                }
+
+                if (notKept > 0)
+                {
+                    diagnostics.Add(new OperationDiagnostic(
+                        VerifySkippedCode,
+                        OperationDiagnosticSeverity.Warning,
+                        "Some requests are not verified: their captured response was recorded without its body."));
+                }
+            }
             return new Prepared(items, inputKind, inputSha256, null);
         }
 
@@ -458,7 +476,8 @@ namespace XMAT.Operations.Replay
                     ReplayExchange exchange =
                         await sender.SendAsync(step.Item.Draft, sendOptions, token).ConfigureAwait(false);
                     ReplayVerification verification =
-                        options.Verify && step.Item.Original != null && exchange.Outcome == ReplayOutcome.Completed
+                        options.Verify && step.Item.Original != null && !step.Item.ResponseBodyNotKept &&
+                            exchange.Outcome == ReplayOutcome.Completed
                             ? ReplayVerifier.Compare(
                                 step.Item.Original,
                                 exchange,
@@ -522,7 +541,12 @@ namespace XMAT.Operations.Replay
             long? RequestNumber,
             ProxyConnectionModel Original,
             RequestReplayDraft Draft,
-            int? SourceIndex = null);
+            int? SourceIndex = null)
+        {
+            // The captured response was recorded by the GUI without its body, so verify has nothing to compare it with.
+            internal bool ResponseBodyNotKept =>
+                Original?.ResponseHeaders.ContainsKey(RequestReplayDraft.ResponseBodyNotKeptHeader) == true;
+        }
 
         private sealed record Prepared(
             IReadOnlyList<ReplayItem> Items,
