@@ -2,8 +2,10 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using XMAT.Operations.Replay;
@@ -264,6 +266,71 @@ namespace XMAT.Tests.Cli
             Assert.Empty(server.Requests);
             Assert.False(Directory.Exists(Path.Join(directory.Root, "results")));
             CliAssert.NoStagingFolders(directory.Root);
+        }
+
+        // --connect-to sends to another address than the URL's host, so it needs --allow-connect-to; without it nothing is
+        // even connected. With it, TLS still checks the certificate against the URL's host, here one from a root that
+        // Windows does not trust, so the send fails before any HTTP. The output says that the send used connect-to and
+        // never names the endpoint.
+        [Fact]
+        public async Task Compose_ConnectTo_NeedsItsOwnPermission_AndTheOutputNeverNamesTheEndpoint()
+        {
+            const string Host = "xmat-connect-to.test";
+            using var directory = new CliTestDirectory();
+            using var authority = new TestCertificateAuthority();
+            using X509Certificate2 certificate = authority.Issue(Host);
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok(), new LoopbackTls(certificate));
+            string[] command = { "compose", "--url", $"https://{Host}:{server.Port}/item", "--connect-to", $"127.0.0.1:{server.Port}" };
+
+            XmatRun denied = await XmatProcess.RunAsync(directory.Root, command.Concat(new[] { "--out", "denied" }).ToArray());
+
+            CliAssert.ExitCode(3, denied);
+            Assert.Equal(new[] { ReplayOperation.ConnectToPolicyCode }, denied.ErrorCodes());
+            Assert.Equal(0, server.Connections);
+            Assert.False(Directory.Exists(Path.Join(directory.Root, "denied")));
+
+            XmatRun sent = await XmatProcess.RunAsync(
+                directory.Root, command.Concat(new[] { "--allow-connect-to", "--out", "results" }).ToArray());
+
+            CliAssert.ExitCode(12, sent);
+            JsonElement json = sent.Json();
+            JsonElement options = json.GetProperty("options");
+            Assert.Equal((true, true), (options.GetProperty("connectTo").GetBoolean(), options.GetProperty("allowConnectTo").GetBoolean()));
+            JsonElement replay = Assert.Single(json.GetProperty("replays").EnumerateArray());
+            Assert.Equal(
+                ("failed", ReplaySender.SendFailedCode, ReplayTransportOptions.ConnectToName),
+                (replay.GetProperty("outcome").GetString(), replay.GetProperty("code").GetString(), replay.GetProperty("transport").GetString()));
+            Assert.Equal(JsonValueKind.Null, replay.GetProperty("responseVersion").ValueKind);
+            Assert.Empty(server.Requests);
+            Assert.NotEmpty(server.ServerNames);
+            Assert.All(server.ServerNames, name => Assert.Equal(Host, name));
+            string published = Path.Join(directory.Root, "results");
+            IEnumerable<string> outputs = new[] { denied.Stdout, denied.Stderr, sent.Stdout, sent.Stderr }
+                .Concat(Directory.GetFiles(published, "*", SearchOption.AllDirectories).Select(File.ReadAllText));
+            Assert.All(outputs, text => Assert.DoesNotContain("127.0.0.1", text, StringComparison.Ordinal));
+        }
+
+        // A --connect-to that is not an address and port, or an HTTP version that XMAT does not offer, is a usage error
+        // that never repeats the value; HTTP/2 or connect-to for an http URL is refused before anything is sent.
+        [Theory]
+        [InlineData("--connect-to", Canary + ":443", 2, "cli.usage.invalid-value")]
+        [InlineData("--http-version", Canary, 2, "cli.usage.invalid-value")]
+        [InlineData("--http-version", "2", 3, ReplayOperation.Http2HttpsCode)]
+        [InlineData("--connect-to", "127.0.0.1:{0}", 3, ReplayOperation.ConnectToHttpsCode)]
+        public async Task Compose_ATransportThatCannotBeUsed_SendsNothing(string option, string value, int exitCode, string code)
+        {
+            using var directory = new CliTestDirectory();
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root, "compose", "--url", server.Origin + "/item", option,
+                string.Format(CultureInfo.InvariantCulture, value, server.Port), "--allow-connect-to", "--out", "results");
+
+            CliAssert.ExitCode(exitCode, run);
+            Assert.Equal(new[] { code }, run.ErrorCodes());
+            Assert.Equal(0, server.Connections);
+            Assert.False(Directory.Exists(Path.Join(directory.Root, "results")));
+            Assert.DoesNotContain(Canary, run.Stdout + run.Stderr, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

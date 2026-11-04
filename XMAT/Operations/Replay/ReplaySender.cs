@@ -11,17 +11,20 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.WebServiceCapture;
 
 namespace XMAT.Operations.Replay
 {
-    // How one request is sent: how long to wait, how much of the response to keep and how many redirects to follow.
+    // How one request is sent: how long to wait, how much of the response to keep, how many redirects to follow and which
+    // HTTP version to ask for.
     internal sealed record ReplaySendOptions(
         TimeSpan Timeout,
         long MaxResponseBytes,
-        int MaxRedirects = 0)
+        int MaxRedirects = 0,
+        ReplayHttpVersion HttpVersion = ReplayHttpVersion.Auto)
     {
         internal const long DefaultMaxResponseBytes = 16L * 1024 * 1024;
 
@@ -31,11 +34,12 @@ namespace XMAT.Operations.Replay
     }
 
     // The one way XMAT sends a replayed or composed request, for the GUI and xmat.exe alike. A replay never goes through a
-    // proxy (so Local PC capture does not record it), never sends or keeps cookies of its own, never decompresses (so
-    // inspectors see the bytes the server sent) and keeps the platform's certificate validation. Replay follows redirects
-    // itself, at most MaxRedirects of them, and only within the origin it sent to: a server never chooses where the
-    // request's headers and body go next, so a hop to another origin, from HTTPS to HTTP or to anything but HTTP and HTTPS
-    // is never followed.
+    // proxy (so Local PC capture does not record it), never sends or keeps cookies of its own, never answers an
+    // authentication challenge with the user's Windows credentials, never decompresses (so inspectors see the bytes the
+    // server sent) and keeps the platform's certificate validation. Replay follows redirects itself, at most MaxRedirects
+    // of them, and only within the origin it sent to: a server never chooses where the request's headers and body go next,
+    // so a hop to another origin, from HTTPS to HTTP or to anything but HTTP and HTTPS is never followed. A sender made for
+    // a connect-to endpoint connects only there, for every request and redirect, and never falls back to the URL's host.
     internal sealed class ReplaySender : IDisposable
     {
         // Why a redirect was not followed; the redirect response is then the result.
@@ -56,6 +60,15 @@ namespace XMAT.Operations.Replay
         {
         }
 
+        // A sender of its own for one connect-to endpoint, which no direct send shares.
+        internal ReplaySender(ReplayConnectTo connectTo)
+            : this(
+                new HttpMessageInvoker(
+                    CreateHandler(connectTo ?? throw new ArgumentNullException(nameof(connectTo))), disposeHandler: true),
+                ownsInvoker: true)
+        {
+        }
+
         // An injected invoker, such as an HttpClient or one over a test handler, belongs to its caller unless ownsInvoker.
         internal ReplaySender(HttpMessageInvoker invoker, bool ownsInvoker = false)
         {
@@ -63,13 +76,24 @@ namespace XMAT.Operations.Replay
             _ownsInvoker = ownsInvoker;
         }
 
-        internal static SocketsHttpHandler CreateHandler() => new()
+        // Without connectTo, the handler connects to the URL's host; with it, only to that endpoint. Credentials stay unset,
+        // so an NTLM or Negotiate challenge is the result, never answered with the user's Windows credentials.
+        internal static SocketsHttpHandler CreateHandler(ReplayConnectTo connectTo = null)
         {
-            UseProxy = false,
-            UseCookies = false,
-            AllowAutoRedirect = false,
-            AutomaticDecompression = DecompressionMethods.None,
-        };
+            var handler = new SocketsHttpHandler
+            {
+                UseProxy = false,
+                UseCookies = false,
+                AllowAutoRedirect = false,
+                AutomaticDecompression = DecompressionMethods.None,
+            };
+            if (connectTo != null)
+            {
+                handler.ConnectCallback = ConnectOnlyTo(connectTo);
+            }
+
+            return handler;
+        }
 
         // A response with any status code, a transport failure, a timeout and an oversized response are all results. Only
         // the caller's cancellation throws (OperationCanceledException); an invalid draft throws as CreateRequestToSend does.
@@ -81,6 +105,7 @@ namespace XMAT.Operations.Replay
             ArgumentNullException.ThrowIfNull(draft);
             ArgumentNullException.ThrowIfNull(options);
             HttpRequestMessage request = draft.CreateRequestToSend();
+            ApplyVersion(request, options.HttpVersion);
 
             // The same bytes as the request content: a body from SetBodyBytes is shared, not copied.
             byte[] body = draft.GetBodyBytes();
@@ -196,6 +221,40 @@ namespace XMAT.Operations.Replay
         private static bool IsRedirect(HttpResponseMessage response) =>
             response.StatusCode is HttpStatusCode.MovedPermanently or HttpStatusCode.Found or HttpStatusCode.SeeOther or
                 HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect;
+
+        // An explicit version is asked for exactly: the request fails rather than go out with another. Auto keeps what the
+        // request factory chose, HTTP/2 or lower, as replay has always sent. Redirects keep the version of the request.
+        private static void ApplyVersion(HttpRequestMessage request, ReplayHttpVersion version)
+        {
+            if (version == ReplayHttpVersion.Auto)
+            {
+                return;
+            }
+
+            request.Version = version == ReplayHttpVersion.Http2 ? HttpVersion.Version20 : HttpVersion.Version11;
+            request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
+        }
+
+        // Connects every connection of the handler to target, whatever the URL's host resolves to, and to nothing else: a
+        // failure fails the send. The handler then sets up TLS for the URL's host, so the server name sent and the
+        // certificate name checked stay the URL's.
+        private static Func<SocketsHttpConnectionContext, CancellationToken, ValueTask<Stream>> ConnectOnlyTo(
+            ReplayConnectTo target) =>
+            async (_, cancellationToken) =>
+            {
+                IPEndPoint endpoint = target.ToEndPoint();
+                var socket = new Socket(endpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+                try
+                {
+                    await socket.ConnectAsync(endpoint, cancellationToken).ConfigureAwait(false);
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
+            };
 
         // The version a request goes out with before any response says otherwise: cleartext HTTP never upgrades to
         // HTTP/2 when a lower version is allowed, so only HTTPS can start with the requested version.

@@ -5,13 +5,16 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 
 namespace XMAT.Tests.Replay
 {
+    // Version is the HTTP version of the request line, such as HTTP/1.1.
     internal sealed record LoopbackRequest(
-        string Method, string Target, IReadOnlyList<KeyValuePair<string, string>> Headers, byte[] Body)
+        string Method, string Target, IReadOnlyList<KeyValuePair<string, string>> Headers, byte[] Body, string Version = null)
     {
         internal string Header(string name) =>
             Headers.Where(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase))
@@ -36,8 +39,13 @@ namespace XMAT.Tests.Replay
             new(status, "Redirect", $"Location: {location}\r\n");
     }
 
+    // HTTPS for a loopback server: the certificate that it presents and the application protocols that it offers, by
+    // default HTTP/1.1 only. It speaks HTTP/1.1 only, so a connection that negotiates HTTP/2 is recorded and closed.
+    internal sealed record LoopbackTls(X509Certificate2 Certificate, IReadOnlyList<SslApplicationProtocol> Protocols = null);
+
     // A minimal HTTP/1.1 origin server on 127.0.0.1 for replay tests: one request per connection, answered by the
-    // callback. It listens on the loopback address only, so nothing outside the machine can reach it.
+    // callback, over HTTPS when given LoopbackTls. It listens on the loopback address only, so nothing outside the machine
+    // can reach it.
     internal sealed class LoopbackHttpServer : IAsyncDisposable
     {
         private const int MaxHeadBytes = 64 * 1024;
@@ -45,19 +53,24 @@ namespace XMAT.Tests.Replay
         private readonly TcpListener _listener;
         private readonly CancellationTokenSource _stop = new();
         private readonly Func<LoopbackRequest, Task<LoopbackResponse>> _respond;
+        private readonly LoopbackTls _tls;
         private readonly ConcurrentQueue<LoopbackRequest> _requests = new();
+        private readonly ConcurrentQueue<string> _serverNames = new();
+        private readonly ConcurrentQueue<string> _protocols = new();
         private readonly ConcurrentBag<Task> _serving = new();
         private readonly Task _accepting;
         private int _connections;
+        private int _failedHandshakes;
 
-        internal LoopbackHttpServer(Func<LoopbackRequest, LoopbackResponse> respond)
-            : this(request => Task.FromResult(respond(request)))
+        internal LoopbackHttpServer(Func<LoopbackRequest, LoopbackResponse> respond, LoopbackTls tls = null)
+            : this(request => Task.FromResult(respond(request)), tls)
         {
         }
 
-        internal LoopbackHttpServer(Func<LoopbackRequest, Task<LoopbackResponse>> respond)
+        internal LoopbackHttpServer(Func<LoopbackRequest, Task<LoopbackResponse>> respond, LoopbackTls tls = null)
         {
             _respond = respond;
+            _tls = tls;
             _listener = new TcpListener(IPAddress.Loopback, 0);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -69,13 +82,21 @@ namespace XMAT.Tests.Replay
 
         internal int Port { get; }
 
-        internal string Origin => $"http://127.0.0.1:{Port}";
+        internal string Origin => $"{(_tls == null ? "http" : "https")}://127.0.0.1:{Port}";
 
         // In arrival order.
         internal IReadOnlyList<LoopbackRequest> Requests => _requests.ToArray();
 
         // Every connection accepted, including those that never sent a complete request.
         internal int Connections => Volatile.Read(ref _connections);
+
+        // Over HTTPS: the server name (SNI) of each TLS handshake that the client began, "" without one; the application
+        // protocol of each handshake that completed ("http/1.1", "h2" or "" for none); and the handshakes that failed.
+        internal IReadOnlyList<string> ServerNames => _serverNames.ToArray();
+
+        internal IReadOnlyList<string> Protocols => _protocols.ToArray();
+
+        internal int FailedHandshakes => Volatile.Read(ref _failedHandshakes);
 
         public async ValueTask DisposeAsync()
         {
@@ -111,27 +132,76 @@ namespace XMAT.Tests.Replay
             {
                 try
                 {
-                    NetworkStream stream = client.GetStream();
-                    LoopbackRequest request = await ReadRequestAsync(stream, _stop.Token);
-                    if (request == null)
+                    Stream stream = client.GetStream();
+                    if (_tls != null)
                     {
-                        return;
+                        stream = await AuthenticateAsync(stream);
+                        if (stream == null)
+                        {
+                            return;
+                        }
                     }
 
-                    _requests.Enqueue(request);
-                    LoopbackResponse response = await _respond(request);
-                    if (response.Hang)
+                    await using (stream)
                     {
-                        await Task.Delay(Timeout.Infinite, _stop.Token);
-                    }
+                        LoopbackRequest request = await ReadRequestAsync(stream, _stop.Token);
+                        if (request == null)
+                        {
+                            return;
+                        }
 
-                    await stream.WriteAsync(Serialize(response), _stop.Token);
+                        _requests.Enqueue(request);
+                        LoopbackResponse response = await _respond(request);
+                        if (response.Hang)
+                        {
+                            await Task.Delay(Timeout.Infinite, _stop.Token);
+                        }
+
+                        await stream.WriteAsync(Serialize(response), _stop.Token);
+                    }
                 }
                 catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
                 {
                     // The client went away, the server is stopping or the callback failed: the connection just closes.
                 }
             }
+        }
+
+        // The TLS stream once the handshake completed with HTTP/1.1 or no application protocol; null otherwise, after
+        // recording what happened.
+        private async Task<Stream> AuthenticateAsync(Stream stream)
+        {
+            var ssl = new SslStream(stream, leaveInnerStreamOpen: false);
+            var options = new SslServerAuthenticationOptions
+            {
+                ServerCertificateSelectionCallback = (_, name) =>
+                {
+                    _serverNames.Enqueue(name ?? string.Empty);
+                    return _tls.Certificate;
+                },
+                ApplicationProtocols = (_tls.Protocols ?? new[] { SslApplicationProtocol.Http11 }).ToList(),
+                ClientCertificateRequired = false,
+            };
+            try
+            {
+                await ssl.AuthenticateAsServerAsync(options, _stop.Token);
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                Interlocked.Increment(ref _failedHandshakes);
+                await ssl.DisposeAsync();
+                return null;
+            }
+
+            string protocol = ssl.NegotiatedApplicationProtocol.ToString();
+            _protocols.Enqueue(protocol);
+            if (protocol == SslApplicationProtocol.Http2.ToString())
+            {
+                await ssl.DisposeAsync();
+                return null;
+            }
+
+            return ssl;
         }
 
         private static async Task<LoopbackRequest> ReadRequestAsync(Stream stream, CancellationToken cancellationToken)
@@ -177,7 +247,8 @@ namespace XMAT.Tests.Replay
                 body.Write(chunk, 0, read);
             }
 
-            return new LoopbackRequest(requestLine[0], requestLine[1], headers, body.ToArray());
+            return new LoopbackRequest(
+                requestLine[0], requestLine[1], headers, body.ToArray(), requestLine.Length > 2 ? requestLine[2] : null);
         }
 
         private static int IndexOfHeadEnd(MemoryStream buffer) =>

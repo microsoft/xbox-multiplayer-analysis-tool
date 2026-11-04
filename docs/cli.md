@@ -18,11 +18,12 @@ xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib
 xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify]
             [--url URL | --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]...
             [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
-            [--allow-unsafe-methods] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N]
-            [--max-record-mib N] [--max-records N]
+            [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change]
+            [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]
 xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]...
              [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS]
-             [--max-response-mib N] [--allow-unsafe-methods]
+             [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods]
+             [--allow-connect-to]
 xmat doctor --for analyze
 xmat help [COMMAND]
 xmat --version
@@ -156,6 +157,26 @@ xmat --version
   one usable `Location`. With `--follow-redirects 0`, a redirect is the result as it is, without a code; otherwise a
   redirect that is not followed is the result, with the code `replay.redirect.origin-change`,
   `replay.redirect.insecure`, `replay.redirect.unsupported` or `replay.redirect.limit`.
+- A request that carries one of Fiddler's control headers, `Fiddler-Host`, `X-OverrideHost`,
+  `X-IgnoreCertCNMismatch` or `X-OverrideGateway`, is refused (`replay.request.control-header`): xmat never acts on
+  a captured header, so a capture never chooses where its requests go or which certificate is accepted. Remove the
+  header (`--remove-header`) to replay the request.
+- `--http-version` chooses the HTTP version: `auto` (the default) sends HTTP/2 to an HTTPS server that offers it and
+  HTTP/1.1 otherwise, as before; `1.1` and `2` ask for exactly that version, and a request that cannot be sent with it
+  fails (`replay.send.failed`) rather than go out with another. `2` needs HTTPS URLs (`replay.http-version.https-required`).
+  xmat never answers an authentication challenge, such as NTLM or Negotiate, with your Windows credentials: the
+  challenge is the result.
+- `--connect-to IP:PORT` connects to that endpoint instead of the address of the URL's host, as Fiddler's
+  `Fiddler-Host` does, for example to send a request for a production host name to a test server. The endpoint is a
+  numeric address and a port (`IPv4:PORT` or `[IPv6]:PORT`, without a zone; the port is 1 to 65535); a host name, a
+  URL or another form is a usage error (exit code 2). The URL, the `Host` header, the TLS server name and the
+  certificate check stay those of the URL, so the endpoint must present a certificate that is valid for the URL's
+  host, and xmat never accepts another. It needs HTTPS URLs (`replay.connect-to.https-required`) that share one origin
+  (`replay.connect-to.origin-count`), refuses unspecified, multicast and broadcast addresses
+  (`replay.connect-to.target-denied`), and sends nothing without `--allow-connect-to` (`replay.policy.connect-to`),
+  whatever the address: the requests, with their headers and body, go to that endpoint. Redirects within the origin
+  go there too. When the endpoint cannot be reached, the send fails (`replay.send.failed`); xmat never falls back to
+  the URL's host, a proxy or a name lookup.
 - Each request waits for its response up to `--timeout` seconds (30 by default, at most 600) and keeps a body of up to
   `--max-response-mib` (16 by default, at most 512). HEAD, 1xx, 204 and 304 responses have no body, whatever their
   `Content-Length` says. A request without a complete response is a result too: its
@@ -252,10 +273,13 @@ whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFai
 `slice`); `help` reports `commands`, each with its `name`, `status` (`supported`), `usage` and `capabilities` (the ids
 of the capabilities that the command provides); and `--version` reports `version`. Instead of the analysis fields,
 `replay` and `compose` report `options` (`repeat`, `parallel`, `timeoutSeconds`, `maxResponseMib`, `followRedirects`,
-`unconditional`, `verify`, `allowUnsafeMethods` and `allowOriginChange`), `replays` (one per send, in order, each with
+`unconditional`, `verify`, `allowUnsafeMethods`, `allowOriginChange`, `httpVersion`, `connectTo`, which says whether
+`--connect-to` was given but never its endpoint, and `allowConnectTo`), `replays` (one per send, in order, each with
 its `id`, `device` and `request` (null for `compose`), `sequence` (the number that `--sequence` put in the URL,
 otherwise null), `iteration`, `outcome`, `status` (null without a response), `durationMs`, `responseBytes`,
-`redirects`, `code`, `verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`, and its
+`redirects`, `transport` (`direct` or `connect-to`, as the send was configured), `httpVersion` (the version asked
+for: `auto`, `1.1` or `2`), `responseVersion` (the version of the response, such as `1.1` or `2`, null without
+one), `code`, `verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`, and its
 `differences`, `status` and `body`) and, once published, its `files`) and `totals` (`replays`, `completed`, `failed`,
 `matched` and `mismatched`); `replay` also reports `input` and `limits` like `analyze`.
 `summary.json` of a replay holds `schema` (`xmat-replay/1`), `command`, `runId`, `version`, the same fields and the
@@ -273,7 +297,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 |---|---|
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
-| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device; for `replay` and `compose` also a selection, edit, sequence or `--body-file` that cannot be used, or a request that needs `--allow-unsafe-methods` or `--allow-origin-change` (nothing is sent) |
+| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device; for `replay` and `compose` also a selection, edit, sequence, `--body-file`, HTTP version or connect-to endpoint that cannot be used, a Fiddler control header, or a request that needs `--allow-unsafe-methods`, `--allow-origin-change` or `--allow-connect-to` (nothing is sent) |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists |
 | 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`) |
@@ -343,8 +367,8 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
-| Compose and send a new request (`request.compose`) | `xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--allow-unsafe-methods]` | Supported (S9) |
-| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--allow-unsafe-methods] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
+| Compose and send a new request (`request.compose`) | `xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-connect-to]` | Supported (S9) |
+| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Report navigation and analysis tabs (`view.analysis-navigation`) | (none) | GUI only. Presentation: moves between report views and tabs |

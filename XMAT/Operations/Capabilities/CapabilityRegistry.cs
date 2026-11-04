@@ -198,7 +198,8 @@ namespace XMAT.Operations.Capabilities
                 cli: "replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
                     "[--verify] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
                     "[--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] " +
-                    "[--max-response-mib N] [--allow-unsafe-methods] [--allow-origin-change] [--max-input-mib N] " +
+                    "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] " +
+                    "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] " +
                     "[--max-data-mib N] [--max-record-mib N] [--max-records N]",
                 operation: ReplayOperation,
                 gui: new[]
@@ -218,7 +219,8 @@ namespace XMAT.Operations.Capabilities
                 "request.compose", "Compose and send a new request", "S9",
                 cli: "compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header \"NAME: VALUE\"]... " +
                     "[--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
-                    "[--max-response-mib N] [--allow-unsafe-methods]",
+                    "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] " +
+                    "[--allow-connect-to]",
                 operation: ReplayOperation,
                 gui: new[]
                 {

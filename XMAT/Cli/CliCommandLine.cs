@@ -57,7 +57,10 @@ namespace XMAT.Cli
         bool Verify = false,
         bool AllowUnsafeMethods = false,
         bool AllowOriginChange = false,
-        string Sequence = null)
+        string Sequence = null,
+        ReplayHttpVersion HttpVersion = ReplayHttpVersion.Auto,
+        ReplayConnectTo ConnectTo = null,
+        bool AllowConnectTo = false)
     {
         internal static CliReplay Default { get; } = new();
     }
@@ -93,10 +96,19 @@ namespace XMAT.Cli
         internal const string RemoveHeaderOption = "--remove-header";
         internal const string BodyFileOption = "--body-file";
         internal const string SequenceOption = "--sequence";
+        internal const string HttpVersionOption = "--http-version";
+        internal const string ConnectToOption = "--connect-to";
         internal const string UnconditionalSwitch = "--unconditional";
         internal const string VerifySwitch = "--verify";
         internal const string AllowUnsafeMethodsSwitch = "--allow-unsafe-methods";
         internal const string AllowOriginChangeSwitch = "--allow-origin-change";
+        internal const string AllowConnectToSwitch = "--allow-connect-to";
+
+        internal const string HttpVersionMessage = "--http-version takes auto, 1.1 or 2.";
+
+        internal const string ConnectToMessage =
+            "--connect-to takes an IP address and a port, as IPv4:PORT or [IPv6]:PORT, with no host name; the port is " +
+                "1 to 65535.";
 
         // The whole-number options of replay and compose, with their defaults and maximums (ReplayOptions' limits).
         internal static readonly CliLimitOption RepeatOption = new("--repeat", string.Empty, 1, ReplayOptions.MaxRepeat);
@@ -149,6 +161,8 @@ namespace XMAT.Cli
             TimeoutOption.Name,
             MaxResponseOption.Name,
             FollowRedirectsOption.Name,
+            HttpVersionOption,
+            ConnectToOption,
         };
 
         private static readonly HashSet<string> ComposeCommandOptions = new(
@@ -172,8 +186,12 @@ namespace XMAT.Cli
         private static readonly HashSet<string> RepeatableOptions = new(StringComparer.Ordinal) { HeaderOption, RemoveHeaderOption };
 
         // compose has no captured origin to change, and replay never follows a redirect to another origin, so only replay
-        // takes --allow-origin-change.
-        private static readonly HashSet<string> ComposeSwitches = new(StringComparer.Ordinal) { AllowUnsafeMethodsSwitch };
+        // takes --allow-origin-change. Both take --allow-connect-to, the permission that --connect-to needs.
+        private static readonly HashSet<string> ComposeSwitches = new(StringComparer.Ordinal)
+        {
+            AllowUnsafeMethodsSwitch,
+            AllowConnectToSwitch,
+        };
 
         private static readonly HashSet<string> ReplaySwitches = new(
             ComposeSwitches.Concat(new[] { AllowOriginChangeSwitch, UnconditionalSwitch, VerifySwitch }), StringComparer.Ordinal);
@@ -578,6 +596,20 @@ namespace XMAT.Cli
                 headers.Add(header);
             }
 
+            ReplayHttpVersion httpVersion = ReplayHttpVersion.Auto;
+            if (arguments.Options.TryGetValue(HttpVersionOption, out string versionText) &&
+                !ReplayTransportOptions.TryParseVersion(versionText, out httpVersion))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", HttpVersionMessage);
+            }
+
+            ReplayConnectTo connectTo = null;
+            if (arguments.Options.TryGetValue(ConnectToOption, out string connectToText) &&
+                !ReplayConnectTo.TryParse(connectToText, out connectTo))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", ConnectToMessage);
+            }
+
             arguments.Options.TryGetValue(BodyFileOption, out string bodyFile);
             replay = new CliReplay(
                 Repeat: values[0],
@@ -592,7 +624,10 @@ namespace XMAT.Cli
                 BodyFile: bodyFile,
                 AllowUnsafeMethods: arguments.Switches.Contains(AllowUnsafeMethodsSwitch),
                 AllowOriginChange: arguments.Switches.Contains(AllowOriginChangeSwitch),
-                Sequence: sequenceText);
+                Sequence: sequenceText,
+                HttpVersion: httpVersion,
+                ConnectTo: connectTo,
+                AllowConnectTo: arguments.Switches.Contains(AllowConnectToSwitch));
             return null;
         }
 

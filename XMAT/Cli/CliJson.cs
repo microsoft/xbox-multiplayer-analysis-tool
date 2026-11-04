@@ -205,6 +205,11 @@ namespace XMAT.Cli
             writer.WriteBoolean("verify", options.Verify);
             writer.WriteBoolean("allowUnsafeMethods", options.AllowUnsafeMethods);
             writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+            writer.WriteString("httpVersion", ReplayTransportOptions.VersionName(options.HttpVersion));
+
+            // Whether --connect-to was given, never its address: the output names no endpoint.
+            writer.WriteBoolean("connectTo", options.ConnectTo != null);
+            writer.WriteBoolean("allowConnectTo", options.AllowConnectTo);
             writer.WriteEndObject();
 
             writer.WriteStartArray("replays");
@@ -245,6 +250,9 @@ namespace XMAT.Cli
                 writer.WriteNumber("durationMs", (long)item.Duration.TotalMilliseconds);
                 writer.WriteNumber("responseBytes", item.ResponseBytes);
                 writer.WriteNumber("redirects", item.Redirects);
+                writer.WriteString("transport", item.Transport);
+                writer.WriteString("httpVersion", item.HttpVersion);
+                writer.WriteString("responseVersion", item.ResponseVersion);
                 writer.WriteString("code", item.Code);
                 if (item.Verification == null)
                 {

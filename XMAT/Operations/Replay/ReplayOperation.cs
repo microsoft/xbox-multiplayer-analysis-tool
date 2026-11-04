@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,18 +18,42 @@ using XMAT.WebServiceCapture.Models;
 namespace XMAT.Operations.Replay
 {
     // Reissues captured requests, or sends a composed one, for the GUI and xmat.exe. Everything is checked before anything
-    // is sent: the selection, the edits, every request's validity and the safety policy, under which a method that can
-    // change server state, or captured headers going to another origin, needs the caller's permission. One failed check
-    // fails the run with InvalidInput and nothing is sent. Then every selected request is sent once per iteration, in
-    // order, or up to Parallelism at a time. Each send is a result whether it got a response or not, so a run that was
-    // not cancelled succeeds once every send is done.
+    // is sent: the selection, the edits, every request's validity, how the requests may reach the server and the safety
+    // policy, under which a method that can change server state, captured headers going to another origin, or a
+    // connection to another endpoint than the URL's host, needs the caller's permission. One failed check fails the run
+    // with InvalidInput and nothing is sent. Then every selected request is sent once per iteration, in order, or up to
+    // Parallelism at a time. Each send is a result whether it got a response or not, so a run that was not cancelled
+    // succeeds once every send is done.
     internal sealed class ReplayOperation : IOperation<ReplayRequest, ReplayResult>
     {
         internal const string SkippedCode = "replay.request.skipped";
         internal const string VerifySkippedCode = "replay.verify.skipped";
         internal const string SequenceInvalidCode = "replay.sequence.invalid";
+        internal const string ControlHeaderCode = "replay.request.control-header";
+        internal const string Http2HttpsCode = "replay.http-version.https-required";
+        internal const string ConnectToDeniedCode = "replay.connect-to.target-denied";
+        internal const string ConnectToHttpsCode = "replay.connect-to.https-required";
+        internal const string ConnectToOriginCountCode = "replay.connect-to.origin-count";
+        internal const string ConnectToPolicyCode = "replay.policy.connect-to";
 
+        // Headers that tell Fiddler how to send a request. XMAT never acts on them, and refuses a request that carries one
+        // rather than send it as if it did: a captured header is never a permission. Removing it makes the request
+        // replayable.
+        private static readonly string[] ControlHeaders =
+        {
+            "Fiddler-Host",
+            "X-OverrideHost",
+            "X-IgnoreCertCNMismatch",
+            "X-OverrideGateway",
+        };
+
+        // The sender of a run that connects to the URL's host; the GUI's composer passes one over its pooled connections.
         internal Func<ReplaySender> SenderFactory { get; set; } = static () => new ReplaySender();
+
+        // The sender of a run that connects to another endpoint (ReplayTransportOptions.ConnectTo): always one of its own,
+        // so no pooled connection to the URL's host carries its requests, and none of its connections serve another run.
+        internal Func<ReplayConnectTo, ReplaySender> ConnectToSenderFactory { get; set; } =
+            static target => new ReplaySender(target);
 
         internal Func<AnalyzeCaptureOperation> CaptureReaderFactory { get; set; } =
             static () => new AnalyzeCaptureOperation();
@@ -100,9 +125,9 @@ namespace XMAT.Operations.Replay
 
         // A composed request, or one per number of a sequence, checked as ExecuteAsync checks it before it sends, but
         // without sending anything or expanding the sequence: the options, the plan size, the template and its URL budget,
-        // and that the request can be built (the widest number's URL for a sequence). The result says how many sends it
-        // makes and which consent they need, so the GUI can ask once before it sends. An invalid plan fails with the code
-        // that ExecuteAsync would report.
+        // that the request can be built (the widest number's URL for a sequence) and how it may reach the server. The
+        // result says how many sends it makes and which consent they need, so the GUI can ask once before it sends, and
+        // carries the transport that was checked. An invalid plan fails with the code that ExecuteAsync would report.
         internal OperationResult<ReplayPlanPreview> Preview(ReplaySource source, ReplayOptions options = null)
         {
             ArgumentNullException.ThrowIfNull(source);
@@ -131,8 +156,15 @@ namespace XMAT.Operations.Replay
                 }
 
                 Validate(widest);
+                ReplayTransportOptions transport = options.EffectiveTransport;
+                CheckTransport(new[] { widest }, transport);
                 return OperationResult<ReplayPlanPreview>.Success(new ReplayPlanPreview(
-                    template, source.Sequence, requests * options.Repeat, widest.UsesUnsafeMethod, widest.ChangesOrigin));
+                    template,
+                    source.Sequence,
+                    requests * options.Repeat,
+                    widest.UsesUnsafeMethod,
+                    widest.ChangesOrigin,
+                    transport));
             }
             catch (ReplayInputException ex)
             {
@@ -533,6 +565,8 @@ namespace XMAT.Operations.Replay
                 Validate(item.Draft);
             }
 
+            ReplayTransportOptions transport = options.EffectiveTransport;
+            CheckTransport(items.Select(item => item.Draft), transport);
             if (!options.AllowUnsafeMethods && items.Any(item => item.Draft.UsesUnsafeMethod))
             {
                 throw new ReplayInputException(
@@ -548,21 +582,85 @@ namespace XMAT.Operations.Replay
                     "A selected request would go to another origin than the one it was captured for, with its captured " +
                         "headers, and origin changes are not allowed; nothing was sent.");
             }
+
+            if (transport.ConnectTo != null && !options.AllowConnectTo)
+            {
+                throw new ReplayInputException(
+                    ConnectToPolicyCode,
+                    "Connecting to another endpoint than the URL's host sends the requests, with their headers and body, " +
+                        "to that endpoint, and that was not allowed; nothing was sent.");
+            }
         }
 
-        // Building the request validates the method, URL, headers and body.
+        // How the requests may reach the server: HTTP/2 only and a connect-to endpoint need HTTPS, so the server must
+        // prove that it is the URL's host; a connect-to endpoint serves one origin, and never an address that no request
+        // may go to.
+        private static void CheckTransport(IEnumerable<RequestReplayDraft> drafts, ReplayTransportOptions transport)
+        {
+            if (transport.HttpVersion == ReplayHttpVersion.Http2 && !drafts.All(IsHttps))
+            {
+                throw new ReplayInputException(
+                    Http2HttpsCode, "HTTP/2 only is supported for HTTPS URLs only; nothing was sent.");
+            }
+
+            if (transport.ConnectTo == null)
+            {
+                return;
+            }
+
+            if (transport.ConnectTo.IsDenied)
+            {
+                throw new ReplayInputException(
+                    ConnectToDeniedCode,
+                    "The connect-to endpoint is an unspecified, multicast or broadcast address; nothing was sent.");
+            }
+
+            if (!drafts.All(IsHttps))
+            {
+                throw new ReplayInputException(
+                    ConnectToHttpsCode,
+                    "Connecting to another endpoint needs HTTPS URLs, so the endpoint must prove that it is the URL's " +
+                        "host; nothing was sent.");
+            }
+
+            if (drafts.Select(draft => new Uri(draft.Url).GetLeftPart(UriPartial.Authority))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Skip(1)
+                .Any())
+            {
+                throw new ReplayInputException(
+                    ConnectToOriginCountCode,
+                    "Connecting to another endpoint needs the requests of a run to share one origin; nothing was sent.");
+            }
+        }
+
+        private static bool IsHttps(RequestReplayDraft draft) =>
+            Uri.TryCreate(draft.Url, UriKind.Absolute, out Uri uri) && uri.Scheme == Uri.UriSchemeHttps;
+
+        // Building the request validates the method, URL, headers and body; a Fiddler control header is refused.
         private static void Validate(RequestReplayDraft draft)
         {
+            HttpRequestMessage message;
             try
             {
-                using (draft.CreateRequestToSend())
-                {
-                    // Built only to be validated.
-                }
+                message = draft.CreateRequestToSend();
             }
             catch (Exception ex) when (ex is FormatException or ArgumentException or NotSupportedException)
             {
                 throw Invalid(ex);
+            }
+
+            using (message)
+            {
+                if (message.Headers.NonValidated.Any(header =>
+                    ControlHeaders.Contains(header.Key, StringComparer.OrdinalIgnoreCase)))
+                {
+                    throw new ReplayInputException(
+                        ControlHeaderCode,
+                        "A selected request has a Fiddler control header (Fiddler-Host, X-OverrideHost, " +
+                            "X-IgnoreCertCNMismatch or X-OverrideGateway), which XMAT does not act on; remove it to send " +
+                            "the request. Nothing was sent.");
+                }
             }
         }
 
@@ -593,7 +691,9 @@ namespace XMAT.Operations.Replay
             var gate = new object();
             int done = 0;
             ReplaySendOptions sendOptions = options.ToSendOptions();
-            using ReplaySender sender = SenderFactory() ??
+            ReplayTransportOptions transport = options.EffectiveTransport;
+            using ReplaySender sender =
+                (transport.ConnectTo == null ? SenderFactory() : ConnectToSenderFactory(transport.ConnectTo)) ??
                 throw new InvalidOperationException("The replay sender factory returned no sender.");
             ReportProgress(context, 0, plan.Count);
             await Parallel.ForEachAsync(
@@ -625,7 +725,10 @@ namespace XMAT.Operations.Replay
                         exchange.Code,
                         verification,
                         step.Item.SourceIndex,
-                        step.Item.Sequence);
+                        step.Item.Sequence,
+                        transport.TransportName,
+                        transport.HttpVersionName,
+                        ReplayTransportOptions.ResponseVersionName(exchange.Version));
                     lock (gate)
                     {
                         token.ThrowIfCancellationRequested();

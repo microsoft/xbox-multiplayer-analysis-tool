@@ -343,14 +343,22 @@ namespace XMAT.Tests.Cli
         }
 
         // The JSON of a replay holds numbers, ids, outcomes, codes and artifact paths only, and lists the files of each
-        // send only once they were published.
+        // send only once they were published. It says that a run connected to another endpoint, never which one.
         [Fact]
         public void ReplayJson_HoldsOnlyAllowListedFields()
         {
+            Assert.True(ReplayConnectTo.TryParse("198.51.100.77:8443", out ReplayConnectTo endpoint));
             var report = new CliReport(CliCommands.Replay, "run")
             {
                 Replay = new CliReplayReport(
-                    new CliReplay(Selection: "1", Url: "http://secret.test/", Method: "SECRET", BodyFile: @"C:\secret"),
+                    new CliReplay(
+                        Selection: "1",
+                        Url: "http://secret.test/",
+                        Method: "SECRET",
+                        BodyFile: @"C:\secret",
+                        HttpVersion: ReplayHttpVersion.Http2,
+                        ConnectTo: endpoint,
+                        AllowConnectTo: true),
                     CliLimits.Default)
                 {
                     InputKind = "saz",
@@ -359,7 +367,10 @@ namespace XMAT.Tests.Cli
                     {
                         new ReplayItemResult(
                             1, "d1", 7, 1, ReplayOutcome.Completed, 200, TimeSpan.FromMilliseconds(12.7), 5, 0, null,
-                            new ReplayVerification(new[] { ReplayVerifier.BodyDifference })),
+                            new ReplayVerification(new[] { ReplayVerifier.BodyDifference }),
+                            Transport: ReplayTransportOptions.ConnectToName,
+                            HttpVersion: "2",
+                            ResponseVersion: "2"),
                         new ReplayItemResult(
                             2, "d1", 7, 2, ReplayOutcome.Failed, 0, TimeSpan.Zero, 0, 0, "replay.send.failed", null),
                     },
@@ -371,14 +382,38 @@ namespace XMAT.Tests.Cli
             using JsonDocument published = JsonDocument.Parse(CliJson.Serialize(report));
             using JsonDocument summary = JsonDocument.Parse(CliJson.SerializeReplaySummary(report));
 
-            Assert.DoesNotContain("secret", Encoding.UTF8.GetString(CliJson.Serialize(report)), StringComparison.OrdinalIgnoreCase);
+            foreach (byte[] json in new[] { CliJson.Serialize(report), CliJson.SerializeReplaySummary(report) })
+            {
+                string text = Encoding.UTF8.GetString(json);
+                Assert.DoesNotContain("secret", text, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("198.51.100.77", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("8443", text, StringComparison.Ordinal);
+            }
+
             Assert.Equal(
                 new[] { "schema", "command", "runId", "version", "input", "limits", "options", "replays", "totals", "warnings" },
                 summary.RootElement.EnumerateObject().Select(property => property.Name));
+            JsonElement options = published.RootElement.GetProperty("options");
+            Assert.Equal(
+                ("2", true, true),
+                (options.GetProperty("httpVersion").GetString(), options.GetProperty("connectTo").GetBoolean(),
+                    options.GetProperty("allowConnectTo").GetBoolean()));
             JsonElement[] replays = published.RootElement.GetProperty("replays").EnumerateArray().ToArray();
             Assert.Equal(
-                new[] { "id", "device", "request", "sequence", "iteration", "outcome", "status", "durationMs", "responseBytes", "redirects", "code", "verify", "files" },
+                new[]
+                {
+                    "id", "device", "request", "sequence", "iteration", "outcome", "status", "durationMs", "responseBytes",
+                    "redirects", "transport", "httpVersion", "responseVersion", "code", "verify", "files",
+                },
                 replays[0].EnumerateObject().Select(property => property.Name));
+            Assert.Equal(
+                ("connect-to", "2", "2"),
+                (replays[0].GetProperty("transport").GetString(), replays[0].GetProperty("httpVersion").GetString(),
+                    replays[0].GetProperty("responseVersion").GetString()));
+            Assert.Equal(
+                ("direct", "auto", JsonValueKind.Null),
+                (replays[1].GetProperty("transport").GetString(), replays[1].GetProperty("httpVersion").GetString(),
+                    replays[1].GetProperty("responseVersion").ValueKind));
             Assert.Equal(("completed", 200, 12L), (replays[0].GetProperty("outcome").GetString(), replays[0].GetProperty("status").GetInt32(), replays[0].GetProperty("durationMs").GetInt64()));
             Assert.Equal("mismatch", replays[0].GetProperty("verify").GetProperty("result").GetString());
             Assert.Equal("replays/00001/response.http", replays[0].GetProperty("files").GetProperty("response").GetString());

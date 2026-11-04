@@ -103,7 +103,9 @@ namespace XMAT.Operations.Replay
         long MaxResponseBytes = ReplaySendOptions.DefaultMaxResponseBytes,
         int MaxRedirects = 0,
         bool AllowUnsafeMethods = false,
-        bool AllowOriginChange = false)
+        bool AllowOriginChange = false,
+        bool AllowConnectTo = false,
+        ReplayTransportOptions Transport = null)
     {
         internal const int MaxRepeat = 1000;
         internal const int MaxParallelism = 16;
@@ -127,8 +129,12 @@ namespace XMAT.Operations.Replay
 
         internal TimeSpan EffectiveTimeout => Timeout ?? ReplaySendOptions.DefaultTimeout;
 
+        // How the requests reach the server; never null.
+        internal ReplayTransportOptions EffectiveTransport => Transport ?? ReplayTransportOptions.Default;
+
         // AllowOriginChange applies to the requests the caller edits: replay never follows a redirect to another origin.
-        internal ReplaySendOptions ToSendOptions() => new(EffectiveTimeout, MaxResponseBytes, MaxRedirects);
+        internal ReplaySendOptions ToSendOptions() =>
+            new(EffectiveTimeout, MaxResponseBytes, MaxRedirects, EffectiveTransport.HttpVersion);
 
         internal bool IsValid =>
             Repeat is >= 1 and <= MaxRepeat &&
@@ -153,16 +159,20 @@ namespace XMAT.Operations.Replay
         IReplayExchangeSink Sink = null);
 
     // What a composed request, or one per number of a sequence, would send (ReplayOperation.Preview). Template is a copy
-    // of the draft that was checked, so later edits to that draft change nothing here; send it with ToSource. Sends counts
-    // every send, repeats included. UsesUnsafeMethod and ChangesOrigin say which consent the options must carry
-    // (AllowUnsafeMethods, AllowOriginChange) for the operation to send them; it checks them again when it runs.
+    // of the draft that was checked, so later edits to that draft change nothing here; send it with ToSource and
+    // Transport, which is how the plan was checked to reach the server. Sends counts every send, repeats included.
+    // UsesUnsafeMethod, ChangesOrigin and UsesConnectTo say which consent the options must carry (AllowUnsafeMethods,
+    // AllowOriginChange, AllowConnectTo) for the operation to send them; it checks them again when it runs.
     internal sealed record ReplayPlanPreview(
         RequestReplayDraft Template,
         ReplaySequence Sequence,
         int Sends,
         bool UsesUnsafeMethod,
-        bool ChangesOrigin)
+        bool ChangesOrigin,
+        ReplayTransportOptions Transport = null)
     {
+        internal bool UsesConnectTo => Transport?.ConnectTo != null;
+
         internal ReplaySource ToSource() =>
             Sequence == null ? ReplaySource.FromDraft(Template) : ReplaySource.FromTemplate(Template, Sequence);
     }
@@ -170,7 +180,9 @@ namespace XMAT.Operations.Replay
     // One send, without its messages. Id numbers the sends of a run from 1, in plan order: every selected request once per
     // iteration, iterations in turn. DeviceId and RequestNumber are null for a composed request. SourceIndex is the
     // position of the sent request in ReplaySource.Captures (the GUI's rows), and null for other sources. Sequence is the
-    // number that a sequence put in the URL, and null for other sources.
+    // number that a sequence put in the URL, and null for other sources. Transport is how the send was configured to reach
+    // the server ("direct" or "connect-to"), HttpVersion the version it asked for ("auto", "1.1" or "2") and
+    // ResponseVersion the version of the response that it got ("1.1" or "2"), null without a response.
     internal sealed record ReplayItemResult(
         int Id,
         string DeviceId,
@@ -184,7 +196,10 @@ namespace XMAT.Operations.Replay
         string Code,
         ReplayVerification Verification,
         int? SourceIndex = null,
-        long? Sequence = null);
+        long? Sequence = null,
+        string Transport = ReplayTransportOptions.DirectName,
+        string HttpVersion = ReplayTransportOptions.AutoVersionName,
+        string ResponseVersion = null);
 
     // InputKind and InputSha256 describe a capture file and are null for other sources.
     internal sealed record ReplayResult(string InputKind, string InputSha256, IReadOnlyList<ReplayItemResult> Items)

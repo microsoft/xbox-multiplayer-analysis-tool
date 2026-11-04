@@ -174,7 +174,9 @@ namespace XMAT.Cli
                 MaxResponseBytes: replay.MaxResponseMib * AnalysisLimits.BytesPerMib,
                 MaxRedirects: replay.FollowRedirects,
                 AllowUnsafeMethods: replay.AllowUnsafeMethods,
-                AllowOriginChange: replay.AllowOriginChange);
+                AllowOriginChange: replay.AllowOriginChange,
+                AllowConnectTo: replay.AllowConnectTo,
+                Transport: new ReplayTransportOptions(replay.HttpVersion, replay.ConnectTo));
             if (request.Command == CliCommands.Compose)
             {
                 // The operation applies and checks the method, headers and body of a composed request like any edit; with
