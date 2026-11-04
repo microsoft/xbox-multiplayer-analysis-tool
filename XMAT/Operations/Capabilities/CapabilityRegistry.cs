@@ -29,6 +29,10 @@ namespace XMAT.Operations.Capabilities
         private const string BypassListXaml = "Engines/WebServiceProxy/Views/BypassListView.xaml";
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
         private const string SanitizedExportXaml = "Windows/SanitizedExportProgressWindow.xaml";
+        private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
+
+        // Replace with the SIG-XMAT task that owns composer and replay parity once it exists.
+        private const string ReplayOwner = "TBD";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
@@ -185,6 +189,19 @@ namespace XMAT.Operations.Capabilities
                     Click(BypassListXaml, "AddBypass_Click"),
                     Click(BypassListXaml, "RemoveSelected_Click"),
                     Click(BypassListXaml, "ClearAll_Click"),
+                }),
+
+            // The composer resends one captured request directly from this PC; the replay is not captured.
+            Capability.Planned(
+                "request.replay", "Edit and resend a captured request", "S9", ReplayOwner,
+                gui: new[]
+                {
+                    Command(ProxyCommandsPrefix + "EditAndResend"),
+                    Window("XMAT.WebServiceCapture.RequestComposerWindow"),
+                    Click(ComposerXaml, "Send_Click"),
+                    Click(ComposerXaml, "CancelSend_Click"),
+                    Click(ComposerXaml, "CopyCurl_Click"),
+                    Click(ComposerXaml, "Close_Click"),
                 }),
 
             // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.
