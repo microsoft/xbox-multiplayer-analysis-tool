@@ -754,6 +754,7 @@ namespace XMAT.WebServiceCapture.Proxy
         internal static ISet<string> GetConnectionHeaderNames(HeaderCollection headers)
         {
             return (headers.GetHeaderValuesAsList("Connection") ?? Array.Empty<string>())
+                .Where(value => value != null)
                 .SelectMany(value => value.Split(','))
                 .Select(name => name.Trim())
                 .Where(name => name.Length != 0)

@@ -173,6 +173,21 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void GetConnectionHeaderNames_IgnoresNullValuesAndRetainsOtherTokens()
+        {
+            var headers = new HeaderCollection();
+            headers.Add("Connection", null);
+            headers.Add("Connection", " X-First, , x-SECOND ");
+            headers.Add("Connection", null);
+
+            var names = ProxyHeaderUtilities.GetConnectionHeaderNames(headers);
+
+            Assert.Equal(2, names.Count);
+            Assert.True(names.Contains("x-first"));
+            Assert.True(names.Contains("X-SECOND"));
+        }
+
+        [Fact]
         public async Task InvokeAsync_RemovesConnectionNominatedResponseHeaders()
         {
             var proxy = new WebServiceProxy();
@@ -852,6 +867,78 @@ namespace XMAT.Tests
                 await forwardHost.StopAsync();
                 forwardHost.Dispose();
             }
+        }
+
+        [Theory]
+        [InlineData(1, false)]
+        [InlineData(1, true)]
+        [InlineData(2, false)]
+        [InlineData(2, true)]
+        public async Task ForwardProxy_ScriptsCanClearConnectionHeader(
+            int clientVersion, bool responseScript)
+        {
+            var proxy = new WebServiceProxy();
+            var script = new ScriptHost();
+            Assert.Empty(await script.CompileScriptAsync<WebServiceCaptureScriptParams>(
+                """
+                if (Params.Request.Method != "CONNECT")
+                {
+                    if (Params.Response == null)
+                        Params.Request.Headers["Connection"] = null;
+                    else
+                        Params.Response.Headers["Connection"] = null;
+                }
+                """));
+            if (responseScript)
+            {
+                proxy.WebResponsePolicyAsync = async (args, token) =>
+                    (await script.RunScriptAsync(
+                        new WebServiceCaptureScriptParams
+                        {
+                            Request = args.Request, Response = args.Response
+                        }, token)).Continue;
+            }
+            else
+            {
+                proxy.WebRequestPolicyAsync = async (args, token) =>
+                    (await script.RunScriptAsync(
+                        new WebServiceCaptureScriptParams { Request = args.Request }, token)).Continue;
+            }
+            ClientRequest capturedRequest = null;
+            ServerResponse capturedResponse = null;
+            proxy.ReceivedWebRequest += (_, args) => capturedRequest = args.Request;
+            proxy.ReceivedWebResponse += (_, args) => capturedResponse = args.Response;
+
+            await WithForwardProxyAsync(2, proxy, async context =>
+            {
+                Assert.False(context.Request.Headers.ContainsKey("Connection"));
+                Assert.Equal("request-retained", context.Request.Headers["X-End-To-End"].ToString());
+                using var body = new MemoryStream();
+                await context.Request.Body.CopyToAsync(body, context.RequestAborted);
+                Assert.Equal("request-body"u8.ToArray(), body.ToArray());
+                context.Response.Headers["X-End-To-End"] = "response-retained";
+                await context.Response.WriteAsync("response-body", context.RequestAborted);
+            }, async (client, origin) =>
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(origin, "/clear-header"))
+                {
+                    Version = new Version(clientVersion, clientVersion == 1 ? 1 : 0),
+                    VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                    Content = new StringContent("request-body")
+                };
+                request.Headers.Add("X-End-To-End", "request-retained");
+                using var response = await client.SendAsync(request);
+
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                Assert.Equal(request.Version, response.Version);
+                Assert.Equal("response-body", await response.Content.ReadAsStringAsync());
+                Assert.Equal("response-retained", response.Headers.GetValues("X-End-To-End").Single());
+                Assert.False(response.Headers.Contains("Connection"));
+                Assert.NotNull(capturedRequest);
+                Assert.NotNull(capturedResponse);
+                var clearedHeaders = responseScript ? capturedResponse.Headers : capturedRequest.Headers;
+                Assert.Null(Assert.Single(clearedHeaders.GetHeaderValuesAsList("Connection")));
+            });
         }
 
         [Theory]
