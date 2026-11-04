@@ -277,12 +277,11 @@ namespace XMAT.Cli
                 return null;
             }
 
-            foreach (char character in value)
+            if (value.Any(static character =>
+                    character < ' ' ||
+                    character > '~'))
             {
-                if (character < ' ' || character > '~')
-                {
-                    return null;
-                }
+                return null;
             }
 
             return value;

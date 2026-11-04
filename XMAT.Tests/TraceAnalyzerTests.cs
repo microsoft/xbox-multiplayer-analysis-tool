@@ -74,18 +74,18 @@ namespace XMAT.Tests
                         reports["first-console"]
                             .First()
                             .ToJson());
-                foreach (string fileName in
+                foreach (string path in
                     new[]
                     {
                         "FirstJsonReport.json",
                         "SecondJsonReport.json",
                         "ThirdJsonReport.json",
-                    })
-                {
-                    string path =
+                    }
+                    .Select(fileName =>
                         Path.Join(
                             outputDirectory,
-                            fileName);
+                            fileName)))
+                {
                     Assert.Equal(
                         expected,
                         File.ReadAllBytes(path));

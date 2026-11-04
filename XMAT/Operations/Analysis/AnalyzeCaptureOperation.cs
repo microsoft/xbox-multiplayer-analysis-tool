@@ -214,14 +214,12 @@ namespace XMAT.Operations.Analysis
                 indexedDevices,
                 options.DeviceId);
             foreach (IndexedDevice indexedDevice in
-                indexedDevices)
+                indexedDevices.Where(indexedDevice =>
+                    !selectedDevices.Contains(
+                        indexedDevice)))
             {
-                if (!selectedDevices.Contains(
-                        indexedDevice))
-                {
-                    indexedDevice.Device
-                        .ReleaseOwnedRecords();
-                }
+                indexedDevice.Device
+                    .ReleaseOwnedRecords();
             }
             if (options.ProduceLegacyReports && selectedDevices.Count != 1)
             {
@@ -1154,15 +1152,15 @@ namespace XMAT.Operations.Analysis
                 field => field.Name,
                 field => field,
                 StringComparer.Ordinal);
-            foreach (var required in requiredFields)
+            if (requiredFields.Any(required =>
+                    !fields.TryGetValue(
+                        required.Name,
+                        out IFieldDefinition actual) ||
+                    actual.ValueType != required.ValueType))
             {
-                if (!fields.TryGetValue(required.Name, out var actual) ||
-                    actual.ValueType != required.ValueType)
-                {
-                    throw new AnalysisInputException(
-                        "analysis.input.schema",
-                        "The capture database schema is invalid.");
-                }
+                throw new AnalysisInputException(
+                    "analysis.input.schema",
+                    "The capture database schema is invalid.");
             }
         }
 

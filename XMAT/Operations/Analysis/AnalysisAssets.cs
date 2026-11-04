@@ -299,17 +299,15 @@ namespace XMAT.Operations.Analysis
                 var knownTypes = Utils.GetRuleTypesWithRuleAttribute()
                     .Select(type => type.Name)
                     .ToHashSet(StringComparer.Ordinal);
-                foreach (var rule in rules.EnumerateArray())
-                {
-                    if (rule.ValueKind != JsonValueKind.Object ||
-                        !RequiredString(rule, "Type", out var type) ||
+                if (rules.EnumerateArray().Any(rule =>
+                        rule.ValueKind != JsonValueKind.Object ||
+                        !RequiredString(rule, "Type", out string type) ||
                         !RequiredString(rule, "Name", out _) ||
                         !RequiredString(rule, "Endpoint", out _) ||
-                        !knownTypes.Contains(type))
-                    {
-                        throw new AnalysisAssetException(
-                            "analysis.assets.rules");
-                    }
+                        !knownTypes.Contains(type)))
+                {
+                    throw new AnalysisAssetException(
+                        "analysis.assets.rules");
                 }
             }
             catch (AnalysisAssetException)

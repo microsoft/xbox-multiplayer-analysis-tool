@@ -93,13 +93,17 @@ namespace XMAT.Tests.HeadlessParity
         private static Dictionary<ushort, OpCode> CreateOpCodeTable()
         {
             var table = new Dictionary<ushort, OpCode>();
-            foreach (FieldInfo field in typeof(OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
+            foreach (OpCode opCode in typeof(OpCodes)
+                .GetFields(
+                    BindingFlags.Public |
+                    BindingFlags.Static)
+                .Where(field =>
+                    field.FieldType ==
+                    typeof(OpCode))
+                .Select(field =>
+                    (OpCode)field.GetValue(null)))
             {
-                if (field.FieldType == typeof(OpCode))
-                {
-                    var opCode = (OpCode)field.GetValue(null);
-                    table.TryAdd(unchecked((ushort)opCode.Value), opCode);
-                }
+                table.TryAdd(unchecked((ushort)opCode.Value), opCode);
             }
 
             return table;
@@ -114,9 +118,9 @@ namespace XMAT.Tests.HeadlessParity
             foreach (TypeDefinitionHandle typeHandle in _metadata.TypeDefinitions)
             {
                 TypeDefinition type = _metadata.GetTypeDefinition(typeHandle);
-                foreach (MethodDefinitionHandle methodHandle in type.GetMethods())
+                foreach (MethodDefinition method in type.GetMethods()
+                    .Select(_metadata.GetMethodDefinition))
                 {
-                    MethodDefinition method = _metadata.GetMethodDefinition(methodHandle);
                     if (method.RelativeVirtualAddress == 0)
                     {
                         continue;
@@ -138,9 +142,9 @@ namespace XMAT.Tests.HeadlessParity
                     }
 
                     string caller = userTypeName + "::" + userMethod;
-                    foreach (string callee in callees)
+                    foreach (string key in callees.Select(callee =>
+                        caller + "|" + callee))
                     {
-                        string key = caller + "|" + callee;
                         counts[key] = counts.TryGetValue(key, out int count) ? count + 1 : 1;
                     }
                 }
@@ -155,9 +159,9 @@ namespace XMAT.Tests.HeadlessParity
             foreach (TypeDefinitionHandle typeHandle in _metadata.TypeDefinitions)
             {
                 TypeDefinition type = _metadata.GetTypeDefinition(typeHandle);
-                foreach (MethodDefinitionHandle methodHandle in type.GetMethods())
+                foreach (MethodDefinition method in type.GetMethods()
+                    .Select(_metadata.GetMethodDefinition))
                 {
-                    MethodDefinition method = _metadata.GetMethodDefinition(methodHandle);
                     if (method.RelativeVirtualAddress == 0)
                     {
                         continue;
@@ -465,15 +469,14 @@ namespace XMAT.Tests.HeadlessParity
 
         private bool ImplementsComponentConnector(TypeDefinitionHandle handle)
         {
-            foreach (InterfaceImplementationHandle implementation in _metadata.GetTypeDefinition(handle).GetInterfaceImplementations())
-            {
-                if (TypeName(_metadata.GetInterfaceImplementation(implementation).Interface) == ComponentConnector)
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            return _metadata.GetTypeDefinition(handle)
+                .GetInterfaceImplementations()
+                .Any(implementation =>
+                    TypeName(
+                        _metadata.GetInterfaceImplementation(
+                            implementation)
+                        .Interface) ==
+                    ComponentConnector);
         }
 
         // Whether a type defined in or referenced by the scanned assembly is, or derives from, target. Types defined

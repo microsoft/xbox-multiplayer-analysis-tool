@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.Sqlite;
@@ -281,17 +282,8 @@ namespace XMAT.DataAbstractionLayer
             {
                 return false;
             }
-            foreach (char character in value)
-            {
-                if (character is not (
-                        >= '0' and <= '9') &&
-                    character is not (
-                        >= 'a' and <= 'f'))
-                {
-                    return false;
-                }
-            }
-            return true;
+            return value.All(static character =>
+                character is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
         }
 
         private void DisposeInternal()

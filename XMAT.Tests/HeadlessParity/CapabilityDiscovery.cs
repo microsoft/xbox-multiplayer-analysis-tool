@@ -95,12 +95,16 @@ namespace XMAT.Tests.HeadlessParity
                 if (IsPreferenceModel(type))
                 {
                     foreach (PropertyInfo property in type.GetProperties(
-                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                            BindingFlags.Instance |
+                            BindingFlags.Public |
+                            BindingFlags.NonPublic |
+                            BindingFlags.DeclaredOnly)
+                        .Where(property =>
+                            property.SetMethod != null &&
+                            IsSimple(
+                                property.PropertyType)))
                     {
-                        if (property.SetMethod != null && IsSimple(property.PropertyType))
-                        {
-                            keys.Add(CapabilityKeys.Preference(type.FullName, property.Name));
-                        }
+                        keys.Add(CapabilityKeys.Preference(type.FullName, property.Name));
                     }
                 }
             }
