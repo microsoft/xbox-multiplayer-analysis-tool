@@ -10,8 +10,6 @@
     <SolidColorBrush x:Key="PrimaryForegroundBrush"         Color="Black"/>
     <SolidColorBrush x:Key="SecondaryForegroundBrush"       Color="#FF333333"/>
     <SolidColorBrush x:Key="DisabledForegroundBrush"        Color="#FF808080"/>
-    <SolidColorBrush x:Key="CapturePendingForegroundBrush"  Color="#FF8A4B00"/>
-    <SolidColorBrush x:Key="CaptureErrorForegroundBrush"    Color="#FFC00000"/>
 
     <!-- Borders -->
     <SolidColorBrush x:Key="BorderBrush"                    Color="#FFCCCCCC"/>

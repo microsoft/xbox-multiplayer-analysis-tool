@@ -10,8 +10,6 @@
     <SolidColorBrush x:Key="PrimaryForegroundBrush"         Color="#FFD4D4D4"/>
     <SolidColorBrush x:Key="SecondaryForegroundBrush"       Color="#FF9B9B9B"/>
     <SolidColorBrush x:Key="DisabledForegroundBrush"        Color="#FF808080"/>
-    <SolidColorBrush x:Key="CapturePendingForegroundBrush"  Color="#FFFFC000"/>
-    <SolidColorBrush x:Key="CaptureErrorForegroundBrush"    Color="#FFFF8080"/>
 
     <!-- Borders -->
     <SolidColorBrush x:Key="BorderBrush"                    Color="#FF3F3F46"/>
@@ -36,8 +34,8 @@
 
     <!-- Tab / header -->
     <SolidColorBrush x:Key="TabPanelBackgroundBrush"        Color="Transparent"/>
-    <SolidColorBrush x:Key="TabItemBackgroundBrush"         Color="#FF1E1E1E"/>
-    <SolidColorBrush x:Key="TabItemSelectedBackgroundBrush" Color="#FF2D2D30"/>
+    <SolidColorBrush x:Key="TabItemBackgroundBrush"         Color="#FF2D2D30"/>
+    <SolidColorBrush x:Key="TabItemSelectedBackgroundBrush" Color="#FF1E1E1E"/>
     <SolidColorBrush x:Key="TabItemForegroundBrush"         Color="#FF9B9B9B"/>
     <SolidColorBrush x:Key="TabItemSelectedForegroundBrush" Color="#FFD4D4D4"/>
 
