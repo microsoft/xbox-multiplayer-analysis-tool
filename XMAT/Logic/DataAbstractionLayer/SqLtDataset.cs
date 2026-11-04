@@ -53,7 +53,8 @@ namespace XMAT.DataAbstractionLayer
                         var fieldDef = _fieldDefinitions[x.Name] as FieldDefinition;
                         var fieldName = fieldDef.Name;
                         var parameter = $"$p{index++}";
-                        _commandInterface.Parameters.AddWithValue(parameter, x.Value ?? DBNull.Value);
+                        _commandInterface.Parameters.AddWithValue(parameter,
+                            _useLegacyTextValues ? fieldDef.FieldValueAsParameter(x.Value) : x.Value ?? DBNull.Value);
                         return " " + QuoteIdentifier(fieldName) + " = " + parameter;
                     }));
                 _commandBuilder.Append(whereValues);
@@ -100,7 +101,8 @@ namespace XMAT.DataAbstractionLayer
         internal SqLtDataset(
             SqliteConnection connection,
             string sourceTableName,
-            IDictionary<string, IFieldDefinition> fieldsToInclude)
+            IDictionary<string, IFieldDefinition> fieldsToInclude,
+            bool useLegacyTextValues = false)
         {
             _gate = SqLtConnectionGate.For(connection);
             _sourceTableName = sourceTableName;
@@ -108,6 +110,7 @@ namespace XMAT.DataAbstractionLayer
             _commandInterface.Connection = connection;
             _commandBuilder = new StringBuilder();
             _fieldDefinitions = fieldsToInclude;
+            _useLegacyTextValues = useLegacyTextValues;
         }
 
         private IEnumerable<IFieldDefinition> GetFieldDefs()
@@ -253,6 +256,7 @@ namespace XMAT.DataAbstractionLayer
             new(ReferenceEqualityComparer.Instance);
         private object _enumerablesLock => _gate;
         private readonly object _gate;
+        private readonly bool _useLegacyTextValues;
         private bool _disposed;
 
         private static string QuoteIdentifier(string value) =>

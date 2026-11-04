@@ -143,7 +143,7 @@ namespace XMAT.AgentAccess
             bool wasPaused;
             lock (_gate)
             {
-                if (_stopping != null)
+                if (_stopping != null && !_stopping.IsFaulted && !_stopping.IsCanceled)
                 {
                     return _stopping;
                 }
@@ -187,10 +187,11 @@ namespace XMAT.AgentAccess
                 }
                 await draining;
                 await Task.WhenAll(connections.Select(connection => connection.Worker));
-                await _queries.DisposeResultsAsync();
-                await _data.DisposeResultsAsync();
-                await _scripts.DisposeResultsAsync();
-                await _administration.DrainAsync();
+                await FinishCleanupAsync(_queries.DisposeResultsAsync);
+                await FinishCleanupAsync(_data.DisposeResultsAsync);
+                await FinishCleanupAsync(_scripts.DisposeResultsAsync);
+                await FinishCleanupAsync(_administration.DrainAsync);
+                await Runtime.RetryTemporaryCleanupAsync();
                 listening?.Dispose();
                 completion.TrySetResult();
             }
@@ -202,6 +203,17 @@ namespace XMAT.AgentAccess
             {
                 _paused = wasPaused;
                 Changed?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        private static async Task FinishCleanupAsync(Func<Task> cleanup)
+        {
+            try
+            { await cleanup(); }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR,
+                    $"Agent temporary cleanup could not finish ({exception.GetType().FullName}).");
             }
         }
 

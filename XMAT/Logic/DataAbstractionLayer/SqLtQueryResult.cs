@@ -170,57 +170,81 @@ namespace XMAT.DataAbstractionLayer
             var preview = (int)Math.Min(4096, Math.Max(0, (maximumBytes - cost - minimumRowCost) /
                 Math.Max(1L, Columns.Count * 6L)));
             using var connection = SqLtQuerySupport.Open(_path, true);
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT ordinal," + string.Join(",", Columns.Select(column =>
-                $"typeof(c{column.Ordinal}),length(CAST(c{column.Ordinal} AS BLOB))," +
-                $"CASE WHEN typeof(c{column.Ordinal}) IN ('text','blob') THEN substr(CAST(c{column.Ordinal} AS BLOB),1,$preview) ELSE c{column.Ordinal} END")) +
-                " FROM Rows WHERE ordinal >= $offset ORDER BY ordinal LIMIT $rows";
-            command.Parameters.AddWithValue("$preview", preview);
-            command.Parameters.AddWithValue("$offset", offset);
-            command.Parameters.AddWithValue("$rows", maximumRows);
-            using var reader = command.ExecuteReader();
-            var rows = new List<QueryRow>();
-            while (reader.Read())
+            // Each value needs three projected fields; batch wide results within SQLite's native limit.
+            var batchSize = (raw.sqlite3_limit(connection.Handle, raw.SQLITE_LIMIT_COLUMN, -1) - 1) / 3;
+            var commands = new List<SqliteCommand>();
+            var readers = new List<SqliteDataReader>();
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var cells = new List<QueryCell>();
-                long rowCost = 64;
-                for (var index = 0; index < Columns.Count; index++)
+                for (var first = 0; first < Columns.Count; first += batchSize)
                 {
-                    var start = index * 3 + 1;
-                    var kind = ParseKind(reader.GetString(start));
-                    var length = reader.IsDBNull(start + 1) ? 0 : reader.GetInt64(start + 1);
-                    object value = kind switch
-                    {
-                        QueryValueKind.Null => null,
-                        QueryValueKind.Integer => reader.GetInt64(start + 2),
-                        QueryValueKind.Real => reader.GetDouble(start + 2),
-                        QueryValueKind.Text => length == 0 ? string.Empty :
-                            DecodePreview(reader.GetFieldValue<byte[]>(start + 2), length > preview),
-                        QueryValueKind.Blob => length == 0 ? Array.Empty<byte>() : reader.GetFieldValue<byte[]>(start + 2),
-                        _ => throw new QueryException(QueryError.InvalidValue, "Unsupported SQLite value.")
-                    };
-                    cells.Add(new(kind, value, length,
-                        kind is QueryValueKind.Text or QueryValueKind.Blob && length > preview));
-                    rowCost += 128 + (value switch
-                    {
-                        string => 6L * Math.Min(length, preview),
-                        byte[] bytes => 4L * ((bytes.Length + 2L) / 3),
-                        _ => 32
-                    });
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var command = connection.CreateCommand();
+                    commands.Add(command);
+                    command.CommandText = "SELECT ordinal," + string.Join(",", Columns.Skip(first).Take(batchSize).Select(column =>
+                        $"typeof(c{column.Ordinal}),length(CAST(c{column.Ordinal} AS BLOB))," +
+                        $"CASE WHEN typeof(c{column.Ordinal}) IN ('text','blob') THEN substr(CAST(c{column.Ordinal} AS BLOB),1,$preview) ELSE c{column.Ordinal} END")) +
+                        " FROM Rows WHERE ordinal >= $offset ORDER BY ordinal LIMIT $rows";
+                    command.Parameters.AddWithValue("$preview", preview);
+                    command.Parameters.AddWithValue("$offset", offset);
+                    command.Parameters.AddWithValue("$rows", maximumRows);
+                    readers.Add(command.ExecuteReader());
                 }
-                if (cost + rowCost > maximumBytes)
+                var rows = new List<QueryRow>();
+                while (readers[0].Read())
                 {
-                    if (rows.Count == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var ordinal = readers[0].GetInt64(0);
+                    foreach (var reader in readers.Skip(1))
                     {
-                        throw new QueryException(QueryError.PageTooSmall, "This row does not fit the response budget.");
+                        if (!reader.Read() || reader.GetInt64(0) != ordinal)
+                            throw new InvalidDataException("The result column batches do not identify the same row.");
                     }
-                    break;
+                    var cells = new List<QueryCell>();
+                    long rowCost = 64;
+                    for (var index = 0; index < Columns.Count; index++)
+                    {
+                        var reader = readers[index / batchSize];
+                        var start = index % batchSize * 3 + 1;
+                        var kind = ParseKind(reader.GetString(start));
+                        var length = reader.IsDBNull(start + 1) ? 0 : reader.GetInt64(start + 1);
+                        object value = kind switch
+                        {
+                            QueryValueKind.Null => null,
+                            QueryValueKind.Integer => reader.GetInt64(start + 2),
+                            QueryValueKind.Real => reader.GetDouble(start + 2),
+                            QueryValueKind.Text => length == 0 ? string.Empty :
+                                DecodePreview(reader.GetFieldValue<byte[]>(start + 2), length > preview),
+                            QueryValueKind.Blob => length == 0 ? Array.Empty<byte>() : reader.GetFieldValue<byte[]>(start + 2),
+                            _ => throw new QueryException(QueryError.InvalidValue, "Unsupported SQLite value.")
+                        };
+                        cells.Add(new(kind, value, length,
+                            kind is QueryValueKind.Text or QueryValueKind.Blob && length > preview));
+                        rowCost += 128 + (value switch
+                        {
+                            string => 6L * Math.Min(length, preview),
+                            byte[] bytes => 4L * ((bytes.Length + 2L) / 3),
+                            _ => 32
+                        });
+                    }
+                    if (cost + rowCost > maximumBytes)
+                    {
+                        if (rows.Count == 0)
+                            throw new QueryException(QueryError.PageTooSmall, "This row does not fit the response budget.");
+                        break;
+                    }
+                    cost += rowCost;
+                    rows.Add(new(ordinal, cells.AsReadOnly()));
                 }
-                cost += rowCost;
-                rows.Add(new(reader.GetInt64(0), cells.AsReadOnly()));
+                return new(offset, RowCount, Columns, rows.AsReadOnly(), offset + rows.Count < RowCount);
             }
-            return new(offset, RowCount, Columns, rows.AsReadOnly(), offset + rows.Count < RowCount);
+            finally
+            {
+                foreach (var reader in readers)
+                    reader.Dispose();
+                foreach (var command in commands)
+                    command.Dispose();
+            }
         }
 
         public Task<QueryValueChunk> ReadValueAsync(
@@ -310,14 +334,32 @@ namespace XMAT.DataAbstractionLayer
         {
             lock (_disposeGate)
             {
-                return new(_disposing ??= DisposeCoreAsync());
+                if (_disposing != null)
+                    return new(_disposing);
+                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _disposing = completion.Task;
+                _ = DisposeCoreAsync(completion);
+                return new(completion.Task);
             }
         }
 
-        private async Task DisposeCoreAsync()
+        private async Task DisposeCoreAsync(TaskCompletionSource completion)
         {
-            await _readers.StopAcceptingAndWaitAsync();
-            SqLtQuerySupport.DeleteWorkspace(_workspace);
+            try
+            {
+                await _readers.StopAcceptingAndWaitAsync();
+                SqLtQuerySupport.DeleteWorkspace(_workspace);
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                lock (_disposeGate)
+                {
+                    if (ReferenceEquals(_disposing, completion.Task))
+                        _disposing = null;
+                }
+                completion.TrySetException(exception);
+            }
         }
     }
 }

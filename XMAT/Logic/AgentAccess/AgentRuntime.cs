@@ -174,7 +174,8 @@ namespace XMAT.AgentAccess
         internal async Task SetPermissionsAsync(
             AgentSession session,
             IEnumerable<AgentPermission> permissions,
-            AgentLimits limits = null)
+            AgentLimits limits = null,
+            IEnumerable<AgentScope> editedScopes = null)
         {
             ArgumentNullException.ThrowIfNull(permissions);
             var granted = permissions.ToHashSet();
@@ -182,12 +183,17 @@ namespace XMAT.AgentAccess
             {
                 throw new ArgumentException("Permissions cannot contain null.", nameof(permissions));
             }
+            var scopes = editedScopes?.ToHashSet();
+            if (scopes != null && (scopes.Contains(null) || granted.Any(permission => !scopes.Contains(permission.Scope))))
+                throw new ArgumentException("Permission edits must belong to the selected scopes.", nameof(editedScopes));
             Operation[] affected;
             OwnedResource[] owned;
             SessionData data;
             lock (_gate)
             {
                 data = DemandConnected(session);
+                if (scopes != null)
+                    granted.UnionWith(data.Permissions.Where(permission => !scopes.Contains(permission.Scope)));
                 var effectiveLimits = limits ?? data.Limits;
                 if (data.Permissions.SetEquals(granted) && data.Limits == effectiveLimits)
                 {
@@ -523,6 +529,17 @@ namespace XMAT.AgentAccess
             return completion.Task;
         }
 
+        internal Task RetryTemporaryCleanupAsync()
+        {
+            OwnedResource[] resources;
+            lock (_gate)
+            {
+                resources = _resources.Values.Where(resource => resource.State == AgentResourceState.RecoveryRequired &&
+                    IsTemporaryResource(resource.Key.Kind)).ToArray();
+            }
+            return CleanResourcesAsync(resources);
+        }
+
         private async Task DisableCoreAsync(AgentSession[] sessions, TaskCompletionSource completion)
         {
             try
@@ -769,7 +786,8 @@ namespace XMAT.AgentAccess
                 };
                 if (!operation.Descriptor.Requirements.Any(permission =>
                     (permission.Capability == requiredCapability ||
-                    (key.Kind == AgentResourceKind.Artifact && permission.Capability == AgentCapability.QueryResultExport)) &&
+                    (key.Kind == AgentResourceKind.Artifact && permission.Capability is
+                        AgentCapability.QueryResultExport or AgentCapability.AnalysisReportExport)) &&
                     (key.Kind != AgentResourceKind.Capture || permission.Scope.Id == key.Id)) ||
                     (key.Kind is AgentResourceKind.Capture or AgentResourceKind.Script &&
                     operation.Descriptor.Effects == AgentOperationEffects.None))
@@ -800,7 +818,7 @@ namespace XMAT.AgentAccess
                     {
                         continue;
                     }
-                    if (resource.Cleaning == null)
+                    if (resource.Cleaning == null || resource.Cleaning.IsCompleted && IsTemporaryResource(resource.Key.Kind))
                     {
                         resource.State = AgentResourceState.Cleaning;
                         resource.Cleaning = Task.Run(() => CleanResourceAsync(resource));
@@ -810,6 +828,10 @@ namespace XMAT.AgentAccess
                 await cleaning;
             }
         }
+
+        private static bool IsTemporaryResource(AgentResourceKind kind) =>
+            kind is AgentResourceKind.QueryResult or AgentResourceKind.Artifact or
+                AgentResourceKind.CaptureData or AgentResourceKind.ScriptValidation;
 
         private async Task CleanResourceAsync(OwnedResource resource)
         {

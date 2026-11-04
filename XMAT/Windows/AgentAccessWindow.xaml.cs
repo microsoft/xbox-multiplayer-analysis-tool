@@ -84,7 +84,15 @@ namespace XMAT
             QueryMegabytes.ToolTip = Text("AGENT_QUERY_MEGABYTES");
             QueryResultCount.ToolTip = Text("AGENT_QUERY_RESULT_COUNT");
             ApplyGrants.Content = Text("AGENT_GRANT_APPLY");
+            ApplyGrants.ToolTip = Text("AGENT_GRANT_APPLY_SCOPE");
             Revoke.Content = Text("AGENT_REVOKE");
+            GrantedScopesLabel.Text = Text("AGENT_GRANTED_SCOPES");
+            GrantedScopeTarget.ToolTip = Text("AGENT_REVOKE_SCOPE_DETAIL");
+            RevokeScope.Content = Text("AGENT_REVOKE_SCOPE");
+            RevokeScope.ToolTip = Text("AGENT_REVOKE_SCOPE_DETAIL");
+            GrantedScopeTarget.SelectionChanged += (_, _) =>
+                RevokeScope.IsEnabled = GrantedScopeTarget.SelectedItem is AgentScope &&
+                    Sessions.SelectedItem is AgentSessionSnapshot { State: AgentSessionState.Connected };
             Approve.Content = Text("AGENT_APPROVE");
             Deny.Content = Text("AGENT_DENY");
             CancelOperation.Content = Text("AGENT_CANCEL_OPERATION");
@@ -299,6 +307,12 @@ namespace XMAT
             var session = Sessions.SelectedItem as AgentSessionSnapshot;
             CurrentGrants.Text = session == null ? string.Empty : Text("AGENT_CURRENT_GRANTS",
                 string.Join(", ", session.Permissions.Select(permission => $"{permission.Capability}:{permission.Scope.Id}")));
+            var previous = GrantedScopeTarget.SelectedItem as AgentScope;
+            var scopes = session?.Permissions.Select(permission => permission.Scope).Distinct()
+                .OrderBy(scope => scope.Kind).ThenBy(scope => scope.Id).ToArray() ?? [];
+            GrantedScopeTarget.ItemsSource = scopes;
+            GrantedScopeTarget.SelectedItem = scopes.FirstOrDefault(scope => scope == previous);
+            RevokeScope.IsEnabled = GrantedScopeTarget.SelectedItem != null && session.State == AgentSessionState.Connected;
         }
 
         private static bool HasCaptureGrant(AgentSessionSnapshot session, CaptureDescriptor capture, AgentCapability capability) =>
@@ -344,6 +358,19 @@ namespace XMAT
             }
             await TryAsync(async () =>
             {
+                var selectedCapture = CaptureTarget.SelectedItem as CaptureDescriptor;
+                var selectedSource = QuerySourceTarget.SelectedItem as QuerySourceDescriptor;
+                var selectedFolder = ExportFolderTarget.SelectedItem as ExportFolderDescriptor;
+                var selectedInput = InputFileTarget.SelectedItem as InputFileDescriptor;
+                var scopes = new List<AgentScope> { AgentScope.Application };
+                if (selectedCapture != null)
+                    scopes.Add(AgentScope.Capture(selectedCapture.Id));
+                if (selectedSource != null)
+                    scopes.Add(AgentScope.Source(selectedSource.Id));
+                if (selectedFolder != null)
+                    scopes.Add(AgentScope.ExportFolder(selectedFolder.Id));
+                if (selectedInput != null)
+                    scopes.Add(AgentScope.InputFile(selectedInput.Id));
                 var permissions = new List<AgentPermission>();
                 if (SummaryGrant.IsChecked == true)
                 {
@@ -360,7 +387,7 @@ namespace XMAT
                     if (control.IsChecked == true)
                         permissions.Add(new AgentPermission(capability, AgentScope.Application));
                 }
-                if (CaptureTarget.SelectedItem is CaptureDescriptor capture)
+                if (selectedCapture is CaptureDescriptor capture)
                 {
                     if (!capture.IsReadOnly && DeviceConfigurationGrant.IsChecked == true)
                     {
@@ -399,7 +426,7 @@ namespace XMAT
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
-                if (RawQueryGrant.IsChecked == true && QuerySourceTarget.SelectedItem is QuerySourceDescriptor source)
+                if (RawQueryGrant.IsChecked == true && selectedSource is QuerySourceDescriptor source)
                 {
                     if (MessageBox.Show(this, Text("AGENT_RAW_QUERY_TRUST", source.DisplayName), Title,
                         MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
@@ -416,27 +443,27 @@ namespace XMAT
                         permissions.Add(new AgentPermission(AgentCapability.CaptureExport, AgentScope.Source(source.Id)));
                     }
                 }
-                if (SourceSummaryGrant.IsChecked == true && QuerySourceTarget.SelectedItem is QuerySourceDescriptor summarySource)
+                if (SourceSummaryGrant.IsChecked == true && selectedSource is QuerySourceDescriptor summarySource)
                 {
                     permissions.Add(new AgentPermission(AgentCapability.SummaryRead, AgentScope.Source(summarySource.Id)));
                 }
-                if (FileWriteGrant.IsChecked == true && ExportFolderTarget.SelectedItem is ExportFolderDescriptor folder)
+                if (FileWriteGrant.IsChecked == true && selectedFolder is ExportFolderDescriptor folder)
                 {
                     permissions.Add(new AgentPermission(AgentCapability.FileWrite, AgentScope.ExportFolder(folder.Id)));
                 }
-                if (FileReadGrant.IsChecked == true && InputFileTarget.SelectedItem is InputFileDescriptor input)
+                if (FileReadGrant.IsChecked == true && selectedInput is InputFileDescriptor input)
                 {
                     permissions.Add(new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(input.Id)));
                 }
-                if (CaptureImportGrant.IsChecked == true && QuerySourceTarget.SelectedItem is QuerySourceDescriptor importSource &&
+                if (CaptureImportGrant.IsChecked == true && selectedSource is QuerySourceDescriptor importSource &&
                     importSource.Kind == QuerySourceKind.Active)
                     permissions.Add(new AgentPermission(AgentCapability.CaptureImport, AgentScope.Source(importSource.Id)));
                 if (ReportExportGrant.IsChecked == true && RawQueryGrant.IsChecked == true &&
-                    QuerySourceTarget.SelectedItem is QuerySourceDescriptor reportSource)
+                    selectedSource is QuerySourceDescriptor reportSource)
                     permissions.Add(new AgentPermission(AgentCapability.AnalysisReportExport, AgentScope.Source(reportSource.Id)));
                 await _host.Runtime.SetPermissionsAsync(_host.FindSession(selected.Id), permissions,
                     new AgentLimits(selected.Limits.ResponseRows, selected.Limits.ResponseBytes, selected.Limits.MaximumOperations,
-                        seconds, megabytes * 1024L * 1024, resultCount));
+                        seconds, megabytes * 1024L * 1024, resultCount), scopes);
                 await RefreshAsync();
             });
         }
@@ -488,6 +515,19 @@ namespace XMAT
             if (Sessions.SelectedItem is AgentSessionSnapshot selected)
             {
                 await TryAsync(() => _host.RevokeAsync(selected.Id));
+            }
+        }
+
+        private async void RevokeScope_Click(object sender, RoutedEventArgs args)
+        {
+            if (Sessions.SelectedItem is AgentSessionSnapshot session && GrantedScopeTarget.SelectedItem is AgentScope scope)
+            {
+                await TryAsync(async () =>
+                {
+                    await _host.Runtime.SetPermissionsAsync(_host.FindSession(session.Id), [], editedScopes: [scope]);
+                    await RefreshAsync();
+                    ShowGrantSelection();
+                });
             }
         }
 

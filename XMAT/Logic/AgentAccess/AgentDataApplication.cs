@@ -183,8 +183,7 @@ namespace XMAT.AgentAccess
             Entry[] entries;
             lock (_gate)
             { entries = _results.Values.ToArray(); }
-            foreach (var entry in entries)
-                await RemoveAsync(entry);
+            await Task.WhenAll(entries.Select(RemoveAsync));
         }
 
         private JsonElement Page<T>(

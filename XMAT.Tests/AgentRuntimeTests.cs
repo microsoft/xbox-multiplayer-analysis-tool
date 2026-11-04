@@ -50,6 +50,137 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task ScopedGrantEditsPreserveOtherTargetsAndOnlyRevokeTheEditedScopes()
+        {
+            await using var runtime = Enabled();
+            var session = runtime.Connect("multiple targets");
+            var first = new[]
+            {
+                Control(Guid.NewGuid()),
+                new AgentPermission(AgentCapability.SummaryRead, AgentScope.Source(Guid.NewGuid())),
+                new AgentPermission(AgentCapability.FileWrite, AgentScope.ExportFolder(Guid.NewGuid())),
+                new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(Guid.NewGuid()))
+            };
+            var second = new[]
+            {
+                Control(Guid.NewGuid()),
+                new AgentPermission(AgentCapability.SummaryRead, AgentScope.Source(Guid.NewGuid())),
+                new AgentPermission(AgentCapability.FileWrite, AgentScope.ExportFolder(Guid.NewGuid())),
+                new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(Guid.NewGuid()))
+            };
+            await runtime.SetPermissionsAsync(session, first.Append(Summary));
+            var cleaned = 0;
+            var capture = new AgentResourceKey(AgentResourceKind.Capture, first[0].Scope.Id);
+            var id = runtime.Submit(session, Descriptor(first[0], AgentOperationEffects.StateChange), "own first", context =>
+            {
+                context.OwnResource(capture, "first", () =>
+                {
+                    cleaned++;
+                    return Task.FromResult(AgentCleanupOutcome.Released);
+                });
+                return Done();
+            }, Current);
+            await Wait(runtime, session, id);
+
+            var secondScopes = second.Select(permission => permission.Scope).Append(AgentScope.Application).ToArray();
+            await runtime.SetPermissionsAsync(session, second.Append(Summary), editedScopes: secondScopes);
+            Assert.All(first.Concat(second).Append(Summary), permission => runtime.Demand(session, permission));
+            Assert.Equal(0, cleaned);
+            Assert.Equal(capture, Assert.Single(runtime.GetOwnedResources()).Resource);
+
+            await runtime.SetPermissionsAsync(session, [Summary], editedScopes: secondScopes);
+            Assert.All(first, permission => runtime.Demand(session, permission));
+            Assert.DoesNotContain(runtime.GetSession(session).Permissions, permission => second.Contains(permission));
+            Assert.Equal(0, cleaned);
+            await runtime.SetPermissionsAsync(session, [Summary],
+                editedScopes: first.Select(permission => permission.Scope).Append(AgentScope.Application));
+            Assert.Equal(1, cleaned);
+            Assert.Equal(Summary, Assert.Single(runtime.GetSession(session).Permissions));
+            Assert.Empty(runtime.GetOwnedResources());
+        }
+
+        [Fact]
+        public async Task ScopedGrantEditsCannotChangeAPermissionOutsideTheirSelectedScopes()
+        {
+            await using var runtime = Enabled();
+            var session = runtime.Connect("scope validation");
+            await runtime.SetPermissionsAsync(session, [Summary]);
+            var control = Control(Guid.NewGuid());
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                runtime.SetPermissionsAsync(session, [control], editedScopes: [AgentScope.Application]));
+            Assert.Equal(Summary, Assert.Single(runtime.GetSession(session).Permissions));
+        }
+
+        [Fact]
+        public async Task TemporaryCleanupRetriesDoNotRetryExternalCaptureRecovery()
+        {
+            await using var runtime = Enabled();
+            var session = runtime.Connect("temporary recovery");
+            var control = Control(Guid.NewGuid());
+            var raw = new AgentPermission(AgentCapability.RawDataRead, AgentScope.Source(Guid.NewGuid()));
+            await runtime.SetPermissionsAsync(session, [control, raw]);
+            var temporary = new AgentResourceKey(AgentResourceKind.QueryResult, Guid.NewGuid());
+            var capture = new AgentResourceKey(AgentResourceKind.Capture, control.Scope.Id);
+            var retryReady = false;
+            var captureCleanups = 0;
+            var id = runtime.Submit(session, new AgentOperationDescriptor("own", [control, raw],
+                AgentOperationEffects.StateChange, "fingerprint", "reviewed"), "own", context =>
+            {
+                context.OwnResource(temporary, "query", () => Task.FromResult(retryReady
+                    ? AgentCleanupOutcome.Released : AgentCleanupOutcome.RecoveryRequired));
+                context.OwnResource(capture, "capture", () =>
+                {
+                    captureCleanups++;
+                    return Task.FromResult(AgentCleanupOutcome.RecoveryRequired);
+                });
+                return Done();
+            }, Current);
+            await Wait(runtime, session, id);
+            await runtime.EndSessionAsync(session);
+            Assert.Equal(2, runtime.GetOwnedResources().Count);
+            retryReady = true;
+            await runtime.RetryTemporaryCleanupAsync();
+            Assert.Equal(capture, Assert.Single(runtime.GetOwnedResources()).Resource);
+            Assert.Equal(1, captureCleanups);
+            Assert.True(runtime.TakeOver(capture));
+        }
+
+        [Theory]
+        [InlineData(AgentResourceKind.Capture)]
+        [InlineData(AgentResourceKind.Script)]
+        public async Task UnrelatedGrantEditsAndDisconnectDoNotRetryExternalRecovery(AgentResourceKind kind)
+        {
+            await using var runtime = Enabled();
+            var session = runtime.Connect("external recovery policy");
+            var control = new AgentPermission(kind == AgentResourceKind.Capture
+                ? AgentCapability.CaptureControl : AgentCapability.ScriptExecute, AgentScope.Capture(Guid.NewGuid()));
+            await runtime.SetPermissionsAsync(session, [control, Summary]);
+            var capture = new AgentResourceKey(kind, control.Scope.Id);
+            var attempts = 0;
+            var id = runtime.Submit(session, Descriptor(control, AgentOperationEffects.StateChange), "own", context =>
+            {
+                context.OwnResource(capture, "epoch", () =>
+                {
+                    attempts++;
+                    return Task.FromResult(AgentCleanupOutcome.RecoveryRequired);
+                });
+                return Done();
+            }, Current);
+            if (kind == AgentResourceKind.Script)
+                Assert.True(runtime.Approve(id));
+            await Wait(runtime, session, id);
+            await runtime.SetPermissionsAsync(session, [Summary]);
+            Assert.Equal(1, attempts);
+            var other = Control(Guid.NewGuid());
+            await runtime.SetPermissionsAsync(session, [Summary, other]);
+            await runtime.EndSessionAsync(session);
+            await runtime.RetryTemporaryCleanupAsync();
+            Assert.Equal(1, attempts);
+            Assert.Equal(AgentResourceState.RecoveryRequired, Assert.Single(runtime.GetOwnedResources()).State);
+            Assert.True(runtime.TakeOver(capture));
+        }
+
+        [Fact]
         public async Task SessionSnapshotRoundTripPreservesScopeWithoutCreatingAuthority()
         {
             await using var runtime = Enabled();

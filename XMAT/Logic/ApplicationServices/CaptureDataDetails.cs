@@ -120,10 +120,12 @@ namespace XMAT.ApplicationServices
             TaskCompletionSource completion;
             lock (_state.Lifetime)
             {
-                if (Interlocked.Exchange(ref _released, 1) != 0)
-                    return new(_state.Disposing ?? Task.CompletedTask);
-                if (--_state.References != 0)
+                if (Interlocked.Exchange(ref _released, 1) == 0)
+                    _state.References--;
+                if (_state.References != 0)
                     return ValueTask.CompletedTask;
+                if (_state.Disposing != null)
+                    return new(_state.Disposing);
                 completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 _state.Disposing = completion.Task;
             }
@@ -138,7 +140,15 @@ namespace XMAT.ApplicationServices
                 await _state.DisposeAsync();
                 completion.TrySetResult();
             }
-            catch (Exception exception) { completion.TrySetException(exception); }
+            catch (Exception exception)
+            {
+                lock (_state.Lifetime)
+                {
+                    if (ReferenceEquals(_state.Disposing, completion.Task))
+                        _state.Disposing = null;
+                }
+                completion.TrySetException(exception);
+            }
         }
 
         private sealed class State(

@@ -228,6 +228,146 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task PublishedReportCleanupFailuresRemainOwnedAndDoNotConsumeLaterExportAdmission()
+        {
+            using var directory = new InvestigationDirectory();
+            await using var runtime = new AgentRuntime();
+            runtime.Enable();
+            var owner = runtime.Connect("report cleanup");
+            var sourceId = Guid.NewGuid();
+            var original = new InvestigationReportFiles(Path.Combine(directory.Path, "source"), sourceId);
+            var files = new FailingReportFiles(original);
+            var investigation = new Investigation(sourceId) { Files = files };
+            var exports = new PausedExports { PublishDirectly = true };
+            exports.Continue.TrySetResult();
+            var destinationPath = Path.Combine(directory.Path, "destination");
+            Directory.CreateDirectory(destinationPath);
+            var folder = await exports.RegisterFolderAsync(destinationPath);
+            var application = new AgentDataApplication(runtime, investigation, () => true, exports);
+            await GrantExport(runtime, owner, sourceId, folder.Id);
+            await runtime.SetPermissionsAsync(owner, runtime.GetSession(owner).Permissions,
+                new AgentLimits(maximumQueryResults: 1));
+            try
+            {
+                var result = await Run(application, runtime, owner, sourceId, analyze: true);
+                for (var index = 0; index < 5; index++)
+                {
+                    var operation = await application.ExportReportAsync(owner, result, folder.Id,
+                        $"report{index}", $"export{index}", default);
+                    Assert.True(runtime.Approve(operation));
+                    await runtime.WaitForCompletionAsync(owner, operation).WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Equal(AgentOperationState.Succeeded, runtime.GetOperation(owner, operation).State);
+                    var receipt = runtime.GetResult(owner, operation);
+                    Assert.True(receipt.GetProperty("published").GetBoolean());
+                    Assert.True(receipt.GetProperty("cleanupRequired").GetBoolean());
+                }
+                Assert.Equal(5, runtime.GetOwnedResources().Count(item => item.Resource.Kind == AgentResourceKind.Artifact));
+                Assert.Equal(5, exports.SaveCount);
+            }
+            finally
+            {
+                files.FailDisposal = false;
+                await runtime.EndSessionAsync(owner);
+                await application.DisposeResultsAsync();
+            }
+            Assert.Empty(runtime.GetOwnedResources());
+            Assert.True(original.Disposed);
+            Assert.Equal(5, Directory.EnumerateDirectories(destinationPath).Count());
+        }
+
+        [Fact]
+        public async Task UnpublishedReportResidueKeepsItsProtectedReceiptAndOwnedCleanup()
+        {
+            using var directory = new InvestigationDirectory();
+            await using var runtime = new AgentRuntime();
+            runtime.Enable();
+            var owner = runtime.Connect("report residue");
+            var sourceId = Guid.NewGuid();
+            var files = new InvestigationReportFiles(Path.Combine(directory.Path, "source"), sourceId);
+            var investigation = new Investigation(sourceId) { Files = files };
+            var exports = new PausedExports();
+            exports.Continue.TrySetResult();
+            var destinationPath = Path.Combine(directory.Path, "destination");
+            Directory.CreateDirectory(destinationPath);
+            var folder = await exports.RegisterFolderAsync(destinationPath);
+            var application = new AgentDataApplication(runtime, investigation, () => true, exports);
+            FileStream locked = null;
+            exports.BeforePublish = () =>
+            {
+                var staging = Directory.GetDirectories(destinationPath).Single();
+                locked = File.Open(Path.Combine(staging, "calls.js"), FileMode.Open, FileAccess.Read, FileShare.None);
+                throw new IOException("The report could not be published.");
+            };
+            try
+            {
+                await GrantExport(runtime, owner, sourceId, folder.Id);
+                var result = await Run(application, runtime, owner, sourceId, analyze: true);
+                var operation = await application.ExportReportAsync(owner, result, folder.Id, "report", "residue", default);
+                Assert.True(runtime.Approve(operation));
+                await runtime.WaitForCompletionAsync(owner, operation).WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(AgentOperationState.RecoveryRequired, runtime.GetOperation(owner, operation).State);
+                var receipt = runtime.GetResult(owner, operation);
+                Assert.False(receipt.GetProperty("published").GetBoolean());
+                Assert.True(receipt.GetProperty("cleanupRequired").GetBoolean());
+                Assert.Single(runtime.GetOwnedResources(), item => item.Resource.Kind == AgentResourceKind.Artifact);
+                Assert.False(Directory.Exists(Path.Combine(destinationPath, "report")));
+            }
+            finally
+            {
+                locked?.Dispose();
+                await runtime.EndSessionAsync(owner);
+                await application.DisposeResultsAsync();
+            }
+            Assert.Empty(runtime.GetOwnedResources());
+            Assert.Empty(Directory.GetFileSystemEntries(destinationPath));
+        }
+
+        [Fact]
+        public async Task UncertainPublicationReceiptSurvivesASecondPrivateCleanupFailure()
+        {
+            using var directory = new InvestigationDirectory();
+            await using var runtime = new AgentRuntime();
+            runtime.Enable();
+            var owner = runtime.Connect("uncertain report cleanup");
+            var sourceId = Guid.NewGuid();
+            var files = new FailingReportFiles(new InvestigationReportFiles(Path.Combine(directory.Path, "source"), sourceId));
+            var investigation = new Investigation(sourceId) { Files = files };
+            var exports = new PausedExports();
+            var destinationPath = Path.Combine(directory.Path, "destination");
+            Directory.CreateDirectory(destinationPath);
+            var folder = await exports.RegisterFolderAsync(destinationPath);
+            using var pinned = new WindowsExportFolder(destinationPath);
+            var residue = pinned.CreateTemporaryDirectory();
+            exports.Failure = new AnalysisReportExportException(AnalysisReportExportFailureKind.PublishFailed,
+                "Publication could not be verified.", publicationState: AnalysisReportPublicationState.Unknown)
+            { ResiduePath = residue.Path, OwnedResidue = residue };
+            var application = new AgentDataApplication(runtime, investigation, () => true, exports);
+            try
+            {
+                await GrantExport(runtime, owner, sourceId, folder.Id);
+                var result = await Run(application, runtime, owner, sourceId, analyze: true);
+                var operation = await application.ExportReportAsync(owner, result, folder.Id, "report", "unknown", default);
+                Assert.True(runtime.Approve(operation));
+                await runtime.WaitForCompletionAsync(owner, operation).WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Equal(AgentOperationState.RecoveryRequired, runtime.GetOperation(owner, operation).State);
+                var receipt = runtime.GetResult(owner, operation);
+                Assert.Equal(System.Text.Json.JsonValueKind.Null, receipt.GetProperty("published").ValueKind);
+                Assert.Equal("Unknown", receipt.GetProperty("publicationState").GetString());
+                Assert.Equal(Path.GetFileName(residue.Path), receipt.GetProperty("residueDirectory").GetString());
+                Assert.True(receipt.GetProperty("cleanupRequired").GetBoolean());
+                Assert.Equal(2, runtime.GetOwnedResources().Count(item => item.Resource.Kind == AgentResourceKind.Artifact));
+            }
+            finally
+            {
+                files.FailDisposal = false;
+                await runtime.EndSessionAsync(owner);
+                await application.DisposeResultsAsync();
+            }
+            Assert.Empty(runtime.GetOwnedResources());
+            Assert.Empty(Directory.GetFileSystemEntries(destinationPath));
+        }
+
+        [Fact]
         public async Task RevokingRawDuringReportCopyCancelsUnpublishedOutputAndInvalidatesItsDetails()
         {
             using var directory = new InvestigationDirectory();
@@ -286,7 +426,7 @@ namespace XMAT.Tests
         {
             internal Guid SourceId { get; } = sourceId ?? Guid.NewGuid();
             internal bool BlockReads { get; set; }
-            internal InvestigationReportFiles Files { get; set; }
+            internal ICaptureReportFiles Files { get; set; }
             internal List<Details> Instances { get; } = new();
             public Task<IReadOnlyList<CaptureAnalyzerDescriptor>> GetAnalyzersAsync(CancellationToken cancellationToken = default) =>
                 Task.FromResult<IReadOnlyList<CaptureAnalyzerDescriptor>>([]);
@@ -309,7 +449,7 @@ namespace XMAT.Tests
             }
         }
 
-        private sealed class Details(bool block, InvestigationReportFiles files) : ICaptureDataDetails
+        private sealed class Details(bool block, ICaptureReportFiles files) : ICaptureDataDetails
         {
             private int _disposed;
             private int _readers;
@@ -353,12 +493,26 @@ namespace XMAT.Tests
             }
         }
 
+        private sealed class FailingReportFiles(ICaptureReportFiles original) : ICaptureReportFiles
+        {
+            public string SourceDirectory => original.SourceDirectory;
+            public CaptureCompletedReportDescriptor Report => original.Report;
+            public IReadOnlyList<CaptureReportArtifact> Manifest => original.Manifest;
+            internal bool FailDisposal { get; set; } = true;
+            public ValueTask DisposeAsync() => FailDisposal
+                ? ValueTask.FromException(new IOException("The temporary report files are locked."))
+                : original.DisposeAsync();
+        }
+
         private sealed class PausedExports : ICaptureFileExports
         {
             private readonly CaptureFileExports _files = new();
             internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
             internal TaskCompletionSource Continue { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
             internal int SaveCount { get; private set; }
+            internal Action BeforePublish { get; set; }
+            internal AnalysisReportExportException Failure { get; set; }
+            internal bool PublishDirectly { get; set; }
             public Task<ExportFolderDescriptor> RegisterFolderAsync(string path, CancellationToken cancellationToken = default) =>
                 _files.RegisterFolderAsync(path, cancellationToken);
             public IReadOnlyList<ExportFolderDescriptor> GetFolders() => _files.GetFolders();
@@ -369,12 +523,31 @@ namespace XMAT.Tests
                 Func<CancellationToken, Task> beforePublish, CancellationToken cancellationToken = default)
             {
                 SaveCount++;
+                if (Failure != null)
+                    return Task.FromException<CaptureReportExportReceipt>(Failure);
+                if (PublishDirectly)
+                    return PublishDirectlyAsync(files, destination, beforePublish, cancellationToken);
                 return _files.SaveReportAsync(files, destination, maximumBytes, async token =>
                 {
                     Started.TrySetResult();
                     await Continue.Task.WaitAsync(token);
                     await beforePublish(token);
+                    BeforePublish?.Invoke();
                 }, cancellationToken);
+            }
+            private async Task<CaptureReportExportReceipt> PublishDirectlyAsync(
+                ICaptureReportFiles files, CaptureReportDestination destination,
+                Func<CancellationToken, Task> beforePublish, CancellationToken cancellationToken)
+            {
+                await beforePublish(cancellationToken);
+                // Keep adapter-cleanup tests independent of the separately tested native directory rename.
+                var folder = GetFolders().Single(item => item.Id == destination.FolderId);
+                var path = Path.Combine(folder.Path, destination.DirectoryName);
+                Directory.CreateDirectory(path);
+                foreach (var artifact in files.Manifest)
+                    File.Copy(Path.Combine(files.SourceDirectory, artifact.RelativePath), Path.Combine(path, artifact.RelativePath));
+                return new(files.Report.Id, files.Report.SourceId, files.Report.SnapshotId,
+                    destination.FolderId, destination.DirectoryName, files.Manifest.Sum(item => item.Length), files.Manifest.Count, true);
             }
             public Task ValidateAsync(QueryFileDestination destination, CancellationToken cancellationToken = default) => throw new NotSupportedException();
             public Task ValidateCaptureAsync(CaptureFileDestination destination, CancellationToken cancellationToken = default) => throw new NotSupportedException();

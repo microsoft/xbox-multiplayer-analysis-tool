@@ -247,6 +247,111 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task ResultDisposalCanRetryAfterATransientFileLockWithoutReopeningReaders()
+        {
+            using var database = CreateDatabase();
+            await using var session = await database.CreateQuerySessionAsync();
+            await using var result = await session.ExecuteAsync("SELECT Name FROM Data", Options());
+            var workspace = Workspace(result);
+            using (new FileStream(Path.Combine(workspace, "result.sqlite"),
+                FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                await Assert.ThrowsAsync<IOException>(() => result.DisposeAsync().AsTask());
+                await Assert.ThrowsAsync<ObjectDisposedException>(() => result.ReadPageAsync(0, 1, 8192));
+            }
+            await result.DisposeAsync();
+            Assert.False(Directory.Exists(workspace));
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task SnapshotDisposalCanRetryThroughRetainedInvestigationDetails(bool retainedDetails)
+        {
+            using var database = CreateDatabase();
+            await using var session = await database.CreateQuerySessionAsync();
+            var workspace = Workspace(session);
+            var details = retainedDetails ? new ApplicationServices.CaptureDataDetails(
+                session, "Data", ["id"], [], Options(), 0, [], null, null) : null;
+            var retained = details?.Retain();
+            if (retained != null)
+                await retained.DisposeAsync();
+            try
+            {
+                using (new FileStream(Path.Combine(workspace, "snapshot.sqlite"),
+                    FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    await Assert.ThrowsAsync<IOException>(() => details == null
+                        ? session.DisposeAsync().AsTask() : details.DisposeAsync().AsTask());
+                }
+                if (details != null)
+                    await details.DisposeAsync();
+                else
+                    await session.DisposeAsync();
+                Assert.False(Directory.Exists(workspace));
+            }
+            finally
+            {
+                if (details != null)
+                    await details.DisposeAsync();
+            }
+        }
+
+        [Theory]
+        [InlineData(666)]
+        [InlineData(667)]
+        [InlineData(1999)]
+        public async Task WideResultsPageEveryColumnAndKeepBatchesOnTheSameRow(int columnCount)
+        {
+            using var database = CreateDatabase();
+            await using var session = await database.CreateQuerySessionAsync();
+            var first = string.Join(",", Enumerable.Range(0, columnCount).Select(index => $"{index} AS c{index}"));
+            var second = string.Join(",", Enumerable.Range(columnCount, columnCount));
+            await using var result = await session.ExecuteAsync($"SELECT {first} UNION ALL SELECT {second}", Options());
+            var page = await result.ReadPageAsync(0, 1, 1024 * 1024);
+            Assert.True(page.HasMore);
+            Assert.Equal(0, page.Rows[0].Ordinal);
+            Assert.Equal(Enumerable.Range(0, columnCount).Select(index => (long)index),
+                page.Rows[0].Cells.Select(cell => (long)cell.Value));
+            var next = await result.ReadPageAsync(1, 1, 1024 * 1024);
+            Assert.False(next.HasMore);
+            Assert.Equal(1, next.Rows[0].Ordinal);
+            Assert.Equal(Enumerable.Range(columnCount, columnCount).Select(index => (long)index),
+                next.Rows[0].Cells.Select(cell => (long)cell.Value));
+        }
+
+        [Theory]
+        [InlineData("plain", false)]
+        [InlineData("double\"quote", false)]
+        [InlineData("single'quote", false)]
+        [InlineData("both'\"quotes", false)]
+        [InlineData(null, false)]
+        [InlineData("double\"quote", true)]
+        [InlineData("both'\"quotes", true)]
+        [InlineData(null, true)]
+        public void FiltersMatchLegacyWritesWithoutChangingNativeReadonlyValues(string value, bool imported)
+        {
+            using var directory = new TestDirectory();
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            var table = database.CreateTable("CaptureDevices",
+                new Field<long>("DeviceType"), new Field<string>("DeviceName"), new Field<long>("CaptureType"),
+                new Field<string>("Name"));
+            object[] row = [0L, "fixture", 0L, value];
+            if (imported)
+                ((IImportedCaptureTable)table).ReplaceImportedRows(new FieldValue<string>("DeviceName", "fixture"), [row]);
+            else
+                table.AddRow(row);
+            var expected = table.Dataset.DataRecords.Single();
+            Assert.Equal(expected.RowId, Assert.Single(table.Dataset.DataRecordsWhen(new FieldValue<string>("Name", value))).RowId);
+            var path = Path.Combine(directory.Path, "capture.xmatcap");
+            database.SaveToFile(path);
+            using var loaded = new SqLtReadonlyDatabase(path);
+            Assert.Equal(expected.RowId, Assert.Single(loaded.TableByName("CaptureDevices").Dataset.DataRecordsWhen(
+                new FieldValue<string>("Name", expected.Str("Name")))).RowId);
+        }
+
+        [Fact]
         public async Task MalformedUtf8TextStillHasABoundedPreviewAndExactByteChunks()
         {
             var bytes = Enumerable.Repeat((byte)0xff, 12000).ToArray();

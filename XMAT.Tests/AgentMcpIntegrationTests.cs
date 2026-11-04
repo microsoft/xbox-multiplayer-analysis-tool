@@ -195,16 +195,18 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void DesktopWindowEnablesAccessAndGrantsOnlyTheChosenCapture()
+        public void DesktopWindowSupportsMultipleGrantsWithoutStoppingExistingOwnedCaptures()
         {
             _application.Run(owner =>
             {
                 WpfTestHost.Show(owner, new Grid());
                 var model = new CaptureAppModel();
-                model.CaptureDeviceContexts.Add(new Context("chosen"));
+                var chosen = new Context("chosen");
+                model.CaptureDeviceContexts.Add(chosen);
                 model.CaptureDeviceContexts.Add(new Context("not chosen"));
+                var operations = new TestOperations(model, Dispatcher.CurrentDispatcher);
                 var host = new AgentAccessHost(model, Dispatcher.CurrentDispatcher,
-                    new TestOperations(model, Dispatcher.CurrentDispatcher));
+                    operations);
                 AgentAccessWindow manager = null;
                 McpClient client = null;
                 try
@@ -237,6 +239,39 @@ namespace XMAT.Tests
                     Assert.Equal(2, session.Permissions.Count);
                     Assert.DoesNotContain(session.Permissions, permission => permission.Capability == AgentCapability.ScriptExecute);
                     Assert.Same(manager, AgentAccessWindow.ShowOrActivate(owner, host));
+                    var connection = host.FindSession(session.Id);
+                    var start = Payload(Complete(client.CallToolAsync("xmat_set_capture_running",
+                        new Dictionary<string, object>
+                        {
+                            ["captureId"] = target.Id,
+                            ["expectedRevision"] = target.Revision,
+                            ["running"] = true,
+                            ["idempotencyKey"] = "retain-chosen"
+                        }).AsTask())).GetProperty("id").GetGuid();
+                    Assert.True(host.Runtime.Approve(start));
+                    Finish(host.Runtime.WaitForCompletionAsync(connection, start));
+                    Assert.True(chosen.Controller.IsRunning);
+
+                    targets.SelectedItem = targets.Items.Cast<CaptureDescriptor>().Single(item => item.DeviceName == "not chosen");
+                    var other = (CaptureDescriptor)targets.SelectedItem;
+                    ((CheckBox)manager.FindName("ControlGrant")).IsChecked = true;
+                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                    CaptureDeviceTestData.PumpUntil(() => host.Runtime.GetSession(connection).Permissions.Contains(
+                        new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(other.Id))));
+                    Assert.Contains(new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(target.Id)),
+                        host.Runtime.GetSession(connection).Permissions);
+                    Assert.True(chosen.Controller.IsRunning);
+                    Assert.Equal(0, operations.StopCount);
+                    Assert.Equal(target.Id, Assert.Single(host.Runtime.GetOwnedResources()).Resource.Id);
+
+                    ((CheckBox)manager.FindName("ControlGrant")).IsChecked = false;
+                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                    CaptureDeviceTestData.PumpUntil(() => !host.Runtime.GetSession(connection).Permissions.Contains(
+                        new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(other.Id))));
+                    Assert.Contains(new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(target.Id)),
+                        host.Runtime.GetSession(connection).Permissions);
+                    Assert.True(chosen.Controller.IsRunning);
+                    Assert.Equal(0, operations.StopCount);
                 }
                 finally
                 {

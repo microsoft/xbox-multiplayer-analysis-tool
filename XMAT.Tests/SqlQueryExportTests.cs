@@ -62,6 +62,35 @@ namespace XMAT.Tests
         [Theory]
         [InlineData(QueryExportFormat.Csv)]
         [InlineData(QueryExportFormat.Json)]
+        public async Task WideCompletedResultsExportEveryColumnWithoutRerunningTheQuery(QueryExportFormat format)
+        {
+            using var database = Database();
+            await using var snapshot = await database.CreateQuerySessionAsync();
+            const int count = 1999;
+            var fields = string.Join(",", Enumerable.Range(0, count).Select(index => $"{index} AS c{index}"));
+            await using var result = await snapshot.ExecuteAsync($"SELECT {fields}", Options());
+            await snapshot.DisposeAsync();
+            using var output = new MemoryStream();
+            await QueryResultExporter.WriteAsync(result, output, format, 2 * 1024 * 1024);
+            if (format == QueryExportFormat.Json)
+            {
+                using var json = JsonDocument.Parse(output.ToArray());
+                Assert.Equal(count, json.RootElement.GetProperty("columns").GetArrayLength());
+                Assert.Equal(Enumerable.Range(0, count).Select(index => (long)index),
+                    json.RootElement.GetProperty("rows")[0].EnumerateArray().Select(value => value.GetInt64()));
+            }
+            else
+            {
+                var lines = Encoding.UTF8.GetString(output.ToArray()).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+                Assert.Equal(2, lines.Length);
+                Assert.Equal(string.Join(",", Enumerable.Range(0, count).Select(index => $"\"c{index}\"")), lines[0]);
+                Assert.Equal(string.Join(",", Enumerable.Range(0, count)), lines[1]);
+            }
+        }
+
+        [Theory]
+        [InlineData(QueryExportFormat.Csv)]
+        [InlineData(QueryExportFormat.Json)]
         public async Task ExportIncludesEveryStoredRowBeyondTheVisiblePageWithoutReexecution(QueryExportFormat format)
         {
             using var database = Database();

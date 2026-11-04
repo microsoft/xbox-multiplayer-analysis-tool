@@ -312,31 +312,45 @@ namespace XMAT.AgentAccess
                 catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception)) { failure = exception; }
                 finally
                 {
-                    if (files != null)
+                    try
                     {
-                        try
-                        { await files.DisposeAsync(); }
-                        catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+                        if (files != null)
                         {
-                            cleanupRequired = true;
-                            var retainedFiles = files;
-                            context.OwnResource(new AgentResourceKey(AgentResourceKind.Artifact, Guid.NewGuid()), report.SourceId.ToString("D"),
-                                async () =>
-                                {
-                                    try
-                                    { await retainedFiles.DisposeAsync(); return AgentCleanupOutcome.Released; }
-                                    catch (IOException) { return AgentCleanupOutcome.RecoveryRequired; }
-                                    catch (UnauthorizedAccessException) { return AgentCleanupOutcome.RecoveryRequired; }
-                                });
+                            try
+                            { await files.DisposeAsync(); }
+                            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+                            {
+                                cleanupRequired = true;
+                                var retainedFiles = files;
+                                context.OwnResource(new AgentResourceKey(AgentResourceKind.Artifact, Guid.NewGuid()), report.SourceId.ToString("D"),
+                                    async () =>
+                                    {
+                                        try
+                                        { await retainedFiles.DisposeAsync(); return AgentCleanupOutcome.Released; }
+                                        catch (IOException) { return AgentCleanupOutcome.RecoveryRequired; }
+                                        catch (UnauthorizedAccessException) { return AgentCleanupOutcome.RecoveryRequired; }
+                                    });
+                            }
                         }
                     }
-                    lock (_gate)
+                    finally
                     {
-                        if (--_reportExports[session] == 0)
-                            _reportExports.Remove(session);
+                        lock (_gate)
+                        {
+                            if (--_reportExports[session] == 0)
+                                _reportExports.Remove(session);
+                        }
                     }
                 }
                 if (cleanupRequired && receipt == null)
+                {
+                    if (failure is AgentAccessException { ProtectedResult: JsonElement previous } original &&
+                        previous.ValueKind == JsonValueKind.Object)
+                    {
+                        var values = previous.EnumerateObject().ToDictionary(property => property.Name, property => property.Value.Clone());
+                        values["cleanupRequired"] = JsonSerializer.SerializeToElement(true);
+                        throw new AgentAccessException(original.Error, AgentJson.Encode(values));
+                    }
                     throw new AgentAccessException(AgentAccessError.RecoveryRequired, AgentJson.Encode(new
                     {
                         reportId = report.Id,
@@ -347,6 +361,7 @@ namespace XMAT.AgentAccess
                         published = false,
                         cleanupRequired = true
                     }));
+                }
                 if (failure != null)
                     ExceptionDispatchInfo.Capture(failure).Throw();
                 return AgentJson.Encode(new

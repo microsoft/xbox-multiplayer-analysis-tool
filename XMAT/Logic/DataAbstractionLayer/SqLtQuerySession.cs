@@ -198,8 +198,8 @@ namespace XMAT.DataAbstractionLayer
                 {
                     _disposed = true;
                     _connection.Dispose();
-                    SqLtQuerySupport.DeleteWorkspace(_workspace);
                 }
+                SqLtQuerySupport.DeleteWorkspace(_workspace);
             }
             finally { _gate.Release(); }
         }

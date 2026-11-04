@@ -171,7 +171,7 @@ namespace XMAT.DataAbstractionLayer
                         $"DELETE FROM {_name} WHERE {captureField.Name} = $capture";
                     deleteCommand.Parameters.AddWithValue(
                         "$capture",
-                        ImportedFieldValueAsParameter(captureField, capture.Value));
+                        captureField.FieldValueAsParameter(capture.Value));
                     deleteCommand.ExecuteNonQuery();
                 }
 
@@ -202,7 +202,7 @@ namespace XMAT.DataAbstractionLayer
                     for (int index = 0; index < fields.Length; index++)
                     {
                         parameters[index].Value =
-                            ImportedFieldValueAsParameter(fields[index], row[index]);
+                            fields[index].FieldValueAsParameter(row[index]);
                     }
 
                     insertCommand.ExecuteNonQuery();
@@ -215,30 +215,11 @@ namespace XMAT.DataAbstractionLayer
             }
         }
 
-        private static object ImportedFieldValueAsParameter(
-            FieldDefinition field,
-            object value)
-        {
-            if (value == null)
-            {
-                return string.Empty;
-            }
-
-            if (field.ValueType != FieldValueType.String)
-            {
-                return value;
-            }
-
-            // Preserve FieldValueAsString's stored text: doubled single quotes
-            // were SQL syntax, while doubled double quotes became data.
-            return value.ToString().Replace("\"", "\"\"");
-        }
-
         private IDataset GetDataset()
         {
             lock (_lockObj)
             {
-                return new SqLtDataset(_connection, Name, _fieldDefinitions);
+                return new SqLtDataset(_connection, Name, _fieldDefinitions, useLegacyTextValues: true);
             }
         }
 
@@ -252,7 +233,7 @@ namespace XMAT.DataAbstractionLayer
                         {
                             return fieldNames.Contains(x.Key);
                         }
-                    ).ToDictionary(dict => dict.Key, dict => dict.Value));
+                    ).ToDictionary(dict => dict.Key, dict => dict.Value), useLegacyTextValues: true);
             }
         }
 

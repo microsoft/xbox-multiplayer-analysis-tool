@@ -63,6 +63,14 @@ namespace XMAT.DataAbstractionLayer
                 escapedValue;
         }
 
+        internal object FieldValueAsParameter(object value)
+        {
+            if (value == null)
+                return string.Empty;
+            // Legacy SQL literals stored doubled double quotes as data, unlike escaped apostrophes.
+            return ValueType == FieldValueType.String ? value.ToString().Replace("\"", "\"\"") : value;
+        }
+
         internal static FieldDefinition CreateFromSchema(
             string name,
             Type type,

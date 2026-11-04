@@ -528,10 +528,7 @@ namespace XMAT.AgentAccess
                 entries = _results.Values.ToArray();
                 exports = _exports.Values.ToArray();
             }
-            foreach (var entry in entries)
-                await RemoveAsync(entry);
-            foreach (var artifact in exports)
-                await RemoveExportAsync(artifact);
+            await Task.WhenAll(entries.Select(RemoveAsync).Concat(exports.Select(RemoveExportAsync)));
         }
 
         private void Reserve(AgentSession session, int maximum)

@@ -2,8 +2,13 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using XMAT.AgentAccess;
@@ -297,6 +302,129 @@ namespace XMAT.Tests
                 }
                 finally
                 {
+                    if (client != null)
+                        Finish(client.DisposeAsync().AsTask());
+                    Finish(host.DisposeAsync().AsTask());
+                }
+            });
+        }
+
+        [Fact]
+        public void HostShutdownDoesNotStrandOtherResultsOrStayFaultedAfterATemporaryCleanupLock()
+        {
+            _application.Run(_ =>
+            {
+                using var database = QueryDatabase();
+                var model = new CaptureAppModel { ActiveDatabase = database };
+                var host = model.AgentAccess;
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var queries = (AgentQueryApplication)typeof(AgentAccessHost).GetField("_queries", flags).GetValue(host);
+                try
+                {
+                    host.Runtime.Enable();
+                    var session = host.Runtime.Connect("cleanup recovery");
+                    var source = Complete(model.CaptureQueries.GetSourcesAsync()).Single();
+                    Finish(host.Runtime.SetPermissionsAsync(session,
+                        [new AgentPermission(AgentCapability.RawDataRead, AgentScope.Source(source.Id))]));
+                    var workspaces = new List<string>();
+                    foreach (var key in new[] { "locked", "unlocked" })
+                    {
+                        var operation = Complete(queries.RunAsync(session, source.Id, "SELECT 42", key, null, null, default));
+                        Finish(host.Runtime.WaitForCompletionAsync(session, operation));
+                        var resultId = host.Runtime.GetResult(session, operation).GetProperty("resultId").GetGuid();
+                        var entries = (IDictionary)typeof(AgentQueryApplication).GetField("_results", flags).GetValue(queries);
+                        var entry = entries[resultId];
+                        var result = (IQueryResult)entry.GetType().GetProperty("Result", flags).GetValue(entry);
+                        workspaces.Add((string)result.GetType().GetField("_workspace", flags).GetValue(result));
+                    }
+                    using (new FileStream(Path.Combine(workspaces[0], "result.sqlite"),
+                        FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    {
+                        Finish(host.Runtime.EndSessionAsync(session));
+                        Finish(host.DisableAsync());
+                        Assert.False(host.IsEnabled);
+                        Assert.True(Directory.Exists(workspaces[0]));
+                        Assert.False(Directory.Exists(workspaces[1]));
+                        Assert.Equal(AgentResourceState.RecoveryRequired, Assert.Single(host.Runtime.GetOwnedResources()).State);
+                    }
+                    host.MarkReady();
+                    host.Enable();
+                    Assert.True(host.IsEnabled);
+                    Finish(host.DisableAsync());
+                    Assert.All(workspaces, workspace => Assert.False(Directory.Exists(workspace)));
+                    Assert.Empty(host.Runtime.GetOwnedResources());
+                }
+                finally { Finish(host.DisposeAsync().AsTask()); }
+            });
+        }
+
+        [Fact]
+        public void DesktopCanRevokeAnOldLoadedSourceWithoutDroppingActiveSourceGrants()
+        {
+            _application.Run(owner =>
+            {
+                using var directory = new CaptureFileExportTests.DirectoryFixture();
+                var path = Path.Combine(directory.Path, "capture.xmatcap");
+                CaptureFileLoadTests.WriteCapture(path, [("loaded", CaptureType.WebProxy)]);
+                using var loaded = new SqLtReadonlyDatabase(path);
+                using var replacement = new SqLtReadonlyDatabase(path);
+                using var database = QueryDatabase();
+                var model = new CaptureAppModel { ActiveDatabase = database, LoadedDatabase = loaded };
+                var host = model.AgentAccess;
+                McpClient client = null;
+                AgentAccessWindow manager = null;
+                try
+                {
+                    host.MarkReady();
+                    host.Enable();
+                    client = Complete(Connect(host));
+                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
+                    var session = host.FindSession(host.Runtime.GetSessions().Single().Id);
+                    var sources = Complete(host.GetSourcesAsync());
+                    var active = sources.Single(source => source.Kind == QuerySourceKind.Active);
+                    var previous = sources.Single(source => source.Kind == QuerySourceKind.Loaded);
+                    var activeRead = new AgentPermission(AgentCapability.RawDataRead, AgentScope.Source(active.Id));
+                    Finish(host.Runtime.SetPermissionsAsync(session,
+                        [activeRead, new AgentPermission(AgentCapability.RawDataRead, AgentScope.Source(previous.Id)),
+                         new AgentPermission(AgentCapability.QueryResultExport, AgentScope.Source(previous.Id))]));
+                    var result = Query(client, host, session, previous.Id, "SELECT 42", "old source");
+                    model.LoadedDatabase = replacement;
+                    WpfTestHost.Show(owner, new Grid());
+                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
+                    CaptureDeviceTestData.PumpUntil(() => ((DataGrid)manager.FindName("Sessions")).Items.Count == 1);
+                    ((DataGrid)manager.FindName("Sessions")).SelectedItem =
+                        ((DataGrid)manager.FindName("Sessions")).Items.Cast<AgentSessionSnapshot>().Single();
+                    WpfTestHost.Pump();
+                    Assert.DoesNotContain(((ComboBox)manager.FindName("QuerySourceTarget")).Items.Cast<QuerySourceDescriptor>(),
+                        source => source.Id == previous.Id);
+                    var targets = (ComboBox)manager.FindName("GrantedScopeTarget");
+                    targets.SelectedItem = targets.Items.Cast<AgentScope>().Single(scope =>
+                        scope == AgentScope.Source(previous.Id));
+                    ((Button)manager.FindName("RevokeScope")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                    CaptureDeviceTestData.PumpUntil(() =>
+                    {
+                        if (host.Runtime.GetSession(session).Permissions.Any(permission =>
+                            permission.Scope == AgentScope.Source(previous.Id)) || host.Runtime.GetOwnedResources().Count != 0)
+                            return false;
+                        try
+                        {
+                            host.Runtime.Demand(session, activeRead);
+                            return true;
+                        }
+                        catch (AgentAccessException exception) when (exception.Error == AgentAccessError.PermissionsUpdating)
+                        { return false; }
+                    });
+                    host.Runtime.Demand(session, activeRead);
+                    Assert.Equal(AgentSessionState.Connected, host.Runtime.GetSession(session).State);
+                    Assert.Empty(host.Runtime.GetOwnedResources());
+                    var released = Payload(Complete(client.CallToolAsync("xmat_get_query_page",
+                        new Dictionary<string, object> { ["resultId"] = result }).AsTask()));
+                    Assert.Equal("OperationNotFound", released.GetProperty("error").GetString());
+                    Query(client, host, session, active.Id, "SELECT 7", "active source");
+                }
+                finally
+                {
+                    manager?.Close();
                     if (client != null)
                         Finish(client.DisposeAsync().AsTask());
                     Finish(host.DisposeAsync().AsTask());

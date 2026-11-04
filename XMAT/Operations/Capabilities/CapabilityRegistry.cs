@@ -112,6 +112,7 @@ namespace XMAT.Operations.Capabilities
                     Click(AgentAccessXaml, "Deny_Click"),
                     Click(AgentAccessXaml, "EnableAccess_Click"),
                     Click(AgentAccessXaml, "Revoke_Click"),
+                    Click(AgentAccessXaml, "RevokeScope_Click"),
                     Click(AgentAccessXaml, "TakeOver_Click"),
                 }),
 

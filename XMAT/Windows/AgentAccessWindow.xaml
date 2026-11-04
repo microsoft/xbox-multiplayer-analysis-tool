@@ -84,6 +84,17 @@
               <Button x:Name="Revoke" Click="Revoke_Click" Padding="6,3" />
             </WrapPanel>
             <TextBlock x:Name="CurrentGrants" TextWrapping="Wrap" Margin="0,6,0,0" />
+            <TextBlock x:Name="GrantedScopesLabel" Margin="0,8,0,3" />
+            <ComboBox x:Name="GrantedScopeTarget">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock>
+                    <Run Text="{Binding Kind}" /><Run Text=": " /><Run Text="{Binding Id}" />
+                  </TextBlock>
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <Button x:Name="RevokeScope" Click="RevokeScope_Click" Margin="0,4,0,0" Padding="6,3" IsEnabled="False" />
           </StackPanel>
         </ScrollViewer>
       </Grid>
