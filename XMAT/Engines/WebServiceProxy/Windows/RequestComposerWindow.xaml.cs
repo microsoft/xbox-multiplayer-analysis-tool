@@ -164,11 +164,11 @@ namespace XMAT.WebServiceCapture
             {
                 if (!_closed)
                 {
-                    // A timeout is a send without a response, which the Replays tab records; a cancelled send usually is not.
-                    StatusText.Text = WithRecording(
-                        Localization.GetLocalizedString(
-                            cancellation.IsCancellationRequested ? "COMPOSER_CANCELLED" : "COMPOSER_TIMEOUT"),
-                        recording);
+                    // A timeout is a send without a response, which the Replays tab records; a cancelled send usually is
+                    // not, though it may have reached the server.
+                    StatusText.Text = cancellation.IsCancellationRequested
+                        ? CancelledText(recording)
+                        : WithRecording(Localization.GetLocalizedString("COMPOSER_TIMEOUT"), recording);
                 }
             }
             catch (Exception exception) when (IsInputError(exception) || exception is HttpRequestException or IOException)
@@ -200,6 +200,12 @@ namespace XMAT.WebServiceCapture
             };
             return note == null ? status : status + " " + note;
         }
+
+        // A cancelled send that the Replays tab has no row for: it may still have reached the server.
+        private static string CancelledText(ReplayRecording recording) =>
+            recording?.Recorder is { Recorded: 0, NotRecorded: 0 } recorder
+                ? Localization.GetLocalizedString("COMPOSER_CANCELLED_NOT_RECORDED", recorder.Destination)
+                : WithRecording(Localization.GetLocalizedString("COMPOSER_CANCELLED"), recording);
 
         internal void CancelSend()
         {

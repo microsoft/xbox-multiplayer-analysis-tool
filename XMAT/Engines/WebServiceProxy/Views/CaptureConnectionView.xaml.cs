@@ -203,10 +203,30 @@ namespace XMAT.WebServiceCapture
         internal static bool IsReissueRunning => _reissueCancellation != null;
 
         // The application's Replays tab, whose rows are added through dispatcher.
-        internal static ReplayRecordingTarget ApplicationReplayTarget(Dispatcher dispatcher)
+        internal static ReplayRecordingTarget ApplicationReplayTarget(Dispatcher dispatcher) =>
+            new(CaptureAppModel.AppModel, UiDispatch(dispatcher));
+
+        // Runs an action on dispatcher's thread and waits for it, or not at all once that dispatcher is shutting down, as
+        // when XMAT exits: the recorder then counts the send as not recorded instead of waiting for a thread that has gone.
+        internal static Action<Action> UiDispatch(Dispatcher dispatcher)
         {
             ArgumentNullException.ThrowIfNull(dispatcher);
-            return new ReplayRecordingTarget(CaptureAppModel.AppModel, action => dispatcher.Invoke(action));
+            return action =>
+            {
+                if (dispatcher.HasShutdownStarted)
+                {
+                    return;
+                }
+
+                try
+                {
+                    dispatcher.Invoke(action);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The dispatcher shut down before it ran the action, which then never runs.
+                }
+            };
         }
 
         // The name of this view's tab, for where its replays come from.
@@ -254,7 +274,7 @@ namespace XMAT.WebServiceCapture
             }
 
             ReplayRunResult run = await ReissueAsync(snapshot, snapshot.UnsafeSends > 0, ReplayTarget);
-            ShowReplayOutcome(owner, snapshot.Request, run);
+            ShowReplayOutcome(owner, snapshot, run);
             return run;
         }
 
@@ -336,11 +356,12 @@ namespace XMAT.WebServiceCapture
             ReplayRecorder recorder = recording.Recorder;
             return new ReplayRunResult(
                 result,
-                recorder.Destination,
-                recorder.BodyBudgetBytes,
-                recorder.OmittedBodies,
-                recorder.NotRecorded,
-                _reissueCancelledByUser);
+                Destination: recorder.Destination,
+                BodyBudgetBytes: recorder.BodyBudgetBytes,
+                Recorded: recorder.Recorded,
+                OmittedBodies: recorder.OmittedBodies,
+                NotRecorded: recorder.NotRecorded,
+                CancelledByUser: _reissueCancelledByUser);
         }
 
         private bool Confirm(Window owner, string message) =>
@@ -369,11 +390,16 @@ namespace XMAT.WebServiceCapture
                 : MessageBox.Show(owner, message, title, buttons, image, defaultResult);
         }
 
-        // Tells the user how a run went: why it did not run or failed, the verify summary or the sends without a complete
-        // response, then the bodies that the Replays tab did not keep and the sends it could not record. A run that closing
-        // XMAT cancelled says nothing.
-        private void ShowReplayOutcome(Window owner, ReissueRequest request, ReplayRunResult run)
+        // Tells the user how a run went: why it did not run or failed, that it was cancelled, the verify summary or the
+        // sends without a complete response, then the bodies that the Replays tab did not keep and the sends it could not
+        // record. A run that exiting XMAT cancelled says nothing.
+        private void ShowReplayOutcome(Window owner, ReplaySnapshot snapshot, ReplayRunResult run)
         {
+            if (ReplayTarget.IsShuttingDown)
+            {
+                return;
+            }
+
             if (run.WasBusy)
             {
                 Tell(owner, Localization.GetLocalizedString("REPLAY_BUSY"), MessageBoxImage.Information);
@@ -389,13 +415,20 @@ namespace XMAT.WebServiceCapture
 
             var lines = new List<string>();
             MessageBoxImage image = MessageBoxImage.Information;
-            if (!cancelled && !result.Succeeded)
+            if (cancelled && run.CancelledByUser)
+            {
+                // Cancelling does not unsend: the request in flight may have reached the server, and it has no row.
+                lines.Add(Localization.GetLocalizedString(
+                    "REPLAY_CANCELLED", run.Recorded, snapshot.Sends, run.Destination));
+                image = MessageBoxImage.Warning;
+            }
+            else if (!cancelled && !result.Succeeded)
             {
                 lines.Add(Localization.GetLocalizedString(
                     "REPLAY_FAILED", result.Diagnostics.Count > 0 ? result.Diagnostics[0].Message : string.Empty));
                 image = MessageBoxImage.Error;
             }
-            else if (!cancelled && request.Verify)
+            else if (!cancelled && snapshot.Request.Verify)
             {
                 lines.Add(VerifySummary(result.Value));
                 if (result.Value.Mismatched + result.Value.Failed > 0)
@@ -406,7 +439,7 @@ namespace XMAT.WebServiceCapture
             else if (!cancelled && result.Value.Failed > 0)
             {
                 lines.Add(Localization.GetLocalizedString(
-                    "REPLAY_SOME_FAILED", result.Value.Failed, result.Value.Items.Count));
+                    "REPLAY_SOME_FAILED", result.Value.Failed, result.Value.Items.Count, run.Destination));
                 image = MessageBoxImage.Warning;
             }
 

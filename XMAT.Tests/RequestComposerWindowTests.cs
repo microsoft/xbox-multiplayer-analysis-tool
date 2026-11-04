@@ -310,8 +310,7 @@ namespace XMAT.Tests
                 Find<TextBox>(composed, "UrlBox").Text = "http://127.0.0.1:9/new";
                 await composed.SendAsync();
 
-                var replays = (WebServiceDeviceCaptureController)model
-                    .GetOrAddReplayContext(ReplayRecorder.DeviceName).CaptureController;
+                var replays = (WebServiceDeviceCaptureController)model.GetOrAddReplayContext().CaptureController;
                 Assert.Equal(
                     new[] { "Local PC #7, from the composer", "a request composed from scratch" },
                     replays.ProxyConnections.Select(row => row.ReplaySource));
@@ -323,7 +322,7 @@ namespace XMAT.Tests
                 Assert.Equal("original"u8.ToArray(), resent.RequestBody);
                 Assert.Equal("made"u8.ToArray(), replays.ProxyConnections[1].ResponseBody);
                 Assert.Equal(ReplaySourceKind.Composed, replays.ProxyConnections[1].Replay.Kind);
-                Assert.EndsWith("Recorded in the Replays tab.", Find<TextBlock>(edited, "StatusText").Text);
+                Assert.EndsWith("Recorded in the XMAT Replays tab.", Find<TextBlock>(edited, "StatusText").Text);
                 Assert.True(model.CanModifyCaptureData);
                 Assert.Equal("original"u8.ToArray(), capture.RequestBody);
                 Assert.Equal("old response"u8.ToArray(), capture.ResponseBody);
@@ -367,10 +366,88 @@ namespace XMAT.Tests
                 await window.SendAsync();
 
                 Assert.Equal(1, handler.CallCount);
-                var replays = (WebServiceDeviceCaptureController)model
-                    .GetOrAddReplayContext(ReplayRecorder.DeviceName).CaptureController;
+                var replays = (WebServiceDeviceCaptureController)model.GetOrAddReplayContext().CaptureController;
                 Assert.Single(replays.ProxyConnections);
                 Assert.True(model.CanModifyCaptureData);
+            }
+            finally
+            {
+                window.Close();
+                await RemoveAllAsync(model);
+            }
+        });
+
+        // A send that the user cancels gets no row in the Replays tab, though the server may have received it: the status
+        // says both.
+        [Fact]
+        public Task Window_CancelledSend_SaysItMayHaveReachedTheServer_AndIsNotRecorded() => OnDispatcher(async () =>
+        {
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var handler = new StubHandler(async (_, token) =>
+            {
+                entered.TrySetResult();
+                await Task.Delay(Timeout.Infinite, token);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+            using var httpClient = new HttpClient(handler);
+            using var client = new RequestReplayClient(httpClient);
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            var window = new RequestComposerWindow(LoopbackGet(), client, (_, _) => true, Recording(model), "Local PC");
+            try
+            {
+                Task sending = window.SendAsync();
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                window.CancelSend();
+                await sending.WaitAsync(TimeSpan.FromSeconds(5));
+
+                Assert.Equal(
+                    Localization.GetLocalizedString("COMPOSER_CANCELLED_NOT_RECORDED", CaptureAppModel.ReplayContextName),
+                    Find<TextBlock>(window, "StatusText").Text);
+                Assert.Null(window.LastResult);
+                var replays = (WebServiceDeviceCaptureController)model.GetOrAddReplayContext().CaptureController;
+                Assert.Empty(replays.ProxyConnections);
+                Assert.True(model.CanModifyCaptureData);
+            }
+            finally
+            {
+                window.Close();
+                await RemoveAllAsync(model);
+            }
+        });
+
+        // Exiting XMAT without the main window's Closing (Windows ending the session, Application.Shutdown) cancels a send in
+        // progress without waiting for it and records nothing more; no send starts afterward.
+        [Fact]
+        public Task Window_ShutdownCancelsTheSendInProgress_AndNoSendStartsAfterward() => OnDispatcher(async () =>
+        {
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var handler = new StubHandler(async (_, token) =>
+            {
+                entered.TrySetResult();
+                await Task.Delay(Timeout.Infinite, token);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+            using var httpClient = new HttpClient(handler);
+            using var client = new RequestReplayClient(httpClient);
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            var window = new RequestComposerWindow(LoopbackGet(), client, (_, _) => true, Recording(model), "Local PC");
+            try
+            {
+                Task sending = window.SendAsync();
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                model.BeginShutdown();
+                Assert.False(sending.IsCompleted);
+                await sending.WaitAsync(TimeSpan.FromSeconds(5));
+
+                Assert.Null(window.LastResult);
+                var replays = (WebServiceDeviceCaptureController)model.GetOrAddReplayContext().CaptureController;
+                Assert.Empty(replays.ProxyConnections);
+
+                await window.SendAsync();
+
+                Assert.Equal(1, handler.CallCount);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_BUSY"), Find<TextBlock>(window, "StatusText").Text);
+                Assert.Empty(replays.ProxyConnections);
             }
             finally
             {
@@ -450,6 +527,11 @@ namespace XMAT.Tests
 
         private static T Find<T>(Window window, string name) where T : class =>
             Assert.IsType<T>(window.FindName(name));
+
+        // A captured GET to the discard port on this machine; tests that send it stub the transport.
+        private static ProxyConnectionModel LoopbackGet() =>
+            new(7, "200", DateTime.UtcNow, TimeSpan.Zero, "http", "127.0.0.1:9", "GET", "/", "GET / HTTP/1.1\r\n\r\n", [],
+                "HTTP/1.1 200 OK\r\n\r\n", [], "127.0.0.1");
 
         // Records into the model's Replays tab, on this test's UI thread.
         private static ReplayRecordingTarget Recording(CaptureAppModel model)

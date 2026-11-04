@@ -38,6 +38,14 @@ namespace XMAT
             InitializeCaptureMethods();
             InitializeCaptureAnalyzers();
             TrackXboxCaptures();
+            SessionEnding += Application_SessionEnding;
+        }
+
+        // Windows ending the session closes XMAT without the main window's Closing, which would cancel a running replay
+        // and wait for it: cancel it here, without waiting, since its rows are added on this thread.
+        private void Application_SessionEnding(object sender, SessionEndingCancelEventArgs e)
+        {
+            CaptureAppModel.AppModel.BeginShutdown();
         }
 
         private void InitializeExceptionHandlers()
@@ -255,6 +263,9 @@ namespace XMAT
 
         private void Application_Exit(object sender, ExitEventArgs e)
         {
+            // Application.Shutdown, as when XMAT restarts as administrator, ignores a cancelled Closing and does not wait for
+            // a running replay either: cancel it, without waiting, before the capture methods and the database go away.
+            CaptureAppModel.AppModel.BeginShutdown();
             ShutdownCaptureAnalyzers();
             ShutdownCaptureMethods();
             _xboxSessions?.Clear();

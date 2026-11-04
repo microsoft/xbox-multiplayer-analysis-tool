@@ -64,7 +64,8 @@ namespace XMAT.WebServiceCapture
 
     // The requests of a Replay menu run, fixed on the UI thread before the user is asked about them: copies of the rows
     // that can be replayed, as they are then, and where each comes from. A live capture that updates a row afterwards
-    // changes nothing: what the user confirms is what is sent.
+    // changes nothing: what the user confirms is what is sent. The copies share the rows' bodies and header dictionaries,
+    // which an update replaces and never changes in place (ProxyConnectionModel.RequestBody).
     internal sealed class ReplaySnapshot
     {
         private ReplaySnapshot(
@@ -84,9 +85,9 @@ namespace XMAT.WebServiceCapture
         // Where each of Captures comes from, by index (ReplayItemResult.SourceIndex).
         internal IReadOnlyList<ReplayProvenance> Provenance { get; }
 
-        // The requests whose method can change server state, as ReplayOperation's policy counts them
-        // (RequestReplayDraft.UsesUnsafeMethod).
-        internal int UnsafeRequests => Captures.Count(capture => capture.Method is not ("GET" or "HEAD" or "OPTIONS"));
+        // The requests whose method can change server state, as ReplayOperation's policy counts them: any method but exactly
+        // GET, HEAD and OPTIONS (RequestReplayDraft.IsUnsafeMethod).
+        internal int UnsafeRequests => Captures.Count(capture => RequestReplayDraft.IsUnsafeMethod(capture.Method));
 
         internal long Sends => (long)Captures.Count * Request.Repeat;
 
@@ -114,12 +115,13 @@ namespace XMAT.WebServiceCapture
     }
 
     // What a GUI replay run did: the operation's result, or none when XMAT was busy and nothing was sent; the tab it was
-    // recorded in and the most bodies that tab keeps; the bodies the tab did not keep and the sends it could not record;
-    // and whether the user cancelled the run.
+    // recorded in and the most bodies that tab keeps; the sends that the tab recorded, the bodies it did not keep and the
+    // sends it could not record; and whether the user cancelled the run.
     internal sealed record ReplayRunResult(
         OperationResult<ReplayResult> Result,
         string Destination = null,
         long BodyBudgetBytes = 0,
+        int Recorded = 0,
         int OmittedBodies = 0,
         int NotRecorded = 0,
         bool CancelledByUser = false)
@@ -132,13 +134,14 @@ namespace XMAT.WebServiceCapture
     // The GUI's sink for ReplayOperation: each send becomes a row of the read-only Replays tab, with the request XMAT sent
     // and the response it got, so replays can be inspected and analyzed like captured traffic. ReplayOperation calls Add
     // off the UI thread, one send at a time; the row is added on the UI thread, once to the tab's rows and once to the table
-    // that the tab's analysis reads (GetCaptureRecords), and only while the tab is open: a send that finds the tab closed
-    // is counted and stops the run. The tab keeps at most BodyBudgetBytes of request and response bodies, its earlier rows
-    // included; a send whose bodies do not fit is still recorded, with its status, headers and timing, without those
-    // bodies and with a note that says so.
+    // that the tab's analysis reads (GetCaptureRecords), and only while the tab is open: a send that finds the tab closed,
+    // or that the UI thread does not take, as once XMAT is shutting down, is counted and stops the run. The tab keeps at
+    // most BodyBudgetBytes of request and response bodies, its earlier rows included; a send whose bodies do not fit is
+    // still recorded, with its status, headers and timing, without those bodies, with a note that says so, and with a
+    // header in its stored request or response head that says how many bytes were not kept
+    // (RequestReplayDraft.RequestBodyNotKeptHeader, ResponseBodyNotKeptHeader), which saved captures and exports keep.
     internal sealed class ReplayRecorder : IReplayExchangeSink
     {
-        internal const string DeviceName = "Replays";
         internal const long DefaultBodyBudgetBytes = 256L * 1024 * 1024;
 
         private readonly WebServiceDeviceCaptureController _controller;
@@ -149,10 +152,12 @@ namespace XMAT.WebServiceCapture
         private readonly Action _stop;
         private long _retainedBodyBytes;
         private long _lastNumber;
+        private int _notRecorded;
 
-        // Created on the UI thread, which onUiThread runs an action on synchronously (UI types pass their dispatcher).
-        // isOpen says whether the tab is still open, and stop ends the run once it is not. Replay rows are numbered after
-        // the rows the tab already has, whose bodies count against the budget.
+        // Created on the UI thread, which onUiThread runs an action on synchronously, or not at all once it no longer takes
+        // rows (UI types pass their dispatcher). isOpen says, on the UI thread, whether the tab still takes rows, and stop
+        // ends the run once it does not. Replay rows are numbered after the rows the tab already has, whose bodies count
+        // against the budget.
         internal ReplayRecorder(
             WebServiceDeviceCaptureController controller,
             IDataTable table,
@@ -182,7 +187,7 @@ namespace XMAT.WebServiceCapture
 
         internal long BodyBudgetBytes { get; }
 
-        // The counts below change on the UI thread; read them there.
+        // The counts below change on the UI thread, but for NotRecorded; read them there once the run has ended.
         internal long RetainedBodyBytes => _retainedBodyBytes;
 
         internal int Recorded { get; private set; }
@@ -190,8 +195,8 @@ namespace XMAT.WebServiceCapture
         // Request and response bodies that sends had but their rows do not keep.
         internal int OmittedBodies { get; private set; }
 
-        // Sends that found the tab closed.
-        internal int NotRecorded { get; private set; }
+        // Sends that found the tab closed, or that the UI thread did not take.
+        internal int NotRecorded => Volatile.Read(ref _notRecorded);
 
         public void Add(ReplayItemResult result, ReplayExchange exchange)
         {
@@ -199,17 +204,27 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(exchange);
             ReplayProvenance provenance = _provenanceOf(result) ??
                 new ReplayProvenance(ReplaySourceKind.Reissued, string.Empty, result.RequestNumber);
-            _onUiThread(() => Record(provenance, exchange));
+            bool taken = false;
+            _onUiThread(() =>
+            {
+                taken = true;
+                Record(provenance, exchange);
+            });
+            if (!taken)
+            {
+                NotRecordedStop();
+            }
         }
 
         // A capture row for one send: the request as XMAT built it and the response, with no status when none came, and
-        // without the bodies that the tab does not keep.
+        // without the bodies that the tab does not keep, which a header in the head and the row's note account for.
         internal static ProxyConnectionModel ToRow(
             long number,
             ReplayProvenance provenance,
             ReplayExchange exchange,
             bool keepRequestBody = true,
-            bool keepResponseBody = true)
+            bool keepResponseBody = true,
+            long bodyBudgetBytes = DefaultBodyBudgetBytes)
         {
             ArgumentNullException.ThrowIfNull(exchange);
             Uri uri = exchange.RequestUri;
@@ -219,6 +234,11 @@ namespace XMAT.WebServiceCapture
             byte[] responseBody = response?.Body ?? Array.Empty<byte>();
             bool requestOmitted = !keepRequestBody && requestBody.Length != 0;
             bool responseOmitted = !keepResponseBody && responseBody.Length != 0;
+            string requestHead = Head(
+                request, requestOmitted ? RequestReplayDraft.RequestBodyNotKeptHeader : null, requestBody.LongLength);
+            string responseHead = Head(
+                response, responseOmitted ? RequestReplayDraft.ResponseBodyNotKeptHeader : null, responseBody.LongLength);
+            long budgetMiB = bodyBudgetBytes / (1024 * 1024);
             return new ProxyConnectionModel(
                 number,
                 exchange.StatusCode == 0 ? string.Empty : exchange.StatusCode.ToString(CultureInfo.InvariantCulture),
@@ -228,18 +248,21 @@ namespace XMAT.WebServiceCapture
                 uri?.Authority ?? string.Empty,
                 request?.StartLine.Split(' ')[0] ?? string.Empty,
                 uri?.PathAndQuery ?? string.Empty,
-                Head(request),
+                requestHead,
                 requestOmitted ? Array.Empty<byte>() : requestBody,
-                Head(response),
+                responseHead,
                 responseOmitted ? Array.Empty<byte>() : responseBody,
                 "0.0.0.0")
             {
                 Replay = provenance,
                 ReplayNote = (requestOmitted, responseOmitted) switch
                 {
-                    (true, true) => Localization.GetLocalizedString("REPLAY_NOTE_BODIES"),
-                    (true, false) => Localization.GetLocalizedString("REPLAY_NOTE_REQUEST_BODY"),
-                    (false, true) => Localization.GetLocalizedString("REPLAY_NOTE_RESPONSE_BODY"),
+                    (true, true) => Localization.GetLocalizedString(
+                        "REPLAY_NOTE_BODIES", requestBody.LongLength, responseBody.LongLength, budgetMiB),
+                    (true, false) => Localization.GetLocalizedString(
+                        "REPLAY_NOTE_REQUEST_BODY", requestBody.LongLength, budgetMiB),
+                    (false, true) => Localization.GetLocalizedString(
+                        "REPLAY_NOTE_RESPONSE_BODY", responseBody.LongLength, budgetMiB),
                     _ => null,
                 },
             };
@@ -250,15 +273,15 @@ namespace XMAT.WebServiceCapture
         {
             if (!_isOpen())
             {
-                NotRecorded++;
-                _stop?.Invoke();
+                NotRecordedStop();
                 return;
             }
 
             bool keepRequest = TryRetain(exchange.Request?.Body.LongLength ?? 0);
             bool keepResponse = TryRetain(exchange.Response?.Body.LongLength ?? 0);
             OmittedBodies += (keepRequest ? 0 : 1) + (keepResponse ? 0 : 1);
-            ProxyConnectionModel row = ToRow(_lastNumber + 1, provenance, exchange, keepRequest, keepResponse);
+            ProxyConnectionModel row = ToRow(
+                _lastNumber + 1, provenance, exchange, keepRequest, keepResponse, BodyBudgetBytes);
             if (_table != null)
             {
                 row.AddToDataTable(_controller.DeviceName, _table);
@@ -267,6 +290,13 @@ namespace XMAT.WebServiceCapture
             _controller.ProxyConnections.Add(row);
             _lastNumber++;
             Recorded++;
+        }
+
+        // A send that the tab cannot take is counted, and the run stops: nothing after it would be recorded either.
+        private void NotRecordedStop()
+        {
+            Interlocked.Increment(ref _notRecorded);
+            _stop?.Invoke();
         }
 
         // Keeps a body when it fits what is left of the budget; an empty body always fits.
@@ -289,8 +319,9 @@ namespace XMAT.WebServiceCapture
         private static long BodyBytes(ProxyConnectionModel row) =>
             (row.RequestBody?.LongLength ?? 0) + (row.ResponseBody?.LongLength ?? 0);
 
-        // The start line and header lines, as captures store them.
-        private static string Head(ReplayMessage message)
+        // The start line and header lines, as captures store them, then the empty line that ends the head; notKeptHeader,
+        // when a body was not kept, adds that header with the body's size in bytes.
+        private static string Head(ReplayMessage message, string notKeptHeader, long notKeptBytes)
         {
             if (message == null)
             {
@@ -303,7 +334,13 @@ namespace XMAT.WebServiceCapture
                 head.Append(header.Key).Append(": ").Append(header.Value).Append("\r\n");
             }
 
-            return head.ToString();
+            if (notKeptHeader != null)
+            {
+                head.Append(notKeptHeader).Append(": ")
+                    .Append(notKeptBytes.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+            }
+
+            return head.Append("\r\n").ToString();
         }
     }
 
@@ -330,7 +367,8 @@ namespace XMAT.WebServiceCapture
     // Where the GUI records replays and composer sends: the Replays tab of an application model, the tab that the replay
     // feature created and keeps by reference (CaptureAppModel.GetOrAddReplayContext), never a tab found by its name. A
     // recording holds the model's capture-data operation, so no load, import, analysis or tab close runs while it adds
-    // rows, and closing XMAT cancels its run and waits for it to end (CaptureAppModel.CanCloseAsync).
+    // rows; closing XMAT cancels its run and waits for it to end (CaptureAppModel.CanCloseAsync), and once XMAT exits
+    // without that (CaptureAppModel.BeginShutdown), no recording starts and none adds rows.
     internal sealed class ReplayRecordingTarget
     {
         private readonly CaptureAppModel _model;
@@ -338,8 +376,9 @@ namespace XMAT.WebServiceCapture
         private readonly Func<WebServiceDeviceCaptureController, IDataTable> _tableOf;
         private readonly long _bodyBudgetBytes;
 
-        // onUiThread runs an action on the UI thread synchronously: UI types pass their dispatcher. tableOf gives the table
-        // that the tab's rows go to; by default the capture method's, which the tab reads.
+        // onUiThread runs an action on the UI thread synchronously, or not at all once that thread no longer takes work:
+        // UI types pass their dispatcher. tableOf gives the table that the tab's rows go to; by default the capture
+        // method's, which the tab reads.
         internal ReplayRecordingTarget(
             CaptureAppModel model,
             Action<Action> onUiThread,
@@ -354,11 +393,16 @@ namespace XMAT.WebServiceCapture
             _bodyBudgetBytes = bodyBudgetBytes;
         }
 
-        // False while an analysis or another capture-data operation, such as another replay, is running.
-        internal bool CanBegin => _model.CanModifyCaptureData;
+        // False while an analysis or another capture-data operation, such as another replay, is running, and once XMAT is
+        // shutting down.
+        internal bool CanBegin => _model.CanModifyCaptureData && !_model.IsShuttingDown;
 
-        // Starts recording one run, on the UI thread; null when XMAT is busy (CanBegin). Until the recording is disposed,
-        // closing XMAT cancels the run through cancellation and waits for the recording to end. show selects the tab.
+        // XMAT is exiting without waiting for replays (CaptureAppModel.BeginShutdown).
+        internal bool IsShuttingDown => _model.IsShuttingDown;
+
+        // Starts recording one run, on the UI thread; null when XMAT is busy or shutting down (CanBegin). Until the
+        // recording is disposed, closing XMAT cancels the run through cancellation and waits for the recording to end.
+        // show selects the tab.
         internal ReplayRecording TryBegin(
             CancellationTokenSource cancellation,
             Func<ReplayItemResult, ReplayProvenance> provenanceOf,
@@ -373,14 +417,14 @@ namespace XMAT.WebServiceCapture
 
             try
             {
-                ICaptureDeviceContext destination = _model.GetOrAddReplayContext(ReplayRecorder.DeviceName);
+                ICaptureDeviceContext destination = _model.GetOrAddReplayContext();
                 var controller = (WebServiceDeviceCaptureController)destination.CaptureController;
                 var recorder = new ReplayRecorder(
                     controller,
                     _tableOf(controller),
-                    _onUiThread,
+                    OnUiThreadUntilShutdown,
                     provenanceOf,
-                    () => _model.CaptureDeviceContexts.Contains(destination),
+                    () => !_model.IsShuttingDown && _model.CaptureDeviceContexts.Contains(destination),
                     cancellation.Cancel,
                     _bodyBudgetBytes);
                 if (show)
@@ -394,6 +438,16 @@ namespace XMAT.WebServiceCapture
             {
                 operation.Dispose();
                 throw;
+            }
+        }
+
+        // Once XMAT is shutting down a send no longer waits for the UI thread, which may be tearing down the tabs and the
+        // database: its row is not added.
+        private void OnUiThreadUntilShutdown(Action action)
+        {
+            if (!_model.IsShuttingDown)
+            {
+                _onUiThread(action);
             }
         }
     }

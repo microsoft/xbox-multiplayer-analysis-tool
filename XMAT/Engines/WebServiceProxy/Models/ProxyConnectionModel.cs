@@ -39,6 +39,9 @@ namespace XMAT.WebServiceCapture.Models
         public string Method { get; private set; }
         public string Path { get; private set; }
         public string RequestLineAndHeaders { get; private set; }
+        // The body arrays, and the header dictionaries below, are never changed in place once a row is published: an
+        // update (UpdateFromDataRecord) replaces the arrays and drops the dictionaries. So a copy (the copy constructor),
+        // such as a replay's snapshot of the rows the user confirmed, may share them and still keeps what it copied.
         public byte[] RequestBody { get; private set; }
         public string ResponseLineAndHeaders { get; private set; }
         public byte[] ResponseBody { get; private set; }
@@ -171,6 +174,7 @@ namespace XMAT.WebServiceCapture.Models
             Replay = model.Replay;
             ReplayNote = model.ReplayNote;
 
+            // Shared, not copied: they are immutable once published (see RequestBody).
             _requestHeaders = model.RequestHeaders;
             _responseHeaders = model.ResponseHeaders;
 

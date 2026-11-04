@@ -126,6 +126,17 @@ namespace XMAT.Models
                 }
             }
         }
+        // XMAT is exiting (BeginShutdown): no GUI replay starts, and a running one adds no more rows.
+        internal bool IsShuttingDown
+        {
+            get
+            {
+                lock (_analysisStateLock)
+                {
+                    return _isShuttingDown;
+                }
+            }
+        }
         internal bool IsAnyCaptureRunning
         {
             get
@@ -165,13 +176,22 @@ namespace XMAT.Models
         private bool _isAnalysisRunning;
         private bool _isCaptureDataOperationRunning;
 
+        // The name of the read-only tab that GUI replays and composer sends are recorded in (GetOrAddReplayContext), which is
+        // also the device name of its rows in the shared capture table. No tab that writes to that table can have it, or a
+        // name that starts with it, so their rows never mix with replays: console names have no spaces, the fixed device
+        // names and imports' names ("Fiddler - ...") start otherwise, and AddDeviceContext refuses it. Only tabs loaded
+        // from a saved capture can have it, and they read their own copy of the rows.
+        internal const string ReplayContextName = "XMAT Replays";
+
         // The read-only tab that GUI replays are recorded in (GetOrAddReplayContext); null until one is needed.
         private ICaptureDeviceContext _replayContext;
 
         // The running capture-data operation, if closing XMAT may cancel it and wait for it to end, such as a GUI replay,
-        // and the task that completes when it has ended. Guarded by _analysisStateLock.
+        // and the task that completes when it has ended; and whether XMAT is shutting down (BeginShutdown). Guarded by
+        // _analysisStateLock.
         private CancellationTokenSource _cancellableOperation;
         private TaskCompletionSource _cancellableOperationEnded;
+        private bool _isShuttingDown;
 
         public CaptureAppModel() :
             this(Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher)
@@ -267,13 +287,14 @@ namespace XMAT.Models
         }
 
         // Begins a capture-data operation that closing XMAT may cancel through cancellation and then wait for, instead of
-        // refusing to close: a GUI replay (CancelCaptureDataOperationAsync). Disposing the lease ends the operation.
+        // refusing to close: a GUI replay (CancelCaptureDataOperationAsync). Disposing the lease ends the operation. None
+        // begins once XMAT is shutting down (BeginShutdown).
         internal bool TryBeginCancellableCaptureDataOperation(
             CancellationTokenSource cancellation,
             out IDisposable operationLease)
         {
             ArgumentNullException.ThrowIfNull(cancellation);
-            if (!TryBeginCaptureDataOperation(out IDisposable lease))
+            if (IsShuttingDown || !TryBeginCaptureDataOperation(out IDisposable lease))
             {
                 operationLease = null;
                 return false;
@@ -317,6 +338,29 @@ namespace XMAT.Models
             }
 
             return !IsCaptureDataOperationRunning;
+        }
+
+        // For XMAT exiting without its main window's Closing, which cancels a GUI replay and waits for it (CanCloseAsync):
+        // Windows ending the session, or Application.Shutdown. Cancels a running GUI replay without waiting for it, since
+        // the UI thread that calls this is the one that adds the replay's rows, and from now on no replay starts and none
+        // adds rows (IsShuttingDown). A request that was being sent may still reach the server.
+        internal void BeginShutdown()
+        {
+            CancellationTokenSource cancellation;
+            lock (_analysisStateLock)
+            {
+                _isShuttingDown = true;
+                cancellation = _cancellableOperation;
+            }
+
+            try
+            {
+                cancellation?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The operation ended and disposed its cancellation meanwhile.
+            }
         }
 
         private void EndCancellableOperation(TaskCompletionSource ended)
@@ -948,6 +992,13 @@ namespace XMAT.Models
             object serializedParameters,
             bool deferPortAllocation = false)
         {
+            // Rows are kept by device name in the shared capture table, and the replay tab's name is its own.
+            if (deviceName != null && deviceName.StartsWith(ReplayContextName, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "This name is reserved for the tab that replays are recorded in.", nameof(deviceName));
+            }
+
             var newCaptureDeviceModel = GetDeviceContext(
                 deviceType,
                 deviceName,
@@ -982,21 +1033,30 @@ namespace XMAT.Models
 
         // The read-only tab where GUI replays and composer sends are recorded (ReplayRecordingTarget), created on first use
         // and again after it is closed. Only the replay feature finds it: name lookups (GetDeviceContext) skip it, so no
-        // load, import or new capture reuses it or replaces its rows, and a tab that merely has the same name is never used
-        // for replays. Its name is the first of name, "name (2)", ... that no open tab has, so that its rows in the shared
-        // capture table stay apart from theirs.
-        internal ICaptureDeviceContext GetOrAddReplayContext(string name)
+        // load, import or new capture reuses it or replaces its rows, and a tab that merely has its name, such as one loaded
+        // from a saved capture, is never used for replays. It is named ReplayContextName, or "XMAT Replays (2)" and so on
+        // while an open tab has that name. Unlike other read-only tabs it is listed with the capture devices, so that saving
+        // keeps it: the saved capture opens it as an ordinary read-only tab.
+        internal ICaptureDeviceContext GetOrAddReplayContext()
         {
-            ArgumentException.ThrowIfNullOrEmpty(name);
-            if (_replayContext != null && _captureDeviceContexts.Contains(_replayContext))
+            if (_replayContext != null)
             {
-                return _replayContext;
+                if (_captureDeviceContexts.Contains(_replayContext))
+                {
+                    return _replayContext;
+                }
+
+                // Removed without RemoveDeviceContextAsync, it still has rows in the capture table, under a name that the new
+                // tab can take: they go first.
+                _replayContext.CaptureController.ClearAllCaptures();
+                UnlistReplayContext(_replayContext);
+                _replayContext = null;
             }
 
-            string deviceName = name;
+            string deviceName = ReplayContextName;
             for (int suffix = 2; _captureDeviceContexts.Any(context => context.DeviceName == deviceName); suffix++)
             {
-                deviceName = $"{name} ({suffix})";
+                deviceName = $"{ReplayContextName} ({suffix})";
             }
 
             var context = new CaptureDeviceContextModel(
@@ -1006,11 +1066,21 @@ namespace XMAT.Models
                 true,
                 null,
                 hostListPolicy: HostListPolicy);
+            CaptureDevicesTable?.AddRow(
+                (Int64)context.DeviceType,
+                context.DeviceName,
+                (Int64)context.CaptureType);
             _replayContext = context;
             _captureDeviceContexts.Add(context);
             InvalidateCommands();
             return context;
         }
+
+        private void UnlistReplayContext(ICaptureDeviceContext context) =>
+            CaptureDevicesTable?.RemoveRowsWhere(
+                new FieldValue<Int64>(@"DeviceType", (Int64)context.DeviceType),
+                new FieldValue<string>(@"DeviceName", context.DeviceName),
+                new FieldValue<Int64>(@"CaptureType", (Int64)context.CaptureType));
 
         internal ICaptureDeviceContext GetDeviceContext(DeviceType deviceType, string deviceName, CaptureType captureType, bool readOnly)
         {
@@ -1040,6 +1110,10 @@ namespace XMAT.Models
                     new FieldValue<string>(@"DeviceName", captureDeviceContext.DeviceName),
                     new FieldValue<Int64>(@"CaptureType", (Int64)captureDeviceContext.CaptureType)
                 );
+            }
+            else if (ReferenceEquals(captureDeviceContext, _replayContext))
+            {
+                UnlistReplayContext(captureDeviceContext);
             }
 
             bool wasPresent =

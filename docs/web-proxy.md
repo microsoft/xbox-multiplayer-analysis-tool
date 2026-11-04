@@ -161,8 +161,8 @@ Requests are sent directly from this PC, bypassing system proxies and capture sc
 HTTPS certificates are validated, redirects are not followed, and response cookies
 are not reused. **Captured headers, including credentials, are sent to the edited URL.**
 Host and Content-Length are regenerated, and connection-only headers are omitted.
-Methods other than GET, HEAD, and OPTIONS require confirmation, as does changing the
-captured origin. CONNECT and WebSocket handshakes cannot be resent.
+Methods other than exactly GET, HEAD, and OPTIONS, in capitals, require confirmation, as
+does changing the captured origin. CONNECT and WebSocket handshakes cannot be resent.
 
 Use **Cancel request** to stop waiting, or **Copy as cURL (PowerShell 7)** to copy a
 command for PowerShell 7 with `curl.exe` available. **Copied commands can contain
@@ -172,8 +172,9 @@ limit. Cancelling or timing out cannot undo changes already processed by the ser
 To send a request that was never captured, select **Actions > Compose a New Request**.
 The composer opens with an empty GET request and works the same way.
 
-Each send from the composer is also recorded in the **Replays** tab, like the requests
-that **Replay** sends (see below), unless you cancel it first. While a replay, an
+Each send from the composer is also recorded in the **XMAT Replays** tab, like the
+requests that **Replay** sends (see below). A send that you cancel is not recorded, but
+it may already have reached the server, and the status line says so. While a replay, an
 analysis, or a capture file operation such as an import runs, the composer does not
 send and says so; send again when it has finished.
 
@@ -192,32 +193,50 @@ Right-click a request, or one of several selected requests, and open **Replay**:
   turn before the next round.
 - **Cancel replay** stops a replay that is running.
 
-Replays are sent the way the composer sends requests. Methods other than GET, HEAD, and
-OPTIONS need confirmation, which states how many requests the replay sends, repeats
-included, and how many of them can change server data. The requests are copied when
-you choose the menu item, so the confirmed requests are exactly the ones sent, even if
-a running capture updates their rows meanwhile.
+Replays are sent the way the composer sends requests. Methods other than exactly GET,
+HEAD, and OPTIONS, in capitals, need confirmation, which states how many requests the
+replay sends, repeats included, and how many of them can change server data. The
+requests are copied when you choose the menu item, so the confirmed requests are exactly
+the ones sent, even if a running capture updates their rows meanwhile.
 
-Each request that was sent appears in the read-only **Replays** tab, with its response,
-or without one when the request failed or timed out; a request cancelled while it is
-being sent is not recorded. **Replay of** in the request details shows where it comes
-from: the tab and request number of the captured request, or that the request was
-composed from scratch. This link is kept in memory only, and loading a saved capture
-does not restore the **Replays** tab. The tab belongs to the replay feature: a loaded
-or imported tab that happens to have the same name is never used for replays, and
-loads and imports never change the replay tab. You can inspect and analyze replays
-like captured traffic, and edit and resend them.
+Each request that was sent appears in the read-only **XMAT Replays** tab, with its
+response, or without one when the request failed or timed out. **Replay of** in the
+request details shows where it comes from: the tab and request number of the captured
+request, or that the request was composed from scratch. This link is kept in memory
+only. You can inspect and analyze replays like captured traffic, and edit and resend
+them.
 
-The **Replays** tab keeps at most 256 MiB of request and response bodies, counting the
-rows it already has. A request whose bodies do not fit still gets its row, with the
-status, headers, and timing but without those bodies, and a note in the request
-details says so; after the replay, XMAT tells you how many bodies were not kept. Close
-the **Replays** tab to free the space: the next replay starts a new one.
+When you cancel a replay, the requests already recorded stay in the tab, and XMAT tells
+you how many there are. The request that was being sent when you cancelled is not
+recorded, but it may already have reached the server, which may have processed it.
+
+The tab belongs to the replay feature. No capture can have its name, so its rows never
+mix with a capture's, in analysis or in saved captures; a loaded or imported tab is
+never used for replays, and loads and imports never change the replay tab. While
+another tab with that name is open, such as one loaded from a saved capture, replays go
+to **XMAT Replays (2)**, and so on.
+
+**File > Save** saves the **XMAT Replays** tab with the other tabs, and opening the saved
+capture shows it as an ordinary read-only tab, without **Replay of**. **File > Export**
+to a Fiddler archive includes its requests.
+
+The **XMAT Replays** tab keeps at most 256 MiB of request and response bodies, counting
+the rows it already has. This limits the bodies it keeps, not XMAT's memory use. A
+request whose bodies do not fit still gets its row, with the status, headers, and timing
+but without those bodies. A note in the request details says so, and an
+`X-XMAT-Request-Body-Not-Kept` or `X-XMAT-Response-Body-Not-Kept` header in the
+recorded request or response gives the size of the body that was not kept, so saved
+captures and exports never show it as an empty body. A request whose body was not kept
+is never sent again, from the GUI or with `xmat replay`. After the replay, XMAT tells
+you how many bodies were not kept. Close the tab to make room for new bodies: the next
+replay starts a new one.
 
 While a replay or a send from the composer is in progress, XMAT does not load, import,
 save, or export captures, analyze, start a capture, or close tabs; **Cancel replay**
 stops a replay. Exiting XMAT cancels a replay or send in progress and waits for it to
-stop before closing.
+stop before closing. When Windows ends your session, or XMAT restarts itself as
+administrator, a replay or send in progress is cancelled without waiting, and nothing
+more is recorded.
 
 The command line does the same with `xmat replay` and `xmat compose`; see
 [Command line](cli.md).
