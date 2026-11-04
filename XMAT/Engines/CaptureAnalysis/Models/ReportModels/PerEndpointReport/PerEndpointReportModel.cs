@@ -16,8 +16,9 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport
         public PerEndpointReportModel(
             ICaptureAppModel captureAppModel,
             string sourceCaptureName,
-            PerEndpointReportDocument reportDocument) :
-            base(captureAppModel, sourceCaptureName, reportDocument)
+            PerEndpointReportDocument reportDocument,
+            AnalysisSource source = null) :
+            base(captureAppModel, sourceCaptureName, reportDocument, source)
         {
             Summary = new EndpointValidationIssuesSummary(
                 captureAppModel,

@@ -18,16 +18,19 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
         string /*sourceCaptureName*/,
         string /*analysisStorageDirectory*/,
         ReportDocument,
+        AnalysisSource,
         // out as return value
         ReportViewModel>;
 
     internal static class ReportViewModelFactory
     {
+        // source is the tab that the analysis read, which the report goes to (AnalysisSource).
         public static ReportViewModel CreateForDocument(
             ICaptureAppModel captureAppModel,
             string sourceCaptureName,
             string analysisStorageDirectory,
-            ReportDocument reportDocument)
+            ReportDocument reportDocument,
+            AnalysisSource source = null)
         {
             if (ViewModelCreators.TryGetValue(
                 reportDocument.GetType(),
@@ -37,7 +40,8 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
                     captureAppModel,
                     sourceCaptureName,
                     analysisStorageDirectory,
-                    reportDocument);
+                    reportDocument,
+                    source);
             }
             return null;
         }
@@ -51,12 +55,14 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
                     (ICaptureAppModel captureAppModel,
                         string sourceCaptureName,
                         string analysisStorageDirectory,
-                        ReportDocument reportDocument) =>
+                        ReportDocument reportDocument,
+                        AnalysisSource source) =>
                 {
                     return new PerEndpointReportModel(
                         captureAppModel,
                         sourceCaptureName,
-                        reportDocument as PerEndpointReportDocument);
+                        reportDocument as PerEndpointReportDocument,
+                        source);
                 }
             },
 
@@ -66,13 +72,15 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
                     (ICaptureAppModel captureAppModel,
                         string sourceCaptureName,
                         string analysisStorageDirectory,
-                        ReportDocument reportDocument) =>
+                        ReportDocument reportDocument,
+                        AnalysisSource source) =>
                 {
                     return new CallReportModel(
                         captureAppModel,
                         sourceCaptureName,
                         analysisStorageDirectory,
-                        reportDocument as CallReportDocument);
+                        reportDocument as CallReportDocument,
+                        source);
                 }
             },
 
@@ -82,13 +90,15 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
                     (ICaptureAppModel captureAppModel,
                         string sourceCaptureName,
                         string analysisStorageDirectory,
-                        ReportDocument reportDocument) =>
+                        ReportDocument reportDocument,
+                        AnalysisSource source) =>
                 {
                     return new StatsReportModel(
                         captureAppModel,
                         sourceCaptureName,
                         analysisStorageDirectory,
-                        reportDocument as StatsReportDocument);
+                        reportDocument as StatsReportDocument,
+                        source);
                 }
             }
         };

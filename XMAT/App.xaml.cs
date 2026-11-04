@@ -42,7 +42,9 @@ namespace XMAT
         }
 
         // Windows ending the session closes XMAT without the main window's Closing, which would cancel a running replay
-        // and wait for it: cancel it here, without waiting, since its rows are added on this thread.
+        // and wait for it: cancel it here, without waiting, since its rows are added on this thread. This handler never
+        // cancels the session end (e.Cancel stays false), so XMAT always exits and BeginShutdown, which is terminal, is
+        // safe here. A handler that may cancel it must first add a reversible preparation instead (BeginShutdown).
         private void Application_SessionEnding(object sender, SessionEndingCancelEventArgs e)
         {
             CaptureAppModel.AppModel.BeginShutdown();

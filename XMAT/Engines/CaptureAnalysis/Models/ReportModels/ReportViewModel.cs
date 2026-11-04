@@ -24,17 +24,23 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
         public virtual bool Show { get { return true; } }
 
         public ICaptureAppModel CaptureAppModel { get; }
+        // The analyzed tab's name, for display and exports; Source identifies the tab.
         public string SourceCaptureName { get; }
         public ReportDocument ReportDocument { get; }
+
+        // The tab that the analysis read, which a report goes to; null when it is unknown.
+        internal AnalysisSource Source { get; }
 
         protected ReportViewModel(
             ICaptureAppModel captureAppModel,
             string sourceCaptureName,
-            ReportDocument reportDocument)
+            ReportDocument reportDocument,
+            AnalysisSource source = null)
         {
             CaptureAppModel = captureAppModel;
             SourceCaptureName = sourceCaptureName;
             ReportDocument = reportDocument;
+            Source = source;
         }
 
         protected void CopyResourceToAnalysisDirectory(

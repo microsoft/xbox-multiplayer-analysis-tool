@@ -20,8 +20,9 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.StatsReport
             ICaptureAppModel captureAppModel,
             string sourceCaptureName,
             string analysisStorageDirectory,
-            StatsReportDocument reportDocument) :
-            base(captureAppModel, sourceCaptureName, reportDocument)
+            StatsReportDocument reportDocument,
+            AnalysisSource source = null) :
+            base(captureAppModel, sourceCaptureName, reportDocument, source)
         {
             ReportUrl = $"file:///{analysisStorageDirectory}/index.html";
 

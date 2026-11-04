@@ -108,6 +108,9 @@ namespace XMAT.XboxLiveCaptureAnalysis
             analysisResultsModel.OutputDirectory =
                 analysisRunStorageDirectory;
             analysisResultsModel.SourceCaptureName = controller.DeviceName;
+            // The tab itself, which reports go to: another tab can have the same name and the same request numbers.
+            var source = new AnalysisSource(controller);
+            analysisResultsModel.Source = source;
             var progress = new Progress<OperationProgress>(update =>
             {
                 if (TryGetProcessStep(update.Phase, out var processStep))
@@ -159,7 +162,8 @@ namespace XMAT.XboxLiveCaptureAnalysis
                     _captureAppModel,
                     controller.DeviceName,
                     analysisRunStorageDirectory,
-                    report);
+                    report,
+                    source);
                 if (model != null && model.Show)
                 {
                     analysisResultsModel.Reports.Add(model);

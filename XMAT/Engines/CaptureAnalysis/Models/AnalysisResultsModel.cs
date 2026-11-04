@@ -58,7 +58,9 @@ namespace XMAT.XboxLiveCaptureAnalysis.Models
         public bool IsComplete { get => ActiveProcessStep == ProcessStep.Complete; }
 
         public string OutputDirectory { get; internal set; }
+        // The analyzed tab's name, for display and exports; Source identifies the tab, which reports go to.
         public string SourceCaptureName { get; internal set; }
+        internal AnalysisSource Source { get; set; }
         public DateTime CompletedAt { get; internal set; }
         public IReadOnlyList<AnalysisArtifact> ArtifactManifest { get; internal set; }
 

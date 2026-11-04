@@ -2,6 +2,9 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
+using System.Globalization;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -11,6 +14,7 @@ using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
+using XMAT.XboxLiveCaptureAnalysis.ReportModels;
 using XMAT.XboxLiveCaptureAnalysis.ReportModels.PerEndpointReport;
 using XMAT.XboxLiveCaptureAnalysis.ReportViews.Controls;
 
@@ -44,22 +48,66 @@ namespace XMAT.XboxLiveCaptureAnalysis
             endPointElement?.BringIntoView();
         }
 
+        // Tells the user why a request cannot be shown, with a message box unless tests replace it.
+        internal Action<string> ShowNavigationWarning { get; set; }
+
+        // Goes to a request in the tab that the report analyzed, found by reference (AnalysisSource), never to a tab that
+        // merely has its name: another tab, live or loaded, can have the same name and the same request numbers. While that
+        // tab is closed, or no longer shows the rows that were analyzed, nothing is selected and the user is told why.
         private void GoToEndpoint_Id(object sender, RoutedEventArgs e)
         {
-            PerEndpointReportModel reportModel = DataContext as PerEndpointReportModel;
-            // select the device by source name
-            ICaptureDeviceContext context = reportModel.CaptureAppModel.SelectCaptureDeviceContext(reportModel.SourceCaptureName);
-            if (context != null)
+            if (DataContext is not PerEndpointReportModel reportModel ||
+                e is not ExecutedRoutedEventArgs { Parameter: not null } args ||
+                !long.TryParse(
+                    args.Parameter.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out long requestNumber))
             {
-                // select the capture by ID
-                int requestId = int.Parse((e as ExecutedRoutedEventArgs).Parameter.ToString());
-                WebServiceDeviceCaptureController controller =
-                    context.CaptureController as WebServiceDeviceCaptureController;
-                ProxyConnectionModel model = controller.ProxyConnections.ById(requestId);
-                if (model != null && model != controller.SelectedConnectionModel)
-                {
-                    controller.SelectedConnectionModel = model;
-                }
+                return;
+            }
+
+            e.Handled = true;
+            AnalysisSource source = reportModel.Source;
+            ICaptureAppModel app = reportModel.CaptureAppModel;
+            if (source == null ||
+                app == null ||
+                !app.CaptureDeviceContexts.Any(context => ReferenceEquals(context.CaptureController, source.Controller)))
+            {
+                WarnNavigation(Localization.GetLocalizedString(
+                    "LTA_GOTO_REQUEST_SOURCE_CLOSED", requestNumber, reportModel.SourceCaptureName));
+                return;
+            }
+
+            ProxyConnectionModel request = source.FindRequest(requestNumber);
+            if (request == null)
+            {
+                WarnNavigation(Localization.GetLocalizedString(
+                    "LTA_GOTO_REQUEST_SOURCE_CHANGED", requestNumber, reportModel.SourceCaptureName));
+                return;
+            }
+
+            app.SelectCaptureDeviceContext(source.Controller);
+            if (!ReferenceEquals(source.Controller.SelectedConnectionModel, request))
+            {
+                source.Controller.SelectedConnectionModel = request;
+            }
+        }
+
+        private void WarnNavigation(string message)
+        {
+            if (ShowNavigationWarning != null)
+            {
+                ShowNavigationWarning(message);
+                return;
+            }
+
+            Window owner = Window.GetWindow(this);
+            string title = Localization.GetLocalizedString("WEBCAP_ANALYZER_TITLE");
+            if (owner == null)
+            {
+                MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            else
+            {
+                MessageBox.Show(owner, message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 

@@ -956,6 +956,59 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // A captured response recorded without its body (replay.verify.skipped) cannot be verified. Whether some or all of
+        // a run's requests are such, they count as not verified, neither matched nor differed, the summary says so and
+        // why, and it is a warning.
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public Task ReissueAndVerify_CountsResponsesRecordedWithoutTheirBodyAsNotVerified_AndWarns(bool someVerified) => _application.RunAsync(async () =>
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok("reply"));
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            string notKept = RequestReplayDraft.ResponseBodyNotKeptHeader + ": 5\r\n";
+            ProxyConnectionModel[] rows = someVerified
+                ? new[]
+                {
+                    Capture(1, server.Port, "/kept", responseBody: "reply"u8.ToArray()),
+                    Capture(2, server.Port, "/not-kept", responseHeaders: notKept),
+                }
+                : new[]
+                {
+                    Capture(1, server.Port, "/one", responseHeaders: notKept),
+                    Capture(2, server.Port, "/two", responseHeaders: notKept),
+                };
+            CaptureConnectionView view = HostListUiTests.CaptureView(new HostListPolicy(), rows);
+            view.ReplayTarget = Target(model, table: null);
+            var messages = new List<(string Text, MessageBoxImage Image)>();
+            view.ShowReplayMessage = (text, image) => messages.Add((text, image));
+            try
+            {
+                ReplayRunResult run = await view.ReissueFromMenuAsync(new ReissueRequest(rows, Verify: true));
+
+                int matched = someVerified ? 1 : 0;
+                int notVerified = someVerified ? 1 : 2;
+                Assert.True(run.Result.Succeeded);
+                Assert.Contains(run.Result.Diagnostics, diagnostic => diagnostic.Code == ReplayOperation.VerifySkippedCode);
+                Assert.Equal(
+                    (matched, 0, 0, notVerified),
+                    (run.Result.Value.Matched,
+                        run.Result.Value.Mismatched,
+                        run.Result.Value.Failed,
+                        CaptureConnectionView.NotVerified(run.Result.Value)));
+                (string text, MessageBoxImage image) = Assert.Single(messages);
+                Assert.Equal(
+                    Localization.GetLocalizedString("REPLAY_VERIFY_SUMMARY_NOT_VERIFIED", 2, matched, 0, 0, notVerified),
+                    text);
+                Assert.Contains("were not verified, because their captured response was recorded without its body", text);
+                Assert.Equal(MessageBoxImage.Warning, image);
+            }
+            finally
+            {
+                await RemoveAllAsync(model);
+            }
+        });
+
         [Fact]
         public void ReplayRow_ShowsWhereItComesFrom_AndWhatItDidNotKeep()
         {

@@ -188,7 +188,9 @@ Right-click a request, or one of several selected requests, and open **Replay**:
   response instead of 304 Not Modified.
 - **Reissue and verify** then compares each response with the captured one, by status
   code and body (without chunked framing or gzip, deflate or Brotli encoding), and lists
-  the requests whose response differs. Headers are not compared.
+  the requests whose response differs. Headers are not compared. A request whose
+  captured response was recorded without its body (see the body limit below) is not
+  verified: XMAT counts it as not verified, neither matched nor differed, and warns.
 - **Reissue several times** sends the selected requests 2 to 100 times, all of them in
   turn before the next round.
 - **Cancel replay** stops a replay that is running.

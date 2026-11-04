@@ -431,7 +431,7 @@ namespace XMAT.WebServiceCapture
             else if (!cancelled && snapshot.Request.Verify)
             {
                 lines.Add(VerifySummary(result.Value));
-                if (result.Value.Mismatched + result.Value.Failed > 0)
+                if (result.Value.Mismatched + result.Value.Failed + NotVerified(result.Value) > 0)
                 {
                     image = MessageBoxImage.Warning;
                 }
@@ -465,11 +465,21 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // The outcome of Reissue and verify: the counts, then each request whose replay differed and how (at most 20).
+        // The outcome of Reissue and verify: the counts, including the requests not verified, then each request whose replay
+        // differed and how (at most 20).
         internal static string VerifySummary(ReplayResult result)
         {
-            var summary = new StringBuilder(Localization.GetLocalizedString(
-                "REPLAY_VERIFY_SUMMARY", result.Items.Count, result.Matched, result.Mismatched, result.Failed));
+            int notVerified = NotVerified(result);
+            var summary = new StringBuilder(notVerified == 0
+                ? Localization.GetLocalizedString(
+                    "REPLAY_VERIFY_SUMMARY", result.Items.Count, result.Matched, result.Mismatched, result.Failed)
+                : Localization.GetLocalizedString(
+                    "REPLAY_VERIFY_SUMMARY_NOT_VERIFIED",
+                    result.Items.Count,
+                    result.Matched,
+                    result.Mismatched,
+                    result.Failed,
+                    notVerified));
             foreach (ReplayItemResult item in result.Items.Where(item => item.Verification is { Matches: false }).Take(20))
             {
                 string differences = string.Join(
@@ -482,6 +492,11 @@ namespace XMAT.WebServiceCapture
 
             return summary.ToString();
         }
+
+        // The sends of a Reissue and verify run that got a response but were not compared with the captured one, because
+        // it was recorded without its body (ReplayOperation.VerifySkippedCode). They count as neither matched nor differed.
+        internal static int NotVerified(ReplayResult result) =>
+            result.Items.Count(item => item.Outcome == ReplayOutcome.Completed && item.Verification == null);
 
         private void CancelReissue_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {

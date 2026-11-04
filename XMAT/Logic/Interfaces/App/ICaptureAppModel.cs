@@ -15,6 +15,8 @@ namespace XMAT.SharedInterfaces
         ObservableCollection<ICaptureDeviceContext> CaptureDeviceContexts { get; }
         ObservableCollection<ICaptureAnalysisRun> AnalysisRuns { get; }
 
-        ICaptureDeviceContext SelectCaptureDeviceContext(string deviceContextName);
+        // Selects the open tab whose capture controller this is, found by reference, and returns it; null when no open tab
+        // has it, such as once the tab is closed. Tabs are never selected by name, which several tabs can share.
+        ICaptureDeviceContext SelectCaptureDeviceContext(IDeviceCaptureController captureController);
     }
 }

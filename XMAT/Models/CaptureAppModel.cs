@@ -183,6 +183,10 @@ namespace XMAT.Models
         // from a saved capture can have it, and they read their own copy of the rows.
         internal const string ReplayContextName = "XMAT Replays";
 
+        // A name that AddDeviceContext refuses, because it is the replay tab's (ReplayContextName).
+        internal static bool IsReplayContextName(string deviceName) =>
+            deviceName != null && deviceName.StartsWith(ReplayContextName, StringComparison.Ordinal);
+
         // The read-only tab that GUI replays are recorded in (GetOrAddReplayContext); null until one is needed.
         private ICaptureDeviceContext _replayContext;
 
@@ -230,10 +234,13 @@ namespace XMAT.Models
             return true;
         }
 
-        public ICaptureDeviceContext SelectCaptureDeviceContext(string deviceContextName)
+        // Selects the open tab whose capture controller this is, by reference: tab names are not unique (ICaptureAppModel).
+        public ICaptureDeviceContext SelectCaptureDeviceContext(IDeviceCaptureController captureController)
         {
-            ICaptureDeviceContext context = _captureDeviceContexts.FirstOrDefault(
-                captureDeviceContext => captureDeviceContext.DeviceName == deviceContextName);
+            ICaptureDeviceContext context = captureController == null
+                ? null
+                : _captureDeviceContexts.FirstOrDefault(
+                    captureDeviceContext => ReferenceEquals(captureDeviceContext.CaptureController, captureController));
             if (context != null && context != SelectedDeviceContext)
             {
                 SelectedDeviceContext = context;
@@ -344,6 +351,9 @@ namespace XMAT.Models
         // Windows ending the session, or Application.Shutdown. Cancels a running GUI replay without waiting for it, since
         // the UI thread that calls this is the one that adds the replay's rows, and from now on no replay starts and none
         // adds rows (IsShuttingDown). A request that was being sent may still reach the server.
+        // This is terminal: nothing undoes it, so call it only once XMAT will exit. A handler that lets the exit still be
+        // cancelled, such as SessionEnding setting e.Cancel, must not call it; it would need a reversible preparation that
+        // pauses replays and can resume them.
         internal void BeginShutdown()
         {
             CancellationTokenSource cancellation;
@@ -993,7 +1003,7 @@ namespace XMAT.Models
             bool deferPortAllocation = false)
         {
             // Rows are kept by device name in the shared capture table, and the replay tab's name is its own.
-            if (deviceName != null && deviceName.StartsWith(ReplayContextName, StringComparison.Ordinal))
+            if (IsReplayContextName(deviceName))
             {
                 throw new ArgumentException(
                     "This name is reserved for the tab that replays are recorded in.", nameof(deviceName));

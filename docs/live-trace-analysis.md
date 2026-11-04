@@ -48,8 +48,11 @@ indicates issues were found.
 
 1. Click a summary cell to scroll to the host/rule combination.
 2. Expand it to see the rule description, related data, and individual warnings.
-3. Click a warning's request-number button to open the corresponding capture tab
-   and select that request.
+3. Click a warning's request-number button to open the capture tab that was analyzed
+   and select that request. It is always that tab, never another tab with the same
+   name: if the analyzed tab has been closed, or no longer shows the requests that were
+   analyzed (for example after **Clear Capture**, or after loading a capture into it),
+   XMAT says so and selects nothing.
 
 ![Rule description and individual warnings](../ReadmeImages/19.png)
 

@@ -20,8 +20,9 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.StatsReport
             ICaptureAppModel captureAppModel,
             string sourceCaptureName,
             string analysisStorageDirectory,
-            CallReportDocument reportDocument) :
-            base(captureAppModel, sourceCaptureName, reportDocument)
+            CallReportDocument reportDocument,
+            AnalysisSource source = null) :
+            base(captureAppModel, sourceCaptureName, reportDocument, source)
         {
             CopyResourceToAnalysisDirectory(
                 "Resources/html/xlta/calls.js",
