@@ -7,10 +7,10 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -86,6 +86,7 @@ namespace XMAT.NetworkTrace
         private readonly INetworkTraceEngineFactory _engineFactory;
         private readonly Dispatcher _dispatcher;
         private IDataTable _dataTable;
+        private bool _liveRowsAttached;
         internal INetworkTraceEngine _networkTraceEngine;
         private bool _isRunning;
         private bool _operationInProgress;
@@ -137,7 +138,7 @@ namespace XMAT.NetworkTrace
             _deviceName = deviceName;
             _deviceType = deviceType;
             _engineFactory = engineFactory ?? throw new ArgumentNullException(nameof(engineFactory));
-            _dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+            _dispatcher = App.CaptureUiDispatcher();
             IsCapturing = false;
             DeviceStatus = DeviceStatusEnum.Idle;
             PidFilterList = new ObservableCollection<CheckedListItem>();
@@ -149,10 +150,13 @@ namespace XMAT.NetworkTrace
 
         public void Initialize()
         {
-            Initialize(NetworkTraceCaptureMethod.MethodInstance.NetworkTracePacketsTable);
+            Initialize(attachLiveRows: true);
         }
 
-        internal void Initialize(IDataTable table)
+        internal void Initialize(bool attachLiveRows) =>
+            Initialize(NetworkTraceCaptureMethod.MethodInstance.NetworkTracePacketsTable, attachLiveRows);
+
+        internal void Initialize(IDataTable table, bool attachLiveRows = true)
         {
             if (IsCapturing || IsTransitioning)
                 throw new InvalidOperationException("The trace capture is busy.");
@@ -161,12 +165,14 @@ namespace XMAT.NetworkTrace
                 return;
             if (_dataTable != null)
                 _dataTable.RowAdded -= HandleRowAdded;
+            _liveRowsAttached = false;
             _disposed = false;
             Interlocked.Increment(ref _viewGeneration);
             NetworkTracePackets = new NetworkTracePacketsCollection();
             CaptureMethod = NetworkTraceCaptureMethod.Method;
             _dataTable = table;
-            _dataTable.RowAdded += HandleRowAdded;
+            if (attachLiveRows)
+                AttachLiveRows();
             IsCapturing = false;
             DeviceStatus = DeviceStatusEnum.Idle;
             RaisePropertyChange(nameof(HaveTraces));
@@ -178,6 +184,17 @@ namespace XMAT.NetworkTrace
             _disposed = false;
             NetworkTracePackets = new NetworkTracePacketsCollection();
             CaptureMethod = NetworkTraceCaptureMethod.Method;
+        }
+
+        internal void AttachLiveRows()
+        {
+            if (_liveRowsAttached || _disposed)
+                return;
+            _dataTable ??= NetworkTraceCaptureMethod.MethodInstance.NetworkTracePacketsTable;
+            if (_dataTable == null)
+                return;
+            _dataTable.RowAdded += HandleRowAdded;
+            _liveRowsAttached = true;
         }
 
         public void ClearAllCaptures()
@@ -205,7 +222,6 @@ namespace XMAT.NetworkTrace
         {
             if (IsRunning || IsTransitioning)
                 throw new InvalidOperationException(Localization.GetLocalizedString("NETCAP_RECOVERY_CLOSE_BLOCKED"));
-            Dispose();
             return Task.CompletedTask;
         }
 
@@ -215,6 +231,7 @@ namespace XMAT.NetworkTrace
             Interlocked.Increment(ref _viewGeneration);
             if (_dataTable != null)
                 _dataTable.RowAdded -= HandleRowAdded;
+            _liveRowsAttached = false;
         }
 
         private void HandleRowAdded(IDataTable table, Int64 rowId)
@@ -228,10 +245,10 @@ namespace XMAT.NetworkTrace
                     if (!_disposed && generation == Volatile.Read(ref _viewGeneration))
                         NetworkTracePackets.AddFromDataRecord(record);
                 }
-                if (_dispatcher.CheckAccess())
+                if (App.HasUiAccess(_dispatcher))
                     Publish();
                 else
-                    _dispatcher.BeginInvoke(new Action(Publish));
+                    App.PostToUi(_dispatcher, Publish);
             }
         }
 
@@ -454,7 +471,7 @@ namespace XMAT.NetworkTrace
                     return;
                 current._operationInProgress = false;
                 current.RaisePropertyChange(nameof(IsTransitioning));
-                CommandManager.InvalidateRequerySuggested();
+                App.RefreshCommands();
             }
         }
 
@@ -481,17 +498,44 @@ namespace XMAT.NetworkTrace
 
         internal void ApplyLoadedCaptures(NetworkTracePacketsCollection packets)
         {
-            Interlocked.Increment(ref _viewGeneration);
+            if (!_liveRowsAttached)
+                Interlocked.Increment(ref _viewGeneration);
             NetworkTracePackets = packets;
             _selectedPacket = null;
+            FilteredItems = null;
+            PidFilterList = CreateFilterList(packets.OrderBy(packet => packet.ProcessId)
+                .Select(packet => packet.ProcessId.ToString(CultureInfo.InvariantCulture)).Distinct());
+            TidFilterList = CreateFilterList(packets.OrderBy(packet => packet.ThreadId)
+                .Select(packet => packet.ThreadId.ToString(CultureInfo.InvariantCulture)).Distinct());
+            ProtocolFilterList = CreateFilterList(packets.OrderBy(packet => packet.Protocol)
+                .Select(packet => Enum.IsDefined(typeof(NetworkProtocol), packet.Protocol)
+                    ? $"{packet.Protocol} ({(NetworkProtocol)packet.Protocol})"
+                    : packet.Protocol.ToString(CultureInfo.InvariantCulture)).Distinct());
+            SourceIpFilterList = CreateFilterList(packets.Select(packet => packet.SourceIpv4Address).Distinct().OrderBy(value => value));
+            DestIpFilterList = CreateFilterList(packets.Select(packet => packet.DestinationIpv4Address).Distinct().OrderBy(value => value));
         }
 
         internal void NotifyLoadedCaptures()
         {
             RaisePropertyChange(nameof(NetworkTracePackets));
             RaisePropertyChange(nameof(SelectedPacket));
+            RaisePropertyChange(nameof(PidFilterList));
+            RaisePropertyChange(nameof(TidFilterList));
+            RaisePropertyChange(nameof(ProtocolFilterList));
+            RaisePropertyChange(nameof(SourceIpFilterList));
+            RaisePropertyChange(nameof(DestIpFilterList));
             RaisePropertyChange(nameof(HaveTraces));
             RaisePropertyChange(nameof(HaveNoTraces));
         }
+
+        internal void ReplaceLoadedCapturesFrom(NetworkTraceCaptureController source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            ApplyLoadedCaptures(source.NetworkTracePackets);
+            NotifyLoadedCaptures();
+        }
+
+        private static ObservableCollection<CheckedListItem> CreateFilterList(IEnumerable<string> values) =>
+            new(values.Select(value => new CheckedListItem { IsChecked = true, Text = value }));
     }
 }

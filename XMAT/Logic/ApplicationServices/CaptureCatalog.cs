@@ -78,8 +78,7 @@ namespace XMAT.ApplicationServices
         private Identity GetIdentity(ICaptureDeviceContext target) =>
             _identities.GetValue(target, context => new Identity(context));
 
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => dispatcher.CheckAccess()
-            ? action() : dispatcher.InvokeAsync(action).Task.Unwrap();
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(dispatcher, action);
 
         private sealed class Identity
         {

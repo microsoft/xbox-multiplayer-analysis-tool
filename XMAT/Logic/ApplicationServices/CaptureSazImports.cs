@@ -132,7 +132,7 @@ namespace XMAT.ApplicationServices
                     Demand(expected, cancellationToken);
                     var target = model.GetDeviceContext(DeviceType.Unknown, expected.DeviceName, captureType, true) ??
                         new CaptureDeviceContextModel(DeviceType.Unknown, expected.DeviceName, captureType,
-                            true, null, hostListPolicy: model.HostListPolicy);
+                            true, null, hostListPolicy: model.HostListPolicy, attachLiveRows: false);
                     model.CaptureCatalog.DescribeTarget(target);
                     return Task.FromResult(target);
                 });
@@ -296,10 +296,8 @@ namespace XMAT.ApplicationServices
             }).ConfigureAwait(false);
         }
 
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => dispatcher.CheckAccess()
-            ? action() : dispatcher.InvokeAsync(action).Task.Unwrap();
-        private Task InvokeAsync(Func<Task> action) => dispatcher.CheckAccess()
-            ? action() : dispatcher.InvokeAsync(action).Task.Unwrap();
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(dispatcher, action);
+        private Task InvokeAsync(Func<Task> action) => App.RunOnUiAsync(dispatcher, action);
 
         private sealed class Prepared : IDisposable
         {

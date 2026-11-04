@@ -77,7 +77,7 @@ namespace XMAT.ApplicationServices
             {
                 await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
                     65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                await file.CopyToAsync(destination, token);
+                await DataAbstractionLayer.DataAbstractionLayer.CopyCaptureInputAsync(path, file, destination, token);
                 return Path.GetFileName(path);
             }, path, _ => Task.CompletedTask, cancellationToken);
         }
@@ -144,7 +144,7 @@ namespace XMAT.ApplicationServices
                     return Task.FromResult(devices.Select(device => new Target(
                         _model.GetDeviceContext(device.Type, device.Name, device.Capture, true) ??
                         new CaptureDeviceContextModel(device.Type, device.Name, device.Capture, true, null,
-                            hostListPolicy: _model.HostListPolicy))).ToArray());
+                            hostListPolicy: _model.HostListPolicy, attachLiveRows: false))).ToArray());
                 });
                 await Task.Run(() =>
                 {
@@ -182,7 +182,8 @@ namespace XMAT.ApplicationServices
                         _files.Add(file);
                         foreach (var target in targets)
                             target.Apply();
-                        _model.CommitLoadedCapture(file.Database, originalPath ?? file.Path, name, added);
+                        _model.CommitLoadedCapture(file.Database, originalPath ?? file.Path, name, added,
+                            targets.Select(target => target.Context).ToArray());
                         foreach (var target in targets)
                             _model.CaptureCatalog.RecordDataReplacement(target.Context);
                         adopted = true;
@@ -201,6 +202,17 @@ namespace XMAT.ApplicationServices
                     }
                     Prune();
                     return new CaptureLoadReceipt(sourceId, added.Length, targets.Length - added.Length, true, notified);
+                });
+            }
+            catch (DataAbstractionLayer.SqLtSchemaException exception)
+            {
+                throw new CaptureFileException(exception.Failure switch
+                {
+                    DataAbstractionLayer.SqLtSchemaFailure.Limit => CaptureFileFailure.SchemaLimit,
+                    DataAbstractionLayer.SqLtSchemaFailure.Sidecar or
+                        DataAbstractionLayer.SqLtSchemaFailure.WriteAheadLog => CaptureFileFailure.LiveDatabase,
+                    DataAbstractionLayer.SqLtSchemaFailure.UnsupportedLocation => CaptureFileFailure.UnsupportedLocation,
+                    _ => CaptureFileFailure.InvalidCapture
                 });
             }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception) &&
@@ -287,7 +299,9 @@ namespace XMAT.ApplicationServices
             foreach (var file in _files.ToArray())
             {
                 if (ReferenceEquals(file.Database, _model.LoadedDatabase) ||
-                    file.Contexts.Any(_model.CaptureDeviceContexts.Contains))
+                    (file.Database is DataAbstractionLayer.SqLtReadonlyDatabase native
+                        ? DataAbstractionLayer.LoadedCaptureDatabaseRegistry.ReferenceCount(native) != 0
+                        : file.Contexts.Any(_model.CaptureDeviceContexts.Contains)))
                     continue;
                 _files.Remove(file);
                 _cleanup = Task.WhenAll(_cleanup, Task.Run(file.Dispose));
@@ -321,17 +335,22 @@ namespace XMAT.ApplicationServices
                 _model.PropertyChanged -= ModelChanged;
                 _model.CaptureDataRebound -= DataRebound;
                 foreach (var file in _files.ToArray())
+                {
+                    foreach (var context in file.Contexts)
+                        if (ReferenceEquals(DataAbstractionLayer.LoadedCaptureDatabaseRegistry.DatabaseFor(
+                            context.CaptureController), file.Database))
+                            DataAbstractionLayer.LoadedCaptureDatabaseRegistry.Release(context.CaptureController);
+                    _model.ReleaseLoadedWorkspace(file.Database);
                     _cleanup = Task.WhenAll(_cleanup, Task.Run(file.Dispose));
+                }
                 _files.Clear();
                 return Task.FromResult(_cleanup);
             }).ConfigureAwait(false);
             await cleanup.ConfigureAwait(false);
         }
 
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => _dispatcher.CheckAccess()
-            ? action() : _dispatcher.InvokeAsync(action).Task.Unwrap();
-        private Task InvokeAsync(Func<Task> action) => _dispatcher.CheckAccess()
-            ? action() : _dispatcher.InvokeAsync(action).Task.Unwrap();
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(_dispatcher, action);
+        private Task InvokeAsync(Func<Task> action) => App.RunOnUiAsync(_dispatcher, action);
         private sealed record Device(DeviceType Type, string Name, CaptureType Capture);
 
         private sealed class Target(ICaptureDeviceContext context)

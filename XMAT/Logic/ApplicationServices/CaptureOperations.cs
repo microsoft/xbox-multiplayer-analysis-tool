@@ -171,9 +171,7 @@ namespace XMAT.ApplicationServices
 
         private Task<T> InvokeAsync<T>(Func<Task<T>> action)
         {
-            return _dispatcher.CheckAccess()
-                ? action()
-                : _dispatcher.InvokeAsync(action).Task.Unwrap();
+            return App.RunOnUiAsync(_dispatcher, action);
         }
 
         private static ICaptureLifecycleAdapter CreateAdapter(ICaptureDeviceContext target)

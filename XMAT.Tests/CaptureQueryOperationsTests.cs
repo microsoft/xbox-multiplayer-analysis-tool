@@ -52,7 +52,7 @@ namespace XMAT.Tests
                             Assert.Throws<QueryException>(() => Complete(queries.GetSchemaAsync(activeId))).Error);
                         Assert.Equal(QueryError.SourceChanged,
                             Assert.Throws<QueryException>(() => Complete(queries.CreateSessionAsync(loadedId))).Error);
-                        var result = Complete(snapshot.ExecuteAsync("SELECT Value FROM Data",
+                        var result = Complete(snapshot.ExecuteAsync("SELECT Value FROM CaptureDevices",
                             new QueryExecutionOptions(TimeSpan.FromSeconds(5))));
                         try
                         {
@@ -61,7 +61,7 @@ namespace XMAT.Tests
                         finally { Complete(result.DisposeAsync().AsTask()); }
                         model.ActiveDatabase = first;
                         Assert.Equal(activeId, Complete(queries.GetSourcesAsync()).Single(item => item.Kind == QuerySourceKind.Active).Id);
-                        Assert.Equal("before", loaded.TableByName("Data").Dataset.DataRecords.Single().Str("Value"));
+                        Assert.Equal("before", loaded.TableByName("CaptureDevices").Dataset.DataRecords.Single().Str("Value"));
                     }
                     finally { Complete(snapshot.DisposeAsync().AsTask()); }
                 }
@@ -94,7 +94,7 @@ namespace XMAT.Tests
                     Assert.True(model.TryBeginCaptureDataOperation(out var next));
                     using (next)
                     {
-                        var result = Complete(snapshot.ExecuteAsync("SELECT Value FROM Data",
+                        var result = Complete(snapshot.ExecuteAsync("SELECT Value FROM CaptureDevices",
                             new QueryExecutionOptions(TimeSpan.FromSeconds(5))));
                         try
                         {
@@ -149,7 +149,9 @@ namespace XMAT.Tests
         {
             var database = new SqLtDatabase();
             database.Initialize();
-            database.CreateTable("Data", new Field<string>("Value")).AddRow(value);
+            database.CreateTable("CaptureDevices", new Field<long>("DeviceType"),
+                new Field<string>("DeviceName"), new Field<long>("CaptureType"), new Field<string>("Value"))
+                .AddRow(0L, "fixture", 0L, value);
             return database;
         }
 

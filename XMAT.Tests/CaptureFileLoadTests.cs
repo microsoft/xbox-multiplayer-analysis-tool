@@ -55,7 +55,9 @@ namespace XMAT.Tests
                     Assert.Single(proxy.ProxyConnections);
                     Assert.False(proxy.HasPortReservation);
                     Assert.Empty(proxy.Scripts.ActiveScripts);
-                    WriteCapture(path, [("replacement", CaptureType.WebProxy)]);
+                    var replacement = Path.Combine(directory.Path, "replacement.xmatcap");
+                    WriteCapture(replacement, [("replacement", CaptureType.WebProxy)]);
+                    File.Move(replacement, path, overwrite: true);
                     Assert.Equal("loaded", Assert.Single(proxy.GetCaptureRecords()).Str("DeviceName"));
                     Finish(model.CaptureOperations.SetRunningAsync(human, false));
                     Assert.Single(Complete(model.CaptureQueries.GetSchemaAsync(receipt.SourceId)),
@@ -420,6 +422,79 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void NativeLoadingRejectsOriginalSidecarsBeforeCreatingAnApparentlyCleanPrivateCopy()
+        {
+            application.Run(_ =>
+            {
+                using var directory = new CaptureFileExportTests.DirectoryFixture();
+                var path = Path.Combine(directory.Path, "live.xmatcap");
+                WriteCapture(path, [("loaded", CaptureType.WebProxy)]);
+                var model = new CaptureAppModel();
+                try
+                {
+                    foreach (var suffix in new[] { "-journal", "-wal", "-shm" })
+                    {
+                        File.WriteAllBytes(path + suffix, [0]);
+                        try
+                        {
+                            var failure = Assert.Throws<CaptureFileException>(() =>
+                                Complete(model.CaptureFileLoads.LoadDesktopAsync(path)));
+                            Assert.Equal(CaptureFileFailure.LiveDatabase, failure.Failure);
+                            var input = Complete(model.CaptureFileInputs.RegisterAsync(path, 65536));
+                            var state = Complete(model.CaptureFileLoads.GetStateAsync());
+                            failure = Assert.Throws<CaptureFileException>(() => Complete(
+                                model.CaptureFileLoads.LoadInputAsync(input.Id, state, 65536, _ => Task.CompletedTask)));
+                            Assert.Equal(CaptureFileFailure.LiveDatabase, failure.Failure);
+                            Assert.Null(model.LoadedDatabase);
+                            Assert.Empty(model.CaptureDeviceContexts);
+                        }
+                        finally { File.Delete(path + suffix); }
+                    }
+                    Assert.True(Complete(model.CaptureFileLoads.LoadDesktopAsync(path)).Published);
+                }
+                finally
+                {
+                    Finish(model.CaptureFileLoads.DisposeAsync().AsTask());
+                    Finish(model.AgentAccess.DisposeAsync().AsTask());
+                }
+            });
+        }
+
+        [Fact]
+        public void FrozenLoadedSourcesRetainOriginalSaveProtectionUntilTheirWorkspaceAndViewsAreReleased()
+        {
+            application.Run(_ =>
+            {
+                using var directory = new CaptureFileExportTests.DirectoryFixture();
+                var path = Path.Combine(directory.Path, "original.xmatcap");
+                WriteCapture(path, [("loaded", CaptureType.WebProxy)]);
+                var original = File.ReadAllBytes(path);
+                using var active = CaptureInvestigationTestData.WebDatabase();
+                var model = new CaptureAppModel { ActiveDatabase = active };
+                try
+                {
+                    Complete(model.CaptureFileLoads.LoadDesktopAsync(path));
+                    var source = Complete(model.CaptureQueries.GetSourcesAsync())
+                        .Single(source => source.Kind == QuerySourceKind.Active).Id;
+                    Assert.Equal(CaptureSaveFailure.Refused, Assert.Throws<CaptureSaveException>(() => Finish(
+                        model.CaptureFiles.SaveDesktopAsync(source, CaptureArchiveFormat.CaptureDatabase, path))).Failure);
+                    Assert.Equal(original, File.ReadAllBytes(path));
+                    Finish(model.RemoveDeviceContextAsync(model.CaptureDeviceContexts.Single()));
+                    Assert.Equal(CaptureSaveFailure.Refused, Assert.Throws<CaptureSaveException>(() => Finish(
+                        model.CaptureFiles.SaveDesktopAsync(source, CaptureArchiveFormat.CaptureDatabase, path))).Failure);
+                    Finish(model.CaptureFileLoads.DisposeAsync().AsTask());
+                    Finish(model.CaptureFiles.SaveDesktopAsync(source, CaptureArchiveFormat.CaptureDatabase, path));
+                    Assert.NotEqual(original, File.ReadAllBytes(path));
+                }
+                finally
+                {
+                    Finish(model.CaptureFileLoads.DisposeAsync().AsTask());
+                    Finish(model.AgentAccess.DisposeAsync().AsTask());
+                }
+            });
+        }
+
+        [Fact]
         public void NativeDalQuotesSchemaIdentifiersAndBindsDeviceNamesWithoutChangingTheirText()
         {
             using var directory = new CaptureFileExportTests.DirectoryFixture();
@@ -436,10 +511,13 @@ namespace XMAT.Tests
                     "INSERT INTO \"odd\"\"; table\" (\"select\"\"field\") VALUES ($value)";
                 command.Parameters.AddWithValue("$value", value);
                 command.ExecuteNonQuery();
-            }
-            using var loaded = new SqLtReadonlyDatabase(path);
-            Assert.Equal(value, Assert.Single(loaded.TableByName(table).Dataset.DataRecordsWhen(
+                using var dataset = new SqLtDataset(connection, table, new Dictionary<string, IFieldDefinition>
+                {
+                    [field] = FieldDefinition.CreateFromSchema(field, typeof(string), 1)
+                });
+                Assert.Equal(value, Assert.Single(dataset.DataRecordsWhen(
                 new FieldValue<string>(field, value))).Str(field));
+            }
         }
 
         [Theory]
@@ -458,7 +536,7 @@ namespace XMAT.Tests
                 command.CommandText = schema;
                 command.ExecuteNonQuery();
             }
-            Assert.Throws<InvalidDataException>(() => new SqLtReadonlyDatabase(path));
+            Assert.Throws<SqLtSchemaException>(() => new SqLtReadonlyDatabase(path));
             File.Delete(path);
             Assert.False(File.Exists(path));
         }

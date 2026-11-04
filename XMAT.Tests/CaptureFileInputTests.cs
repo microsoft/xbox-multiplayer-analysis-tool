@@ -57,8 +57,8 @@ namespace XMAT.Tests
         {
             using var directory = new CaptureFileExportTests.DirectoryFixture();
             var path = Path.Combine(directory.Path, "capture.xmatcap");
-            byte[] bytes = [0, 0xff, 0x80, 1, 2, 0, 3];
-            await File.WriteAllBytesAsync(path, bytes);
+            CaptureFileLoadTests.WriteCapture(path, [("loaded", CaptureType.WebProxy)]);
+            var bytes = await File.ReadAllBytesAsync(path);
             var inputs = new CaptureFileInputs();
             var input = await inputs.RegisterAsync(path, 65536);
             using var output = new MemoryStream();

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Generic;
+using System.Linq;
 
 namespace CaptureAnalysisEngine
 {
@@ -11,5 +12,10 @@ namespace CaptureAnalysisEngine
         IReadOnlyList<RuleResult> Rules,
         IReadOnlyList<ReportDocument> Reports);
 
-    public sealed record TraceAnalysisResult(IReadOnlyList<ConsoleAnalysisResult> Consoles);
+    public sealed record TraceAnalysisResult(IReadOnlyList<ConsoleAnalysisResult> Consoles)
+    {
+        internal static TraceAnalysisResult FromConsoleResults(IReadOnlyDictionary<string, TraceConsoleAnalysis> results) =>
+            new(results.Select(console => new ConsoleAnalysisResult(console.Key, console.Value.RuleResults,
+                console.Value.Reports)).ToArray());
+    }
 }

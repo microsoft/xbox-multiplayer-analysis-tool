@@ -17,8 +17,30 @@ using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
 {
+    internal sealed record FiddlerSazImportResult(
+        ProxyConnectionsCollection Records,
+        int SkippedIncompleteFrames,
+        int SkippedMalformedHeaderLines);
+
+    internal sealed class FiddlerSazHeaderLimitException : Exception
+    {
+        internal FiddlerSazHeaderLimitException(Exception innerException = null)
+            : base(
+                "The SAZ message headers exceed a supported safety limit.",
+                innerException)
+        {
+        }
+    }
+
     public static class FiddlerSazHandler
     {
+        // Per request or response: header lines exclude the start and empty/whitespace separator lines; raw bytes
+        // include the start line, every header line and their CRLFs, and the separator line. Malformed lines count.
+        // These limits cover tested sanitizer cases, not every possible writer output.
+        internal const int MaxHeaderLinesPerMessage = 16_384;
+        internal const int MaxRawHeaderBytesPerMessage = 16 * 1024 * 1024;
+        private const int EntryReadBufferBytes = 64 * 1024;
+
         enum EntryType
         {
             Request,
@@ -39,10 +61,71 @@ namespace XMAT.WebServiceCapture
             return int.Parse(number);
         }
 
-        public static ProxyConnectionModel FromFiddlerFrame(
-            UInt32 frameId, ZipArchiveEntry cFileStream, ZipArchiveEntry mFileStream, ZipArchiveEntry sFileStream,
-            long maximumEntryBytes = long.MaxValue, CancellationToken cancellationToken = default)
+        public static ProxyConnectionModel FromFiddlerFrame(UInt32 frameId, ZipArchiveEntry cFileStream, ZipArchiveEntry mFileStream, ZipArchiveEntry sFileStream)
         {
+            return FromFiddlerFrame(
+                frameId,
+                cFileStream,
+                mFileStream,
+                sFileStream,
+                out _);
+        }
+
+        private static ProxyConnectionModel FromFiddlerFrame(
+            UInt32 frameId,
+            ZipArchiveEntry cFileStream,
+            ZipArchiveEntry mFileStream,
+            ZipArchiveEntry sFileStream,
+            out int skippedMalformedHeaderLines)
+        {
+            // Requests and responses are parsed as they decompress, so the header limits stop an entry before the rest
+            // of it is read; the small metadata entry is read whole.
+            using Stream request = OpenEntryForParsing(cFileStream);
+            using var metadata = mFileStream == null
+                ? null
+                : ZipUtilities.DecompressEntryToMemory(mFileStream);
+            using Stream response = OpenEntryForParsing(sFileStream);
+
+            return FromFiddlerFrame(
+                frameId,
+                request,
+                metadata,
+                response,
+                out skippedMalformedHeaderLines);
+        }
+
+        private static Stream OpenEntryForParsing(ZipArchiveEntry entry)
+        {
+            return entry == null
+                ? null
+                : new LookaheadReadStream(
+                    new BufferedStream(
+                        entry.Open(),
+                        EntryReadBufferBytes));
+        }
+
+        internal static ProxyConnectionModel FromFiddlerFrame(
+            UInt32 frameId,
+            Stream requestStream,
+            Stream metadataStream,
+            Stream responseStream)
+        {
+            return FromFiddlerFrame(
+                frameId,
+                requestStream,
+                metadataStream,
+                responseStream,
+                out _);
+        }
+
+        internal static ProxyConnectionModel FromFiddlerFrame(
+            UInt32 frameId,
+            Stream requestStream,
+            Stream metadataStream,
+            Stream responseStream,
+            out int skippedMalformedHeaderLines)
+        {
+            skippedMalformedHeaderLines = 0;
             string status = string.Empty;
             DateTime requestTime = DateTime.MinValue;
             TimeSpan duration = TimeSpan.FromMilliseconds(0);
@@ -60,120 +143,118 @@ namespace XMAT.WebServiceCapture
             Int64 id = Convert.ToInt64(frameId);
 
             // Read the client part of the frame (###_c.txt)
-            if (cFileStream != null)
+            if (requestStream != null)
             {
-                using (MemoryStream cFileMemory = ZipUtilities.DecompressEntryToMemory(cFileStream, maximumEntryBytes, cancellationToken))
+                RewindIfSeekable(requestStream);
+                using (var cFile = new BinaryReader(requestStream, Encoding.ASCII, true))
                 {
-                    using (var cFile = new BinaryReader(cFileMemory))
+                    var requestHeaderBytes = 0;
+                    var firstLine = ReadHeaderLine(
+                        cFile,
+                        ref requestHeaderBytes);
+
+                    if (!string.IsNullOrEmpty(firstLine))
                     {
-                        var firstLine = cFile.ReadLine(cancellationToken);
-
-                        if (!string.IsNullOrEmpty(firstLine))
+                        if (firstLine.IndexOf(' ') < 0)
                         {
-                            var firstLineSplit = firstLine.Split(' ');
+                            return null;
+                        }
+                        var firstLineSplit = firstLine.Split(' ');
 
-                            // METHOD
-                            method = firstLineSplit[0];
+                        // METHOD
+                        method = firstLineSplit[0];
 
-                            // CALL & SCHEME
-                            if (method == "CONNECT")
+                        // CALL & SCHEME
+                        if (method == "CONNECT")
+                        {
+                            call = firstLineSplit[1];
+                            scheme = @"http";
+                        }
+                        else
+                        {
+                            if (Uri.TryCreate(firstLineSplit[1], UriKind.Absolute, out Uri uri))
                             {
-                                call = firstLineSplit[1];
-                                scheme = @"http";
+                                call = uri.LocalPath;
+                                scheme = uri.Scheme;
                             }
                             else
                             {
-                                if (Uri.TryCreate(firstLineSplit[1], UriKind.Absolute, out Uri uri))
-                                {
-                                    call = uri.LocalPath;
-                                    scheme = uri.Scheme;
-                                }
-                                else
-                                {
-                                    scheme = firstLineSplit[0];
-                                    call = firstLineSplit[1];
-                                }
+                                scheme = firstLineSplit[0];
+                                call = firstLineSplit[1];
                             }
                         }
-
-                        // Read the Request Headers
-                        var fileLine = cFile.ReadLine(cancellationToken);
-                        var reqHeaders = new WebHeaderCollection();
-                        while (string.IsNullOrWhiteSpace(fileLine) == false)
-                        {
-                            try
-                            {
-                                reqHeaders.Add(fileLine);
-                            }
-                            catch (Exception)
-                            {
-                                // This will throw if a header value contains invalid characters
-                                // Ignore and continue
-                            }
-
-                            fileLine = cFile.ReadLine(cancellationToken);
-                        }
-
-                        // HOST
-                        hostAndPort = reqHeaders["Host"];
-
-                        // REQUEST BODY
-                        requestBody = cFile.ReadToEnd(cancellationToken);
-
-                        // REQUEST HEADERS
-                        requestHeaders = $"{firstLine}\r\n{reqHeaders}";
                     }
+
+                    WebHeaderCollection reqHeaders = ReadHeaders(
+                        cFile,
+                        ref requestHeaderBytes,
+                        ref skippedMalformedHeaderLines);
+
+                    hostAndPort = reqHeaders["Host"];
+
+                    // REQUEST BODY
+                    requestBody = cFile.ReadToEnd();
+
+                    // REQUEST HEADERS
+                    requestHeaders = $"{firstLine}\r\n{reqHeaders}";
                 }
             }
 
             // Read the server part of the frame(###_s.txt)
-            if (sFileStream != null)
+            if (responseStream != null)
             {
-                using (MemoryStream sFileMemory = ZipUtilities.DecompressEntryToMemory(sFileStream, maximumEntryBytes, cancellationToken))
+                RewindIfSeekable(responseStream);
+                using (var sFile = new BinaryReader(responseStream, Encoding.ASCII, true))
                 {
-                    using (var sFile = new BinaryReader(sFileMemory))
+                    var responseHeaderBytes = 0;
+                    var firstLine = ReadHeaderLine(
+                        sFile,
+                        ref responseHeaderBytes);
+
+                    if (!string.IsNullOrEmpty(firstLine))
                     {
-                        var firstLine = sFile.ReadLine(cancellationToken);
-
-                        if (!string.IsNullOrEmpty(firstLine))
+                        if (firstLine.IndexOf(' ') < 0)
                         {
-                            var firstLineSplit = firstLine.Split(' ');
-
-                            // STATUS
-                            status = firstLineSplit[1];
+                            // A skipped frame contributes no malformed-header count.
+                            skippedMalformedHeaderLines = 0;
+                            return null;
                         }
+                        var firstLineSplit = firstLine.Split(' ');
 
-                        // Read the Response Headers
-                        var headers = new WebHeaderCollection();
-                        var fileLine = sFile.ReadLine(cancellationToken);
-                        while (!string.IsNullOrWhiteSpace(fileLine))
-                        {
-                            headers.Add(fileLine);
-                            fileLine = sFile.ReadLine(cancellationToken);
-                        }
-
-                        // RESPONSE BODY
-                        responseBody = sFile.ReadToEnd(cancellationToken);
-
-                        // RESPONSE HEADERS
-                        responseHeaders = $"{firstLine}\r\n{headers}";
+                        // STATUS
+                        status = firstLineSplit[1];
                     }
+
+                    WebHeaderCollection headers = ReadHeaders(
+                        sFile,
+                        ref responseHeaderBytes,
+                        ref skippedMalformedHeaderLines);
+
+                    // RESPONSE BODY
+                    responseBody = sFile.ReadToEnd();
+
+                    // RESPONSE HEADERS
+                    responseHeaders = $"{firstLine}\r\n{headers}";
                 }
             }
 
             // Read the frame metadata (###_m.xml)
-            if (mFileStream != null)
+            if (metadataStream != null)
             {
-                using (var metadata = ZipUtilities.DecompressEntryToMemory(mFileStream, maximumEntryBytes, cancellationToken))
+                RewindIfSeekable(metadataStream);
+                using (var mFile = new StreamReader(
+                    metadataStream,
+                    Encoding.UTF8,
+                    true,
+                    1024,
+                    true))
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    using var reader = XmlReader.Create(metadata, new XmlReaderSettings
+                    using var xml = XmlReader.Create(mFile, new XmlReaderSettings
                     {
                         DtdProcessing = DtdProcessing.Prohibit,
-                        XmlResolver = null,
-                        MaxCharactersInDocument = Math.Max(1, metadata.Length)
+                        XmlResolver = null
                     });
-                    XDocument xmldata = XDocument.Load(reader);
+                    XDocument xmldata = XDocument.Load(xml);
 
                     XElement sessionTimers = xmldata.Element("Session").Element("SessionTimers");
 
@@ -187,7 +268,6 @@ namespace XMAT.WebServiceCapture
 
                     foreach (var flag in sessionFlags.Descendants())
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
                         if ((string)flag.Attribute("N") == "x-clientip")
                         {
                             // CLIENT IP
@@ -199,7 +279,6 @@ namespace XMAT.WebServiceCapture
                 }
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
             ProxyConnectionModel model = new(
                 id,
                 status,
@@ -218,39 +297,77 @@ namespace XMAT.WebServiceCapture
             return model;
         }
 
-        public static ProxyConnectionsCollection ImportSazFile(string filename, CancellationToken cancelToken) =>
-            ImportSazFile(filename, long.MaxValue, cancelToken);
+        public static ProxyConnectionsCollection ImportSazFile(
+            string filename,
+            CancellationToken cancelToken)
+        {
+            return ImportSazFileWithDiagnostics(
+                filename,
+                cancelToken).Records;
+        }
 
         public static ProxyConnectionsCollection ImportSazFile(
-            string filename, long maximumExpandedBytes, CancellationToken cancelToken = default)
-        {
-            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumExpandedBytes);
-            cancelToken.ThrowIfCancellationRequested();
-            var list = new ProxyConnectionsCollection();
+            string filename, long maximumExpandedBytes, CancellationToken cancellationToken = default) =>
+            ImportSazFileWithDiagnostics(filename, maximumExpandedBytes, cancellationToken).Records;
 
-            // Open the SAZ
-            using (var archive = ZipFile.Open(filename, ZipArchiveMode.Read))
+        internal static FiddlerSazImportResult ImportSazFileWithDiagnostics(
+            string filename, long maximumBytes, CancellationToken cancellationToken)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
+            if (maximumBytes == long.MaxValue)
+                return ImportSazFileWithDiagnostics(filename, cancellationToken);
+            try
             {
-                var remaining = maximumExpandedBytes;
-                foreach (var entry in archive.Entries)
+                using var input = new FileStream(filename, FileMode.Open, FileAccess.Read, FileShare.Read);
+                var records = (int)Math.Clamp(maximumBytes / 256, 1, 250000);
+                var result = BoundedSazReader.Read(input, new BoundedSazLimits(
+                    maximumBytes, maximumBytes, maximumBytes, records,
+                    Math.Min(Math.Max(1, maximumBytes / 256), BoundedSazReader.MaxArchiveEntriesCeiling),
+                    Math.Min(maximumBytes, BoundedSazReader.DefaultMaxCentralDirectoryBytes)), cancellationToken);
+                var connections = new ProxyConnectionsCollection();
+                foreach (var record in result.Records)
                 {
-                    cancelToken.ThrowIfCancellationRequested();
-                    if (remaining < 256 || entry.Length > remaining - 256)
-                        throw new QueryException(QueryError.ResultLimit, "The expanded archive exceeds the approved input limit.");
-                    remaining -= entry.Length + 256;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    connections.Add(record);
                 }
-                IEnumerable<ZipArchiveEntry> Frames()
-                {
-                    foreach (var entry in archive.Entries)
-                    {
-                        cancelToken.ThrowIfCancellationRequested();
-                        if (entry.Name.Contains("_c.txt") || entry.Name.Contains("_s.txt") || entry.Name.Contains("_m.xml"))
-                            yield return entry;
-                    }
-                }
-                var result = from e in Frames()
+                return new(connections, result.SkippedIncompleteFrames, result.SkippedMalformedHeaderLines);
+            }
+            catch (BoundedSazException exception) when (exception.Failure != BoundedSazFailure.Malformed)
+            { throw new QueryException(QueryError.ResultLimit, "The SAZ input exceeds an approved safety limit."); }
+            catch (BoundedSazException exception)
+            { throw new InvalidDataException("The SAZ input is malformed.", exception); }
+        }
+
+        internal static FiddlerSazImportResult ImportSazFileWithDiagnostics(
+            string filename,
+            CancellationToken cancelToken)
+        {
+            var list = new ProxyConnectionsCollection();
+            var skippedIncompleteFrames = 0;
+            var skippedMalformedHeaderLines = 0;
+
+            // Open the SAZ, checking its directory before ZipArchive reads it
+            using (var input = new FileStream(
+                filename,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read))
+            {
+                SazArchivePreflight.Validate(
+                    input,
+                    cancelToken);
+                input.Seek(0, SeekOrigin.Begin);
+                using var archive = new ZipArchive(
+                    input,
+                    ZipArchiveMode.Read,
+                    true);
+
+                // Group the archive entries by frame number
+                var result = from e in archive.Entries
+                             where e.Name.Contains("_c.txt") || e.Name.Contains("_s.txt") || e.Name.Contains("_m.xml")
                              group e by GetFrameNumber(e.Name) into g
                              select new { Frame = g.Key, Files = g };
+                var totalCalls = result.Count();
 
                 // Process data per frame
                 foreach (var group in result)
@@ -279,12 +396,18 @@ namespace XMAT.WebServiceCapture
                         }
                     }
 
-                    var proxyConnectionModel = FromFiddlerFrame((UInt32)group.Frame, requestFileArchive, metaFileArchive,
-                        responseFileArchive, maximumExpandedBytes, cancelToken);
+                    var proxyConnectionModel = FromFiddlerFrame(
+                        (UInt32)group.Frame,
+                        requestFileArchive,
+                        metaFileArchive,
+                        responseFileArchive,
+                        out var skippedInFrame);
+                    skippedMalformedHeaderLines += skippedInFrame;
 
                     // skip if the frame could not be converted
                     if (proxyConnectionModel == null)
                     {
+                        skippedIncompleteFrames++;
                         continue;
                     }
 
@@ -292,13 +415,234 @@ namespace XMAT.WebServiceCapture
                 }
             }
 
-            return list;
+            return new FiddlerSazImportResult(
+                list,
+                skippedIncompleteFrames,
+                skippedMalformedHeaderLines);
         }
+
+        private static WebHeaderCollection ReadHeaders(
+            BinaryReader reader,
+            ref int rawHeaderBytes,
+            ref int skippedMalformedHeaderLines)
+        {
+            var headers = new WebHeaderCollection();
+            var headerLines = 0;
+            while (true)
+            {
+                if (headerLines == MaxHeaderLinesPerMessage)
+                {
+                    ConsumeHeaderSeparator(
+                        reader,
+                        ref rawHeaderBytes);
+                    return headers;
+                }
+
+                string line = ReadHeaderLine(
+                    reader,
+                    ref rawHeaderBytes);
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    return headers;
+                }
+
+                headerLines++;
+                AddHeaderOrSkip(
+                    headers,
+                    line,
+                    ref skippedMalformedHeaderLines);
+            }
+        }
+
+        private static string ReadHeaderLine(
+            BinaryReader reader,
+            ref int rawHeaderBytes)
+        {
+            try
+            {
+                string line = reader.ReadLine(
+                    MaxRawHeaderBytesPerMessage - rawHeaderBytes,
+                    out int bytesRead);
+                rawHeaderBytes += bytesRead;
+                return line;
+            }
+            catch (BinaryReadLimitException ex)
+            {
+                throw new FiddlerSazHeaderLimitException(ex);
+            }
+        }
+
+        // Once the line count is full, consume only an ASCII-whitespace separator without retaining a 16,385th line.
+        private static void ConsumeHeaderSeparator(
+            BinaryReader reader,
+            ref int rawHeaderBytes)
+        {
+            var previousWasCarriageReturn = false;
+            while (true)
+            {
+                if (rawHeaderBytes == MaxRawHeaderBytesPerMessage &&
+                    reader.BaseStream.HasMoreBytes())
+                {
+                    throw new FiddlerSazHeaderLimitException();
+                }
+
+                int value = reader.BaseStream.ReadByte();
+                if (value < 0)
+                {
+                    return;
+                }
+
+                rawHeaderBytes++;
+                byte current = (byte)value;
+                if (!IsAsciiWhitespace(current))
+                {
+                    throw new FiddlerSazHeaderLimitException();
+                }
+                if (current == '\n' &&
+                    previousWasCarriageReturn &&
+                    reader.BaseStream.HasMoreBytes())
+                {
+                    return;
+                }
+
+                previousWasCarriageReturn = current == '\r';
+            }
+        }
+
+        private static void RewindIfSeekable(Stream stream)
+        {
+            if (stream.CanSeek)
+            {
+                stream.Seek(0, SeekOrigin.Begin);
+            }
+        }
+
+        private static bool IsAsciiWhitespace(byte value) =>
+            value == (byte)'\t' ||
+            value == (byte)'\n' ||
+            value == (byte)'\v' ||
+            value == (byte)'\f' ||
+            value == (byte)'\r' ||
+            value == (byte)' ';
+
+        private static void AddHeaderOrSkip(
+            WebHeaderCollection headers,
+            string line,
+            ref int skippedMalformedHeaderLines)
+        {
+            if (!IsValidHeaderLine(line))
+            {
+                skippedMalformedHeaderLines++;
+                return;
+            }
+
+            try
+            {
+                headers.Add(line);
+            }
+            catch (ArgumentException)
+            {
+                skippedMalformedHeaderLines++;
+            }
+        }
+
+        // Mirrors .NET 10 WebHeaderCollection.Add(string) validation without using exceptions for control flow.
+        internal static bool IsValidHeaderLine(string line)
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                return false;
+            }
+
+            int colon = line.IndexOf(':');
+            if (colon < 0)
+            {
+                return false;
+            }
+
+            for (var index = 0; index < colon; index++)
+            {
+                if (!IsValidHeaderNameCharacter(line[index]))
+                {
+                    return false;
+                }
+            }
+
+            int valueStart = colon + 1;
+            int valueEnd = line.Length - 1;
+            while (valueStart <= valueEnd &&
+                IsHeaderValueTrimCharacter(line[valueStart]))
+            {
+                valueStart++;
+            }
+            while (valueEnd >= valueStart &&
+                IsHeaderValueTrimCharacter(line[valueEnd]))
+            {
+                valueEnd--;
+            }
+
+            var state = 0;
+            for (int index = valueStart; index <= valueEnd; index++)
+            {
+                char value = (char)(line[index] & 0xff);
+                switch (state)
+                {
+                    case 0:
+                        if (value == '\r')
+                        {
+                            state = 1;
+                        }
+                        else if (value == '\n')
+                        {
+                            state = 2;
+                        }
+                        else if (value == 127 ||
+                            (value < ' ' && value != '\t'))
+                        {
+                            return false;
+                        }
+                        break;
+
+                    case 1:
+                        if (value != '\n')
+                        {
+                            return false;
+                        }
+                        state = 2;
+                        break;
+
+                    case 2:
+                        if (value != ' ' &&
+                            value != '\t')
+                        {
+                            return false;
+                        }
+                        state = 0;
+                        break;
+                }
+            }
+
+            return state == 0;
+        }
+
+        private static bool IsValidHeaderNameCharacter(char value)
+        {
+            return value > ' ' &&
+                value < 127 &&
+                value is not (
+                    '(' or ')' or '<' or '>' or '@' or ',' or ';' or
+                    ':' or '\\' or '"' or '\'' or '/' or '[' or ']' or
+                    '?' or '=' or '{' or '}');
+        }
+
+        private static bool IsHeaderValueTrimCharacter(char value) =>
+            value is '\t' or '\n' or '\v' or '\f' or '\r' or ' ';
 
         public static void CreateSazFile(
             string filename, IEnumerable<ProxyConnectionModel> records, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // always overwrite
             using var archive = new ZipArchive(File.Create(filename), ZipArchiveMode.Update);
 
             foreach (var record in records)
@@ -314,7 +658,8 @@ namespace XMAT.WebServiceCapture
 
                 if (!string.IsNullOrEmpty(record.ResponseLineAndHeaders))
                 {
-                    AddEntry(archive, EntryType.Response, record.RequestNumber, record.ResponseLineAndHeaders, record.ResponseBody, cancellationToken);
+                    AddEntry(archive, EntryType.Response, record.RequestNumber, record.ResponseLineAndHeaders,
+                        record.ResponseBody, cancellationToken);
                 }
             }
         }

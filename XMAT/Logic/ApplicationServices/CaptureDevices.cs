@@ -370,7 +370,6 @@ namespace XMAT.ApplicationServices
             }
         }
 
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => _dispatcher.CheckAccess()
-            ? action() : _dispatcher.InvokeAsync(action).Task.Unwrap();
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(_dispatcher, action);
     }
 }

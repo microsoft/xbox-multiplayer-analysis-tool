@@ -63,7 +63,8 @@ namespace XMAT.Models
             object serializedParameters,
             bool deferPortAllocation = false,
             HostListPolicy hostListPolicy = null,
-            Func<IWebServiceProxy> proxyFactory = null)
+            Func<IWebServiceProxy> proxyFactory = null,
+            bool attachLiveRows = true)
         {
             DeviceType = deviceType;
             DeviceName = deviceName;
@@ -101,9 +102,13 @@ namespace XMAT.Models
             {
                 proxy.Initialize(deferPortAllocation);
             }
-            else if (readOnly && CaptureController is NetworkTraceCaptureController trace)
+            else if (readOnly && !attachLiveRows && CaptureController is NetworkTraceCaptureController trace)
             {
                 trace.InitializeReadOnly();
+            }
+            else if (CaptureController is NetworkTraceCaptureController network)
+            {
+                network.Initialize(attachLiveRows);
             }
             else
             {

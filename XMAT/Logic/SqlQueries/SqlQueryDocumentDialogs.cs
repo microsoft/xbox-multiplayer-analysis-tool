@@ -16,7 +16,7 @@ namespace XMAT.SqlQueries
         {
             if (!document.IsDirty)
                 return true;
-            var answer = MessageBox.Show(owner,
+            var answer = App.ShowMessage(owner,
                 Localization.GetLocalizedString("SQL_UNSAVED_MESSAGE", document.Title),
                 Localization.GetLocalizedString("SQL_UNSAVED_TITLE"), MessageBoxButton.YesNoCancel,
                 MessageBoxImage.Question);
@@ -43,7 +43,7 @@ namespace XMAT.SqlQueries
                     AddExtension = true,
                     OverwritePrompt = true
                 };
-                if (dialog.ShowDialog(owner) != true)
+                if (App.ShowFileDialog(dialog, owner) != true)
                     return Task.FromResult(false);
                 path = dialog.FileName;
             }
@@ -60,7 +60,7 @@ namespace XMAT.SqlQueries
                 CheckFileExists = true,
                 Multiselect = false
             };
-            return dialog.ShowDialog(owner) == true ? dialog.FileName : null;
+            return App.ShowFileDialog(dialog, owner) == true ? dialog.FileName : null;
         }
     }
 }

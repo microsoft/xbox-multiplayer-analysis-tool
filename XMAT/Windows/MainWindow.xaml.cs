@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
@@ -363,10 +364,28 @@ namespace XMAT
             }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
-                MessageBox.Show(Localization.GetLocalizedString("CAPTURE_LOAD_ERROR"),
+                var key = exception is CaptureFileException file ? file.Failure switch
+                {
+                    CaptureFileFailure.SchemaLimit => "CAPTURE_OPEN_SCHEMA_LIMIT",
+                    CaptureFileFailure.LiveDatabase => "CAPTURE_OPEN_SIDECAR",
+                    CaptureFileFailure.UnsupportedLocation => "CAPTURE_OPEN_LOCATION",
+                    CaptureFileFailure.InvalidCapture => "CAPTURE_OPEN_SCHEMA_ERROR",
+                    _ => "CAPTURE_LOAD_ERROR"
+                } : "CAPTURE_LOAD_ERROR";
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Capture open failed ({exception.GetType().FullName}).");
+                MessageBox.Show(Localization.GetLocalizedString(key),
                     Localization.GetLocalizedString("CAPTURE_LOAD_ERROR_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
+
+        internal static string CaptureOpenErrorKey(SqLtSchemaFailure failure) =>
+            failure switch
+            {
+                SqLtSchemaFailure.Limit => "CAPTURE_OPEN_SCHEMA_LIMIT",
+                SqLtSchemaFailure.Sidecar => "CAPTURE_OPEN_SIDECAR",
+                SqLtSchemaFailure.UnsupportedLocation => "CAPTURE_OPEN_LOCATION",
+                _ => "CAPTURE_OPEN_SCHEMA_ERROR"
+            };
 
         private async void Save_Executed(object sender, RoutedEventArgs e)
         {
@@ -385,6 +404,18 @@ namespace XMAT
                 await SaveCaptureFileAsync(saveFileDialog.FileName, CaptureArchiveFormat.CaptureDatabase);
             }
         }
+
+        internal static string CaptureSaveFailureMessageKey(
+            CaptureSaveFailure failure) =>
+            failure switch
+            {
+                CaptureSaveFailure.Refused =>
+                    "CAPTURE_SAVE_ERROR_REFUSED",
+                CaptureSaveFailure.DestinationLocked =>
+                    "CAPTURE_SAVE_ERROR_LOCKED",
+                _ =>
+                    "CAPTURE_SAVE_ERROR_FAILED",
+            };
 
         private async void Import_Executed(object sender, RoutedEventArgs e)
         {
@@ -464,6 +495,11 @@ namespace XMAT
                 var model = CaptureAppModel.AppModel;
                 var source = (await model.CaptureQueries.GetSourcesAsync()).Single(item => item.Kind == QuerySourceKind.Active);
                 await model.CaptureFiles.SaveDesktopAsync(source.Id, format, path);
+            }
+            catch (CaptureSaveException exception)
+            {
+                MessageBox.Show(Localization.GetLocalizedString(CaptureSaveFailureMessageKey(exception.Failure)),
+                    Localization.GetLocalizedString("CAPTURE_SAVE_ERROR_TITLE"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
@@ -697,6 +733,13 @@ namespace XMAT
                 case ECaptureAnalyzerResult.NoSuitableData:
                 {
                     OnError(Localization.GetLocalizedString("WEBCAP_ANALYSIS_ERROR_NOSUITABLE"));
+                    break;
+                }
+
+                case ECaptureAnalyzerResult.WorkLimit:
+                {
+                    OnError(Localization.GetLocalizedString(
+                        "WEBCAP_ANALYSIS_ERROR_WORK_LIMIT"));
                     break;
                 }
 

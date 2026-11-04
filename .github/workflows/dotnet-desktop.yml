@@ -23,7 +23,7 @@ jobs:
 
     steps:
     - name: Harden Runner
-      uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+      uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
       with:
         egress-policy: audit
 
@@ -102,6 +102,26 @@ jobs:
       with:
         name: CoverageReport_${{ matrix.configuration }}
         path: TestResults/CoverageReport/
+
+    # Ship the command line (xmat.exe) next to the GUI and check that it runs from the artifact folder
+    - name: Add xmat.exe to the build artifact
+      run: |
+        $gui = "XMAT\bin\x64\$env:Configuration\net10.0-windows10.0.17763.0\win-x64"
+        $cli = "XMAT.Cli\bin\x64\$env:Configuration\net10.0-windows10.0.17763.0\win-x64"
+        foreach ($name in 'xmat.exe', 'xmat.dll', 'xmat.deps.json', 'xmat.runtimeconfig.json', 'xmat.pdb') {
+          $source = Join-Path $cli $name
+          if ($name -ne 'xmat.pdb' -or (Test-Path -LiteralPath $source)) {
+            Copy-Item -LiteralPath $source -Destination $gui -ErrorAction Stop
+          }
+        }
+        $xmat = Join-Path $gui 'xmat.exe'
+        $version = (& $xmat --version) -join "`n" | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or $version.schema -ne 'xmat-cli/1') { throw "xmat --version failed with exit code $LASTEXITCODE" }
+        $doctor = (& $xmat doctor --for analyze) -join "`n" | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or $doctor.status -ne 'succeeded') { throw "xmat doctor --for analyze failed with exit code $LASTEXITCODE" }
+        Write-Host "xmat $($version.version) runs from the artifact folder"
+      env:
+        Configuration: ${{ matrix.configuration }}
 
     # Upload build artifact
     - name: Upload Artifacts

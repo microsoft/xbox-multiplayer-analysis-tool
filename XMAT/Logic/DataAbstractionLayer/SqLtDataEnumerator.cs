@@ -5,6 +5,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Threading;
+using Microsoft.Data.Sqlite;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
@@ -17,10 +19,14 @@ namespace XMAT.DataAbstractionLayer
             {
                 lock (_gate)
                 {
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
                     if (_cachedDataRecord == null)
                     {
                         _cachedDataRecord = new SqLtDataRecord(_dataReader, _fieldDefs);
                     }
+
                     return _cachedDataRecord;
                 }
             }
@@ -30,8 +36,50 @@ namespace XMAT.DataAbstractionLayer
         {
             lock (_gate)
             {
+                ObjectDisposedException.ThrowIf(
+                    _ownerDisposed,
+                    this);
                 _cachedDataRecord = null;
-                return _dataReader?.Read() == true;
+                SqliteDataReader reader =
+                    _dataReader;
+                if (reader == null)
+                {
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    Dispose();
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    return false;
+                }
+                bool moved;
+                try
+                {
+                    moved = reader.Read();
+                }
+                catch
+                {
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    throw;
+                }
+                if (!moved)
+                {
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    Dispose();
+                    ObjectDisposedException.ThrowIf(
+                        _ownerDisposed,
+                        this);
+                    return false;
+                }
+                ObjectDisposedException.ThrowIf(
+                    _ownerDisposed,
+                    this);
+                return true;
             }
         }
 
@@ -39,6 +87,9 @@ namespace XMAT.DataAbstractionLayer
         {
             lock (_gate)
             {
+                ObjectDisposedException.ThrowIf(
+                    _ownerDisposed,
+                    this);
                 _cachedDataRecord = null;
                 if (_dataReader != null)
                     _dataReader.GetEnumerator().Reset();
@@ -50,16 +101,38 @@ namespace XMAT.DataAbstractionLayer
             get { return Current; }
         }
 
-        void IDisposable.Dispose()
+        public void Dispose()
         {
             lock (_gate)
             {
-                if (_dataReader != null)
+                if (Interlocked.Exchange(
+                        ref _isDisposed,
+                        1) != 0)
                 {
-                    _dataReader.Close();
-                    _dataReader.Dispose();
+                    return;
+                }
+                SqliteDataReader reader =
+                    _dataReader;
+                _dataReader = null;
+                _cachedDataRecord = null;
+                try
+                {
+                    reader?.Dispose();
+                }
+                finally
+                {
+                    Action<SqLtDataEnumerable> disposed =
+                        _onDisposed;
+                    _onDisposed = null;
+                    disposed?.Invoke(this);
                 }
             }
+        }
+
+        internal void DisposeFromOwner()
+        {
+            _ownerDisposed = true;
+            Dispose();
         }
 
         private SqLtDataRecord _cachedDataRecord;

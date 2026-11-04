@@ -104,6 +104,8 @@ namespace XMAT.Tests
                 using var directory = new InvestigationDirectory();
                 using var database = CaptureInvestigationTestData.WebDatabase();
                 var saved = Path.Combine(directory.Path, "capture.xmatcap");
+                database.CreateTable("CaptureDevices", new Field<long>("DeviceType"),
+                    new Field<string>("DeviceName"), new Field<long>("CaptureType"));
                 database.SaveToFile(saved);
                 using var loaded = new SqLtReadonlyDatabase(saved);
                 var model = new CaptureAppModel { ActiveDatabase = database, LoadedDatabase = loaded };

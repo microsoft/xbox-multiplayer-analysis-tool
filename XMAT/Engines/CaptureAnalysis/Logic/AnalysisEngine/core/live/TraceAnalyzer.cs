@@ -13,6 +13,10 @@ using System.Threading.Tasks;
 
 namespace CaptureAnalysisEngine
 {
+    internal sealed record TraceConsoleAnalysis(
+        IReadOnlyList<RuleResult> RuleResults,
+        IReadOnlyList<ReportDocument> Reports);
+
     public class TraceAnalyzer
     {
         // TODO: remove at some point if we do not need to save output
@@ -29,6 +33,9 @@ namespace CaptureAnalysisEngine
         public TraceAnalyzer()
         {
         }
+
+        internal Action<string> StagingFileDelete { get; set; } =
+            File.Delete;
 
         public bool DoesDataContainEndpoint(ServiceCallData serviceCallData, string endpoint)
         {
@@ -59,7 +66,9 @@ namespace CaptureAnalysisEngine
         {
             // NOTE: it is expected that the rules are already properly formatted
             // so any exception that results from parsing should bomb
-            var rulesDocument = JsonDocument.Parse(rules.BaseStream);
+            using var rulesDocument =
+                JsonDocument.Parse(
+                    rules.BaseStream);
             {
                 JsonElement jsonObject = rulesDocument.RootElement;
 
@@ -166,17 +175,25 @@ namespace CaptureAnalysisEngine
 
         public Dictionary<string, IEnumerable<ReportDocument>> Run(RulesEngine rulesEngine, ServiceCallData serviceCallData, string reportOutputDirectory)
         {
-            return RunDetailed(rulesEngine, serviceCallData, reportOutputDirectory).Consoles.ToDictionary(
-                console => console.ConsoleId, console => (IEnumerable<ReportDocument>)console.Reports);
+            return RunDetailed(
+                    rulesEngine,
+                    serviceCallData,
+                    reportOutputDirectory,
+                    true,
+                    CancellationToken.None)
+                .ToDictionary(
+                    item => item.Key,
+                    item => (IEnumerable<ReportDocument>)item.Value.Reports);
         }
 
-        public TraceAnalysisResult RunDetailed(
+        internal Dictionary<string, TraceConsoleAnalysis> RunDetailed(
             RulesEngine rulesEngine,
             ServiceCallData serviceCallData,
-            string reportOutputDirectory = null,
-            CancellationToken cancellationToken = default)
+            string reportOutputDirectory,
+            bool produceReports,
+            CancellationToken cancellationToken)
         {
-            var consoles = new List<ConsoleAnalysisResult>();
+            Dictionary<string, TraceConsoleAnalysis> perConsoleResults = new();
             foreach (var console in serviceCallData.m_perConsoleData)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -187,28 +204,52 @@ namespace CaptureAnalysisEngine
 
                 rulesEngine.ClearAllRules();
                 rulesEngine.AddRules(m_rules);
-                rulesEngine.RunRulesOnData(console.Key, console.Value, cancellationToken);
-                var results = rulesEngine.GetResults(console.Key).AsReadOnly();
-
-                string consoleReportOutputDirectory =
-                    consoles.Count == 0
-                        ? reportOutputDirectory
-                        : null;
-                var reports = RunReports(
-                    results,
-                    serviceCallData,
-                    consoleReportOutputDirectory,
+                rulesEngine.RunRulesOnData(
+                    console.Key,
+                    console.Value,
                     cancellationToken);
 
-                consoles.Add(new(console.Key, results, reports.ToList().AsReadOnly()));
+                var ruleResults = rulesEngine.GetResults(console.Key);
+                // Every console's reports have the same file names, so only the first console writes them.
+                string consoleReportOutputDirectory =
+                    perConsoleResults.Count == 0
+                        ? reportOutputDirectory
+                        : null;
+                var reports = produceReports
+                    ? RunReports(
+                        ruleResults,
+                        serviceCallData,
+                        consoleReportOutputDirectory,
+                        cancellationToken).ToList()
+                    : new List<ReportDocument>();
+
+                perConsoleResults.Add(
+                    console.Key,
+                    new TraceConsoleAnalysis(ruleResults, reports));
             }
-            cancellationToken.ThrowIfCancellationRequested();
-            return new(consoles.AsReadOnly());
+            return perConsoleResults;
         }
 
-        public IEnumerable<ReportDocument> RunReports(
-            IEnumerable<RuleResult> results, ServiceCallData serviceCallData, string reportOutputDirectory,
-            CancellationToken cancellationToken = default)
+        public TraceAnalysisResult RunDetailed(
+            RulesEngine rulesEngine, ServiceCallData serviceCallData, string reportOutputDirectory = null,
+            CancellationToken cancellationToken = default) =>
+            TraceAnalysisResult.FromConsoleResults(RunDetailed(
+                rulesEngine, serviceCallData, reportOutputDirectory, true, cancellationToken));
+
+        public IEnumerable<ReportDocument> RunReports(IEnumerable<RuleResult> results, ServiceCallData serviceCallData, string reportOutputDirectory)
+        {
+            return RunReports(
+                results,
+                serviceCallData,
+                reportOutputDirectory,
+                CancellationToken.None);
+        }
+
+        internal IEnumerable<ReportDocument> RunReports(
+            IEnumerable<RuleResult> results,
+            ServiceCallData serviceCallData,
+            string reportOutputDirectory,
+            CancellationToken cancellationToken)
         {
             ConcurrentBag<ReportDocument> documents = new();
             Parallel.ForEach(
@@ -221,19 +262,107 @@ namespace CaptureAnalysisEngine
                         serviceCallData.m_endpointToService);
                     if (!string.IsNullOrEmpty(reportOutputDirectory))
                     {
-                        var jsonText = reportDocument.ToJson();
                         var jsonPath = Path.Combine(reportOutputDirectory, $"{report.GetType().Name}.json");
-                        File.WriteAllText(jsonPath, jsonText);
+                        WriteReportDocument(
+                            reportDocument,
+                            jsonPath,
+                            cancellationToken);
                     }
                     documents.Add(reportDocument);
                 });
             return documents;
         }
 
-        public void RunUriConverterOnData(ServiceCallData serviceCallData, CancellationToken cancellationToken = default)
+        private void WriteReportDocument(
+            ReportDocument reportDocument,
+            string jsonPath,
+            CancellationToken cancellationToken)
         {
+            string stagingPath =
+                jsonPath +
+                "." +
+                Guid.NewGuid().ToString("N") +
+                ".tmp";
+            bool stagingCreated = false;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                using (var jsonStream =
+                    new FileStream(
+                        stagingPath,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None))
+                {
+                    stagingCreated = true;
+                    reportDocument.WriteJson(
+                        jsonStream);
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                if (File.Exists(jsonPath))
+                {
+                    File.Replace(
+                        stagingPath,
+                        jsonPath,
+                        null);
+                }
+                else
+                {
+                    File.Move(
+                        stagingPath,
+                        jsonPath);
+                }
+                stagingCreated = false;
+            }
+            catch
+            {
+                if (stagingCreated)
+                {
+                    TryDeleteStagingFile(
+                        stagingPath);
+                }
+                throw;
+            }
+        }
+
+        private void TryDeleteStagingFile(
+            string path)
+        {
+            try
+            {
+                StagingFileDelete(path);
+            }
+            catch
+            {
+                // Staging cleanup must never replace the report failure.
+            }
+        }
+
+        public void RunUriConverterOnData(ServiceCallData serviceCallData)
+        {
+            RunUriConverterOnData(serviceCallData, CancellationToken.None);
+        }
+
+        internal void RunUriConverterOnData(
+            ServiceCallData serviceCallData,
+            CancellationToken cancellationToken)
+        {
+            RunUriConverterOnData(
+                serviceCallData,
+                new AnalysisWorkBudget(),
+                cancellationToken);
+        }
+
+        internal void RunUriConverterOnData(
+            ServiceCallData serviceCallData,
+            AnalysisWorkBudget workBudget,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(workBudget);
             foreach (var console in serviceCallData.m_perConsoleData.Values)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 foreach (var endpointData in console.m_servicesHistory)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -243,7 +372,13 @@ namespace CaptureAnalysisEngine
                     {
                         foreach (var call in endpointData.Value)
                         {
-                            call.m_xsapiMethods = m_converter.GetMethod(call.Uri, call.Method == @"GET");
+                            cancellationToken.ThrowIfCancellationRequested();
+                            call.m_xsapiMethods =
+                                m_converter.GetMethod(
+                                    call.Uri,
+                                    call.Method == @"GET",
+                                    workBudget,
+                                    cancellationToken);
                         }
                     }
                 }

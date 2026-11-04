@@ -64,11 +64,11 @@ namespace XMAT.ApplicationServices
         }
 
         public Task ValidateAsync(Guid inputId, long maximumBytes, CancellationToken cancellationToken = default) =>
-            WithFileAsync(inputId, maximumBytes, (_, _) => Task.FromResult(true), cancellationToken);
+            WithFileAsync(inputId, maximumBytes, (_, _, _) => Task.FromResult(true), cancellationToken);
 
         public Task<ScriptFileInput> ReadScriptAsync(
             Guid inputId, long maximumBytes, CancellationToken cancellationToken = default) =>
-            WithFileAsync(inputId, maximumBytes, async (descriptor, file) =>
+            WithFileAsync(inputId, maximumBytes, async (descriptor, file, _) =>
             {
                 if (descriptor.Kind != CaptureInputKind.ScriptSource)
                     throw new CaptureFileException(CaptureFileFailure.InvalidPath);
@@ -90,16 +90,19 @@ namespace XMAT.ApplicationServices
 
         private Task<InputFileDescriptor> CopyAsync(
             Guid inputId, CaptureInputKind kind, Stream destination, long maximumBytes, CancellationToken cancellationToken) =>
-            WithFileAsync(inputId, maximumBytes, async (descriptor, file) =>
+            WithFileAsync(inputId, maximumBytes, async (descriptor, file, path) =>
             {
                 if (descriptor.Kind != kind)
                     throw new CaptureFileException(CaptureFileFailure.InvalidPath);
-                await file.CopyToAsync(destination, cancellationToken);
+                if (kind == CaptureInputKind.CaptureDatabase)
+                    await DataAbstractionLayer.DataAbstractionLayer.CopyCaptureInputAsync(path, file, destination, cancellationToken);
+                else
+                    await file.CopyToAsync(destination, cancellationToken);
                 return descriptor;
             }, cancellationToken);
 
         private Task<T> WithFileAsync<T>(
-            Guid inputId, long maximumBytes, Func<InputFileDescriptor, FileStream, Task<T>> action,
+            Guid inputId, long maximumBytes, Func<InputFileDescriptor, FileStream, string, Task<T>> action,
             CancellationToken cancellationToken) =>
             Task.Run(async () =>
             {
@@ -123,7 +126,7 @@ namespace XMAT.ApplicationServices
                     throw new CaptureFileException(CaptureFileFailure.InputChanged);
                 cancellationToken.ThrowIfCancellationRequested();
                 file.Position = 0;
-                return await action(entry.Descriptor, file);
+                return await action(entry.Descriptor, file, Path.Combine(entry.Directory, entry.Descriptor.FileName));
             }, cancellationToken);
 
         private static void DemandLimit(FileStream file, long maximumBytes)

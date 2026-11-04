@@ -157,5 +157,52 @@ namespace XMAT.Tests
                 entry => entry.Key.LogicalName == "api.host.com").Value;
             Assert.True(history.First.Value.ReqTimeUTC <= history.Last.Value.ReqTimeUTC);
         }
+
+        [Fact]
+        public void Cs1LargeTelemetryLinePreservesFieldsAndDelimiters()
+        {
+            const int FieldCount = 10_000;
+            var fields = new string[FieldCount];
+            fields[0] = "0";
+            fields[1] =
+                "ABCD_12345678.CustomEvent";
+            fields[2] =
+                "2026-01-01T00:00:00Z";
+            for (var index = 3;
+                index < fields.Length;
+                index++)
+            {
+                fields[index] =
+                    index % 3 == 0
+                        ? string.Empty
+                        : $"value-{index}";
+            }
+            var call = new ServiceCallItem(1)
+            {
+                ConsoleIP = "10.0.0.1",
+                Host = "data-vef.xboxlive.com",
+                EndpointKind = EndpointKind.Captured,
+                ReqBody = string.Join("|", fields),
+            };
+            var data = new ServiceCallData(false);
+
+            data.CreateFromServiceCallItems(
+                new[] { call });
+
+            ServiceCallItem converted = Assert.Single(
+                data.m_perConsoleData["10.0.0.1"]
+                    .m_servicesHistory[
+                        new EndpointKey(
+                            EndpointKind.SyntheticTelemetry,
+                            "inGameEvents")]);
+            Assert.Equal(
+                string.Join(
+                    "|",
+                    fields,
+                    1,
+                    fields.Length - 1) +
+                    "|",
+                converted.Dimensions);
+        }
     }
 }

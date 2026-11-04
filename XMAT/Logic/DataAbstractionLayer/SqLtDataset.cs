@@ -5,13 +5,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtDataset : IDataset
+    internal class SqLtDataset : IDataset, IDisposable
     {
         public IEnumerable<IFieldDefinition> FieldDefs { get { return GetFieldDefs(); } }
 
@@ -26,15 +27,22 @@ namespace XMAT.DataAbstractionLayer
         {
             lock (_gate)
             {
+                ThrowIfDisposed();
                 SqliteDataReader dataReader = null;
 
                 _commandBuilder.Clear();
                 _commandBuilder.Append("SELECT DISTINCT id,");
 
-                string fields = string.Join(",", _fieldDefinitions.Select(x => SqLtQuerySupport.Identifier(x.Key)));
+                string fields = string.Join(
+                    ",",
+                    _fieldDefinitions.Select(
+                        field => QuoteIdentifier(field.Key)));
                 _commandBuilder.Append(fields);
 
-                _commandBuilder.Append($" FROM {SqLtQuerySupport.Identifier(_sourceTableName)}");
+                _commandBuilder.Append(" FROM ")
+                    .Append(
+                        QuoteIdentifier(
+                            _sourceTableName));
                 _commandBuilder.Append(@" WHERE");
 
                 _commandInterface.Parameters.Clear();
@@ -43,9 +51,10 @@ namespace XMAT.DataAbstractionLayer
                     (x) =>
                     {
                         var fieldDef = _fieldDefinitions[x.Name] as FieldDefinition;
+                        var fieldName = fieldDef.Name;
                         var parameter = $"$p{index++}";
                         _commandInterface.Parameters.AddWithValue(parameter, x.Value ?? DBNull.Value);
-                        return $" {SqLtQuerySupport.Identifier(fieldDef.Name)} = {parameter}";
+                        return " " + QuoteIdentifier(fieldName) + " = " + parameter;
                     }));
                 _commandBuilder.Append(whereValues);
 
@@ -56,7 +65,7 @@ namespace XMAT.DataAbstractionLayer
                     dataReader = _commandInterface.ExecuteReader();
                 }
 
-                return new SqLtDataEnumerable(_fieldDefinitions, dataReader, null, _gate);
+                return Track(dataReader);
             }
         }
 
@@ -64,20 +73,27 @@ namespace XMAT.DataAbstractionLayer
         {
             lock (_gate)
             {
+                ThrowIfDisposed();
                 _commandBuilder.Clear();
                 _commandBuilder.Append("SELECT DISTINCT id,");
 
-                string fields = string.Join(",", _fieldDefinitions.Select(x => SqLtQuerySupport.Identifier(x.Key)));
+                string fields = string.Join(
+                    ",",
+                    _fieldDefinitions.Select(
+                        field => QuoteIdentifier(field.Key)));
                 _commandBuilder.Append(fields);
 
-                _commandBuilder.Append($" FROM {SqLtQuerySupport.Identifier(_sourceTableName)}");
+                _commandBuilder.Append(" FROM ")
+                    .Append(
+                        QuoteIdentifier(
+                            _sourceTableName));
                 _commandBuilder.Append($" WHERE id >= {firstRowId} LIMIT {limit}");
 
                 _commandInterface.CommandText = _commandBuilder.ToString();
                 _commandInterface.Parameters.Clear();
                 var dataReader = _commandInterface.ExecuteReader();
 
-                return new SqLtDataEnumerable(_fieldDefinitions, dataReader, null, _gate);
+                return Track(dataReader);
             }
         }
 
@@ -96,6 +112,7 @@ namespace XMAT.DataAbstractionLayer
 
         private IEnumerable<IFieldDefinition> GetFieldDefs()
         {
+            ThrowIfDisposed();
             return _fieldDefinitions.Values;
         }
 
@@ -103,19 +120,128 @@ namespace XMAT.DataAbstractionLayer
         {
             lock (_gate)
             {
+                ThrowIfDisposed();
                 _commandBuilder.Clear();
                 _commandBuilder.Append("SELECT DISTINCT id,");
 
-                string fields = string.Join(",", _fieldDefinitions.Select(x => SqLtQuerySupport.Identifier(x.Key)));
+                string fields = string.Join(
+                    ",",
+                    _fieldDefinitions.Select(
+                        field => QuoteIdentifier(field.Key)));
                 _commandBuilder.Append(fields);
 
-                _commandBuilder.Append($" FROM {SqLtQuerySupport.Identifier(_sourceTableName)}");
+                _commandBuilder.Append(" FROM ")
+                    .Append(
+                        QuoteIdentifier(
+                            _sourceTableName));
 
                 _commandInterface.CommandText = _commandBuilder.ToString();
                 _commandInterface.Parameters.Clear();
                 var dataReader = _commandInterface.ExecuteReader();
 
-                return new SqLtDataEnumerable(_fieldDefinitions, dataReader, null, _gate);
+                return Track(dataReader);
+            }
+        }
+
+        public void Dispose()
+        {
+            SqLtDataEnumerable[] active;
+            lock (_enumerablesLock)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+                _disposed = true;
+                active =
+                    _activeEnumerables.ToArray();
+                _activeEnumerables.Clear();
+            }
+            var failures = new List<Exception>();
+            try
+            {
+                foreach (SqLtDataEnumerable enumerable in
+                    active)
+                {
+                    try
+                    {
+                        enumerable.DisposeFromOwner();
+                    }
+                    catch (Exception exception) when (
+                        !ExceptionUtilities.IsFatal(
+                            exception))
+                    {
+                        failures.Add(exception);
+                    }
+                }
+            }
+            finally
+            {
+                try
+                {
+                    lock (_gate)
+                    { _commandInterface.Dispose(); }
+                }
+                catch (Exception exception) when (
+                    !ExceptionUtilities.IsFatal(
+                        exception))
+                {
+                    failures.Add(exception);
+                }
+            }
+            if (failures.Count == 1)
+            {
+                ExceptionDispatchInfo.Capture(
+                    failures[0]).Throw();
+            }
+            if (failures.Count > 1)
+            {
+                throw new AggregateException(failures);
+            }
+        }
+
+        private SqLtDataEnumerable Track(
+            SqliteDataReader dataReader)
+        {
+            var enumerable = new SqLtDataEnumerable(
+                _fieldDefinitions,
+                dataReader,
+                null,
+                disposed =>
+                {
+                    lock (_enumerablesLock)
+                    {
+                        _activeEnumerables.Remove(
+                            disposed);
+                    }
+                }, _gate);
+            bool ownerDisposed;
+            lock (_enumerablesLock)
+            {
+                ownerDisposed = _disposed;
+                if (!ownerDisposed)
+                {
+                    _activeEnumerables.Add(
+                        enumerable);
+                }
+            }
+            if (ownerDisposed)
+            {
+                enumerable.DisposeFromOwner();
+                ObjectDisposedException.ThrowIf(
+                    ownerDisposed,
+                    this);
+            }
+            return enumerable;
+        }
+
+        private void ThrowIfDisposed()
+        {
+            lock (_enumerablesLock)
+            {
+                ObjectDisposedException.ThrowIf(
+                    _disposed,
+                    this);
             }
         }
 
@@ -123,6 +249,18 @@ namespace XMAT.DataAbstractionLayer
         private SqliteCommand _commandInterface;
         private StringBuilder _commandBuilder;
         private IDictionary<string, IFieldDefinition> _fieldDefinitions;
+        private readonly HashSet<SqLtDataEnumerable> _activeEnumerables =
+            new(ReferenceEqualityComparer.Instance);
+        private object _enumerablesLock => _gate;
         private readonly object _gate;
+        private bool _disposed;
+
+        private static string QuoteIdentifier(string value) =>
+            "\"" +
+            value.Replace(
+                "\"",
+                "\"\"",
+                StringComparison.Ordinal) +
+            "\"";
     }
 }

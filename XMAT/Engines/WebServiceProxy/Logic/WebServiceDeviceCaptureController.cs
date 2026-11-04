@@ -131,6 +131,7 @@ namespace XMAT.WebServiceCapture
         internal bool HasPendingPortReservation => _pendingPortReservation != null;
         public bool HasPendingPort => PendingPort != 0;
         public string PortStatus { get => _portStatus; private set { _portStatus = value; RaisePropertyChange(); } }
+        public string ImportNotice { get; private set; }
         public string CaptureStatusText => Localization.GetLocalizedString(
             _readOnly ? "PROXY_CAPTURE_READ_ONLY" : IsRunning ? "PROXY_CAPTURE_RUNNING" : "PROXY_CAPTURE_STOPPED");
         public string PortDescription => Localization.GetLocalizedString(
@@ -178,6 +179,17 @@ namespace XMAT.WebServiceCapture
                 _selectedWebSocketMessage = value;
                 RaisePropertyChange();
             }
+        }
+
+        internal void SetImportNotice(string notice)
+        {
+            if (ImportNotice == notice)
+            {
+                return;
+            }
+
+            ImportNotice = notice;
+            RaisePropertyChange(nameof(ImportNotice));
         }
 
         private const int LoadedCapturesPageBreakSize = 100;
@@ -747,7 +759,10 @@ namespace XMAT.WebServiceCapture
                     connections.AddFromDataRecord(record, true);
                 }
             }
-            return new(dataset, connections, new WebSocketMessagesCollection());
+            return new(dataset, connections, new WebSocketMessagesCollection(),
+                UpdateFilter(connections.Select(connection => connection.Status).Distinct().ToList()),
+                UpdateFilter(connections.Select(connection => connection.Host).Distinct().ToList()),
+                UpdateFilter(connections.Select(connection => connection.Method).Distinct().ToList()));
         }
 
         internal void ApplyLoadedCaptures(LoadedCaptures captures)
@@ -756,6 +771,9 @@ namespace XMAT.WebServiceCapture
             _loadedCaptureDataset = captures.Dataset;
             ProxyConnections = captures.Connections;
             WebSocketMessages = captures.Messages;
+            StatusFilterList = captures.StatusFilters;
+            HostFilterList = captures.HostFilters;
+            MethodFilterList = captures.MethodFilters;
             _selectedConnectionModel = null;
             _selectedWebSocketMessage = null;
         }
@@ -764,19 +782,28 @@ namespace XMAT.WebServiceCapture
         {
             RaisePropertyChange(nameof(ProxyConnections));
             RaisePropertyChange(nameof(WebSocketMessages));
+            RaisePropertyChange(nameof(StatusFilterList));
+            RaisePropertyChange(nameof(HostFilterList));
+            RaisePropertyChange(nameof(MethodFilterList));
             RaisePropertyChange(nameof(SelectedConnectionModel));
             RaisePropertyChange(nameof(SelectedWebSocketMessage));
         }
 
         internal sealed record LoadedCaptures(
-            IDataset Dataset, ProxyConnectionsCollection Connections, WebSocketMessagesCollection Messages);
+            IDataset Dataset, ProxyConnectionsCollection Connections, WebSocketMessagesCollection Messages,
+            ObservableCollection<CheckedListItem> StatusFilters, ObservableCollection<CheckedListItem> HostFilters,
+            ObservableCollection<CheckedListItem> MethodFilters);
 
         internal sealed record ImportedCaptures(
             ProxyConnectionsCollection Connections, ObservableCollection<CheckedListItem> HostFilters,
-            ObservableCollection<CheckedListItem> StatusFilters, ObservableCollection<CheckedListItem> MethodFilters);
+            ObservableCollection<CheckedListItem> StatusFilters, ObservableCollection<CheckedListItem> MethodFilters,
+            int SkippedIncompleteFrames = 0, int SkippedMalformedHeaderLines = 0);
+
+        internal bool LastImportSkippedData { get; private set; }
 
         internal void ApplyImportedCaptures(ImportedCaptures captures, IDataTable table, bool clearMessages = false)
         {
+            LastImportSkippedData = captures.SkippedIncompleteFrames > 0 || captures.SkippedMalformedHeaderLines > 0;
             PrepareForActiveCaptureData();
             _dataTable = table;
             ProxyConnections = captures.Connections;
@@ -789,6 +816,21 @@ namespace XMAT.WebServiceCapture
                 WebSocketMessages = new WebSocketMessagesCollection();
                 _selectedWebSocketMessage = null;
             }
+        }
+
+        internal void ReplaceLoadedCapturesFrom(
+            WebServiceDeviceCaptureController source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            ApplyLoadedCaptures(new(source._loadedCaptureDataset, source.ProxyConnections, source.WebSocketMessages,
+                source.StatusFilterList, source.HostFilterList, source.MethodFilterList));
+            NotifyPropertyChangesSafely(
+                nameof(ProxyConnections),
+                nameof(StatusFilterList),
+                nameof(HostFilterList),
+                nameof(MethodFilterList),
+                nameof(SelectedConnectionModel),
+                nameof(SelectedWebSocketMessage));
         }
 
         internal IEnumerable<IDataRecord> GetCaptureRecords()
@@ -1907,6 +1949,40 @@ namespace XMAT.WebServiceCapture
         public void RaisePropertyChange([CallerMemberName] string name = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        }
+
+        private void NotifyPropertyChangesSafely(
+            params string[] propertyNames)
+        {
+            Delegate[] subscribers =
+                PropertyChanged?.GetInvocationList();
+            if (subscribers == null)
+            {
+                return;
+            }
+            foreach (string propertyName in propertyNames)
+            {
+                var args =
+                    new PropertyChangedEventArgs(
+                        propertyName);
+                foreach (Delegate subscriber in subscribers)
+                {
+                    try
+                    {
+                        ((PropertyChangedEventHandler)subscriber)(
+                            this,
+                            args);
+                    }
+                    catch (Exception exception) when (
+                        !ExceptionUtilities.IsFatal(
+                            exception))
+                    {
+                        PublicUtilities.AppLog(
+                            LogLevel.ERROR,
+                            $"Capture reload notification failed: {exception}");
+                    }
+                }
+            }
         }
     }
 }

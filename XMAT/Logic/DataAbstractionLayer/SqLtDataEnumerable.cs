@@ -26,11 +26,13 @@ namespace XMAT.DataAbstractionLayer
             IDictionary<string, IFieldDefinition> fieldDefs,
             SqliteDataReader dataReader,
             Predicate<IDataRecord> predicate,
+            Action<SqLtDataEnumerable> disposed,
             object gate = null)
         {
             _fieldDefs = fieldDefs;
             _dataReader = dataReader;
             _predicate = predicate;
+            _onDisposed = disposed;
             _cachedDataRecord = null;
             _gate = gate ?? new object();
         }
@@ -38,6 +40,9 @@ namespace XMAT.DataAbstractionLayer
         private IDictionary<string, IFieldDefinition> _fieldDefs;
         private SqliteDataReader _dataReader;
         private Predicate<IDataRecord> _predicate;
+        private Action<SqLtDataEnumerable> _onDisposed;
+        private int _isDisposed;
+        private volatile bool _ownerDisposed;
         private readonly object _gate;
     }
 }

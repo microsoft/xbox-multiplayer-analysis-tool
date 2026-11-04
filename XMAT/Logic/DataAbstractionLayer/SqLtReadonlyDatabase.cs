@@ -3,15 +3,27 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
+using Microsoft.Win32.SafeHandles;
+using SQLitePCL;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
+    internal sealed record SqLtAppliedLimits(
+        int Length,
+        int SqlLength,
+        int Columns,
+        int ExpressionDepth);
+
     internal class SqLtReadonlyDatabase : IReadonlyDatabase, IDisposable
     {
         public Task<IReadOnlyList<QueryTable>> GetQuerySchemaAsync(CancellationToken cancellationToken = default) =>
@@ -20,99 +32,469 @@ namespace XMAT.DataAbstractionLayer
         public Task<IQuerySession> CreateQuerySessionAsync(CancellationToken cancellationToken = default) =>
             SqLtQuerySession.CreateAsync(_connection, cancellationToken);
 
-        public void SaveToFile(string filepath) => SqLtDatabaseBackup.SaveToFile(_connection, filepath);
+        public void SaveToFile(string filepath) => SqLtDatabaseBackup.SaveToFile(_connection, filepath, sourceIdentity: Identity);
 
-        public IEnumerable<string> TableNames()
+        // FILE_NAME_NORMALIZED with VOLUME_NAME_DOS, then with VOLUME_NAME_GUID for volumes without a drive letter. The
+        // opened name is never used: it is not normalized, so it could still lead SQLite through a link.
+        private static readonly uint[] FinalPathFlags =
         {
-            return _dataTables.Keys;
-        }
+            0x0,
+            0x1,
+        };
+        private const int HashBufferBytes = 64 * 1024;
 
-        public IReadonlyDataTable TableByName(string name)
-        {
-            return _dataTables.GetValueOrDefault(name);
-        }
-
-        public void Dispose()
-        {
-            _connection.Dispose();
-        }
+        private readonly FileStream _snapshot;
+        private readonly SqliteConnection _connection;
+        private readonly Dictionary<string, SqLtReadonlyDataTable> _dataTables =
+            new(StringComparer.Ordinal);
+        private bool _disposed;
 
         internal SqLtReadonlyDatabase(string filepath)
+            : this(
+                filepath,
+                SqLtSchemaProfile.CreateGui())
         {
-            var connectionString = new SqliteConnectionStringBuilder
+        }
+
+        internal SqLtReadonlyDatabase(
+            string filepath,
+            SqLtSchemaProfile profile)
+            : this(
+                filepath,
+                profile,
+                beforeSqliteOpens: null)
+        {
+        }
+
+        // beforeSqliteOpens runs after the schema check and before SQLite opens the file, and finalPathUnavailable
+        // makes the final-path lookup fail for the given flags; tests use them to change what happens in between.
+        internal SqLtReadonlyDatabase(
+            string filepath,
+            SqLtSchemaProfile profile,
+            Action<string> beforeSqliteOpens,
+            Func<uint, bool> finalPathUnavailable = null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(filepath);
+            ArgumentNullException.ThrowIfNull(profile);
+            string databasePath = Path.GetFullPath(filepath);
+            if (!File.Exists(databasePath))
             {
-                DataSource = filepath,
-                Mode = SqliteOpenMode.ReadOnly,
-                Pooling = false
-            }.ToString();
-            _connection = new SqliteConnection(connectionString);
+                throw new FileNotFoundException(
+                    "The capture database does not exist.",
+                    filepath);
+            }
+
             try
             {
+                // Without write sharing, this open fails while another handle or a mapped view can write the file, and
+                // while it is held nothing can open the file for writing, rename it or delete it.
+                _snapshot = new FileStream(
+                    databasePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read);
+                Identity = SqLtFileIdentity.FromHandle(
+                    _snapshot.SafeFileHandle);
+                // SQLite opens the file by the final path of this handle, which has no junction or symbolic link left
+                // that could be retargeted after the check.
+                string checkedPath = ToVerbatimPath(
+                    GetFinalPath(
+                        _snapshot.SafeFileHandle,
+                        finalPathUnavailable));
+                if (HasSqliteSidecar(checkedPath))
+                {
+                    throw new SqLtSchemaException(
+                        SqLtSchemaFailure.Sidecar);
+                }
+                SqLtValidatedSchema schema =
+                    SqLtSchemaPreflight.Validate(
+                        _snapshot,
+                        profile);
+                beforeSqliteOpens?.Invoke(databasePath);
+                var connectionString =
+                    new SqliteConnectionStringBuilder
+                    {
+                        DataSource = ToImmutableUri(checkedPath),
+                        Mode = SqliteOpenMode.ReadOnly,
+                        Cache = SqliteCacheMode.Private,
+                        Pooling = false,
+                    }.ToString();
+                _connection =
+                    new SqliteConnection(connectionString);
                 _connection.Open();
-                InitializeTables();
+                ThrowUnlessSqliteOpened(
+                    _connection,
+                    checkedPath);
+                AppliedLimits = ApplyLimits(
+                    _connection,
+                    profile);
+                InitializeTables(
+                    schema,
+                    profile);
             }
             catch
             {
-                _connection.Dispose();
+                try
+                {
+                    _connection?.Dispose();
+                }
+                finally
+                {
+                    _snapshot?.Dispose();
+                }
                 throw;
             }
         }
 
-        private void InitializeTables()
+        internal SqLtAppliedLimits AppliedLimits { get; }
+
+        internal SqLtFileIdentity Identity { get; }
+
+        public IEnumerable<string> TableNames() =>
+            _dataTables.Keys;
+
+        public IReadonlyDataTable TableByName(string name) =>
+            name != null &&
+            _dataTables.TryGetValue(
+                name,
+                out SqLtReadonlyDataTable table)
+                ? table
+                : null;
+
+        internal string ReadSqliteVersion()
         {
-            var names = new List<string>();
-            using var command = new SqliteCommand(
-                "SELECT name,sql FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'", _connection);
-            using (var reader = command.ExecuteReader())
-            {
-                while (reader.Read())
-                {
-                    if (reader.GetString(1).StartsWith("CREATE VIRTUAL", StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidDataException("A native capture cannot contain virtual tables.");
-                    names.Add(reader.GetString(0));
-                }
-            }
-            foreach (var name in names)
-                InitializeTableFields(name);
+            using var command =
+                _connection.CreateCommand();
+            command.CommandText =
+                "SELECT sqlite_version()";
+            return command.ExecuteScalar() as string;
         }
 
-        private void InitializeTableFields(string tableName)
+        internal async Task CopyInputAsync(Stream destination, CancellationToken cancellationToken)
         {
-            using var command = new SqliteCommand(
-                "SELECT cid,name,type,hidden,pk FROM pragma_table_xinfo($name) ORDER BY cid", _connection);
-            command.Parameters.AddWithValue("$name", tableName);
-            var fieldDefinitions = new List<IFieldDefinition>();
-            using (var reader = command.ExecuteReader())
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _snapshot.Position = 0;
+            await _snapshot.CopyToAsync(destination, HashBufferBytes, cancellationToken);
+        }
+
+        // The SHA-256 of the guarded file from its start to its end: the handle that was checked and that keeps writers
+        // out, so these are the bytes SQLite reads. Positional reads leave the handle's position unchanged.
+        internal byte[] ComputeSha256(
+            CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(
+                _disposed,
+                this);
+            SafeFileHandle file =
+                _snapshot.SafeFileHandle;
+            long length =
+                RandomAccess.GetLength(file);
+            using var hash =
+                IncrementalHash.CreateHash(
+                    HashAlgorithmName.SHA256);
+            byte[] buffer =
+                ArrayPool<byte>.Shared.Rent(
+                    HashBufferBytes);
+            try
             {
-                while (reader.Read())
+                long offset = 0;
+                while (offset < length)
                 {
-                    var index = reader.GetInt32(0);
-                    var name = reader.GetString(1);
-                    var declared = reader.GetString(2).ToUpperInvariant();
-                    if (reader.GetInt64(3) != 0 ||
-                        (declared != "INTEGER" && declared != "TEXT"))
-                        throw new InvalidDataException("A native capture requires ordinary integer/text columns.");
-                    if (index == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int read =
+                        RandomAccess.Read(
+                            file,
+                            buffer.AsSpan(
+                                0,
+                                (int)Math.Min(
+                                    HashBufferBytes,
+                                    length - offset)),
+                            offset);
+                    if (read == 0)
                     {
-                        if (!name.Equals("id", StringComparison.OrdinalIgnoreCase) || declared != "INTEGER" ||
-                            reader.GetInt64(4) != 1)
-                            throw new InvalidDataException("A native capture table must start with its record identity.");
-                        continue;
+                        throw new EndOfStreamException();
                     }
-                    if (reader.GetInt64(4) != 0)
-                        throw new InvalidDataException("A native capture requires a single-column record identity.");
-                    fieldDefinitions.Add(FieldDefinition.CreateFromSchema(name,
-                        declared == "INTEGER" ? typeof(long) : typeof(string), index));
+                    hash.AppendData(
+                        buffer,
+                        0,
+                        read);
+                    offset += read;
                 }
+                return hash.GetHashAndReset();
             }
-            if (fieldDefinitions.Count == 0)
-                throw new InvalidDataException("A native capture table requires data columns.");
-            _dataTables[tableName] = new SqLtReadonlyDataTable(_connection, tableName, fieldDefinitions.ToArray());
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
 
-        private SqliteConnection _connection;
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
 
-        private readonly Dictionary<string, SqLtReadonlyDataTable> _dataTables =
-            new Dictionary<string, SqLtReadonlyDataTable>();
+            try
+            {
+                foreach (SqLtReadonlyDataTable table in
+                    _dataTables.Values)
+                {
+                    table.Dispose();
+                }
+                _dataTables.Clear();
+            }
+            finally
+            {
+                try
+                {
+                    _connection.Close();
+                }
+                finally
+                {
+                    try
+                    {
+                        _connection.Dispose();
+                    }
+                    finally
+                    {
+                        _snapshot.Dispose();
+                        _disposed = true;
+                    }
+                }
+            }
+        }
+
+        // A -journal, -wal or -shm file next to the capture means its last save did not finish or another program may
+        // still be writing it, so the file alone may not hold the whole capture. Such captures are refused, and neither
+        // the capture nor those files are changed.
+        internal static bool HasSqliteSidecar(
+            string databasePath) =>
+            Path.Exists(databasePath + "-journal") ||
+            Path.Exists(databasePath + "-wal") ||
+            Path.Exists(databasePath + "-shm");
+
+        private static string GetFinalPath(
+            SafeFileHandle file,
+            Func<uint, bool> finalPathUnavailable)
+        {
+            foreach (uint flags in FinalPathFlags)
+            {
+                string path =
+                    finalPathUnavailable?.Invoke(flags) == true
+                        ? null
+                        : TryGetFinalPath(
+                            file,
+                            flags);
+                if (path != null)
+                {
+                    return path;
+                }
+            }
+            throw new SqLtSchemaException(
+                SqLtSchemaFailure.UnsupportedLocation);
+        }
+
+        private static string TryGetFinalPath(
+            SafeFileHandle file,
+            uint flags)
+        {
+            var buffer = new char[512];
+            while (true)
+            {
+                uint length =
+                    NativeMethods.GetFinalPathNameByHandle(
+                        file,
+                        buffer,
+                        (uint)buffer.Length,
+                        flags);
+                if (length == 0)
+                {
+                    return null;
+                }
+                if (length < buffer.Length)
+                {
+                    return new string(
+                        buffer,
+                        0,
+                        (int)length);
+                }
+                buffer = new char[length];
+            }
+        }
+
+        // The \\?\ form keeps paths longer than MAX_PATH openable and stops Windows from reinterpreting the name.
+        private static string ToVerbatimPath(
+            string fullPath) =>
+            fullPath.StartsWith(
+                    @"\\?\",
+                    StringComparison.Ordinal) ||
+                fullPath.StartsWith(
+                    @"\\.\",
+                    StringComparison.Ordinal)
+                ? fullPath
+                : fullPath.StartsWith(
+                    @"\\",
+                    StringComparison.Ordinal)
+                    ? @"\\?\UNC\" + fullPath[2..]
+                    : @"\\?\" + fullPath;
+
+        // immutable=1 makes SQLite read only this file: it takes no locks and never looks for journal or write-ahead
+        // log files, so sidecars created after the check above are never read. The flag is only a promise that the file
+        // does not change; the read-only handle without write sharing opened above keeps that promise. SQLite decodes
+        // %HH in URI file names and ends the name at '?' or '#', so those characters are escaped.
+        private static string ToImmutableUri(
+            string path) =>
+            "file:" +
+            path.Replace(
+                    "%",
+                    "%25",
+                    StringComparison.Ordinal)
+                .Replace(
+                    "?",
+                    "%3F",
+                    StringComparison.Ordinal)
+                .Replace(
+                    "#",
+                    "%23",
+                    StringComparison.Ordinal) +
+            "?immutable=1";
+
+        // SQLite reports the decoded file name only if it parsed the URI, which is also what applies immutable=1.
+        private static void ThrowUnlessSqliteOpened(
+            SqliteConnection connection,
+            string expectedPath)
+        {
+            string opened =
+                raw.sqlite3_db_filename(
+                        connection.Handle,
+                        "main")
+                    .utf8_to_string();
+            if (!string.Equals(
+                    opened,
+                    expectedPath,
+                    StringComparison.Ordinal))
+            {
+                throw new SqLtSchemaException(
+                    SqLtSchemaFailure.Invalid);
+            }
+        }
+
+        private void InitializeTables(
+            SqLtValidatedSchema schema,
+            SqLtSchemaProfile profile)
+        {
+            foreach (SqLtValidatedTable table in
+                schema.Tables.Values)
+            {
+                if (!profile.MaterializedTables.Contains(
+                        table.CanonicalName))
+                {
+                    continue;
+                }
+                SqLtExpectedTable expected =
+                    SqLtSchemaProfile.GetKnownTable(
+                        table.CanonicalName) ??
+                    throw new SqLtSchemaException(
+                        SqLtSchemaFailure.Invalid);
+                IEnumerable<IFieldDefinition> fields =
+                    table.Columns.Select(
+                        (column, index) =>
+                            FieldDefinition.CreateFromSchema(
+                                column.Name,
+                                column.RuntimeType,
+                                index + 1,
+                                isExtension:
+                                    index >=
+                                    expected.RequiredColumns.Count));
+                _dataTables.Add(
+                    table.CanonicalName,
+                    new SqLtReadonlyDataTable(
+                        _connection,
+                        table.SqliteName,
+                        fields));
+            }
+        }
+
+        // The GUI profile leaves SQLite's value limit at its default: opening a capture in XMAT has no size quota.
+        // The CLI profile sets it to its record limit. The SQL, column and expression limits bound statement
+        // parsing, and each limit that is set is read back.
+        private static SqLtAppliedLimits ApplyLimits(
+            SqliteConnection connection,
+            SqLtSchemaProfile profile)
+        {
+            int length = profile.MaxValueBytes.HasValue
+                ? SetLimit(
+                    connection,
+                    raw.SQLITE_LIMIT_LENGTH,
+                    profile.MaxValueBytes.Value)
+                : ReadLimit(
+                    connection,
+                    raw.SQLITE_LIMIT_LENGTH);
+            int sqlLength = SetLimit(
+                connection,
+                raw.SQLITE_LIMIT_SQL_LENGTH,
+                SqLtSchemaProfile.MaxSqlLength);
+            int columns = SetLimit(
+                connection,
+                raw.SQLITE_LIMIT_COLUMN,
+                SqLtSchemaProfile.MaxColumns);
+            int expressionDepth = SetLimit(
+                connection,
+                raw.SQLITE_LIMIT_EXPR_DEPTH,
+                SqLtSchemaProfile.MaxExpressionDepth);
+            return new SqLtAppliedLimits(
+                length,
+                sqlLength,
+                columns,
+                expressionDepth);
+        }
+
+        private static int SetLimit(
+            SqliteConnection connection,
+            int id,
+            int requested)
+        {
+            _ = raw.sqlite3_limit(
+                connection.Handle,
+                id,
+                requested);
+            int effective = raw.sqlite3_limit(
+                connection.Handle,
+                id,
+                -1);
+            if (effective != requested)
+            {
+                throw new SqLtSchemaException(
+                    SqLtSchemaFailure.Limit);
+            }
+            return effective;
+        }
+
+        private static int ReadLimit(
+            SqliteConnection connection,
+            int id) =>
+            raw.sqlite3_limit(
+                connection.Handle,
+                id,
+                -1);
+
+        private static class NativeMethods
+        {
+            [DllImport(
+                "kernel32.dll",
+                EntryPoint = "GetFinalPathNameByHandleW",
+                SetLastError = true,
+                CharSet = CharSet.Unicode,
+                ExactSpelling = true)]
+            [DefaultDllImportSearchPaths(
+                DllImportSearchPath.System32)]
+            internal static extern uint
+                GetFinalPathNameByHandle(
+                    SafeFileHandle file,
+                    [Out] char[] path,
+                    uint pathLength,
+                    uint flags);
+        }
     }
 }

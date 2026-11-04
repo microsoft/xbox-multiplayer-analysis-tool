@@ -41,8 +41,12 @@ namespace XMAT.Tests
         {
             using var directory = new TestDirectory();
             var path = Path.Join(directory.Path, "capture.xmatcap");
-            using (var database = CreateDatabase())
+            using (var database = new SqLtDatabase())
             {
+                database.Initialize();
+                database.CreateTable("CaptureDevices",
+                    new Field<long>("DeviceType"), new Field<string>("DeviceName"), new Field<long>("CaptureType"),
+                    new Field<long>("Value"), new Field<string>("Name")).AddRow(0L, "fixture", 0L, 1L, "first");
                 database.SaveToFile(path);
             }
             var before = File.ReadAllBytes(path);
@@ -51,7 +55,7 @@ namespace XMAT.Tests
                 var schema = await loaded.GetQuerySchemaAsync();
                 Assert.Single(schema);
                 await using var snapshot = await loaded.CreateQuerySessionAsync();
-                await using var result = await snapshot.ExecuteAsync("SELECT Value,Name FROM Data", Options());
+                await using var result = await snapshot.ExecuteAsync("SELECT Value,Name FROM CaptureDevices", Options());
                 var page = await result.ReadPageAsync(0, 100, 64 * 1024);
                 Assert.Equal(1L, page.Rows[0].Cells[0].Value);
                 Assert.Equal("first", page.Rows[0].Cells[1].Value);

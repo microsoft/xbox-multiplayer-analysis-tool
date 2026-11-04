@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- xmat.exe: the console host of the command line, so shells and CI wait for it and see its exit code and output.
+       All of its logic lives in the XMAT assembly behind XMAT.Cli.CliEntry. The build output also contains the GUI
+       and everything both need (Data, Langs, native libraries). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <AssemblyName>xmat</AssemblyName>
+    <RootNamespace>XMAT.Cli.Host</RootNamespace>
+    <Platforms>x64</Platforms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <Copyright>©Microsoft Corporation. All rights reserved.</Copyright>
+    <Company>Microsoft Corporation</Company>
+    <Authors>Microsoft Corporation</Authors>
+    <Description>Xbox Multiplayer Analysis Tool command line</Description>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <FileVersion>0.2.0.0</FileVersion>
+    <Version>0.2</Version>
+    <Deterministic>true</Deterministic>
+    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <WarningLevel>3</WarningLevel>
+    <TreatWarningsAsErrors>True</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <WarningLevel>9999</WarningLevel>
+    <TreatWarningsAsErrors>True</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XMAT\XboxMultiplayerAnalysisTool.csproj" />
+  </ItemGroup>
+
+  <!-- xmat.exe asks the GC to conserve memory as much as it can (System.GC.ConserveMemory = 9, the highest level, in
+       xmat.runtimeconfig.json), trading CPU time for a smaller heap when it holds large captures. In testing at the
+       default limits, peak memory stayed at or below 1,361 MiB (1,547 MiB at level 7) and runs of 100,000 frames took
+       2 to 3 seconds longer; these are observations, not guarantees. It is not a memory limit, and the GUI keeps the
+       default. -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="9" />
+  </ItemGroup>
+
+</Project>

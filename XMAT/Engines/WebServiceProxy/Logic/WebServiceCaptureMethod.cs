@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -142,11 +143,22 @@ namespace XMAT.WebServiceCapture
         internal static WebServiceDeviceCaptureController.ImportedCaptures PrepareFiddlerImport(
             string path, WebServiceDeviceCaptureController controller, long maximumBytes, CancellationToken cancellationToken)
         {
-            var connections = FiddlerSazHandler.ImportSazFile(path, maximumBytes, cancellationToken);
+            FiddlerSazImportResult result;
+            try { result = FiddlerSazHandler.ImportSazFileWithDiagnostics(path, maximumBytes, cancellationToken); }
+            catch (FiddlerSazHeaderLimitException exception)
+            { throw new InvalidDataException(Localization.GetLocalizedString("WEBCAP_IMPORT_HEADER_LIMIT"), exception); }
+            catch (SazArchiveException exception)
+            {
+                throw new InvalidDataException(Localization.GetLocalizedString(
+                    exception.Failure == SazArchiveFailure.Malformed ? "WEBCAP_IMPORT_ARCHIVE_INVALID" :
+                        "WEBCAP_IMPORT_ARCHIVE_LIMIT"), exception);
+            }
+            var connections = result.Records;
             return new(connections,
                 controller.UpdateFilter(connections.Select(connection => connection.Host).Distinct().ToList()),
                 controller.UpdateFilter(connections.Select(connection => connection.Status).Distinct().ToList()),
-                controller.UpdateFilter(connections.Select(connection => connection.Method).Distinct().ToList()));
+                controller.UpdateFilter(connections.Select(connection => connection.Method).Distinct().ToList()),
+                result.SkippedIncompleteFrames, result.SkippedMalformedHeaderLines);
         }
 
         internal static void PersistFiddlerImport(
@@ -178,6 +190,8 @@ namespace XMAT.WebServiceCapture
         internal static bool NotifyFiddlerImport(WebServiceDeviceCaptureController controller, Action<string> logError = null)
         {
             var notified = true;
+            notified &= TryNotifyCaptureReplacement(() => controller.SetImportNotice(
+                controller.LastImportSkippedData ? Localization.GetLocalizedString("WEBCAP_IMPORT_SKIPPED_DATA_NOTICE") : null), logError);
             foreach (var property in new[]
             {
                 nameof(WebServiceDeviceCaptureController.HostFilterList),

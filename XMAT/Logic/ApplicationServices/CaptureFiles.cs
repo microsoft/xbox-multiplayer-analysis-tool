@@ -27,7 +27,16 @@ namespace XMAT.ApplicationServices
                     await file.FlushAsync(cancellationToken);
                 }
                 cancellationToken.ThrowIfCancellationRequested();
-                File.Move(temporary, path, overwrite: true);
+                using (DataAbstractionLayer.LoadedCaptureDatabaseRegistry.AcquireSaveDestination(path))
+                {
+                    try
+                    { File.Move(temporary, path, overwrite: true); }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                        throw new DataAbstractionLayer.CaptureSaveException(
+                            DataAbstractionLayer.CaptureSaveFailure.DestinationLocked, exception);
+                    }
+                }
             }
             finally { File.Delete(temporary); }
         }

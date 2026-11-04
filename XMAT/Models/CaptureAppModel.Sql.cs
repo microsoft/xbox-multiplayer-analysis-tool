@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System;
 using System.ComponentModel;
 using System.Threading.Tasks;
 using XMAT.SharedInterfaces;
@@ -19,7 +18,7 @@ namespace XMAT.Models
         {
             get
             {
-                _dispatcher.VerifyAccess();
+                App.VerifyUiAccess(_dispatcher);
                 if (_sqlQueryWorkspace == null)
                 {
                     _sqlQueryWorkspace = new(CaptureQueries, _dispatcher,
@@ -34,11 +33,11 @@ namespace XMAT.Models
 
         private void SqlWorkspace_CapturePropertyChanged(object sender, PropertyChangedEventArgs e)
         {
-            if (!_dispatcher.CheckAccess())
+            if (!App.HasUiAccess(_dispatcher))
             {
-                if (!_dispatcher.HasShutdownStarted)
+                if (!App.IsUiShuttingDown(_dispatcher))
                 {
-                    _dispatcher.BeginInvoke(new Action(() => SqlWorkspace_CapturePropertyChanged(sender, e)));
+                    App.PostToUi(_dispatcher, () => SqlWorkspace_CapturePropertyChanged(sender, e));
                 }
                 return;
             }
@@ -57,9 +56,9 @@ namespace XMAT.Models
 
         internal Task DisposeSqlWorkspaceAsync()
         {
-            if (!_dispatcher.CheckAccess())
+            if (!App.HasUiAccess(_dispatcher))
             {
-                return _dispatcher.InvokeAsync(DisposeSqlWorkspaceAsync).Task.Unwrap();
+                return App.QueueOnUi(_dispatcher, DisposeSqlWorkspaceAsync).Task.Unwrap();
             }
             PropertyChanged -= SqlWorkspace_CapturePropertyChanged;
             return _sqlQueryWorkspace?.DisposeAsync().AsTask() ?? Task.CompletedTask;

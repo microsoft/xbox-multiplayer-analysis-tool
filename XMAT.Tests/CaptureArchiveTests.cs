@@ -142,6 +142,8 @@ namespace XMAT.Tests
                 if (loadedSource)
                 {
                     var path = Path.Combine(directory.Path, "source.xmatcap");
+                    database.CreateTable("CaptureDevices", new Field<long>("DeviceType"),
+                        new Field<string>("DeviceName"), new Field<long>("CaptureType"));
                     database.SaveToFile(path);
                     loaded = new SqLtReadonlyDatabase(path);
                     model.LoadedDatabase = loaded;

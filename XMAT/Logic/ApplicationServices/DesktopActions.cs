@@ -47,7 +47,7 @@ namespace XMAT.ApplicationServices
             Action requestNormalClose, Action requestElevatedRestart,
             Func<bool> canClose = null, Func<bool> canRequestElevatedRestart = null)
         {
-            _dispatcher.VerifyAccess();
+            App.VerifyUiAccess(_dispatcher);
             _revealCapture = revealCapture;
             _close = requestNormalClose;
             _requestElevatedRestart = requestElevatedRestart;
@@ -62,7 +62,7 @@ namespace XMAT.ApplicationServices
             Func<DesktopTargetProvenance, CancellationToken, Task<bool>> revealRecord,
             Func<DesktopTargetProvenance, CancellationToken, Task<bool>> revealReport)
         {
-            _dispatcher.VerifyAccess();
+            App.VerifyUiAccess(_dispatcher);
             _revealRecord = revealRecord;
             _revealReport = revealReport;
         }
@@ -83,7 +83,7 @@ namespace XMAT.ApplicationServices
             DesktopNavigationKind kind, DesktopTargetProvenance provenance, long epoch,
             Func<bool> isCurrent, Func<CancellationToken, Task<bool>> reveal, Guid? ownerSessionId)
         {
-            _dispatcher.VerifyAccess();
+            App.VerifyUiAccess(_dispatcher);
             ArgumentNullException.ThrowIfNull(isCurrent);
             if (reveal == null)
                 throw new AdministrationException(AdministrationFailure.Unavailable);
@@ -104,7 +104,7 @@ namespace XMAT.ApplicationServices
 
         internal bool Unregister(Guid targetId)
         {
-            _dispatcher.VerifyAccess();
+            App.VerifyUiAccess(_dispatcher);
             return _registrations.Remove(targetId);
         }
 
@@ -257,7 +257,7 @@ namespace XMAT.ApplicationServices
             });
 
         private Task<T> InvokeAsync<T>(Func<Task<T>> action) =>
-            _dispatcher.CheckAccess() ? action() : _dispatcher.InvokeAsync(action).Task.Unwrap();
+            App.RunOnUiAsync(_dispatcher, action);
 
         private sealed record Registration(
             DesktopNavigationTarget Target, Func<bool> IsCurrent, Func<CancellationToken, Task<bool>> Reveal);

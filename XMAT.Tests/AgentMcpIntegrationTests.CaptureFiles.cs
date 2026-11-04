@@ -134,6 +134,8 @@ namespace XMAT.Tests
                 using var database = CaptureInvestigationTestData.WebDatabase();
                 CaptureInvestigationTestData.AddWeb(database, 1, device: "loaded-only");
                 var sourcePath = Path.Combine(directory.Path, "source.xmatcap");
+                database.CreateTable("CaptureDevices", new Field<long>("DeviceType"),
+                    new Field<string>("DeviceName"), new Field<long>("CaptureType"));
                 database.SaveToFile(sourcePath);
                 using var loaded = new XMAT.DataAbstractionLayer.SqLtReadonlyDatabase(sourcePath);
                 CaptureInvestigationTestData.AddWeb(database, 2, device: "active-only");
@@ -213,6 +215,8 @@ namespace XMAT.Tests
                 CaptureInvestigationTestData.AddWeb(database, 1, device: "first");
                 CaptureInvestigationTestData.AddWeb(database, 2, device: "second");
                 var sourcePath = Path.Combine(directory.Path, "source.xmatcap");
+                database.CreateTable("CaptureDevices", new Field<long>("DeviceType"),
+                    new Field<string>("DeviceName"), new Field<long>("CaptureType"));
                 database.SaveToFile(sourcePath);
                 using var loaded = new XMAT.DataAbstractionLayer.SqLtReadonlyDatabase(sourcePath);
                 var model = new CaptureAppModel { ActiveDatabase = database, LoadedDatabase = loaded };

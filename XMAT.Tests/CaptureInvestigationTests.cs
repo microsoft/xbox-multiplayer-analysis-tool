@@ -117,6 +117,36 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void BuiltInAnalysisUsesTheSharedHeadlessWorkBudgetAndReleasesItsSnapshotAndLeaseOnLimit()
+        {
+            application.Run(_ =>
+            {
+                using var database = CaptureInvestigationTestData.WebDatabase();
+                CaptureInvestigationTestData.AddWeb(database, 1);
+                CaptureInvestigationTestData.AddWeb(database, 2);
+                var model = new CaptureAppModel { ActiveDatabase = database };
+                var analyzer = new XboxLiveCaptureAnalysis.XboxLiveCaptureAnalyzer(
+                    AppContext.BaseDirectory, () => throw new InvalidOperationException("No desktop output was requested."),
+                    workBudgetFactory: () => new CaptureAnalysisEngine.AnalysisWorkBudget(1));
+                analyzer.Initialize(model);
+                model.CaptureAnalyzers.Add(analyzer);
+                var source = Complete(model.CaptureQueries.GetSourcesAsync()).Single().Id;
+                try
+                {
+                    var failure = Assert.Throws<CaptureDataException>(() => Complete(
+                        model.CaptureInvestigation.AnalyzeAsync(source, CaptureDataKind.WebProxy, null, Options())));
+                    Assert.Equal(CaptureDataError.LimitExceeded, failure.Error);
+                    Assert.False(model.IsAnalysisRunning);
+                    Assert.False(model.IsCaptureDataOperationRunning);
+                    var result = Complete(model.CaptureInvestigation.SearchAsync(source, CaptureDataKind.WebProxy, null, Options()));
+                    Assert.Equal(2, result.MatchedRecords);
+                    CaptureDeviceTestData.Finish(result.DisposeAsync().AsTask());
+                }
+                finally { analyzer.Shutdown(); }
+            });
+        }
+
+        [Fact]
         public void SearchAndAnalysisRespectExistingLeasesAndReleasedSources()
         {
             application.Run(_ =>

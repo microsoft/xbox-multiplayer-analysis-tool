@@ -9,7 +9,11 @@ using System.Threading.Tasks;
 
 namespace XMAT.SharedInterfaces
 {
-    public enum CaptureFileFailure { InvalidPath, FolderChanged, DestinationExists, ProtectedSource, Unavailable, InputChanged, InvalidCapture }
+    public enum CaptureFileFailure
+    {
+        InvalidPath, FolderChanged, DestinationExists, ProtectedSource, Unavailable, InputChanged, InvalidCapture,
+        SchemaLimit, LiveDatabase, UnsupportedLocation
+    }
 
     public sealed class CaptureFileException(CaptureFileFailure failure)
         : InvalidOperationException(failure.ToString())

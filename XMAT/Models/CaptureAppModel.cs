@@ -15,7 +15,10 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
+using XMAT.DataAbstractionLayer;
+using XMAT.NetworkTrace;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT.Models
 {
@@ -34,6 +37,7 @@ namespace XMAT.Models
     {
         private IDatabase _activeDatabase;
         private IReadonlyDatabase _loadedDatabase;
+        private IDisposable _loadedWorkspaceLease;
         public IDatabase ActiveDatabase
         {
             get => _activeDatabase;
@@ -54,9 +58,12 @@ namespace XMAT.Models
             {
                 if (ReferenceEquals(_loadedDatabase, value))
                     return;
+                var previousLease = _loadedWorkspaceLease;
+                _loadedWorkspaceLease = null;
                 _loadedDatabase = value;
                 _loadedCaptureRevision++;
                 LoadedCaptureDisplayName = null;
+                previousLease?.Dispose();
                 RaisePropertyChange();
             }
         }
@@ -118,7 +125,7 @@ namespace XMAT.Models
         public string StatusBarText3
         {
             get => SelectedDeviceContext?.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController proxy
-                ? proxy.PortStatus : _statusBarText3;
+                ? proxy.ImportNotice ?? proxy.PortStatus : _statusBarText3;
             set { _statusBarText3 = value; RaisePropertyChange(); }
         }
 
@@ -233,7 +240,7 @@ namespace XMAT.Models
             CaptureDevices = new ApplicationServices.CaptureDevices(this, _dispatcher);
             CaptureProxyOperations = new ApplicationServices.CaptureProxyOperations(this);
             CaptureFileExports = new ApplicationServices.CaptureFileExports(() =>
-                _dispatcher.InvokeAsync<IReadOnlyList<string>>(() => new[] { LoadedCaptureFilePath }).Task);
+                App.QueueOnUi<IReadOnlyList<string>>(_dispatcher, () => new[] { LoadedCaptureFilePath }).Task);
             CaptureFileInputs = new ApplicationServices.CaptureFileInputs();
             CaptureFileLoads = new ApplicationServices.CaptureFileLoads(this, _dispatcher, queries, CaptureFileInputs);
             CaptureSazImports = new ApplicationServices.CaptureSazImports(this, _dispatcher, queries, CaptureFileInputs);
@@ -420,7 +427,8 @@ namespace XMAT.Models
                 (!string.IsNullOrEmpty(e.PropertyName) &&
                  e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.CaptureStatusText) &&
                  e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.PortDescription) &&
-                 e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.PortStatus)))
+                 e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.PortStatus) &&
+                 e.PropertyName != nameof(WebServiceCapture.WebServiceDeviceCaptureController.ImportNotice)))
             {
                 return;
             }
@@ -606,13 +614,21 @@ namespace XMAT.Models
 
         internal void CommitLoadedCapture(
             IReadonlyDatabase database, string path, string displayName,
-            IReadOnlyList<ICaptureDeviceContext> addedContexts)
+            IReadOnlyList<ICaptureDeviceContext> addedContexts,
+            IReadOnlyList<ICaptureDeviceContext> owners = null)
         {
+            var previousLease = _loadedWorkspaceLease;
+            _loadedWorkspaceLease = database is SqLtReadonlyDatabase native
+                ? LoadedCaptureDatabaseRegistry.AcquireSource(native, path) : null;
             RegisterPreparedContexts(addedContexts);
+            if (database is SqLtReadonlyDatabase loaded)
+                foreach (var context in owners ?? addedContexts)
+                    LoadedCaptureDatabaseRegistry.Assign(context.CaptureController, loaded);
             _loadedDatabase = database;
             LoadedCaptureFilePath = path;
             LoadedCaptureDisplayName = displayName;
             _loadedCaptureRevision++;
+            previousLease?.Dispose();
         }
 
         internal void RegisterPreparedContexts(IEnumerable<ICaptureDeviceContext> contexts)
@@ -625,8 +641,23 @@ namespace XMAT.Models
         }
 
         internal event Action<ICaptureDeviceContext, IQueryDatabase> CaptureDataRebound;
-        internal void NotifyCaptureDataRebound(ICaptureDeviceContext context, IQueryDatabase source) =>
+        internal void NotifyCaptureDataRebound(ICaptureDeviceContext context, IQueryDatabase source)
+        {
+            if (source is SqLtReadonlyDatabase database && _captureDeviceContexts.Contains(context))
+                LoadedCaptureDatabaseRegistry.Assign(context.CaptureController, database);
+            else
+                LoadedCaptureDatabaseRegistry.Release(context.CaptureController);
             CaptureDataRebound?.Invoke(context, source);
+        }
+
+        internal void ReleaseLoadedWorkspace(IReadonlyDatabase database)
+        {
+            if (!ReferenceEquals(_loadedDatabase, database))
+                return;
+            var lease = _loadedWorkspaceLease;
+            _loadedWorkspaceLease = null;
+            lease?.Dispose();
+        }
 
         internal void NotifyLoadedContexts()
         {
@@ -639,6 +670,203 @@ namespace XMAT.Models
                 RaisePropertyChange(nameof(SelectedDeviceContext));
             }
         }
+
+        internal void LoadDataCaptures(string fromFilePath) =>
+            LoadDataCaptures(
+                fromFilePath,
+                path =>
+                    DataAbstractionLayer.DataAbstractionLayer
+                        .LoadDatabaseFromFile(path) as
+                        SqLtReadonlyDatabase ??
+                    throw new InvalidOperationException(
+                        "The loaded capture database has an unsupported implementation."));
+
+        internal void LoadDataCaptures(
+            string fromFilePath,
+            Func<string, SqLtReadonlyDatabase> openDatabase)
+        {
+            SqLtReadonlyDatabase opened =
+                openDatabase(fromFilePath);
+            var staged = new List<ICaptureDeviceContext>();
+            try
+            {
+                IReadonlyDataTable devicesTable =
+                    opened.TableByName("CaptureDevices");
+                if (devicesTable == null)
+                {
+                    throw new SqLtSchemaException(
+                        SqLtSchemaFailure.Unsupported);
+                }
+                foreach (IDataRecord record in
+                    devicesTable.Dataset.DataRecords)
+                {
+                    var device =
+                        new CaptureDeviceContextModel(
+                            (DeviceType)record.Int("DeviceType"),
+                            record.Str("DeviceName"),
+                            (CaptureType)record.Int("CaptureType"),
+                            true,
+                            null,
+                            hostListPolicy: HostListPolicy,
+                            attachLiveRows: false);
+                    staged.Add(device);
+                    var datasets = new List<IDataset>();
+                    foreach (string tableName in
+                        opened.TableNames().Where(name =>
+                            device.CaptureController
+                                .CaptureMethod
+                                .OwnsDataTable(name)))
+                    {
+                        datasets.Add(
+                            opened.TableByName(
+                                tableName).Dataset);
+                    }
+                    device.CaptureController.LoadCaptures(
+                        datasets);
+                }
+
+                ICaptureDeviceContext previousSelection =
+                    SelectedDeviceContext;
+                var added = new List<ICaptureDeviceContext>();
+                var transfers = new List<Action>();
+                var owners =
+                    new List<IDeviceCaptureController>();
+                foreach (ICaptureDeviceContext device in staged)
+                {
+                    ICaptureDeviceContext existing =
+                        GetDeviceContext(
+                            device.DeviceType,
+                            device.DeviceName,
+                            device.CaptureType,
+                            true) ??
+                        added.FirstOrDefault(candidate =>
+                            candidate.DeviceType ==
+                                device.DeviceType &&
+                            candidate.DeviceName ==
+                                device.DeviceName &&
+                            candidate.CaptureType ==
+                                device.CaptureType &&
+                            candidate.IsReadOnly);
+                    if (existing == null)
+                    {
+                        added.Add(device);
+                        owners.Add(
+                            device.CaptureController);
+                    }
+                    else
+                    {
+                        transfers.Add(
+                            CreateLoadedCaptureTransfer(
+                                existing.CaptureController,
+                                device.CaptureController));
+                        owners.Add(
+                            existing.CaptureController);
+                    }
+                }
+
+                try
+                {
+                    foreach (ICaptureDeviceContext device in
+                        added)
+                    {
+                        _captureDeviceContexts.Add(device);
+                    }
+                }
+                catch
+                {
+                    foreach (ICaptureDeviceContext device in
+                        added)
+                    {
+                        _captureDeviceContexts.Remove(device);
+                    }
+                    SelectedDeviceContext =
+                        previousSelection;
+                    throw;
+                }
+                foreach (Action transfer in transfers)
+                {
+                    transfer();
+                }
+                IDeviceCaptureController[] distinctOwners =
+                    owners.Where(owner =>
+                            _captureDeviceContexts.Any(
+                                context =>
+                                    ReferenceEquals(
+                                        context.CaptureController,
+                                        owner)))
+                        .Distinct(
+                            ReferenceEqualityComparer.Instance)
+                        .Cast<IDeviceCaptureController>()
+                        .ToArray();
+                foreach (IDeviceCaptureController owner in
+                    distinctOwners)
+                {
+                    LoadedCaptureDatabaseRegistry.Assign(
+                        owner,
+                        opened);
+                }
+                if (distinctOwners.Length == 0)
+                {
+                    opened.Dispose();
+                    opened = null;
+                }
+                else
+                {
+                    LoadedDatabase = opened;
+                    opened = null;
+                }
+                // New tabs show live rows from now on; transfer sources and discarded stages never do.
+                foreach (ICaptureDeviceContext device in added)
+                {
+                    if (_captureDeviceContexts.Contains(
+                            device) &&
+                        device.CaptureController is
+                            NetworkTraceCaptureController network)
+                    {
+                        network.AttachLiveRows();
+                    }
+                }
+            }
+            finally
+            {
+                try
+                {
+                    // Staged controllers that did not become tabs are disposed, so they never attach.
+                    foreach (ICaptureDeviceContext device in staged)
+                    {
+                        if (!_captureDeviceContexts.Contains(
+                            device))
+                        {
+                            (device.CaptureController as
+                                IDisposable)?.Dispose();
+                        }
+                    }
+                }
+                finally
+                {
+                    opened?.Dispose();
+                }
+            }
+        }
+
+        private static Action CreateLoadedCaptureTransfer(
+            IDeviceCaptureController existing,
+            IDeviceCaptureController staged) =>
+            (existing, staged) switch
+            {
+                (
+                    WebServiceDeviceCaptureController target,
+                    WebServiceDeviceCaptureController source) =>
+                    () => target.ReplaceLoadedCapturesFrom(
+                        source),
+                (
+                    NetworkTraceCaptureController target,
+                    NetworkTraceCaptureController source) =>
+                    () => target.ReplaceLoadedCapturesFrom(
+                        source),
+                _ => throw new SqLtSchemaException(
+                    SqLtSchemaFailure.Unsupported),
+            };
 
         internal void SaveDataCaptures(string toFilePath)
         {
@@ -882,13 +1110,64 @@ namespace XMAT.Models
             }
 
             var index = _captureDeviceContexts.IndexOf(captureDeviceContext);
-            _captureDeviceContexts.Remove(captureDeviceContext);
-            if (ReferenceEquals(SelectedDeviceContext, captureDeviceContext))
+            bool wasPresent =
+                _captureDeviceContexts.Contains(
+                    captureDeviceContext);
+            bool removed = false;
+            try
             {
-                SelectedDeviceContext = _captureDeviceContexts.Count == 0 ? null :
-                    _captureDeviceContexts[Math.Min(Math.Max(index, 0), _captureDeviceContexts.Count - 1)];
+                removed = _captureDeviceContexts.Remove(
+                    captureDeviceContext);
             }
-            InvalidateCommands();
+            finally
+            {
+                bool actuallyRemoved =
+                    removed ||
+                    (wasPresent &&
+                     !_captureDeviceContexts.Contains(
+                         captureDeviceContext));
+                try
+                {
+                    // Only a removed tab stops receiving live rows; a failed removal leaves it working.
+                    if (actuallyRemoved)
+                    {
+                        (captureDeviceContext.CaptureController as
+                            IDisposable)?.Dispose();
+                    }
+                }
+                finally
+                {
+                    if (captureDeviceContext.IsReadOnly &&
+                        actuallyRemoved)
+                    {
+                        LoadedCaptureDatabaseRegistry.Release(
+                            captureDeviceContext.CaptureController);
+                        if (_loadedWorkspaceLease == null)
+                            RefreshLoadedDatabase();
+                        else
+                            RaisePropertyChange(nameof(LoadedDatabase));
+                    }
+                    if (actuallyRemoved && ReferenceEquals(SelectedDeviceContext, captureDeviceContext))
+                        SelectedDeviceContext = _captureDeviceContexts.Count == 0 ? null :
+                            _captureDeviceContexts[Math.Min(Math.Max(index, 0), _captureDeviceContexts.Count - 1)];
+                    InvalidateCommands();
+                }
+            }
+        }
+
+        private void RefreshLoadedDatabase()
+        {
+            LoadedDatabase =
+                _captureDeviceContexts
+                    .Where(context =>
+                        context.IsReadOnly)
+                    .Select(context =>
+                        LoadedCaptureDatabaseRegistry
+                            .DatabaseFor(
+                                context.CaptureController))
+                    .Where(database =>
+                        database != null)
+                    .LastOrDefault();
         }
 
         internal static bool SameProxyDevice(DeviceType type, string first, string second) =>

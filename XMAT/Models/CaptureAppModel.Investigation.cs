@@ -97,8 +97,14 @@ namespace XMAT.Models
             });
         }
 
-        internal bool HasInvestigationTarget(IDeviceCaptureController controller) =>
-            _captureDeviceContexts.Any(context => ReferenceEquals(context.CaptureController, controller));
+        internal bool HasInvestigationTarget(IDeviceCaptureController controller)
+        {
+            lock (_investigationGate)
+            {
+                return _captureDeviceContexts.Any(context => ReferenceEquals(context.CaptureController, controller) &&
+                    _investigationSources.ContainsKey(context));
+            }
+        }
 
         internal bool HasInvestigationSource(ICaptureDeviceContext context, Guid sourceId)
         {
@@ -115,7 +121,7 @@ namespace XMAT.Models
         internal Task<DesktopNavigationTarget> RegisterInvestigationNavigationAsync(
             CaptureDataResult result, CaptureDetailKind kind, long itemId, Func<bool> isOwned,
             Guid ownerSessionId, CancellationToken cancellationToken) =>
-            _dispatcher.InvokeAsync(() =>
+            App.QueueOnUi(_dispatcher, () =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!isOwned())
@@ -148,7 +154,7 @@ namespace XMAT.Models
             }).Task;
 
         internal Task UnregisterInvestigationNavigationAsync(IEnumerable<Guid> targets) =>
-            _dispatcher.InvokeAsync(() =>
+            App.QueueOnUi(_dispatcher, () =>
             {
                 foreach (var target in targets)
                     DesktopActions.Unregister(target);
@@ -157,7 +163,7 @@ namespace XMAT.Models
         internal Task<bool> RevealInvestigationRecordAsync(
             DesktopTargetProvenance provenance, Func<CaptureInvestigationRecordTarget, bool> reveal,
             CancellationToken cancellationToken = default) =>
-            _dispatcher.InvokeAsync(() =>
+            App.QueueOnUi(_dispatcher, () =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (provenance?.CaptureId is not Guid captureId || provenance.SourceId is not Guid sourceId ||
@@ -191,7 +197,7 @@ namespace XMAT.Models
         internal Task<bool> RevealDesktopInvestigationReportAsync(
             DesktopTargetProvenance provenance, Func<ICaptureAnalysisRun, bool> reveal,
             CancellationToken cancellationToken = default) =>
-            _dispatcher.InvokeAsync(() =>
+            App.QueueOnUi(_dispatcher, () =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (provenance?.ReportId is not Guid reportId || provenance.SourceId is not Guid sourceId ||
@@ -209,7 +215,7 @@ namespace XMAT.Models
 
         internal Task<CaptureDataResult> RetainInvestigationReportAsync(
             Guid reportId, Guid snapshotId, CancellationToken cancellationToken = default) =>
-            _dispatcher.InvokeAsync(() =>
+            App.QueueOnUi(_dispatcher, () =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 lock (_investigationGate)
@@ -229,8 +235,8 @@ namespace XMAT.Models
         internal async Task<DesktopInvestigationSnapshot> CreateDesktopInvestigationSnapshotAsync(
             IDeviceCaptureController controller, CancellationToken cancellationToken)
         {
-            if (!_dispatcher.CheckAccess())
-                return await _dispatcher.InvokeAsync(() => CreateDesktopInvestigationSnapshotAsync(controller, cancellationToken)).Task.Unwrap();
+            if (!App.HasUiAccess(_dispatcher))
+                return await App.QueueOnUi(_dispatcher, () => CreateDesktopInvestigationSnapshotAsync(controller, cancellationToken)).Task.Unwrap();
             var context = _captureDeviceContexts.SingleOrDefault(context => ReferenceEquals(context.CaptureController, controller));
             if (context == null || !IsAnalysisRunning || controller.IsRunning ||
                 controller is WebServiceDeviceCaptureController { IsTransitioning: true } ||
@@ -301,10 +307,7 @@ namespace XMAT.Models
 
         internal async Task DisposeInvestigationAsync()
         {
-            if (_dispatcher.CheckAccess())
-                CaptureInvestigationReportWindow.CloseForModel(this);
-            else
-                await _dispatcher.InvokeAsync(() => CaptureInvestigationReportWindow.CloseForModel(this));
+            await App.RunOnUiAsync(_dispatcher, () => CaptureInvestigationReportWindow.CloseForModel(this));
             Task cleanup;
             lock (_investigationGate)
             {

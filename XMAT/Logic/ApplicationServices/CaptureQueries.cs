@@ -76,8 +76,7 @@ namespace XMAT.ApplicationServices
 
         private Guid GetId(IQueryDatabase database) => _identities.GetValue(database, _ => new Identity()).Id;
         internal Guid GetSourceId(IQueryDatabase database) => GetId(database);
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => dispatcher.CheckAccess()
-            ? action() : dispatcher.InvokeAsync(action).Task.Unwrap();
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(dispatcher, action);
         private sealed class Identity { internal Guid Id { get; } = Guid.NewGuid(); }
     }
 }

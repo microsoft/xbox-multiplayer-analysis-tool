@@ -149,6 +149,10 @@ namespace XMAT.ApplicationServices
             {
                 throw QueryFailure(exception);
             }
+            catch (AnalysisWorkLimitException)
+            {
+                throw new CaptureDataException(CaptureDataError.LimitExceeded);
+            }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 throw new CaptureDataException(CaptureDataError.Timeout);
@@ -648,8 +652,7 @@ namespace XMAT.ApplicationServices
             metrics.Add(new("packet.matching-payload-window", null, canonical.Options.DuplicateWindowMilliseconds, null, "milliseconds"));
         }
 
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => _dispatcher.CheckAccess()
-            ? action() : _dispatcher.InvokeAsync(action).Task.Unwrap();
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(_dispatcher, action);
 
         private static CaptureDataException QueryFailure(QueryException exception) => new(exception.Error switch
         {
@@ -668,10 +671,7 @@ namespace XMAT.ApplicationServices
             {
                 if (Lease == null)
                     return;
-                if (Dispatcher.CheckAccess())
-                    Lease.Dispose();
-                else
-                    await Dispatcher.InvokeAsync(Lease.Dispose);
+                await App.RunOnUiAsync(Dispatcher, Lease.Dispose);
             }
         }
 

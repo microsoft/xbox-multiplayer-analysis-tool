@@ -22,7 +22,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.StatsReport
         {
             ReportUrl = $"file:///{analysisStorageDirectory}/index.html";
 
-            AnalysisReportArtifactWriter.WriteStats(analysisStorageDirectory, reportDocument.ToJson());
+            AnalysisReportArtifactWriter.WriteStats(analysisStorageDirectory, reportDocument);
         }
     }
 }

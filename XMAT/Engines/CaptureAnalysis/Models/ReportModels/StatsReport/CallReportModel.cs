@@ -20,7 +20,7 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels.StatsReport
             CallReportDocument reportDocument) :
             base(captureAppModel, sourceCaptureName, reportDocument)
         {
-            AnalysisReportArtifactWriter.WriteCalls(analysisStorageDirectory, reportDocument.ToJson());
+            AnalysisReportArtifactWriter.WriteCalls(analysisStorageDirectory, reportDocument);
         }
     }
 }
