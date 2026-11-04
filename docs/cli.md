@@ -24,9 +24,11 @@ xmat --version
   the Xbox Live service call rules on it. It writes `summary.json` (schema `xmat-analysis/1`) to `DIR`, which must not
   exist yet: xmat prepares the results in a private `.xmat-staging-<run id>` folder next to `DIR` and renames that
   folder to `DIR` only when the run completes successfully, so `DIR` is either complete or absent. Only the user who
-  ran xmat can open it, so `DIR` must be on a file system with Windows permissions, such as NTFS: xmat reads the
-  staging folder's permissions back before it writes anything and otherwise refuses (`cli.output.unprotected`, exit
-  code 6); FAT and exFAT drives and some network shares do not keep permissions. `--device` limits a capture of several
+  ran xmat can open it, so `DIR` must be on a local NTFS volume: xmat checks the volume and reads the staging folder's
+  owner and permissions back before it writes anything, and otherwise refuses (`cli.output.unprotected`, exit code 6),
+  including on FAT and exFAT drives and on network shares, mapped drives among them. While it runs, xmat holds the
+  staging folder open, so neither it nor any folder that contains it can be renamed or replaced until the results are
+  published or removed. `--device` limits a capture of several
   devices to one, by the id (`d1`, `d2`, ...) that an earlier run reported. With `--fail-on findings`, xmat exits with
   code 10 when the rules report findings (the results are still written).
 - xmat treats its input as untrusted. By default it refuses an input (exit code 3) larger than 512 MiB
@@ -179,7 +181,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 | 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists |
-| 6 | The operation failed, for example the output could not be written, or `--out` is on storage without Windows permissions (`cli.output.unprotected`) |
+| 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume (`cli.output.unprotected`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
 | 70 | Internal error, including a `help`, `--version` or passing `doctor` run whose JSON document could not be produced (`cli.internal.output`) |

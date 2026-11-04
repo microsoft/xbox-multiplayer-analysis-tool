@@ -59,12 +59,16 @@ namespace XMAT.Cli
                 return report;
             }
 
-            await CliStagedRun.CompleteAsync(
-                report,
-                output,
-                token => AnalyzeAsync(request, output, assets, report, token),
-                null,
-                cancellationToken).ConfigureAwait(false);
+            using (output)
+            {
+                await CliStagedRun.CompleteAsync(
+                    report,
+                    output,
+                    token => AnalyzeAsync(request, output, assets, report, token),
+                    null,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
             if (report.Artifacts.Count != 0)
             {
                 report.HumanLines.Add(
