@@ -144,6 +144,12 @@ namespace XMAT.WebServiceCapture
     {
         internal const long DefaultBodyBudgetBytes = 256L * 1024 * 1024;
 
+        // How ReplayItemResult names a send's transport and HTTP versions (ReplayOperation).
+        private const string ConnectToTransport = "connect-to";
+        private const string AutomaticVersion = "auto";
+        private const string Http11Version = "1.1";
+        private const string Http2Version = "2";
+
         private readonly WebServiceDeviceCaptureController _controller;
         private readonly IDataTable _table;
         private readonly Action<Action> _onUiThread;
@@ -212,7 +218,7 @@ namespace XMAT.WebServiceCapture
             _onUiThread(() =>
             {
                 taken = true;
-                Record(provenance, exchange);
+                Record(provenance, exchange, result);
             });
             if (!taken)
             {
@@ -221,14 +227,17 @@ namespace XMAT.WebServiceCapture
         }
 
         // A capture row for one send: the request as XMAT built it and the response, with no status when none came, and
-        // without the bodies that the tab does not keep, which a header in the head and the row's note account for.
+        // without the bodies that the tab does not keep, which a header in the head and the row's note account for. The
+        // note also says how a send with the composer's transport options went (TransportNote), from what the operation
+        // recorded for it (sent), never from the composer's current controls.
         internal static ProxyConnectionModel ToRow(
             long number,
             ReplayProvenance provenance,
             ReplayExchange exchange,
             bool keepRequestBody = true,
             bool keepResponseBody = true,
-            long bodyBudgetBytes = DefaultBodyBudgetBytes)
+            long bodyBudgetBytes = DefaultBodyBudgetBytes,
+            ReplayItemResult sent = null)
         {
             ArgumentNullException.ThrowIfNull(exchange);
             Uri uri = exchange.RequestUri;
@@ -243,6 +252,17 @@ namespace XMAT.WebServiceCapture
             string responseHead = Head(
                 response, responseOmitted ? RequestReplayDraft.ResponseBodyNotKeptHeader : null, responseBody.LongLength);
             long budgetMiB = bodyBudgetBytes / (1024 * 1024);
+            string bodiesNote = (requestOmitted, responseOmitted) switch
+            {
+                (true, true) => Localization.GetLocalizedString(
+                    "REPLAY_NOTE_BODIES", requestBody.LongLength, responseBody.LongLength, budgetMiB),
+                (true, false) => Localization.GetLocalizedString(
+                    "REPLAY_NOTE_REQUEST_BODY", requestBody.LongLength, budgetMiB),
+                (false, true) => Localization.GetLocalizedString(
+                    "REPLAY_NOTE_RESPONSE_BODY", responseBody.LongLength, budgetMiB),
+                _ => null,
+            };
+            string transportNote = TransportNote(sent);
             return new ProxyConnectionModel(
                 number,
                 exchange.StatusCode == 0 ? string.Empty : exchange.StatusCode.ToString(CultureInfo.InvariantCulture),
@@ -259,21 +279,39 @@ namespace XMAT.WebServiceCapture
                 "0.0.0.0")
             {
                 Replay = provenance,
-                ReplayNote = (requestOmitted, responseOmitted) switch
-                {
-                    (true, true) => Localization.GetLocalizedString(
-                        "REPLAY_NOTE_BODIES", requestBody.LongLength, responseBody.LongLength, budgetMiB),
-                    (true, false) => Localization.GetLocalizedString(
-                        "REPLAY_NOTE_REQUEST_BODY", requestBody.LongLength, budgetMiB),
-                    (false, true) => Localization.GetLocalizedString(
-                        "REPLAY_NOTE_RESPONSE_BODY", responseBody.LongLength, budgetMiB),
-                    _ => null,
-                },
+                ReplayNote = bodiesNote == null || transportNote == null
+                    ? bodiesNote ?? transportNote
+                    : bodiesNote + "\n" + transportNote,
             };
         }
 
+        // How a send went with the composer's transport options, as the operation recorded it (ReplayItemResult): through
+        // another endpoint than the URL's host, and the HTTP version requested and the one that the response came with
+        // ("1.1" or "2", shown as HTTP/1.1 or HTTP/2). Null for a send with the default transport, directly to the URL's
+        // host with the version chosen automatically.
+        internal static string TransportNote(ReplayItemResult sent)
+        {
+            bool connectTo = sent?.Transport == ConnectToTransport;
+            string requestedVersion = sent?.HttpVersion ?? AutomaticVersion;
+            if (sent == null || (!connectTo && requestedVersion == AutomaticVersion))
+            {
+                return null;
+            }
+
+            string requested = Localization.GetLocalizedString(requestedVersion switch
+            {
+                Http11Version => "COMPOSER_HTTP_VERSION_11",
+                Http2Version => "COMPOSER_HTTP_VERSION_2",
+                _ => "COMPOSER_HTTP_VERSION_AUTO",
+            });
+            string version = sent.ResponseVersion == null
+                ? Localization.GetLocalizedString("REPLAY_NOTE_HTTP_VERSION_NO_RESPONSE", requested)
+                : Localization.GetLocalizedString("REPLAY_NOTE_HTTP_VERSION", requested, "HTTP/" + sent.ResponseVersion);
+            return connectTo ? Localization.GetLocalizedString("REPLAY_NOTE_CONNECT_TO") + " " + version : version;
+        }
+
         // On the UI thread, which also closes tabs: a row goes into the open tab, or nowhere.
-        private void Record(ReplayProvenance provenance, ReplayExchange exchange)
+        private void Record(ReplayProvenance provenance, ReplayExchange exchange, ReplayItemResult result)
         {
             if (!_isOpen())
             {
@@ -285,7 +323,7 @@ namespace XMAT.WebServiceCapture
             bool keepResponse = TryRetain(exchange.Response?.Body.LongLength ?? 0);
             OmittedBodies += (keepRequest ? 0 : 1) + (keepResponse ? 0 : 1);
             ProxyConnectionModel row = ToRow(
-                _lastNumber + 1, provenance, exchange, keepRequest, keepResponse, BodyBudgetBytes);
+                _lastNumber + 1, provenance, exchange, keepRequest, keepResponse, BodyBudgetBytes, result);
             if (_table != null)
             {
                 row.AddToDataTable(_controller.DeviceName, _table);

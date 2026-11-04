@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Controls;
 using Microsoft.Win32;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
@@ -25,8 +26,13 @@ namespace XMAT.WebServiceCapture
     /// </summary>
     public partial class RequestComposerWindow : Window
     {
-        // The operation's code for a request that cannot be built (ReplayOperation).
+        // The operation's codes for a request that cannot be built, and for what the composer explains itself: Fiddler's
+        // control headers, and transport options that the URL cannot have (ReplayOperation).
         private const string RequestInvalidCode = "replay.request.invalid";
+        private const string ControlHeaderCode = "replay.request.control-header";
+        private const string HttpVersionHttpsCode = "replay.http-version.https-required";
+        private const string ConnectToHttpsCode = "replay.connect-to.https-required";
+        private const string ConnectToDeniedCode = "replay.connect-to.target-denied";
 
         private readonly RequestReplayClient _client;
         private readonly bool _ownsClient;
@@ -121,6 +127,12 @@ namespace XMAT.WebServiceCapture
             AutomationProperties.SetName(RedirectLimitBox, Localization.GetLocalizedString("COMPOSER_REDIRECT_LIMIT"));
             InspectSessionBox.Content = Localization.GetLocalizedString("COMPOSER_INSPECT_SESSION");
             InspectSessionBox.ToolTip = Localization.GetLocalizedString("COMPOSER_INSPECT_SESSION_HINT");
+            HttpVersionLabel.Content = Localization.GetLocalizedString("COMPOSER_HTTP_VERSION");
+            HttpVersionBox.ToolTip = Localization.GetLocalizedString("COMPOSER_HTTP_VERSION_HINT");
+            ConnectToBox.Content = Localization.GetLocalizedString("COMPOSER_CONNECT_TO");
+            ConnectToBox.ToolTip = Localization.GetLocalizedString("COMPOSER_CONNECT_TO_HINT");
+            ConnectToText.ToolTip = Localization.GetLocalizedString("COMPOSER_CONNECT_TO_HINT");
+            AutomationProperties.SetName(ConnectToText, Localization.GetLocalizedString("COMPOSER_CONNECT_TO_ENDPOINT"));
             ResponseView.Title = Localization.GetLocalizedString("COMPOSER_RESPONSE");
             CopyCurlButton.Content = Localization.GetLocalizedString("COMPOSER_COPY_CURL");
             SendButton.Content = Localization.GetLocalizedString("COMPOSER_SEND");
@@ -133,6 +145,13 @@ namespace XMAT.WebServiceCapture
                 RedirectLimitBox.Items.Add(limit);
             RedirectLimitBox.SelectedItem = ReplayOptions.MaxRedirectLimit;
 
+            // The HTTP version is chosen automatically, as before, unless the user asks for exactly one; Connect to another
+            // endpoint is off.
+            HttpVersionBox.Items.Add(VersionItem(ReplayHttpVersion.Auto, "COMPOSER_HTTP_VERSION_AUTO"));
+            HttpVersionBox.Items.Add(VersionItem(ReplayHttpVersion.Http11, "COMPOSER_HTTP_VERSION_11"));
+            HttpVersionBox.Items.Add(VersionItem(ReplayHttpVersion.Http2, "COMPOSER_HTTP_VERSION_2"));
+            HttpVersionBox.SelectedIndex = 0;
+
             LoadDraft(draft, provenance);
         }
 
@@ -144,17 +163,23 @@ namespace XMAT.WebServiceCapture
                 return;
 
             // Everything that the run sends is fixed here, before the user is asked anything: the request, as a copy that
-            // later edits do not change, the options and where the request comes from.
+            // later edits do not change, the options, the transport and where the request comes from.
             UpdateDraft();
             int maxRedirects = MaxRedirects;
             bool inspect = InspectSessionBox.IsChecked == true;
             ReplayProvenance provenance = _provenance;
+            if (!TryReadTransport(out ReplayTransportOptions transport))
+            {
+                StatusText.Text = ErrorText(Localization.GetLocalizedString("COMPOSER_CONNECT_TO_INVALID"));
+                return;
+            }
+
             ReplayPlanPreview plan;
             bool confirmed;
             _state = ComposerState.Preparing;
             try
             {
-                plan = Prepare(maxRedirects, out confirmed);
+                plan = Prepare(maxRedirects, transport, out confirmed);
             }
             finally
             {
@@ -230,10 +255,10 @@ namespace XMAT.WebServiceCapture
         // The client that sends. The window disposes the client that it created once it is closed and no run uses it.
         internal RequestReplayClient Client => _client;
 
-        // The request to send, checked as sending it would check it and frozen, and whether the user gave the permission
-        // that it needs; null when nothing is to be sent: the input is invalid, the user cancelled or declined, or the
-        // window closed meanwhile. A '#' in the URL asks for a range and sends one request per number.
-        private ReplayPlanPreview Prepare(int maxRedirects, out bool confirmed)
+        // The request to send, checked as sending it would check it and frozen with its transport, and whether the user gave
+        // the permission that it needs; null when nothing is to be sent: the input is invalid, the user cancelled or
+        // declined, or the window closed meanwhile. A '#' in the URL asks for a range and sends one request per number.
+        private ReplayPlanPreview Prepare(int maxRedirects, ReplayTransportOptions transport, out bool confirmed)
         {
             confirmed = false;
             try
@@ -262,10 +287,11 @@ namespace XMAT.WebServiceCapture
                     using var validated = _draft.CreateRequestToSend();
                 }
 
-                // The size of the run is checked before any number is put in the URL.
+                // The size of the run is checked before any number is put in the URL, and the transport with the request.
                 OperationResult<ReplayPlanPreview> preview = _client.Preview(
                     sequence == null ? ReplaySource.FromDraft(_draft) : ReplaySource.FromTemplate(_draft, sequence),
-                    maxRedirects);
+                    maxRedirects,
+                    transport);
                 if (!preview.Succeeded)
                 {
                     StatusText.Text = ErrorText(PlanError(
@@ -273,9 +299,10 @@ namespace XMAT.WebServiceCapture
                     return null;
                 }
 
-                // One question for the whole run, about what was checked: what is typed afterwards changes nothing in it.
+                // One question for the whole run, about what was checked: what is typed or chosen afterwards changes
+                // nothing in it.
                 ReplayPlanPreview plan = preview.Value;
-                if (plan.UsesUnsafeMethod || plan.ChangesOrigin)
+                if (plan.UsesUnsafeMethod || plan.ChangesOrigin || plan.UsesConnectTo)
                 {
                     if (!_confirm(ConfirmationMessage(plan, maxRedirects)) || _closed)
                         return null;
@@ -291,10 +318,24 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // Why the operation refused a run: for a sequence whose request cannot be built, what building it with the widest
-        // number says, as a single send says it; otherwise the operation's message, such as a run that is too large.
+        // Why the operation refused a run: what the composer says itself about Fiddler's control headers and the transport
+        // options; for a sequence whose request cannot be built, what building it with the widest number says, as a single
+        // send says it; otherwise the operation's message, such as a run that is too large.
         private static string PlanError(OperationDiagnostic diagnostic, RequestReplayDraft draft, ReplaySequence sequence)
         {
+            string explained = diagnostic?.Code switch
+            {
+                ControlHeaderCode => "COMPOSER_CONTROL_HEADER",
+                HttpVersionHttpsCode => "COMPOSER_HTTP_VERSION_HTTPS",
+                ConnectToHttpsCode => "COMPOSER_CONNECT_TO_HTTPS",
+                ConnectToDeniedCode => "COMPOSER_CONNECT_TO_DENIED",
+                _ => null,
+            };
+            if (explained != null)
+            {
+                return Localization.GetLocalizedString(explained);
+            }
+
             if (diagnostic?.Code == RequestInvalidCode && sequence != null)
             {
                 try
@@ -311,24 +352,37 @@ namespace XMAT.WebServiceCapture
         }
 
         // The one confirmation of a run: how many requests, with which method and to where; that they may change server
-        // data or send captured credentials to another origin; and that redirects, when followed, are more requests.
+        // data or send captured credentials to another origin; that they go to another endpoint than the address of the
+        // URL's host, which it names with the URL's origin; and that redirects, when followed, are more requests.
         internal static string ConfirmationMessage(ReplayPlanPreview plan, int maxRedirects)
         {
             ArgumentNullException.ThrowIfNull(plan);
             ReplaySequence sequence = plan.Sequence;
+            bool risky = plan.UsesUnsafeMethod || plan.ChangesOrigin;
             string message = sequence == null
-                ? Localization.GetLocalizedString("COMPOSER_CONFIRM_MESSAGE", plan.Template.Method, plan.Template.Url)
+                ? Localization.GetLocalizedString(
+                    risky ? "COMPOSER_CONFIRM_MESSAGE" : "COMPOSER_CONFIRM_SEND", plan.Template.Method, plan.Template.Url)
                 : Localization.GetLocalizedString(
-                    "COMPOSER_CONFIRM_SEQUENCE",
+                    risky ? "COMPOSER_CONFIRM_SEQUENCE" : "COMPOSER_CONFIRM_SEND_SEQUENCE",
                     plan.Sends,
                     plan.Template.Method,
                     sequence.Format(sequence.Start),
                     sequence.Format(sequence.End),
                     plan.Template.Url);
+            if (plan.UsesConnectTo)
+            {
+                message += "\n\n" + Localization.GetLocalizedString(
+                    "COMPOSER_CONFIRM_CONNECT_TO", plan.Transport.ConnectTo.ToString(), Origin(plan.Template.Url));
+            }
+
             return maxRedirects == 0
                 ? message
                 : message + "\n\n" + Localization.GetLocalizedString("COMPOSER_CONFIRM_REDIRECTS", maxRedirects);
         }
+
+        // A URL's scheme, host and port, as the confirmation names the origin of a request that goes to another endpoint.
+        private static string Origin(string url) =>
+            Uri.TryCreate(url, UriKind.Absolute, out Uri uri) ? uri.GetLeftPart(UriPartial.Authority) : url;
 
         // Says how the run went. One request shows its response and status, or why it has none; a sequence counts its
         // requests and shows the last response. Then what the Replays tab did with the sends.
@@ -563,8 +617,9 @@ namespace XMAT.WebServiceCapture
             UpdateCurlAvailability();
         }
 
-        // Copy as cURL copies one request as it is: not a URL with '#', which sends one request per number, and not with
-        // redirects followed, which curl would follow its own way. The button says why when it is unavailable.
+        // Copy as cURL copies one request as it is: not a URL with '#', which sends one request per number; not with
+        // redirects followed, which curl would follow its own way; and only with the default transport, since the command
+        // would not choose the same HTTP version or connect to the same endpoint. The button says why it is unavailable.
         private void UpdateCurlAvailability()
         {
             string unavailable = CurlUnavailableText();
@@ -573,12 +628,43 @@ namespace XMAT.WebServiceCapture
         }
 
         private string CurlUnavailableText() =>
-            UrlBox.Text.Contains(ReplaySequence.Placeholder) || FollowRedirectsBox.IsChecked == true
+            UrlBox.Text.Contains(ReplaySequence.Placeholder) || FollowRedirectsBox.IsChecked == true ||
+                SelectedHttpVersion != ReplayHttpVersion.Auto || ConnectToBox.IsChecked == true
                 ? Localization.GetLocalizedString("COMPOSER_COPY_CURL_UNAVAILABLE")
                 : null;
 
-        private void UrlBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e) =>
+        // Automatic unless HTTP/1.1 only or HTTP/2 only is chosen.
+        private ReplayHttpVersion SelectedHttpVersion =>
+            HttpVersionBox.SelectedItem is ComboBoxItem { Tag: ReplayHttpVersion version } ? version : ReplayHttpVersion.Auto;
+
+        // The transport that the controls choose now, or false when Connect to another endpoint is on with text that is not
+        // an IP address and port. A run sends with the transport that its preview checked, never the controls afterwards.
+        private bool TryReadTransport(out ReplayTransportOptions transport)
+        {
+            ReplayConnectTo target = null;
+            if (ConnectToBox.IsChecked == true && !ReplayConnectTo.TryParse(ConnectToText.Text.Trim(), out target))
+            {
+                transport = null;
+                return false;
+            }
+
+            transport = new ReplayTransportOptions(SelectedHttpVersion, target);
+            return true;
+        }
+
+        private static ComboBoxItem VersionItem(ReplayHttpVersion version, string key) =>
+            new() { Content = Localization.GetLocalizedString(key), Tag = version };
+
+        private void UrlBox_TextChanged(object sender, TextChangedEventArgs e) =>
             UpdateCurlAvailability();
+
+        private void HttpVersion_Changed(object sender, SelectionChangedEventArgs e) => UpdateCurlAvailability();
+
+        private void ConnectTo_Changed(object sender, RoutedEventArgs e)
+        {
+            ConnectToText.IsEnabled = ConnectToBox.IsChecked == true;
+            UpdateCurlAvailability();
+        }
 
         private void FollowRedirects_Changed(object sender, RoutedEventArgs e)
         {

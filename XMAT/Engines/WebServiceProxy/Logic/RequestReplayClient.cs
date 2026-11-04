@@ -67,23 +67,29 @@ namespace XMAT.WebServiceCapture
         internal bool IsDisposed { get; private set; }
 
         // The composer's options: one request at a time, each sent once, with the 30-second timeout and the 16 MiB response
-        // limit, following at most maxRedirects redirects, which replay follows within the request's origin only. A plan
+        // limit, following at most maxRedirects redirects, which replay follows within the request's origin only, over the
+        // transport chosen (null for the default: the HTTP version chosen automatically, directly to the URL's host). A plan
         // that the user confirmed gets the permission that its preview said it needs, and no other.
-        internal static ReplayOptions ComposerOptions(int maxRedirects, ReplayPlanPreview confirmed = null) =>
+        internal static ReplayOptions ComposerOptions(
+            int maxRedirects, ReplayTransportOptions transport = null, ReplayPlanPreview confirmed = null) =>
             new(
                 MaxRedirects: maxRedirects,
                 AllowUnsafeMethods: confirmed?.UsesUnsafeMethod == true,
-                AllowOriginChange: confirmed?.ChangesOrigin == true);
+                AllowOriginChange: confirmed?.ChangesOrigin == true,
+                AllowConnectTo: confirmed?.UsesConnectTo == true,
+                Transport: transport);
 
         // Checks a composed request, or one per number of a sequence, as sending it would, without sending anything or
-        // expanding the sequence: the size of the plan, the request and the permission it needs, with a detached copy of
-        // the draft to send.
-        internal OperationResult<ReplayPlanPreview> Preview(ReplaySource source, int maxRedirects) =>
-            CreateOperation().Preview(source, ComposerOptions(maxRedirects));
+        // expanding the sequence: the size of the plan, the request, the transport and the permission they need, with a
+        // detached copy of the draft and the transport to send.
+        internal OperationResult<ReplayPlanPreview> Preview(
+            ReplaySource source, int maxRedirects, ReplayTransportOptions transport = null) =>
+            CreateOperation().Preview(source, ComposerOptions(maxRedirects, transport));
 
-        // Sends a previewed plan in one operation, which checks it all again first. confirmed says that the user accepted
-        // what the preview said the plan needs. recorder, when given, receives every send as it ends, and progress the
-        // number of sends that have ended.
+        // Sends a previewed plan in one operation, which checks it all again first, over the transport that the preview
+        // checked (ReplayPlanPreview.Transport), never the composer's controls as they are now. confirmed says that the user
+        // accepted what the preview said the plan needs. recorder, when given, receives every send as it ends, and progress
+        // the number of sends that have ended.
         internal async Task<RequestReplayBatchResult> SendPlanAsync(
             ReplayPlanPreview plan,
             int maxRedirects,
@@ -95,8 +101,10 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(plan);
             var sink = new LastExchange(recorder, progress);
             OperationResult<ReplayResult> result = await RunAsync(
-                plan.ToSource(), ComposerOptions(maxRedirects, confirmed ? plan : null), sink, cancellationToken)
-                .ConfigureAwait(false);
+                plan.ToSource(),
+                ComposerOptions(maxRedirects, plan.Transport, confirmed ? plan : null),
+                sink,
+                cancellationToken).ConfigureAwait(false);
             return new RequestReplayBatchResult(result, sink.Sends, sink.Item, sink.Exchange);
         }
 

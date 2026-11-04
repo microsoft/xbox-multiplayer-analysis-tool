@@ -31,6 +31,7 @@
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="3*"/>
           <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid Grid.RowSpan="2">
           <Grid.ColumnDefinitions>
@@ -69,6 +70,15 @@
                     Checked="FollowRedirects_Changed" Unchecked="FollowRedirects_Changed"/>
           <ComboBox x:Name="RedirectLimitBox" MinWidth="56" Margin="6,0,0,0" VerticalAlignment="Center" IsEnabled="False"/>
           <CheckBox x:Name="InspectSessionBox" Margin="18,0,0,0" VerticalAlignment="Center"/>
+        </WrapPanel>
+        <WrapPanel Grid.Row="7" Margin="0,6,0,0" Orientation="Horizontal">
+          <Label x:Name="HttpVersionLabel" Padding="0,0,6,0" VerticalAlignment="Center"
+                 Target="{Binding ElementName=HttpVersionBox}"/>
+          <ComboBox x:Name="HttpVersionBox" MinWidth="130" VerticalAlignment="Center" SelectionChanged="HttpVersion_Changed"/>
+          <CheckBox x:Name="ConnectToBox" Margin="18,0,0,0" VerticalAlignment="Center"
+                    Checked="ConnectTo_Changed" Unchecked="ConnectTo_Changed"/>
+          <TextBox x:Name="ConnectToText" MinWidth="190" Margin="6,0,0,0" VerticalContentAlignment="Center"
+                   IsEnabled="False"/>
         </WrapPanel>
       </Grid>
       <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" ResizeDirection="Columns"/>

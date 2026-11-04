@@ -185,16 +185,45 @@ send and says so; send again when it has finished.
 - **Follow same-origin redirects, at most** *N* is off by default; *N* is 1 to 10, and
   10 at first. XMAT follows a redirect only to the scheme, host, and port that the
   request was sent to, and never from HTTPS to HTTP, so captured headers and the body
-  never go to another origin. Each redirect followed is another request: after a 303,
-  or a 301 or 302 that answers a POST, it is a GET without the body, as browsers send
-  it. When XMAT does not follow a redirect, the redirect response is the result and the
-  status line says why. Without the option, a redirect response is shown as it is.
+  never go to another origin. Each redirect followed is another request: after a 303
+  it is a GET without the body, but a HEAD stays a HEAD, and after a 301 or 302 that
+  answers a POST it is a GET without the body, as browsers send it. When XMAT does not
+  follow a redirect, the redirect response is the result and the status line says why.
+  Without the option, a redirect response is shown as it is.
 - **Inspect session** is off by default. When it is selected, XMAT selects the last
   request that the send recorded in the **XMAT Replays** tab once the send has ended,
   also when that request failed or timed out, and also when you cancelled the send
   after some of its requests were recorded. It selects nothing when the send recorded
   nothing (never a request of an earlier send), when the tab or the composer was closed
   meanwhile, or when XMAT stopped the send because it is closing or exiting.
+- **HTTP version** is **Automatic** by default, which lets the connection choose the
+  version, as before. **HTTP/1.1 only** and **HTTP/2 only** send exactly that version
+  and never fall back to another; **HTTP/2 only** needs an HTTPS URL.
+- **Connect to another endpoint** is off by default. It sends the request to an IP
+  address and port that you enter, such as `192.0.2.10:443` or `[2001:db8::10]:443`,
+  instead of the address that the URL's host resolves to, as Fiddler's `Fiddler-Host`
+  does; host names and URLs are not accepted. It works with HTTPS URLs only. The URL,
+  the `Host` header, and the certificate check stay those of the URL, so the endpoint
+  must present a certificate that is valid for the URL's host; XMAT never falls back to
+  DNS or a proxy, and redirects followed within the URL's origin go to the same
+  endpoint. Sending needs your confirmation, which names the URL's origin and the
+  endpoint, together with any other confirmation that the send needs.
+
+The options are fixed when you confirm or start a send: changing them while it runs, or
+while XMAT asks you about it, changes nothing for that send. In the **XMAT Replays**
+tab, a request sent with an HTTP version other than **Automatic** or with **Connect to
+another endpoint** has a note that says so, with the HTTP version requested and the one
+used. The note is kept in memory only.
+
+Fiddler's control headers `Fiddler-Host`, `X-OverrideHost`, `X-IgnoreCertCNMismatch`,
+and `X-OverrideGateway` are not applied, and XMAT does not send a request that has one:
+in the composer, delete it from the headers. Use **Connect to another endpoint** to send
+to another address.
+
+**Copy as cURL** copies one request with the default options only: it is not available
+for a numbered URL (see below), with **Follow same-origin redirects**, with an **HTTP
+version** other than **Automatic**, or with **Connect to another endpoint**, since the
+command would not send the same requests.
 
 ### Numbered URLs
 
@@ -210,8 +239,6 @@ The requests are checked before anything is sent and go out one at a time, at mo
 10,000 of them. When they need confirmation, one question covers them all and says how
 many there are. **Cancel request** stops before the next request: the requests already
 sent stay in the **XMAT Replays** tab. The composer shows the last response only.
-**Copy as cURL** is not available for a numbered URL or while **Follow same-origin
-redirects** is selected, since the command would not send the same requests.
 
 ### Upload a body from a file
 
