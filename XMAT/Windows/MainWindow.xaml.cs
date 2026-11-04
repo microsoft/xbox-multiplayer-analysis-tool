@@ -75,6 +75,7 @@ namespace XMAT
             ChangeProxyPort.Header = Localization.GetLocalizedString("PROXY_PORT_CHANGE");
             ChangeProxyPort.ToolTip = Localization.GetLocalizedString("PROXY_PORT_CHANGE_TOOLTIP");
             ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
+            ComposeRequest.Header = Localization.GetLocalizedString("COMPOSER_NEW_MENU");
 
             // Sync dark mode checkbox with saved preference
             ToggleDarkMode.IsChecked = CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark";
@@ -98,6 +99,14 @@ namespace XMAT
         private void ManageHostLists_Executed(object sender, ExecutedRoutedEventArgs e)
         {
             HostListManagerWindow.ShowOrActivate(this, CaptureAppModel.AppModel.HostListPolicy);
+        }
+
+        // Each new request gets its own non-modal composer, like Edit and resend.
+        private void ComposeRequest_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            var composer = RequestComposerWindow.ForNewRequest();
+            composer.Owner = this;
+            composer.Show();
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)

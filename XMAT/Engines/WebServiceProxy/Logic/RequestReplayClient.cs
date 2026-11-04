@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using XMAT.Operations;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture.Proxy;
 
@@ -20,25 +21,26 @@ namespace XMAT.WebServiceCapture
     }
 
     /// <summary>
-    /// The composer's adapter over the shared ReplaySender: sends standalone replays without invoking capture callbacks
-    /// or modifying stored traffic, and reports failures as exceptions for the window to show.
+    /// The composer's adapter over the shared ReplayOperation (the command line's is CliReplayCommand): sends one draft
+    /// without invoking capture callbacks or modifying stored traffic, and reports failures as exceptions for the window
+    /// to show.
     /// </summary>
     internal sealed class RequestReplayClient : IDisposable
     {
-        private readonly ReplaySender _sender;
-
-        // Bound both waiting time and buffered response size for interactive sends.
-        private readonly ReplaySendOptions _options = ReplaySendOptions.Default;
+        private readonly HttpMessageInvoker _invoker;
+        private readonly bool _ownsInvoker;
 
         internal RequestReplayClient()
         {
-            _sender = new ReplaySender();
+            // One transport for the window's lifetime, so repeated sends can reuse connections.
+            _invoker = new HttpMessageInvoker(CreateHandler(), disposeHandler: true);
+            _ownsInvoker = true;
         }
 
         // Injected clients belong to their callers.
         internal RequestReplayClient(HttpClient client)
         {
-            _sender = new ReplaySender(client ?? throw new ArgumentNullException(nameof(client)));
+            _invoker = client ?? throw new ArgumentNullException(nameof(client));
         }
 
         // Avoid looping through Local PC capture, sharing cookies, or forwarding credentials via redirects.
@@ -51,13 +53,33 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(draft);
             using (draft.CreateRequest())
             {
-                // Invalid input is reported before the confirmation check.
+                // Invalid input is reported, with what is wrong, before the confirmation check.
             }
 
             if (draft.RequiresConfirmation && !confirmed)
                 throw new InvalidOperationException("Confirm a potentially destructive request before sending it.");
 
-            ReplayExchange exchange = await _sender.SendAsync(draft, _options, cancellationToken).ConfigureAwait(false);
+            // The user's confirmation is the permission that xmat.exe takes from --allow-unsafe-methods and
+            // --allow-origin-change. Bound both waiting time and buffered response size for interactive sends.
+            var sink = new LastExchange();
+            var operation = new ReplayOperation { SenderFactory = () => new ReplaySender(_invoker) };
+            OperationResult<ReplayResult> result = await operation.ExecuteAsync(
+                new ReplayRequest(
+                    ReplaySource.FromDraft(draft),
+                    new ReplayOptions(AllowUnsafeMethods: confirmed, AllowOriginChange: confirmed),
+                    ReplayEdits.None,
+                    sink),
+                OperationContext.None,
+                cancellationToken).ConfigureAwait(false);
+            if (result.Outcome == OperationOutcome.Cancelled)
+                throw new OperationCanceledException(cancellationToken);
+            if (!result.Succeeded || sink.Exchange == null)
+            {
+                throw new InvalidOperationException(
+                    result.Diagnostics.Count > 0 ? result.Diagnostics[0].Message : "The request could not be sent.");
+            }
+
+            ReplayExchange exchange = sink.Exchange;
             switch (exchange.Outcome)
             {
                 case ReplayOutcome.Completed:
@@ -77,7 +99,8 @@ namespace XMAT.WebServiceCapture
 
         public void Dispose()
         {
-            _sender.Dispose();
+            if (_ownsInvoker)
+                _invoker.Dispose();
         }
 
         private static ServerResponse ToServerResponse(ReplayExchange exchange)
@@ -94,6 +117,13 @@ namespace XMAT.WebServiceCapture
             foreach (var header in exchange.Response.ContentHeaders)
                 response.ContentHeaders.Add(header.Key, header.Value);
             return response;
+        }
+
+        private sealed class LastExchange : IReplayExchangeSink
+        {
+            internal ReplayExchange Exchange { get; private set; }
+
+            public void Add(ReplayItemResult result, ReplayExchange exchange) => Exchange = exchange;
         }
     }
 }

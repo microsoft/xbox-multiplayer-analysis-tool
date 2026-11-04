@@ -169,6 +169,12 @@ command for PowerShell 7 with `curl.exe` available. **Copied commands can contai
 credentials and body data.** Sending has a 30-second timeout and a 16 MiB response
 limit. Cancelling or timing out cannot undo changes already processed by the server.
 
+To send a request that was never captured, select **Actions > Compose a New Request**.
+The composer opens with an empty GET request and works the same way.
+
+The command line does the same with `xmat replay` and `xmat compose`; see
+[Command line](cli.md).
+
 ## Block or bypass hosts
 
 The **Block List** and **Bypass List** are shared by every capture in the current

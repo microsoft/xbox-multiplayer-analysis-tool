@@ -45,6 +45,10 @@ namespace XMAT
         public static readonly RoutedUICommand ManageHostLists =
             new RoutedUICommand("Manage Host Lists", "ManageHostLists", typeof(AppCommands));
 
+        // Always available: a new request needs no capture.
+        public static readonly RoutedUICommand ComposeRequest =
+            new RoutedUICommand("Compose a New Request", "ComposeRequest", typeof(AppCommands));
+
         // Resolved when the menu markup loads, after the language has been loaded.
         public static string ManageHostListsHeader => Localization.GetLocalizedString("HOST_LISTS_MANAGE_MENU");
     }

@@ -51,6 +51,44 @@ namespace XMAT.Tests
         });
 
         [Fact]
+        public Task Window_ComposesANewRequestFromNothing() => OnDispatcher(async () =>
+        {
+            using var handler = new StubHandler(async (request, token) =>
+            {
+                Assert.Equal("POST", request.Method.Method);
+                Assert.Equal("https://example.com/new?x=1", request.RequestUri.AbsoluteUri);
+                Assert.Equal("one", string.Join(",", request.Headers.GetValues("X-Test")));
+                Assert.Equal("{}", await request.Content.ReadAsStringAsync(token));
+                return new HttpResponseMessage(HttpStatusCode.Accepted);
+            });
+            using var httpClient = new HttpClient(handler);
+            using var client = new RequestReplayClient(httpClient);
+            int confirmations = 0;
+            var window = RequestComposerWindow.ForNewRequest(client, (_, _) => { ++confirmations; return true; });
+            try
+            {
+                Assert.Equal("GET", Find<TextBox>(window, "MethodBox").Text);
+                Assert.Equal("", Find<TextBox>(window, "UrlBox").Text);
+                await window.SendAsync();
+                Assert.Equal(0, handler.CallCount);
+                Assert.Contains("Request failed:", Find<TextBlock>(window, "StatusText").Text);
+
+                Find<TextBox>(window, "MethodBox").Text = "POST";
+                Find<TextBox>(window, "UrlBox").Text = "https://example.com/new?x=1";
+                Find<TextBox>(window, "HeadersBox").Text = "X-Test: one";
+                Find<TextBox>(window, "BodyBox").Text = "{}";
+                await window.SendAsync();
+
+                Assert.Equal(1, confirmations);
+                Assert.Equal("202", window.LastResult.Response.Status);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+        [Fact]
         public Task Window_PrefillsEditorsAndHonorsDeclinedConfirmation() => OnDispatcher(async () =>
         {
             int confirmations = 0;

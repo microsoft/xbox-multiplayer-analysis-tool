@@ -37,6 +37,11 @@ namespace XMAT.WebServiceCapture
         {
         }
 
+        // Compose a new request: an empty GET with nothing captured behind it.
+        internal static RequestComposerWindow ForNewRequest(
+            RequestReplayClient client = null, Func<string, string, bool> confirm = null) =>
+            new(new RequestReplayDraft(), client, confirm);
+
         private RequestComposerWindow(RequestReplayDraft draft, RequestReplayClient client, Func<string, string, bool> confirm)
         {
             InitializeComponent();

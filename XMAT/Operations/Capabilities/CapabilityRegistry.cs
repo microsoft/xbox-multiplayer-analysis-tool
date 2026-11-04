@@ -213,7 +213,12 @@ namespace XMAT.Operations.Capabilities
                 cli: "compose --url URL --out DIR [--method METHOD] [--header \"NAME: VALUE\"]... [--body-file FILE] " +
                     "[--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] " +
                     "[--allow-unsafe-methods] [--allow-origin-change]",
-                operation: ReplayOperation),
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Command(AppCommandsPrefix + "ComposeRequest"),
+                    Window("XMAT.WebServiceCapture.RequestComposerWindow"),
+                }),
 
             // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.
             Capability.Planned(

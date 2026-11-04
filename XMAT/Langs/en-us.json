@@ -92,6 +92,7 @@
 	"WEBCAP_STOP_PENDING_UI": "Pending UI updates: {0}",
 
 	"COMPOSER_TITLE": "Edit and resend",
+	"COMPOSER_NEW_MENU": "_Compose a New Request...",
 	"COMPOSER_NOTICE": "Sends directly from this PC, bypassing system proxies and capture scripts. The original capture is unchanged. Redirects are not followed, cookies are not shared, and HTTPS certificates are validated. Limit: 30 seconds and a 16 MiB response. Headers, including credentials, are sent to the edited URL. Host and Content-Length are regenerated; connection-only headers are omitted.",
 	"COMPOSER_METHOD": "_Method",
 	"COMPOSER_URL": "_URL",
