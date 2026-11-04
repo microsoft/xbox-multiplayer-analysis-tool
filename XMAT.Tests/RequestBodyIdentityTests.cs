@@ -218,6 +218,7 @@ namespace XMAT.Tests
             Assert.Equal(
                 Count,
                 identities.RepresentativeCount);
+            Assert.NotNull(last);
             Assert.Equal(
                 Count,
                 last.Value);

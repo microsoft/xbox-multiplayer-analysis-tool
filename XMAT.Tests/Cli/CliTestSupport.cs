@@ -289,12 +289,19 @@ namespace XMAT.Tests.Cli
 
             foreach ((string source, string text) in texts)
             {
-                foreach (string secret in new[] { SyntheticCaptures.Canary, directory.Name, "NO_IMPL_" })
-                {
-                    if (text.Contains(secret, StringComparison.OrdinalIgnoreCase))
+                foreach (string secret in
+                    new[]
                     {
-                        Assert.Fail($"{source} contains {secret}.");
+                        SyntheticCaptures.Canary,
+                        directory.Name,
+                        "NO_IMPL_",
                     }
+                    .Where(secret =>
+                        text.Contains(
+                            secret,
+                            StringComparison.OrdinalIgnoreCase)))
+                {
+                    Assert.Fail($"{source} contains {secret}.");
                 }
             }
         }

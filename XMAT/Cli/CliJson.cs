@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
@@ -96,15 +97,15 @@ namespace XMAT.Cli
                 writer.WriteString("status", report.Status);
                 writer.WriteNumber("exitCode", report.ExitCode);
                 writer.WriteStartArray("artifacts");
-                foreach (CliArtifact artifact in report.Artifacts)
+                foreach (CliArtifact artifact in
+                    report.Artifacts.Where(
+                        static artifact =>
+                            artifact != null))
                 {
-                    if (artifact != null)
-                    {
-                        writer.WriteStartObject();
-                        writer.WriteString("kind", FixedOrNull(artifact.Kind));
-                        writer.WriteString("path", FixedOrNull(artifact.Path));
-                        writer.WriteEndObject();
-                    }
+                    writer.WriteStartObject();
+                    writer.WriteString("kind", FixedOrNull(artifact.Kind));
+                    writer.WriteString("path", FixedOrNull(artifact.Path));
+                    writer.WriteEndObject();
                 }
 
                 writer.WriteEndArray();
