@@ -220,9 +220,15 @@ namespace XMAT.Tests.Analysis.Rules
                     (new uint[] { 1, 2, 4, 5, 9 }, 3),
                     (new uint[] { 0, 1, 2, uint.MaxValue, 0 }, 2),
                 };
+            var expected =
+                new StringBuilder();
+            var actual =
+                new StringBuilder();
             foreach ((uint[] ids, uint minimumRange) in
                 cases)
             {
+                expected.Clear();
+                actual.Clear();
                 ServiceCallItem[] calls = ids
                     .Select((id, index) =>
                         Call(
@@ -230,10 +236,6 @@ namespace XMAT.Tests.Analysis.Rules
                             (ulong)index *
                             Millisecond))
                     .ToArray();
-                var expected =
-                    new StringBuilder();
-                var actual =
-                    new StringBuilder();
 
                 PrintCallIdRangeOracle(
                     expected,
