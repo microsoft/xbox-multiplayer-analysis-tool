@@ -13,31 +13,34 @@ namespace XMAT.Operations.Replay
     // The JSON view of a detail: each side's text read strictly (no comments, no trailing commas) as one document, into a
     // table of at most MaxJsonNodes values no deeper than MaxJsonDepth, with every member name of an object once; then the
     // two documents compared as values. Objects compare by member name, case-sensitive; arrays by index; numbers by their
-    // exact text; strings by their unescaped text. Each token read and each value compared is a step.
+    // exact text; strings by their unescaped text. Each token read, each value compared and each member name compared is a
+    // step.
     internal static class VerifyDiffJsonValues
     {
         // The documents' values compared; null, with why, when there is no JSON view. bomDiffers says whether one text came
-        // after a byte order mark and the other did not.
+        // after a byte order mark and the other did not. hasher replaces the member-name hash, for tests.
         internal static VerifyJsonDiff Compare(
             ReadOnlyMemory<byte> original,
             ReadOnlyMemory<byte> actual,
             bool bomDiffers,
             VerifyDiffBudget budget,
+            VerifyDiffHasher hasher,
             out string unavailable)
         {
-            Document a = Document.Read(original, budget, out unavailable);
+            var names = new NameComparer(budget, hasher);
+            Document a = Document.Read(original, budget, names, out unavailable);
             if (a == null)
             {
                 return null;
             }
 
-            Document b = Document.Read(actual, budget, out unavailable);
+            Document b = Document.Read(actual, budget, names, out unavailable);
             if (b == null)
             {
                 return null;
             }
 
-            return new Comparer(a, b, budget).Run(bomDiffers);
+            return new Comparer(a, b, budget, names).Run(bomDiffers);
         }
 
         private enum Kind : byte
@@ -93,14 +96,15 @@ namespace XMAT.Operations.Replay
             // The bytes before each token, then after the last one: whitespace, commas and colons.
             internal List<(int Start, int Length)> Gaps { get; } = new();
 
-            internal static Document Read(ReadOnlyMemory<byte> json, VerifyDiffBudget budget, out string unavailable)
+            internal static Document Read(
+                ReadOnlyMemory<byte> json, VerifyDiffBudget budget, NameComparer names, out string unavailable)
             {
                 VerifyDiffLimits limits = budget.Limits;
                 unavailable = null;
                 try
                 {
-                    // The pass reads every byte, whitespace included, then unescapes and hashes names and escaped strings,
-                    // which are never longer than the text.
+                    // The pass reads every byte, whitespace included, then unescapes names and escaped strings, which are
+                    // never longer than the text. Each object's names are hashed and compared as NameComparer charges them.
                     budget.SpendOrStop(2L * json.Length);
                     budget.ReserveOrStop((long)limits.MaxJsonNodes * NodeBytes);
                     var document = new Document(json, limits.MaxJsonNodes);
@@ -153,7 +157,7 @@ namespace XMAT.Operations.Replay
                                 }
 
                                 name = -1;
-                                open.Add((container, isObject ? new HashSet<string>(StringComparer.Ordinal) : null));
+                                open.Add((container, isObject ? new HashSet<string>(names) : null));
                                 break;
 
                             case JsonTokenType.EndObject:
@@ -284,6 +288,7 @@ namespace XMAT.Operations.Replay
             private readonly Document _a;
             private readonly Document _b;
             private readonly VerifyDiffBudget _budget;
+            private readonly NameComparer _names;
 
             // Where the comparison is: a member name, or an array index when Name is null.
             private readonly List<(string Name, int Index)> _path = new();
@@ -292,11 +297,12 @@ namespace XMAT.Operations.Replay
             private bool _orderDiffers;
             private bool _escapesDiffer;
 
-            internal Comparer(Document a, Document b, VerifyDiffBudget budget)
+            internal Comparer(Document a, Document b, VerifyDiffBudget budget, NameComparer names)
             {
                 _a = a;
                 _b = b;
                 _budget = budget;
+                _names = names;
             }
 
             internal VerifyJsonDiff Run(bool bomDiffers)
@@ -395,27 +401,19 @@ namespace XMAT.Operations.Replay
 
             private void Objects(int x, int y)
             {
-                // The members are found by name: each name is hashed once into the table and once to look it up, and
-                // compared once when found; all of it is charged before it starts.
+                // The members are found by name in a table of the other side's: each name hashed and compared is charged as
+                // it is (NameComparer), and the table's entries are reserved before it is made.
                 int members = 0;
-                long nameChars = 0;
                 for (int child = _b.Nodes[y].First; child >= 0; child = _b.Nodes[child].Next)
                 {
                     members++;
-                    nameChars += _b.Names[_b.Nodes[child].Name].Length;
                 }
 
-                for (int child = _a.Nodes[x].First; child >= 0; child = _a.Nodes[child].Next)
-                {
-                    nameChars += _a.Names[_a.Nodes[child].Name].Length;
-                }
-
-                _budget.SpendOrStop(3 * nameChars);
                 long entries = (long)members * Document.EntryBytes;
                 _budget.ReserveOrStop(entries);
                 try
                 {
-                    var others = new Dictionary<string, (int Node, int Order)>(members, StringComparer.Ordinal);
+                    var others = new Dictionary<string, (int Node, int Order)>(members, _names);
                     int order = 0;
                     for (int child = _b.Nodes[y].First; child >= 0; child = _b.Nodes[child].Next)
                     {
@@ -656,8 +654,10 @@ namespace XMAT.Operations.Replay
                 return text.ToString();
             }
 
-            private static bool IsIdentifier(string name)
+            // Whether a name is written as .name, which reads all of its characters: charged.
+            private bool IsIdentifier(string name)
             {
+                _budget.SpendOrStop(name.Length);
                 if (name.Length == 0 || !(char.IsAsciiLetter(name[0]) || name[0] is '_' or '$'))
                 {
                     return false;
@@ -672,6 +672,40 @@ namespace XMAT.Operations.Replay
                 }
 
                 return true;
+            }
+        }
+
+        // Member names by their text, ordinal, for the tables that find them. Hashing a name is work for its characters;
+        // comparing two names is a step, and work for their characters when their lengths match. Each is charged before it is
+        // done, so names whose hashes collide cost the comparisons that they cause. The hash is the ordinal string hash,
+        // unless a test gives one.
+        private sealed class NameComparer : IEqualityComparer<string>
+        {
+            private readonly VerifyDiffBudget _budget;
+            private readonly VerifyDiffHasher _hasher;
+
+            internal NameComparer(VerifyDiffBudget budget, VerifyDiffHasher hasher)
+            {
+                _budget = budget;
+                _hasher = hasher;
+            }
+
+            public bool Equals(string x, string y)
+            {
+                _budget.StepOrStop();
+                if (x.Length != y.Length)
+                {
+                    return false;
+                }
+
+                _budget.SpendOrStop(x.Length);
+                return x.AsSpan().SequenceEqual(y);
+            }
+
+            public int GetHashCode(string obj)
+            {
+                _budget.SpendOrStop(obj.Length);
+                return _hasher == null ? string.GetHashCode(obj.AsSpan()) : _hasher(obj, 0);
             }
         }
     }

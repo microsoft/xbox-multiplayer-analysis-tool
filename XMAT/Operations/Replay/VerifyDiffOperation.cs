@@ -68,12 +68,12 @@ namespace XMAT.Operations.Replay
             return Explain(comparison, (request.Limits ?? VerifyDiffLimits.Default).Clamped(), cancellationToken);
         }
 
-        // The detail of a comparison, measured as diff.json. hasher replaces the line hash, for tests.
+        // The detail of a comparison, measured as diff.json. hasher replaces the line and member-name hash, for tests.
         internal static VerifyDiff Explain(
             ReplayComparison comparison,
             VerifyDiffLimits limits,
             CancellationToken cancellationToken,
-            VerifyDiffLineHasher hasher = null)
+            VerifyDiffHasher hasher = null)
         {
             ArgumentNullException.ThrowIfNull(comparison);
             ArgumentNullException.ThrowIfNull(limits);
@@ -178,10 +178,10 @@ namespace XMAT.Operations.Replay
         {
             private readonly ReplayComparison _comparison;
             private readonly VerifyDiffBudget _budget;
-            private readonly VerifyDiffLineHasher _hasher;
+            private readonly VerifyDiffHasher _hasher;
 
             internal Builder(
-                ReplayComparison comparison, VerifyDiffLimits limits, VerifyDiffLineHasher hasher, CancellationToken cancellationToken)
+                ReplayComparison comparison, VerifyDiffLimits limits, VerifyDiffHasher hasher, CancellationToken cancellationToken)
             {
                 _comparison = comparison;
                 _budget = new VerifyDiffBudget(limits, cancellationToken);
@@ -329,6 +329,7 @@ namespace XMAT.Operations.Replay
                         actualBytes[actualText.Preamble..],
                         originalText.Preamble != actualText.Preamble,
                         _budget,
+                        _hasher,
                         out unavailable);
                 }
 

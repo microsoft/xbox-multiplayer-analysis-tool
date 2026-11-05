@@ -9,9 +9,9 @@ using XMAT.Operations.Inspection;
 
 namespace XMAT.Operations.Replay
 {
-    // A line's hash (VerifyDiffTextSide.LineHash, unless a test gives one): it only tells lines apart, so lines with equal
-    // hashes are compared by their text.
-    internal delegate int VerifyDiffLineHasher(ReadOnlySpan<char> text, byte lineBreak);
+    // A hash of a line with its break, or of a JSON member name (break 0): VerifyDiffTextSide.LineHash, or for names the
+    // ordinal string hash, unless a test gives one. It only tells texts apart: texts with equal hashes are compared.
+    internal delegate int VerifyDiffHasher(ReadOnlySpan<char> text, byte lineBreak);
 
     // A side's examined bytes read as text by BodyTextRules (strictly, in the charset that the rules choose), split into at
     // most MaxLines lines, each with the break that ends it: "\r\n", "\n", "\r", "\u2028", "\u2029" or none.
@@ -68,13 +68,13 @@ namespace XMAT.Operations.Replay
         // invalid text, or a control character other than tab, CR and LF. allExamined says that the examined bytes are all
         // of the compared bytes; otherwise the text may end inside a character, which is then left out. Charged to work;
         // the decoded text and the line table are reserved as scratch before they are allocated. read is how many of the
-        // examined bytes were decoded: all of them, or none when the work or the scratch ran out first.
+        // examined bytes were decoded: all of them once they decoded as text, otherwise none.
         internal static VerifyDiffTextSide TryRead(
             VerifyBody side,
             ReadOnlySpan<byte> examined,
             bool allExamined,
             VerifyDiffBudget budget,
-            VerifyDiffLineHasher hasher,
+            VerifyDiffHasher hasher,
             out long read)
         {
             read = 0;
@@ -99,7 +99,6 @@ namespace XMAT.Operations.Replay
 
             var chars = new char[most];
             int length;
-            read = examined.Length;
             try
             {
                 format.Encoding.GetDecoder().Convert(bytes, chars, allExamined, out _, out length, out _);
@@ -108,6 +107,8 @@ namespace XMAT.Operations.Replay
             {
                 return null;
             }
+
+            read = examined.Length;
 
             ReadOnlySpan<char> text = chars.AsSpan(0, length);
 
@@ -150,7 +151,7 @@ namespace XMAT.Operations.Replay
             var lengths = new int[lines];
             var breaks = new byte[lines];
             var hashes = new int[lines];
-            VerifyDiffLineHasher hash = hasher ?? new VerifyDiffLineHasher(LineHash);
+            VerifyDiffHasher hash = hasher ?? new VerifyDiffHasher(LineHash);
             int start = 0;
             for (int line = 0; line < lines; line++)
             {

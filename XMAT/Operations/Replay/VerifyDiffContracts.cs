@@ -91,7 +91,8 @@ namespace XMAT.Operations.Replay
     // - MaxChars: every character of the detail together (text lines, JSON paths and values, byte excerpts). MaxValueChars:
     //   one line, path or value, which is then cut and marked so.
     // - MaxChanges: the JSON changes, and separately the byte ranges. MaxHunks and ContextLines: the text hunks.
-    // - MaxSteps: line and JSON comparisons (each line or JSON value compared is a step). MaxWork: the bytes and characters
+    // - MaxSteps: line and JSON comparisons (each line compared, JSON token read, JSON value compared and member name compared
+    //   is a step). MaxWork: the bytes and characters
     //   read, decoded, hashed and compared, the end checks included. MaxScratchBytes: what the comparisons allocate (the
     //   decoded text of each side, line tables, diff frontiers, JSON value tables, names and strings), reserved before each
     //   allocation: a side whose text does not fit is shown as bytes.

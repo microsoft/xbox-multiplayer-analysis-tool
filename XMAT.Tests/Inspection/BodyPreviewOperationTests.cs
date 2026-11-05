@@ -290,7 +290,7 @@ namespace XMAT.Tests.Inspection
 
             Assert.Equal((BodyPreviewState.Truncated, BodyPreviewTextKind.Text), (preview.State, preview.TextKind));
             Assert.StartsWith("0 1 2 3 4 5", preview.Text, StringComparison.Ordinal);
-            Assert.True(text.StartsWith(preview.Text, StringComparison.Ordinal));
+            Assert.StartsWith(preview.Text, text, StringComparison.Ordinal);
             Assert.Equal(new[] { BodyPreviewNotice.StoredPrefix }, preview.Notices);
         }
 
@@ -310,7 +310,7 @@ namespace XMAT.Tests.Inspection
             BodyPreview preview = Preview(compressed[..^missing], JsonType, coding);
 
             Assert.Equal((BodyPreviewState.Truncated, BodyPreviewTextKind.Text), (preview.State, preview.TextKind));
-            Assert.True(text.StartsWith(preview.Text, StringComparison.Ordinal));
+            Assert.StartsWith(preview.Text, text, StringComparison.Ordinal);
             Assert.Empty(preview.JsonDocuments);
             Assert.Equal(new[] { BodyPreviewNotice.Incomplete, BodyPreviewNotice.JsonIncomplete }, preview.Notices);
         }

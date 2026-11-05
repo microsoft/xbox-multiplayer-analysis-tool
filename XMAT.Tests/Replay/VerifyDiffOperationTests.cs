@@ -610,6 +610,21 @@ namespace XMAT.Tests.Replay
             Assert.Equal((string.Empty, string.Empty), (range.Original, range.Actual));
         }
 
+        // Bytes that do not decode as text were not read as text: a side's examined bytes are only what the byte view then
+        // read, here none, since no work is left for it.
+        [Fact]
+        public void ExaminedBytes_AreNotClaimedByTextThatFailedToDecode()
+        {
+            byte[] original = new byte[] { 0xFF }.Concat(Utf8(new string('a', 99))).ToArray();
+
+            VerifyDiff diff = Diff(
+                Original(TextType, original), Actual(Utf8(new string('b', 100))), new VerifyDiffLimits(MaxWork: 100));
+
+            Assert.Null(diff.Body.Text);
+            Assert.Contains(VerifyDiffLimitation.WorkLimit, diff.Limitations);
+            Assert.Equal((0L, 0L), (diff.Original.ExaminedBytes, diff.Actual.ExaminedBytes));
+        }
+
         // A line's break is shown too, so it counts against the characters as well.
         [Fact]
         public void LineBreaks_CountAgainstMaxChars()
@@ -634,14 +649,14 @@ namespace XMAT.Tests.Replay
             VerifyDiff diff = Diff(
                 Original(JsonType, Utf8($"{{\"{name}\":1}}")),
                 Actual(Utf8($"{{ \"{name}\":1}}")),
-                new VerifyDiffLimits(MaxWork: 16L * Name));
+                new VerifyDiffLimits(MaxWork: 18L * Name));
 
             Assert.Equal(VerifyEquivalence.Unknown, diff.Body.Json.Values);
             Assert.Contains(VerifyDiffLimitation.WorkLimit, diff.Limitations);
         }
 
-        // Reading a document is charged twice its length (the bytes, then the names and strings unescaped and hashed):
-        // with work for the text but not for both documents, there is no JSON view.
+        // Reading a document is charged twice its length (the bytes, then the names and strings unescaped), and its names as
+        // they are hashed: with work for the text and the first document but not for the second, there is no JSON view.
         [Fact]
         public void JsonDocuments_AreChargedForReadingAndUnescaping()
         {
@@ -651,9 +666,70 @@ namespace XMAT.Tests.Replay
             VerifyDiff diff = Diff(
                 Original(JsonType, Utf8($"{{\"{name}\":1}}")),
                 Actual(Utf8($"{{ \"{name}\":1}}")),
-                new VerifyDiffLimits(MaxWork: 13L * Name));
+                new VerifyDiffLimits(MaxWork: 15L * Name));
 
             Assert.Equal((null, VerifyJsonUnavailable.Limit), (diff.Body.Json, diff.Body.JsonUnavailable));
+            Assert.Contains(VerifyDiffLimitation.WorkLimit, diff.Limitations);
+        }
+
+        // Names whose hashes collide are compared, which is charged: a step each, and their characters when their lengths
+        // match. Under a hash where every name collides, comparing them uses up what finding them by the ordinal hash leaves.
+        [Theory]
+        [InlineData("work")]
+        [InlineData("steps")]
+        public void JsonMemberNames_WithCollidingHashesAreChargedAsTheyAreCompared(string limit)
+        {
+            // 40 names of one length that differ only at their end, or 60 names of different lengths.
+            IEnumerable<string> names = limit == "work"
+                ? Enumerable.Range(100, 40).Select(number => new string('k', 997) + number)
+                : Enumerable.Range(1, 60).Select(length => new string('k', length));
+            string json = "{" + string.Join(",", names.Select(name => $"\"{name}\":1")) + "}";
+            VerifyDiffLimits limits =
+                limit == "work" ? new VerifyDiffLimits(MaxWork: 1_000_000) : new VerifyDiffLimits(MaxSteps: 1_000);
+            ReplayComparison comparison =
+                ReplayVerifier.CompareSides(Original(JsonType, Utf8(json)), Actual(Utf8(" " + json)), DecodeLimit);
+
+            VerifyDiff ordinal = VerifyDiffOperation.Explain(comparison, limits, CancellationToken.None);
+            VerifyDiff colliding = VerifyDiffOperation.Explain(comparison, limits, CancellationToken.None, (text, lineBreak) => 0);
+
+            Assert.Equal(VerifyEquivalence.Same, ordinal.Body.Json.Values);
+            Assert.Equal((null, VerifyJsonUnavailable.Limit), (colliding.Body.Json, colliding.Body.JsonUnavailable));
+            Assert.Contains(
+                limit == "work" ? VerifyDiffLimitation.WorkLimit : VerifyDiffLimitation.StepLimit, colliding.Limitations);
+        }
+
+        // Finding a name written twice hashes and compares it, which is charged too: with work to read the document but not to
+        // compare its names, there is no JSON view because of the limit, not because of the duplicate.
+        [Fact]
+        public void JsonDuplicateKeys_AreChargedAsTheyAreFound()
+        {
+            const int Name = 100_000;
+            string name = new('k', Name);
+
+            VerifyDiff diff = Diff(
+                Original(JsonType, Utf8($"{{\"{name}\":1,\"{name}\":2}}")),
+                Actual(Utf8("{\"a\":2}")),
+                new VerifyDiffLimits(MaxWork: 33L * Name / 2));
+
+            Assert.Equal((null, VerifyJsonUnavailable.Limit), (diff.Body.Json, diff.Body.JsonUnavailable));
+            Assert.Contains(VerifyDiffLimitation.WorkLimit, diff.Limitations);
+        }
+
+        // A change's path reads each name to choose how it is written, which is charged: a long name can use up the work, and
+        // the documents still differ.
+        [Fact]
+        public void JsonPaths_AreChargedForReadingTheirNames()
+        {
+            const int Name = 100_000;
+            string name = new('k', Name);
+
+            VerifyDiff diff = Diff(
+                Original(JsonType, Utf8($"{{\"{name}\":[1]}}")),
+                Actual(Utf8($"{{\"{name}\":[2]}}")),
+                new VerifyDiffLimits(MaxWork: 41L * Name / 2));
+
+            Assert.Equal(VerifyEquivalence.Different, diff.Body.Json.Values);
+            Assert.Empty(diff.Body.Json.Changes);
             Assert.Contains(VerifyDiffLimitation.WorkLimit, diff.Limitations);
         }
 
