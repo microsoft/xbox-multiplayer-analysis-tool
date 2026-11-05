@@ -48,6 +48,15 @@ namespace XMAT.WebServiceCapture.Models
 
         public bool HasReplayNote => !string.IsNullOrEmpty(ReplayNote);
 
+        // For rows of the Replays tab that Reissue and verify recorded from a send that it verified (ReplayRecorder): the
+        // verdict, and the verification differences when the tab kept them; null for other rows. The differences hold
+        // captured content: they are kept in memory only, never in the capture table, saved captures or exports, and a
+        // copy (the copy constructor), which is made to be sent, does not take them.
+        internal RecordedVerification Verification { get; set; }
+
+        // View verification differences applies to the row (WebServiceProxyCommands.ViewVerifyDiff).
+        public bool IsVerified => Verification != null;
+
         private Dictionary<string, string> _requestHeaders;
         private Dictionary<string, string> _responseHeaders;
 

@@ -98,6 +98,7 @@ namespace XMAT.WebServiceCapture
 
             RequestIdLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_REQID");
             ReplayOfLabel.Text = Localization.GetLocalizedString("REPLAY_OF_LABEL");
+            ViewVerifyDiffButton.Content = Localization.GetLocalizedString("VERIFY_DIFF_VIEW");
             TimeLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_TIME");
             DurationLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_DURATION");
 
@@ -135,6 +136,33 @@ namespace XMAT.WebServiceCapture
             }
             e.Handled = true;
         }
+
+        // View verification differences applies to a row that Reissue and verify recorded from a send that it verified,
+        // also when the tab did not keep the differences: the window then says so.
+        private void ViewVerifyDiff_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = e.Parameter is ProxyConnectionModel { IsVerified: true };
+            e.Handled = true;
+        }
+
+        // Opens the recorded verification of the very row that the command names, while it is a row of this view's tab:
+        // never a row found again by its number or its tab's name. Nothing is sent or compared again.
+        private void ViewVerifyDiff_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            e.Handled = true;
+            if (e.Parameter is not ProxyConnectionModel { IsVerified: true } row ||
+                !TryGetCaptureContext(DataContext, out _, out WebServiceDeviceCaptureController controller) ||
+                !controller.ProxyConnections.Any(shown => ReferenceEquals(shown, row)))
+            {
+                return;
+            }
+
+            var window = new VerifyDiffWindow(row, controller) { Owner = Window.GetWindow(this) };
+            (ShowVerifyDiff ?? (opened => opened.Show()))(window);
+        }
+
+        // Shows a verification differences window, by default without blocking XMAT; tests replace it.
+        internal Action<VerifyDiffWindow> ShowVerifyDiff { get; set; }
 
         private void ConnectionList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
         {
@@ -382,7 +410,8 @@ namespace XMAT.WebServiceCapture
                         new ReplayOptions(
                             Repeat: snapshot.Request.Repeat,
                             Verify: snapshot.Request.Verify,
-                            AllowUnsafeMethods: allowUnsafeMethods),
+                            AllowUnsafeMethods: allowUnsafeMethods,
+                            VerifyDiff: snapshot.Request.Verify),
                         new ReplayEdits(Unconditional: snapshot.Request.Unconditional),
                         recording.Recorder),
                     OperationContext.None,
@@ -410,7 +439,9 @@ namespace XMAT.WebServiceCapture
                 Recorded: recorder.Recorded,
                 OmittedBodies: recorder.OmittedBodies,
                 NotRecorded: recorder.NotRecorded,
-                CancelledByUser: _reissueCancelledByUser);
+                CancelledByUser: _reissueCancelledByUser,
+                OmittedVerifyDiffs: recorder.OmittedVerifyDiffs,
+                VerifyDiffBudgetBytes: recorder.VerifyDiffBudgetBytes);
         }
 
         private bool Confirm(Window owner, string message) =>
@@ -439,9 +470,10 @@ namespace XMAT.WebServiceCapture
                 : MessageBox.Show(owner, message, title, buttons, image, defaultResult);
         }
 
-        // Tells the user how a run went: why it did not run or failed, that it was cancelled, the verify summary or the
-        // sends without a complete response, then the bodies that the Replays tab did not keep and the sends it could not
-        // record. A run that exiting XMAT cancelled says nothing.
+        // Tells the user how a run went: why it did not run or failed, that it was cancelled, the verify summary, with
+        // where to see how replays differed, or the sends without a complete response, then the bodies and verification
+        // differences that the Replays tab did not keep and the sends it could not record. A run that exiting XMAT
+        // cancelled says nothing.
         private void ShowReplayOutcome(Window owner, ReplaySnapshot snapshot, ReplayRunResult run)
         {
             if (ReplayTarget.IsShuttingDown)
@@ -480,6 +512,11 @@ namespace XMAT.WebServiceCapture
             else if (!cancelled && snapshot.Request.Verify)
             {
                 lines.Add(VerifySummary(result.Value));
+                if (result.Value.Mismatched > 0)
+                {
+                    lines.Add(Localization.GetLocalizedString("REPLAY_VERIFY_DIFF_HINT", run.Destination));
+                }
+
                 if (result.Value.Mismatched + result.Value.Failed + NotVerified(result.Value) > 0)
                 {
                     image = MessageBoxImage.Warning;
@@ -498,12 +535,22 @@ namespace XMAT.WebServiceCapture
                     "REPLAY_BODIES_NOT_KEPT", run.OmittedBodies, run.Destination, run.BodyBudgetBytes / (1024 * 1024)));
             }
 
+            if (run.OmittedVerifyDiffs > 0)
+            {
+                lines.Add(Localization.GetLocalizedString(
+                    "REPLAY_DIFFS_NOT_KEPT",
+                    run.OmittedVerifyDiffs,
+                    run.Destination,
+                    run.VerifyDiffBudgetBytes / (1024 * 1024)));
+            }
+
             if (run.NotRecorded > 0)
             {
                 lines.Add(Localization.GetLocalizedString("REPLAY_NOT_RECORDED", run.NotRecorded, run.Destination));
             }
 
-            if ((run.OmittedBodies > 0 || run.NotRecorded > 0) && image == MessageBoxImage.Information)
+            if ((run.OmittedBodies > 0 || run.OmittedVerifyDiffs > 0 || run.NotRecorded > 0) &&
+                image == MessageBoxImage.Information)
             {
                 image = MessageBoxImage.Warning;
             }
@@ -531,19 +578,16 @@ namespace XMAT.WebServiceCapture
                     notVerified));
             foreach (ReplayItemResult item in result.Items.Where(item => item.Verification is { Matches: false }).Take(20))
             {
-                string differences = string.Join(
-                    ", ",
-                    item.Verification.Differences.Select(difference => Localization.GetLocalizedString(
-                        difference == ReplayVerifier.StatusDifference ? "REPLAY_DIFFERENCE_STATUS" : "REPLAY_DIFFERENCE_BODY")));
                 summary.Append('\n').Append(Localization.GetLocalizedString(
-                    "REPLAY_VERIFY_DIFFERENCE", item.RequestNumber, differences));
+                    "REPLAY_VERIFY_DIFFERENCE", item.RequestNumber, VerifyDiffWording.Differences(item.Verification)));
             }
 
             return summary.ToString();
         }
 
         // The sends of a Reissue and verify run that got a response but were not compared with the captured one, because
-        // it was recorded without its body (ReplayOperation.VerifySkippedCode). They count as neither matched nor differed.
+        // no response was captured for them, or it was recorded without its body (ReplayOperation.VerifySkippedCode). They
+        // count as neither matched nor differed.
         internal static int NotVerified(ReplayResult result) =>
             result.Items.Count(item => item.Outcome == ReplayOutcome.Completed && item.Verification == null);
 
@@ -1353,6 +1397,16 @@ namespace XMAT.WebServiceCapture
                 CommandParameter = row.Item
             });
             row.ContextMenu.Items.Add(CreateReplayMenu(CapturesFor(row)));
+            if (row.Item is ProxyConnectionModel { IsReplay: true } replay)
+            {
+                row.ContextMenu.Items.Add(new MenuItem
+                {
+                    Header = Localization.GetLocalizedString("VERIFY_DIFF_VIEW"),
+                    Command = WebServiceProxyCommands.ViewVerifyDiff,
+                    CommandTarget = this,
+                    CommandParameter = replay,
+                });
+            }
         }
 
         internal static bool TryGetCaptureContext(

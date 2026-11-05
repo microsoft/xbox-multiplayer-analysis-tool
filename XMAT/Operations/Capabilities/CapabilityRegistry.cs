@@ -32,6 +32,7 @@ namespace XMAT.Operations.Capabilities
         private const string SanitizedExportXaml = "Windows/SanitizedExportProgressWindow.xaml";
         private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
         private const string SequenceRangeXaml = "Engines/WebServiceProxy/Windows/SequenceRangeWindow.xaml";
+        private const string VerifyDiffXaml = "Engines/WebServiceProxy/Windows/VerifyDiffWindow.xaml";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
@@ -214,6 +215,9 @@ namespace XMAT.Operations.Capabilities
                     Click(ComposerXaml, "UploadFile_Click"),
                     Click(ComposerXaml, "ClearBody_Click"),
                     Click(ComposerXaml, "Close_Click"),
+                    Command(ProxyCommandsPrefix + "ViewVerifyDiff"),
+                    Window("XMAT.WebServiceCapture.VerifyDiffWindow"),
+                    Click(VerifyDiffXaml, "Close_Click"),
                 }),
             Capability.Supported(
                 "request.compose", "Compose and send a new request", "S9",

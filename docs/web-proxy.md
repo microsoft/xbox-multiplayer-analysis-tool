@@ -290,9 +290,13 @@ Right-click a request, or one of several selected requests, and open **Replay**:
   response instead of 304 Not Modified.
 - **Reissue and verify** then compares each response with the captured one, by status
   code and body (without chunked framing or gzip, deflate or Brotli encoding), and lists
-  the requests whose response differs. Headers are not compared. A request whose
-  captured response was recorded without its body (see the body limit below) is not
-  verified: XMAT counts it as not verified, neither matched nor differed, and warns.
+  the requests whose response differs; see
+  [View verification differences](#view-verification-differences) for how. Headers are
+  not compared. A request for which no response was captured, or whose captured response
+  was recorded without its body (see the body limit below), is not verified: XMAT counts
+  it as not verified, neither matched nor differed, and warns. The header that marks a
+  body that was not kept counts only on an empty body: a captured response that has a
+  body is compared, whatever its headers say.
 - **Reissue several times** sends the selected requests 2 to 100 times, all of them in
   turn before the next round.
 - **Cancel replay** stops a replay that is running.
@@ -344,6 +348,51 @@ more is recorded.
 
 The command line does the same with `xmat replay` and `xmat compose`; see
 [Command line](cli.md).
+
+### View verification differences
+
+**Reissue and verify** keeps how each verified replay compared with the captured
+response with its row in the **XMAT Replays** tab, and the note in the request details
+says whether it matched. To see how, right-click the row and choose **View verification
+differences**, or select it and choose the button of that name in the request details.
+The command is available only for rows of verified replays. The window shows what was
+compared when that row's replay ran, and only that: opening it sends nothing and
+compares nothing again.
+
+- At the top: whether the replay matched, the status code of each response, whether the
+  differences shown are complete and, if not, why, and how verify read each body: whether
+  it removed the content coding and the chunked framing, whether the decoded content is
+  known to be complete, how many bytes it compared, and the charset of the text.
+- **Body**: when both bodies read as text, the lines that differ, with up to three
+  unchanged lines around them, as in a unified diff. Each line ends with a mark for its
+  line break, so lines that differ only in their line breaks show it. Otherwise, the
+  offset and length of each run of differing bytes, with up to 16 of its bytes from each
+  body in hexadecimal.
+- **JSON**: when both bodies are whole, valid, single JSON documents, the values that
+  changed, or that only one body has, by path; or, when the values are the same and only
+  how they are written differs, how: whitespace, member order, or escapes. Values are
+  compared exactly: array order, member names with their case, and numbers as written.
+  When a body is not valid JSON, has a member name twice in one object, holds several
+  documents, or is not whole, the tab says so instead.
+
+The differences are bounded: at most 64 Ki characters in all, 256 changes, and 128
+blocks of lines, and a line, path, or value longer than 1,024 characters is cut and
+marked so. When a limit is reached, or a body was not compared in full, the window says
+which, rather than showing fewer differences as if they were all. The verdict does not
+depend on these limits.
+
+The tab keeps at most 16 MiB of verification differences, including those of earlier
+replays, counted by the size of their JSON form, as `xmat replay --verify-diff` writes
+it. This limits the differences it keeps, not XMAT's memory use. A replay whose
+differences do not fit still gets its row and its verdict; its note and the window say
+that its differences were not kept, and after the replay XMAT tells you how many were
+not kept. Close the tab to make room.
+
+The differences contain captured content, such as lines of a response body or JSON
+values, which can include secrets. XMAT keeps them in memory only, with the rows of the
+tab: they are never written to the application log, saved captures or exports, and
+closing or clearing the tab discards them. A window open on a row that leaves the tab
+then clears what it shows and says why.
 
 ## Block or bypass hosts
 

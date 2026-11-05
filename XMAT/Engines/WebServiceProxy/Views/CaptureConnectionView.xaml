@@ -28,6 +28,7 @@
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.EditAndResend}" Executed="EditAndResend_Executed" CanExecute="EditAndResend_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.Reissue}" Executed="Reissue_Executed" CanExecute="Reissue_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelReissue}" Executed="CancelReissue_Executed" CanExecute="CancelReissue_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ViewVerifyDiff}" Executed="ViewVerifyDiff_Executed" CanExecute="ViewVerifyDiff_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ChangePort}" Executed="ChangePort_Executed" CanExecute="ChangePort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}" Executed="DiscardPort_Executed" CanExecute="DiscardPort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}" Executed="CancelPort_Executed" CanExecute="CancelPort_CanExecute"/>
@@ -190,7 +191,8 @@
                         <ColumnDefinition Width="300"/>
                     </Grid.ColumnDefinitions>
 
-                    <!-- Rows of the Replays tab: where the row comes from, and what the tab did not keep. -->
+                    <!-- Rows of the Replays tab: where the row comes from, and what the tab did not keep. A row that Reissue and verify
+                         recorded opens its own recorded verification (IsVerified), the selected row object itself. -->
                     <Border x:Name="ReplayDetails" Grid.Row="0" Grid.ColumnSpan="2" Padding="10,4" BorderThickness="0,0,0,1"
                             BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource PanelBackgroundBrush}"
                             Visibility="{Binding SelectedItem.IsReplay, ElementName=ConnectionList, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}, FallbackValue=Collapsed}">
@@ -202,6 +204,11 @@
                             <TextBlock x:Name="ReplayNoteText" TextWrapping="Wrap" FontStyle="Italic"
                                        Text="{Binding SelectedItem.ReplayNote, ElementName=ConnectionList, Mode=OneWay}"
                                        Visibility="{Binding SelectedItem.HasReplayNote, ElementName=ConnectionList, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                            <Button x:Name="ViewVerifyDiffButton" HorizontalAlignment="Left" Margin="0,4,0,0" Padding="8,2"
+                                    Command="{x:Static local:WebServiceProxyCommands.ViewVerifyDiff}"
+                                    CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                                    CommandParameter="{Binding SelectedItem, ElementName=ConnectionList, Mode=OneWay}"
+                                    Visibility="{Binding SelectedItem.IsVerified, ElementName=ConnectionList, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}, FallbackValue=Collapsed}"/>
                         </StackPanel>
                     </Border>
 
