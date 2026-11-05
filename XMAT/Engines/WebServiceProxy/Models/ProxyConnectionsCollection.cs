@@ -125,20 +125,13 @@ namespace XMAT.WebServiceCapture.Models
             Clear();
         }
 
-        internal int RemoveByRowKeys(
-            IReadOnlySet<CaptureRowKey> keys)
+        internal int RemoveByRowKeys(IReadOnlySet<CaptureRowKey> keys)
         {
             ArgumentNullException.ThrowIfNull(keys);
             lock (_lockObj)
             {
-                ProxyConnectionModel[] survivors =
-                    this.Where(
-                        model =>
-                            !keys.Contains(
-                                model.RowKey))
-                    .ToArray();
-                int removed =
-                    Count - survivors.Length;
+                ProxyConnectionModel[] survivors = this.Where(model => !keys.Contains(model.RowKey)).ToArray();
+                int removed = Count - survivors.Length;
                 if (removed == 0)
                 {
                     return 0;
@@ -147,23 +140,14 @@ namespace XMAT.WebServiceCapture.Models
                 Items.Clear();
                 _requestToConnections.Clear();
                 _keyToConnection.Clear();
-                foreach (
-                    ProxyConnectionModel survivor in
-                    survivors)
+                foreach (ProxyConnectionModel survivor in survivors)
                 {
                     Items.Add(survivor);
                     Index(survivor);
                 }
-                OnPropertyChanged(
-                    new PropertyChangedEventArgs(
-                        nameof(Count)));
-                OnPropertyChanged(
-                    new PropertyChangedEventArgs(
-                        "Item[]"));
-                OnCollectionChanged(
-                    new NotifyCollectionChangedEventArgs(
-                        NotifyCollectionChangedAction
-                            .Reset));
+                OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+                OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+                OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
                 return removed;
             }
         }

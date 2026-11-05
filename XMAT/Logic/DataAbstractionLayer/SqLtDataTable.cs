@@ -156,9 +156,7 @@ namespace XMAT.DataAbstractionLayer
             }
         }
 
-        public IReadOnlyList<long> DeleteRows(
-            string deviceName,
-            IReadOnlyList<long> rowIds)
+        public IReadOnlyList<long> DeleteRows(string deviceName, IReadOnlyList<long> rowIds)
         {
             ArgumentNullException.ThrowIfNull(rowIds);
             if (rowIds.Count == 0)
@@ -169,32 +167,22 @@ namespace XMAT.DataAbstractionLayer
             {
                 var deleted = new List<long>();
                 FieldDefinition device =
-                    (FieldDefinition)_fieldDefinitions[
-                        WebServiceCaptureMethod
-                            .FieldKey_DeviceName];
-                using (SqliteCommand command =
-                    _connection.CreateCommand())
+                    (FieldDefinition)_fieldDefinitions[WebServiceCaptureMethod.FieldKey_DeviceName];
+                using (SqliteCommand command = _connection.CreateCommand())
                 {
                     command.CommandText =
                         $"DELETE FROM {_name} " +
                         $"WHERE {device.Name} = $device " +
                         "AND id IN (SELECT value FROM json_each($ids)) " +
                         "RETURNING id";
-                    command.Parameters.AddWithValue(
-                        "$device",
-                        ImportedFieldValueAsParameter(
-                            device,
-                            deviceName));
+                    command.Parameters.AddWithValue("$device", ImportedFieldValueAsParameter(device, deviceName));
                     command.Parameters.AddWithValue(
                         "$ids",
-                        JsonSerializer.Serialize(
-                            rowIds));
-                    using SqliteDataReader reader =
-                        command.ExecuteReader();
+                        JsonSerializer.Serialize(rowIds));
+                    using SqliteDataReader reader = command.ExecuteReader();
                     while (reader.Read())
                     {
-                        deleted.Add(
-                            reader.GetInt64(0));
+                        deleted.Add(reader.GetInt64(0));
                     }
                 }
                 foreach (long rowId in deleted)
@@ -328,19 +316,12 @@ namespace XMAT.DataAbstractionLayer
             SqliteConnection connection,
             string name,
             IEnumerable<IField> fields)
-            : this(
-                connection,
-                new object(),
-                name,
-                fields)
+            : this(connection, new object(), name, fields)
         {
         }
 
         internal SqLtDataTable(
-            SqliteConnection connection,
-            object connectionGate,
-            string name,
-            IEnumerable<IField> fields)
+            SqliteConnection connection, object connectionGate, string name, IEnumerable<IField> fields)
         {
             ArgumentNullException.ThrowIfNull(connectionGate);
             _name = name;

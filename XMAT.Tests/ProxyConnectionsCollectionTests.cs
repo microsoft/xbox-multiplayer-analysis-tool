@@ -173,27 +173,17 @@ namespace XMAT.Tests
             var deletedKey = new CaptureRowKey(source, 1, 22, 22);
             var lastKey = new CaptureRowKey(source, 1, 23, 23);
             ProxyConnectionModel first = connections.AddFromDataRecord(
-                new Record(21, 21, 1000),
-                false,
-                firstKey);
-            _ = connections.AddFromDataRecord(
-                new Record(22, 22, 1001),
-                false,
-                deletedKey);
+                new Record(21, 21, 1000), false, firstKey);
+            _ = connections.AddFromDataRecord(new Record(22, 22, 1001), false, deletedKey);
             ProxyConnectionModel last = connections.AddFromDataRecord(
-                new Record(23, 23, 1002),
-                false,
-                lastKey);
+                new Record(23, 23, 1002), false, lastKey);
             var changes = new List<NotifyCollectionChangedAction>();
             connections.CollectionChanged += (_, args) => changes.Add(args.Action);
 
-            int removed = connections.RemoveByRowKeys(
-                new HashSet<CaptureRowKey> { deletedKey });
+            int removed = connections.RemoveByRowKeys(new HashSet<CaptureRowKey> { deletedKey });
 
             Assert.Equal(1, removed);
-            Assert.Equal(
-                new[] { NotifyCollectionChangedAction.Reset },
-                changes);
+            Assert.Equal(new[] { NotifyCollectionChangedAction.Reset }, changes);
             Assert.Collection(
                 connections,
                 item => Assert.Same(first, item),
@@ -204,11 +194,7 @@ namespace XMAT.Tests
 
             Assert.Equal(
                 0,
-                connections.RemoveByRowKeys(
-                    new HashSet<CaptureRowKey>
-                    {
-                        new(source, 1, 99, 99),
-                    }));
+                connections.RemoveByRowKeys(new HashSet<CaptureRowKey> { new(source, 1, 99, 99), }));
             Assert.Single(changes);
         }
 
@@ -216,9 +202,7 @@ namespace XMAT.Tests
         public void BatchRemove_ReleasesDeletedModelAndBodies()
         {
             var connections = new ProxyConnectionsCollection();
-            (
-                WeakReference<ProxyConnectionModel> Model,
-                WeakReference<byte[]> Body) references =
+            (WeakReference<ProxyConnectionModel> Model, WeakReference<byte[]> Body) references =
                 AddAndBatchRemoveBody(connections);
 
             ForceCollection();
@@ -318,12 +302,9 @@ namespace XMAT.Tests
             return reference;
         }
 
-        [MethodImpl(
-            MethodImplOptions.NoInlining)]
-        private static (
-            WeakReference<ProxyConnectionModel> Model,
-            WeakReference<byte[]> Body) AddAndBatchRemoveBody(
-                ProxyConnectionsCollection connections)
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static (WeakReference<ProxyConnectionModel> Model, WeakReference<byte[]> Body)
+            AddAndBatchRemoveBody(ProxyConnectionsCollection connections)
         {
             var key = new CaptureRowKey(Guid.NewGuid(), 1, 17, 17);
             ProxyConnectionModel model = connections.AddFromDataRecord(
@@ -337,10 +318,7 @@ namespace XMAT.Tests
             var references = (
                 new WeakReference<ProxyConnectionModel>(model),
                 new WeakReference<byte[]>(model.RequestBody));
-            Assert.Equal(
-                1,
-                connections.RemoveByRowKeys(
-                    new HashSet<CaptureRowKey> { key }));
+            Assert.Equal(1, connections.RemoveByRowKeys(new HashSet<CaptureRowKey> { key }));
             return references;
         }
 

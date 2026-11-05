@@ -118,16 +118,8 @@ namespace XMAT.Tests
             Guid run = Guid.NewGuid();
             ClientProcessContext connection = Connection(run, 1009);
             registry.StartRun(run);
-            CaptureRowKey deleted = Register(
-                registry,
-                connection,
-                requestToken: 15,
-                rowId: 1);
-            Assert.True(
-                registry.TryGetOrCreateStream(
-                    connection,
-                    requestToken: 15,
-                    out CaptureRowKey stream));
+            CaptureRowKey deleted = Register(registry, connection, requestToken: 15, rowId: 1);
+            Assert.True(registry.TryGetOrCreateStream(connection, requestToken: 15, out CaptureRowKey stream));
             Assert.Equal(deleted, stream);
             var olderTwin = new CaptureRowKey(
                 deleted.SourceId,
@@ -141,14 +133,8 @@ namespace XMAT.Tests
                 deleted.Incarnation);
 
             registry.Retire([deleted, olderTwin, foreignTwin]);
-            CaptureRowKey survivor = Register(
-                registry,
-                connection,
-                requestToken: 16,
-                rowId: 1);
-            registry.Resolve(
-                connection,
-                Local("late.exe", 109));
+            CaptureRowKey survivor = Register(registry, connection, requestToken: 16, rowId: 1);
+            registry.Resolve(connection, Local("late.exe", 109));
             var deletedWrite = false;
             var survivorWrite = false;
 
@@ -158,10 +144,7 @@ namespace XMAT.Tests
             Assert.Equal(CaptureRowLookup.Missing, registry.Lookup(foreignTwin));
             Assert.Equal(
                 CaptureRowLookup.Retired,
-                registry.Lookup(
-                    connection,
-                    15,
-                    out CaptureRowKey retiredRequest));
+                registry.Lookup(connection, 15, out CaptureRowKey retiredRequest));
             Assert.Equal(deleted, retiredRequest);
             Assert.False(registry.TryGet(connection, 15, out _));
             Assert.False(registry.TryGetOrCreateStream(connection, 15, out _));

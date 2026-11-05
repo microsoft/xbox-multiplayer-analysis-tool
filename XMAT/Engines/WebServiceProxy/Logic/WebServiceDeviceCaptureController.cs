@@ -158,15 +158,9 @@ namespace XMAT.WebServiceCapture
         public string DeviceName { get; }
         internal bool CanDeleteSessions =>
             !_readOnly &&
-            _captureDataSource ==
-                CaptureDataSource.ActiveTable &&
-            _dataTable is
-                IExactCaptureRowDelete;
-        internal CaptureSourceStamp SourceStamp =>
-            new(
-                _sourceId,
-                Interlocked.Read(
-                    ref _retirementEpoch));
+            _captureDataSource == CaptureDataSource.ActiveTable &&
+            _dataTable is IExactCaptureRowDelete;
+        internal CaptureSourceStamp SourceStamp => new(_sourceId, Interlocked.Read(ref _retirementEpoch));
         public ProcessFilterSpec ProcessFilter { get; private set; }
         internal ClientProcessResolver ProcessResolverOverride { get; set; }
         internal TimeSpan? CaptureCallbackDrainTimeoutOverride { get; set; }
@@ -179,91 +173,58 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(currentlyVisible);
             if (!CanDeleteSessions)
             {
-                throw new InvalidOperationException(
-                    "This capture cannot delete sessions.");
+                throw new InvalidOperationException("This capture cannot delete sessions.");
             }
 
-            var candidates =
-                new List<DeleteCandidate>(
-                    targets.Count);
-            var committedIds =
-                new HashSet<long>();
-            var deleted =
-                new List<CaptureRowKey>(
-                    targets.Count);
-            var deletedSet =
-                new HashSet<CaptureRowKey>();
+            var candidates = new List<DeleteCandidate>(targets.Count);
+            var committedIds = new HashSet<long>();
+            var deleted = new List<CaptureRowKey>(targets.Count);
+            var deletedSet = new HashSet<CaptureRowKey>();
             int retainedHidden = 0;
             int unavailable = 0;
             CaptureSourceStamp stamp;
             using (_captureRows.EnterMutation())
             {
-                foreach (
-                    CaptureDeleteTarget target in
-                    targets)
+                foreach (CaptureDeleteTarget target in targets)
                 {
                     if (target == null)
                     {
                         unavailable++;
                         continue;
                     }
-                    if (!currentlyVisible.Contains(
-                            target.Key))
+                    if (!currentlyVisible.Contains(target.Key))
                     {
                         retainedHidden++;
                         continue;
                     }
                     if (target.Model == null ||
-                        !target.Model.TryGetTarget(
-                            out ProxyConnectionModel model) ||
-                        model.RecordRowId !=
-                            target.Key.RowId ||
-                        !ReferenceEquals(
-                            ProxyConnections.ByKey(
-                                target.Key),
-                            model) ||
-                        _captureRows.Lookup(
-                            target.Key) !=
-                            CaptureRowLookup.Current)
+                        !target.Model.TryGetTarget(out ProxyConnectionModel model) ||
+                        model.RecordRowId != target.Key.RowId ||
+                        !ReferenceEquals(ProxyConnections.ByKey(target.Key), model) ||
+                        _captureRows.Lookup(target.Key) != CaptureRowLookup.Current)
                     {
                         unavailable++;
                         continue;
                     }
-                    candidates.Add(
-                        new DeleteCandidate(
-                            target.Key,
-                            model.RecordRowId));
+                    candidates.Add(new DeleteCandidate(target.Key, model.RecordRowId));
                 }
 
-                _captureRows.PrepareRetirement(
-                    candidates.Count);
-                committedIds.EnsureCapacity(
-                    candidates.Count);
-                deletedSet.EnsureCapacity(
-                    candidates.Count);
-                IReadOnlyList<long> committed =
-                    ((IExactCaptureRowDelete)
-                        _dataTable).DeleteRows(
-                        DeviceName,
-                        candidates.Select(
-                                candidate =>
-                                    candidate.RowId)
-                            .ToArray());
+                _captureRows.PrepareRetirement(candidates.Count);
+                committedIds.EnsureCapacity(candidates.Count);
+                deletedSet.EnsureCapacity(candidates.Count);
+                IReadOnlyList<long> committed = ((IExactCaptureRowDelete)_dataTable).DeleteRows(
+                    DeviceName,
+                    candidates.Select(candidate => candidate.RowId).ToArray());
                 foreach (long rowId in committed)
                 {
                     committedIds.Add(rowId);
                 }
-                foreach (
-                    DeleteCandidate candidate in
-                    candidates)
+                foreach (DeleteCandidate candidate in candidates)
                 {
-                    if (committedIds.Contains(
-                            candidate.RowId) &&
-                        deletedSet.Add(
-                            candidate.Key))
+                    if (committedIds.Contains(candidate.RowId) &&
+                        deletedSet.Add(candidate.Key))
                     {
-                        deleted.Add(
-                            candidate.Key);
+                        deleted.Add(candidate.Key);
                     }
                     else
                     {
@@ -273,8 +234,7 @@ namespace XMAT.WebServiceCapture
                 _captureRows.Retire(deleted);
                 if (deleted.Count != 0)
                 {
-                    Interlocked.Increment(
-                        ref _retirementEpoch);
+                    Interlocked.Increment(ref _retirementEpoch);
                 }
                 stamp = SourceStamp;
             }
@@ -282,30 +242,22 @@ namespace XMAT.WebServiceCapture
             if (deleted.Count != 0)
             {
                 if (SelectedConnectionModel != null &&
-                    deletedSet.Contains(
-                        SelectedConnectionModel
-                            .RowKey))
+                    deletedSet.Contains(SelectedConnectionModel.RowKey))
                 {
                     SelectedConnectionModel = null;
                 }
                 if (SelectedWebSocketMessage != null &&
-                    deletedSet.Contains(
-                        SelectedWebSocketMessage
-                            .RowKey))
+                    deletedSet.Contains(SelectedWebSocketMessage.RowKey))
                 {
                     SelectedWebSocketMessage = null;
                 }
                 try
                 {
-                    ProxyConnections
-                        .RemoveByRowKeys(
-                            deletedSet);
+                    ProxyConnections.RemoveByRowKeys(deletedSet);
                 }
                 finally
                 {
-                    WebSocketMessages
-                        .RemoveByRowKeys(
-                            deletedSet);
+                    WebSocketMessages.RemoveByRowKeys(deletedSet);
                 }
             }
             return new CaptureDeleteResult(
@@ -587,9 +539,7 @@ namespace XMAT.WebServiceCapture
             ClientProcessInfo Process,
             ProxyConnectionModel Model);
 
-        private readonly record struct DeleteCandidate(
-            CaptureRowKey Key,
-            long RowId);
+        private readonly record struct DeleteCandidate(CaptureRowKey Key, long RowId);
 
         private const int LoadedCapturesPageBreakSize = 100;
         private const int UiUpdateBatchSize = 50;
@@ -1825,10 +1775,7 @@ namespace XMAT.WebServiceCapture
 
         private IDataRecord DataRecordFromRow(Int64 rowId)
         {
-            using IDisposable read =
-                (_dataTable as
-                    IVersionedCaptureTable)
-                    ?.EnterRead();
+            using IDisposable read = (_dataTable as IVersionedCaptureTable)?.EnterRead();
             var records = _dataTable.Dataset.DataRecordsFrom(rowId, 1);
             return records.FirstOrDefault(record => record.RowId == rowId);
         }
@@ -1838,21 +1785,14 @@ namespace XMAT.WebServiceCapture
             ClientRequest request,
             out CaptureRowKey key)
         {
-            key =
-                request?.RowKey ??
-                default;
+            key = request?.RowKey ?? default;
             CaptureRowLookup lookup =
                 key.SourceId != Guid.Empty
                     ? _captureRows.Lookup(key)
-                    : processContext == null ||
-                        request == null
+                    : processContext == null || request == null
                         ? CaptureRowLookup.Missing
-                        : _captureRows.Lookup(
-                            processContext,
-                            request.RequestNumber,
-                            out key);
-            if (lookup ==
-                CaptureRowLookup.Current)
+                        : _captureRows.Lookup(processContext, request.RequestNumber, out key);
+            if (lookup == CaptureRowLookup.Current)
             {
                 return DataRecordFromRow(key.RowId);
             }
@@ -1861,16 +1801,11 @@ namespace XMAT.WebServiceCapture
 
         private bool TryUpdateCaptureRecord(ClientProcessContext processContext, CaptureRowKey key, Action update)
         {
-            if (key.SourceId ==
-                Guid.Empty)
+            if (key.SourceId == Guid.Empty)
             {
                 return false;
             }
-            return _captureRows.TryUpdate(
-                processContext?.RunId ??
-                    Guid.Empty,
-                key,
-                update);
+            return _captureRows.TryUpdate(processContext?.RunId ?? Guid.Empty, key, update);
         }
 
         private void HandleRowAdded(IDataRecord record, CaptureRowKey key = default, bool resolving = false)
@@ -1939,9 +1874,7 @@ namespace XMAT.WebServiceCapture
                 }
                 else
                 {
-                    key =
-                        _captureRows.RegisterDetached(
-                            rowId);
+                    key = _captureRows.RegisterDetached(rowId);
                 }
                 IDataRecord addedRecord = DataRecordFromRow(rowId);
                 bool resolving = processContext != null && process.Status == ClientProcessStatus.NotRecorded;
@@ -2002,9 +1935,7 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private void AdvanceSourceStamp() =>
-            Interlocked.Increment(
-                ref _retirementEpoch);
+        private void AdvanceSourceStamp() => Interlocked.Increment(ref _retirementEpoch);
 
         private bool IsRequestBlocked(ClientRequest request)
         {
@@ -2073,8 +2004,7 @@ namespace XMAT.WebServiceCapture
                     if (connectionEvent.Request.BodyBytes != null)
                         base64Body = Convert.ToBase64String(connectionEvent.Request.BodyBytes);
 
-                    connectionEvent.Request.RowKey =
-                        AddCaptureRow(
+                    connectionEvent.Request.RowKey = AddCaptureRow(
                             new Dictionary<
                                 string,
                                 object>(
@@ -2328,8 +2258,7 @@ namespace XMAT.WebServiceCapture
                     if (requestEvent.Request.BodyBytes != null)
                         base64Body = Convert.ToBase64String(requestEvent.Request.BodyBytes);
 
-                    requestEvent.Request.RowKey =
-                        AddCaptureRow(
+                    requestEvent.Request.RowKey = AddCaptureRow(
                             new Dictionary<
                                 string,
                                 object>(
@@ -2479,21 +2408,15 @@ namespace XMAT.WebServiceCapture
             }
 
             using var callbackLeaseScope = callbackLease;
-            if (messageEvent.RowKey.SourceId !=
-                Guid.Empty)
+            if (messageEvent.RowKey.SourceId != Guid.Empty)
             {
-                CaptureRowLookup lookup =
-                    _captureRows.Lookup(
-                        messageEvent.RowKey);
-                CaptureRowKey current =
-                    default;
-                if (lookup ==
-                    CaptureRowLookup.Retired)
+                CaptureRowLookup lookup = _captureRows.Lookup(messageEvent.RowKey);
+                CaptureRowKey current = default;
+                if (lookup == CaptureRowLookup.Retired)
                 {
                     return;
                 }
-                if (lookup ==
-                        CaptureRowLookup.Missing &&
+                if (lookup == CaptureRowLookup.Missing &&
                     (messageEvent.ProcessContext == null ||
                         !_captureRows.TryGetOrCreateStream(
                             messageEvent.ProcessContext,
@@ -2502,11 +2425,9 @@ namespace XMAT.WebServiceCapture
                 {
                     return;
                 }
-                if (lookup ==
-                    CaptureRowLookup.Missing)
+                if (lookup == CaptureRowLookup.Missing)
                 {
-                    messageEvent.RowKey =
-                        current;
+                    messageEvent.RowKey = current;
                 }
             }
             else if (messageEvent.ProcessContext != null)

@@ -90,10 +90,7 @@ namespace XMAT.WebServiceCapture
                 {
                     throw new InvalidOperationException("The connection is not part of the active capture run.");
                 }
-                RequestKey request =
-                    RequestOf(
-                        connection,
-                        requestToken);
+                RequestKey request = RequestOf(connection, requestToken);
                 if (_requests.ContainsKey(request))
                 {
                     throw new InvalidOperationException("The request already has a capture row.");
@@ -137,10 +134,7 @@ namespace XMAT.WebServiceCapture
             ClientProcessInfo inserted = insertedIdentity ?? ClientProcessInfo.NotRecorded;
             lock (_syncRoot)
             {
-                RequestKey request =
-                    RequestOf(
-                        connection,
-                        requestToken);
+                RequestKey request = RequestOf(connection, requestToken);
                 if (_requests.TryGetValue(request, out CaptureRowKey existing))
                 {
                     catchUp = connection.Identity;
@@ -166,27 +160,15 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        internal CaptureRowKey RegisterDetached(
-            long rowId)
+        internal CaptureRowKey RegisterDetached(long rowId)
         {
-            ArgumentOutOfRangeException.ThrowIfNegative(
-                rowId);
+            ArgumentOutOfRangeException.ThrowIfNegative(rowId);
             lock (_syncRoot)
             {
-                var key = new CaptureRowKey(
-                    SourceId,
-                    _generation,
-                    rowId,
-                    checked(
-                        ++_nextIncarnation));
+                var key = new CaptureRowKey(SourceId, _generation, rowId, checked(++_nextIncarnation));
                 _bindings.Add(
                     key,
-                    new Binding(
-                        Guid.Empty,
-                        null,
-                        ClientProcessInfo.NotRecorded,
-                        isFallback: true,
-                        isDetached: true));
+                    new Binding(Guid.Empty, null, ClientProcessInfo.NotRecorded, isFallback: true, isDetached: true));
                 return key;
             }
         }
@@ -261,13 +243,8 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(connection);
             lock (_syncRoot)
             {
-                return _requests.TryGetValue(
-                        RequestOf(
-                            connection,
-                            requestToken),
-                        out key) &&
-                    LookupCore(key) ==
-                        CaptureRowLookup.Current;
+                return _requests.TryGetValue(RequestOf(connection, requestToken), out key) &&
+                    LookupCore(key) == CaptureRowLookup.Current;
             }
         }
 
@@ -276,35 +253,21 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(connection);
             lock (_syncRoot)
             {
-                StreamKey stream =
-                    StreamOf(
-                        connection,
-                        requestToken);
+                StreamKey stream = StreamOf(connection, requestToken);
                 if (_streams.TryGetValue(stream, out StreamBinding existing))
                 {
                     key = existing.Key;
-                    CaptureRowLookup status =
-                        LookupCore(key);
-                    if (status !=
-                        CaptureRowLookup.Missing)
+                    CaptureRowLookup status = LookupCore(key);
+                    if (status != CaptureRowLookup.Missing)
                     {
-                        return status ==
-                            CaptureRowLookup.Current;
+                        return status == CaptureRowLookup.Current;
                     }
                 }
-                if (_requests.TryGetValue(
-                        RequestOf(
-                            connection,
-                            requestToken),
-                        out key))
+                if (_requests.TryGetValue(RequestOf(connection, requestToken), out key))
                 {
-                    if (LookupCore(key) ==
-                        CaptureRowLookup.Current)
+                    if (LookupCore(key) == CaptureRowLookup.Current)
                     {
-                        AssociateStreamCore(
-                            connection,
-                            stream,
-                            key);
+                        AssociateStreamCore(connection, stream, key);
                         return true;
                     }
                     return false;
@@ -315,10 +278,7 @@ namespace XMAT.WebServiceCapture
                     return false;
                 }
                 key = new CaptureRowKey(SourceId, _generation, requestToken, checked(++_nextIncarnation));
-                AssociateStreamCore(
-                    connection,
-                    stream,
-                    key);
+                AssociateStreamCore(connection, stream, key);
                 return true;
             }
         }
@@ -329,12 +289,10 @@ namespace XMAT.WebServiceCapture
             lock (_syncRoot)
             {
                 if (!_bindings.TryGetValue(key, out Binding binding) ||
-                    (!_acceptingUpdates &&
-                        !binding.IsDetached) ||
+                    (!_acceptingUpdates && !binding.IsDetached) ||
                     (!binding.IsFallback &&
                         (binding.RunId != _activeRun ||
-                            (runId != Guid.Empty &&
-                                runId != _activeRun))) ||
+                            (runId != Guid.Empty && runId != _activeRun))) ||
                     !IsCurrentCore(key))
                 {
                     return false;
@@ -360,19 +318,12 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        internal CaptureRowLookup Lookup(
-            ClientProcessContext connection,
-            long requestToken,
-            out CaptureRowKey key)
+        internal CaptureRowLookup Lookup(ClientProcessContext connection, long requestToken, out CaptureRowKey key)
         {
             ArgumentNullException.ThrowIfNull(connection);
             lock (_syncRoot)
             {
-                if (!_requests.TryGetValue(
-                        RequestOf(
-                            connection,
-                            requestToken),
-                        out key))
+                if (!_requests.TryGetValue(RequestOf(connection, requestToken), out key))
                 {
                     return CaptureRowLookup.Missing;
                 }
@@ -382,14 +333,10 @@ namespace XMAT.WebServiceCapture
 
         internal void PrepareRetirement(int additionalKeys)
         {
-            ArgumentOutOfRangeException.ThrowIfNegative(
-                additionalKeys);
+            ArgumentOutOfRangeException.ThrowIfNegative(additionalKeys);
             lock (_syncRoot)
             {
-                _retiredRows.EnsureCapacity(
-                    checked(
-                        _retiredRows.Count +
-                        additionalKeys));
+                _retiredRows.EnsureCapacity(checked(_retiredRows.Count + additionalKeys));
             }
         }
 
@@ -398,55 +345,39 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(keys);
             lock (_syncRoot)
             {
-                foreach (
-                    CaptureRowKey key in
-                    keys)
+                foreach (CaptureRowKey key in keys)
                 {
-                    if (LookupCore(key) !=
-                        CaptureRowLookup.Current)
+                    if (LookupCore(key) != CaptureRowLookup.Current)
                     {
                         continue;
                     }
                     _retiredRows.Add(key);
                     _streamKeys.Remove(key);
-                    if (!_bindings.Remove(
-                            key,
-                            out Binding binding) ||
+                    if (!_bindings.Remove(key, out Binding binding) ||
                         binding.Connection == null)
                     {
                         continue;
                     }
-                    ClientProcessContext connection =
-                        binding.Connection;
+                    ClientProcessContext connection = binding.Connection;
                     binding.Connection = null;
-                    if (_connectionRequests.TryGetValue(
-                            connection,
-                            out HashSet<RequestKey> requests))
+                    if (_connectionRequests.TryGetValue(connection, out HashSet<RequestKey> requests))
                     {
                         requests.RemoveWhere(
                             request =>
-                                _requests.TryGetValue(
-                                    request,
-                                    out CaptureRowKey mapped) &&
-                                mapped == key);
+                                _requests.TryGetValue(request, out CaptureRowKey mapped) && mapped == key);
                         if (requests.Count == 0)
                         {
-                            _connectionRequests.Remove(
-                                connection);
+                            _connectionRequests.Remove(connection);
                         }
                     }
-                    if (_connectionRows.TryGetValue(
-                            connection,
-                            out HashSet<CaptureRowKey> rows))
+                    if (_connectionRows.TryGetValue(connection, out HashSet<CaptureRowKey> rows))
                     {
                         rows.Remove(key);
                         if (rows.Count == 0)
                         {
-                            _connectionRows.Remove(
-                                connection);
+                            _connectionRows.Remove(connection);
                             StopObserving(connection);
-                            _closedConnections.Remove(
-                                connection);
+                            _closedConnections.Remove(connection);
                         }
                     }
                 }
@@ -486,11 +417,8 @@ namespace XMAT.WebServiceCapture
                     VisitObserver?.Invoke("requests", requests.Count);
                     foreach (RequestKey request in requests)
                     {
-                        if (!_requests.TryGetValue(
-                                request,
-                                out CaptureRowKey key) ||
-                            LookupCore(key) !=
-                                CaptureRowLookup.Retired)
+                        if (!_requests.TryGetValue(request, out CaptureRowKey key) ||
+                            LookupCore(key) != CaptureRowLookup.Retired)
                         {
                             _requests.Remove(request);
                         }
@@ -501,12 +429,9 @@ namespace XMAT.WebServiceCapture
                     VisitObserver?.Invoke("streams", streams.Count);
                     foreach (StreamKey stream in streams)
                     {
-                        if (_streams.Remove(
-                                stream,
-                                out StreamBinding binding))
+                        if (_streams.Remove(stream, out StreamBinding binding))
                         {
-                            _streamKeys.Remove(
-                                binding.Key);
+                            _streamKeys.Remove(binding.Key);
                         }
                     }
                 }
@@ -526,16 +451,10 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(connection);
             lock (_syncRoot)
             {
-                StreamKey stream =
-                    StreamOf(
-                        connection,
-                        requestToken);
-                if (_streams.Remove(
-                        stream,
-                        out StreamBinding binding))
+                StreamKey stream = StreamOf(connection, requestToken);
+                if (_streams.Remove(stream, out StreamBinding binding))
                 {
-                    _streamKeys.Remove(
-                        binding.Key);
+                    _streamKeys.Remove(binding.Key);
                 }
                 if (_connectionStreams.TryGetValue(connection, out HashSet<StreamKey> streams))
                 {
@@ -622,10 +541,7 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private void AssociateStreamCore(
-            ClientProcessContext connection,
-            StreamKey stream,
-            CaptureRowKey key)
+        private void AssociateStreamCore(ClientProcessContext connection, StreamKey stream, CaptureRowKey key)
         {
             if (_streams.TryGetValue(stream, out StreamBinding existing))
             {
@@ -690,11 +606,9 @@ namespace XMAT.WebServiceCapture
             rows.All(key => _bindings.TryGetValue(key, out Binding binding) && binding.AppliedProcess == identity);
 
         private bool IsCurrentCore(CaptureRowKey key) =>
-            LookupCore(key) ==
-            CaptureRowLookup.Current;
+            LookupCore(key) == CaptureRowLookup.Current;
 
-        private CaptureRowLookup LookupCore(
-            CaptureRowKey key)
+        private CaptureRowLookup LookupCore(CaptureRowKey key)
         {
             if (key.SourceId != SourceId)
             {
@@ -705,32 +619,19 @@ namespace XMAT.WebServiceCapture
                 return CaptureRowLookup.Retired;
             }
             return key.Generation == _generation &&
-                (_bindings.ContainsKey(key) ||
-                    _streamKeys.Contains(key))
+                (_bindings.ContainsKey(key) || _streamKeys.Contains(key))
                 ? CaptureRowLookup.Current
                 : CaptureRowLookup.Missing;
         }
 
-        private static RequestKey RequestOf(
-            ClientProcessContext connection,
-            long requestToken) =>
-            new(
-                ConnectionOf(connection),
-                requestToken);
+        private static RequestKey RequestOf(ClientProcessContext connection, long requestToken) =>
+            new(ConnectionOf(connection), requestToken);
 
-        private static StreamKey StreamOf(
-            ClientProcessContext connection,
-            long requestToken) =>
-            new(
-                ConnectionOf(connection),
-                requestToken);
+        private static StreamKey StreamOf(ClientProcessContext connection, long requestToken) =>
+            new(ConnectionOf(connection), requestToken);
 
-        private static ConnectionKey ConnectionOf(
-            ClientProcessContext connection) =>
-            new(
-                connection.RunId,
-                connection.ContextId,
-                connection.ConnectionToken);
+        private static ConnectionKey ConnectionOf(ClientProcessContext connection) =>
+            new(connection.RunId, connection.ContextId, connection.ConnectionToken);
 
         private sealed class Binding
         {
@@ -757,18 +658,11 @@ namespace XMAT.WebServiceCapture
             internal bool IsDetached { get; }
         }
 
-        private readonly record struct ConnectionKey(
-            Guid RunId,
-            Guid ContextId,
-            long ConnectionToken);
+        private readonly record struct ConnectionKey(Guid RunId, Guid ContextId, long ConnectionToken);
 
-        private readonly record struct RequestKey(
-            ConnectionKey Connection,
-            long RequestToken);
+        private readonly record struct RequestKey(ConnectionKey Connection, long RequestToken);
 
-        private readonly record struct StreamKey(
-            ConnectionKey Connection,
-            long RequestToken);
+        private readonly record struct StreamKey(ConnectionKey Connection, long RequestToken);
 
         private sealed class StreamBinding
         {
