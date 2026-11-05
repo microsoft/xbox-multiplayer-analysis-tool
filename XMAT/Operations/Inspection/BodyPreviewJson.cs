@@ -10,14 +10,16 @@ using System.Text.Json;
 
 namespace XMAT.Operations.Inspection
 {
-    // Text that never grows past its limits: at most maxChars characters on at most maxLines lines. What does not fit is cut,
-    // never in the middle of a surrogate pair, and then nothing more is appended.
+    // Text that never grows past its limits: at most maxChars characters on at most maxLines lines, where CR, LF, CRLF (one
+    // break), U+2028 and U+2029 each end a line. What does not fit is cut, never in the middle of a surrogate pair, and then
+    // nothing more is appended.
     internal sealed class BodyPreviewText
     {
         private readonly StringBuilder _text = new();
         private readonly int _maxChars;
         private readonly int _maxBreaks;
         private int _breaks;
+        private char _last;
 
         internal BodyPreviewText(int maxChars, int maxLines)
         {
@@ -41,9 +43,11 @@ namespace XMAT.Operations.Inspection
 
             int allowed = Math.Min(text.Length, _maxChars - _text.Length);
             int breaks = _breaks;
+            char previous = _last;
             for (int index = 0; index < allowed; index++)
             {
-                if (text[index] == '\n')
+                char character = text[index];
+                if (character is '\r' or '\u2028' or '\u2029' || (character == '\n' && previous != '\r'))
                 {
                     if (breaks == _maxBreaks)
                     {
@@ -53,6 +57,8 @@ namespace XMAT.Operations.Inspection
 
                     breaks++;
                 }
+
+                previous = character;
             }
 
             if (allowed < text.Length && allowed > 0 && char.IsHighSurrogate(text[allowed - 1]))
@@ -62,6 +68,11 @@ namespace XMAT.Operations.Inspection
 
             _text.Append(text[..allowed]);
             _breaks = breaks;
+            if (allowed > 0)
+            {
+                _last = text[allowed - 1];
+            }
+
             if (allowed < text.Length)
             {
                 Cut = true;
@@ -308,18 +319,19 @@ namespace XMAT.Operations.Inspection
             return FormatEnd.Complete;
         }
 
-        // Whether the body starts like a JSON object or array, after any whitespace.
+        // Whether the body starts like a JSON object or array, after whitespace in its first 64 KiB.
         internal static bool LooksLikeJson(ReadOnlySpan<byte> body)
         {
-            int start = body.IndexOfAnyExcept(" \t\r\n"u8);
-            return start >= 0 && body[start] is (byte)'{' or (byte)'[';
+            ReadOnlySpan<byte> start = body[..Math.Min(body.Length, 64 * 1024)];
+            int first = start.IndexOfAnyExcept(" \t\r\n"u8);
+            return first >= 0 && start[first] is (byte)'{' or (byte)'[';
         }
 
-        // Each preview reader allows one level more than the limit, so the preview, not the reader, stops at the limit.
+        // Each preview reader allows one level more than the limit, so the preview, not the reader, stops at the limit. JSON is
+        // read as it is: trailing commas and comments are not JSON, so formatting never rewrites invalid JSON into valid.
         private static JsonReaderOptions Options(BodyPreviewLimits limits) => new()
         {
             AllowMultipleValues = true,
-            AllowTrailingCommas = true,
             MaxDepth = limits.MaxJsonDepth + 1,
         };
 

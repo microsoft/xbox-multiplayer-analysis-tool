@@ -196,6 +196,22 @@ namespace XMAT.Tests.Inspection
             Assert.Equal(new[] { BodyPreviewNotice.TextLimit }, preview.Notices);
         }
 
+        // CR, CRLF (one break), U+2028 and U+2029 end lines as LF does.
+        [Theory]
+        [InlineData("\r")]
+        [InlineData("\r\n")]
+        [InlineData("\u2028")]
+        [InlineData("\u2029")]
+        public void EveryLineBreak_CountsTowardsTheLineLimit(string lineBreak)
+        {
+            byte[] body = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("x" + lineBreak, 10_000)));
+
+            BodyPreview preview = Preview(body, "text/plain");
+
+            Assert.Equal(BodyPreviewLimits.Default.MaxTextLines, preview.Text.Split(lineBreak).Length);
+            Assert.Equal(new[] { BodyPreviewNotice.TextLimit }, preview.Notices);
+        }
+
         [Fact]
         public void Json_IsFormattedAsWritten()
         {
@@ -276,6 +292,44 @@ namespace XMAT.Tests.Inspection
             Assert.StartsWith("0 1 2 3 4 5", preview.Text, StringComparison.Ordinal);
             Assert.True(text.StartsWith(preview.Text, StringComparison.Ordinal));
             Assert.Equal(new[] { BodyPreviewNotice.StoredPrefix }, preview.Notices);
+        }
+
+        // A whole stored body whose compressed data stops before its end (a missing gzip trailer or zlib checksum, a cut
+        // Brotli stream) is told as incomplete: the decoders end quietly, so the preview checks the end itself.
+        [Theory]
+        [InlineData("gzip", 4)]
+        [InlineData("gzip", 1000)]
+        [InlineData("deflate", 4)]
+        [InlineData("deflate", 1000)]
+        [InlineData("br", 1000)]
+        public void ACompressedBodyThatStopsEarly_IsIncomplete(string coding, int missing)
+        {
+            string text = "{\"items\":[" + string.Join(",", Enumerable.Range(0, 20_000)) + "]}";
+            byte[] compressed = Compress(coding, Encoding.ASCII.GetBytes(text));
+
+            BodyPreview preview = Preview(compressed[..^missing], JsonType, coding);
+
+            Assert.Equal((BodyPreviewState.Truncated, BodyPreviewTextKind.Text), (preview.State, preview.TextKind));
+            Assert.True(text.StartsWith(preview.Text, StringComparison.Ordinal));
+            Assert.Empty(preview.JsonDocuments);
+            Assert.Equal(new[] { BodyPreviewNotice.Incomplete, BodyPreviewNotice.JsonIncomplete }, preview.Notices);
+        }
+
+        // Framing is checked to its last chunk even when the compressed data inside ends first; framing that stops before it
+        // does not parse, so the body is shown as stored.
+        [Theory]
+        [InlineData("gzip")]
+        [InlineData("deflate")]
+        [InlineData("br")]
+        public void AChunkedBodyWithoutItsLastChunk_IsNotComplete(string coding)
+        {
+            byte[] compressed = Compress(coding, "framed and compressed"u8.ToArray());
+            byte[] body = Encoding.ASCII.GetBytes($"{compressed.Length:x}\r\n").Concat(compressed).Concat("\r\n"u8.ToArray()).ToArray();
+
+            BodyPreview preview = Preview(body, "text/plain", coding, "chunked");
+
+            Assert.Equal(BodyPreviewState.Malformed, preview.State);
+            Assert.Equal(new[] { BodyPreviewNotice.FramingIgnored, BodyPreviewNotice.MalformedCoding }, preview.Notices);
         }
 
         // A tree stops at the depth and node limits; formatting a document deeper than the limit shows the body as it is, also
@@ -427,7 +481,9 @@ namespace XMAT.Tests.Inspection
             Assert.Equal(BodyPreviewState.Truncated, preview.State);
             Assert.Contains(BodyPreviewNotice.WorkLimit, preview.Notices);
             Assert.DoesNotContain(BodyPreviewNotice.RawDeflate, preview.Notices);
-            Assert.InRange(preview.DecodedBytes, 0, 200);
+
+            // What was read and what was decoded never add up to more work than allowed.
+            Assert.InRange(preview.DecodedBytes + preview.InspectedBytes, 0, 200);
         }
 
         [Fact]
@@ -443,6 +499,51 @@ namespace XMAT.Tests.Inspection
             Assert.Equal(BodyPreviewLimits.Default.MaxTextLines, largePreview.Hex.Split("\r\n").Length);
             Assert.Equal((BodyPreviewState.Complete, 70_000), (largePreview.State, largePreview.Text.Length));
             Assert.Equal(new[] { BodyPreviewNotice.HexLimit }, largePreview.Notices);
+        }
+
+        // The Hex part is work too: it shows only what the work limit allows, and counts as read.
+        [Fact]
+        public void TheHexPart_IsWithinTheWorkLimit()
+        {
+            byte[] body = Enumerable.Range(0, 100).Select(value => (byte)value).ToArray();
+
+            BodyPreview preview = Preview(body, null, parts: BodyPreviewParts.Hex, limits: new(MaxWork: 16));
+
+            Assert.Equal(Dump(body[..16]), preview.Hex);
+            Assert.Equal(16, preview.InspectedBytes);
+            Assert.Equal(new[] { BodyPreviewNotice.HexLimit }, preview.Notices);
+        }
+
+        // A body meant as JSON, by its media type or because it starts like an object or array, that is not valid JSON says so,
+        // and is shown as it is: never formatted, and never repaired.
+        [Theory]
+        [InlineData("{\"a\":", JsonType)]
+        [InlineData("[1,2,]", JsonType)]
+        [InlineData("{\"a\":1,}", JsonType)]
+        [InlineData("{\"a\":", "text/plain")]
+        public void InvalidJson_IsToldAndShownAsItIs(string body, string contentType)
+        {
+            BodyPreview preview = Preview(Encoding.ASCII.GetBytes(body), contentType);
+            BodyPreview textOnly = Preview(Encoding.ASCII.GetBytes(body), contentType, parts: BodyPreviewParts.Text);
+
+            Assert.Equal((BodyPreviewState.Complete, BodyPreviewTextKind.Text, body), (preview.State, preview.TextKind, preview.Text));
+            Assert.Empty(preview.JsonDocuments);
+            Assert.Equal(new[] { BodyPreviewNotice.JsonMalformed }, preview.Notices);
+            Assert.Equal(contentType == JsonType ? new[] { BodyPreviewNotice.JsonMalformed } : Array.Empty<string>(), textOnly.Notices);
+        }
+
+        // A byte dump in place of the text is work too, and the stored bytes that it shows count as read.
+        [Fact]
+        public void AByteDump_IsWithinTheWorkLimit()
+        {
+            byte[] body = "not decoded at all"u8.ToArray();
+
+            BodyPreview all = Preview(body, "text/plain", "compress");
+            BodyPreview limited = Preview(body, "text/plain", "compress", limits: new(MaxWork: 4));
+
+            Assert.Equal((body.Length, Dump(body)), (all.InspectedBytes, all.Text));
+            Assert.Equal((4, Dump(body[..4])), (limited.InspectedBytes, limited.Text));
+            Assert.Equal(new[] { BodyPreviewNotice.UnsupportedCoding, BodyPreviewNotice.WorkLimit }, limited.Notices);
         }
 
         [Fact]

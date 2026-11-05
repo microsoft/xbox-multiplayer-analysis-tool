@@ -9,8 +9,9 @@ using System.Threading;
 
 namespace XMAT.Operations.Inspection
 {
-    // The work that one preview may still do (BodyPreviewLimits.MaxWork) and how much of the stored body it read. Every stage
-    // spends what it processes before it moves on; cancellation is checked at the same points.
+    // The work that one preview may still do (BodyPreviewLimits.MaxWork) and how far into the stored body it read. A stage
+    // asks how much it may do (Allow) or whether a whole pass fits (Require) before it works, then spends what it did;
+    // cancellation is checked at the same points.
     internal sealed class BodyPreviewWork
     {
         private readonly long _maxWork;
@@ -23,10 +24,33 @@ namespace XMAT.Operations.Inspection
             _cancellationToken = cancellationToken;
         }
 
+        // How far into the stored body any stage has read.
         internal long Inspected { get; private set; }
 
         // The work left before MaxWork.
         internal long Remaining => _maxWork - _spent;
+
+        // How much of wanted may be done now; throws BodyPreviewWorkLimitException when no work is left.
+        internal int Allow(int wanted)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (_spent >= _maxWork)
+            {
+                throw new BodyPreviewWorkLimitException();
+            }
+
+            return (int)Math.Min(wanted, _maxWork - _spent);
+        }
+
+        // Throws BodyPreviewWorkLimitException unless units of work are left, before a pass that may do that much.
+        internal void Require(long units)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (_maxWork - _spent < units)
+            {
+                throw new BodyPreviewWorkLimitException();
+            }
+        }
 
         // Throws BodyPreviewWorkLimitException once the work is over the limit.
         internal void Spend(long units)
@@ -39,12 +63,8 @@ namespace XMAT.Operations.Inspection
             }
         }
 
-        // Stored bytes read, which are work too.
-        internal void Inspect(int bytes)
-        {
-            Inspected += bytes;
-            Spend(bytes);
-        }
+        // Records that the stored body was read up to offset.
+        internal void Reach(long offset) => Inspected = Math.Max(Inspected, offset);
     }
 
     // MaxWork was reached: the preview stops where it is and is never retried.
@@ -55,6 +75,94 @@ namespace XMAT.Operations.Inspection
     // Chunk framing that does not parse. Not an InvalidDataException, so it is never taken for invalid compressed data.
     internal sealed class BodyPreviewFramingException : Exception
     {
+    }
+
+    // What a decoder reads from: its last eight bytes (a gzip trailer), and whether the decoder asked for more after the data
+    // had ended, which a deflate or Brotli decoder does only when its compressed data is incomplete.
+    internal sealed class BodyPreviewSourceStream : Stream
+    {
+        private const int TailBytes = 8;
+
+        private readonly Stream _inner;
+        private readonly byte[] _tail = new byte[TailBytes];
+        private int _tailLength;
+
+        internal BodyPreviewSourceStream(Stream inner)
+        {
+            _inner = inner;
+        }
+
+        internal bool EndRequested { get; private set; }
+
+        internal ReadOnlySpan<byte> Tail => _tail.AsSpan(0, _tailLength);
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (buffer.IsEmpty)
+            {
+                return 0;
+            }
+
+            int read = _inner.Read(buffer);
+            if (read == 0)
+            {
+                EndRequested = true;
+                return 0;
+            }
+
+            ReadOnlySpan<byte> data = buffer[..read];
+            if (data.Length >= TailBytes)
+            {
+                data[^TailBytes..].CopyTo(_tail);
+                _tailLength = TailBytes;
+            }
+            else
+            {
+                int keep = Math.Min(_tailLength, TailBytes - data.Length);
+                _tail.AsSpan(_tailLength - keep, keep).CopyTo(_tail);
+                data.CopyTo(_tail.AsSpan(keep));
+                _tailLength = keep + data.Length;
+            }
+
+            return read;
+        }
+
+        public override void Flush()
+        {
+            // Read-only: nothing to flush.
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
     }
 
     // The stored bytes as a read-only stream, without copying them.
@@ -94,9 +202,11 @@ namespace XMAT.Operations.Inspection
                 return 0;
             }
 
+            count = _work.Allow(count);
             _input.Span.Slice(_position, count).CopyTo(buffer);
             _position += count;
-            _work.Inspect(count);
+            _work.Spend(count);
+            _work.Reach(_position);
             return count;
         }
 
@@ -170,12 +280,13 @@ namespace XMAT.Operations.Inspection
                         return EndEarly();
                     }
 
-                    int count = Math.Min(Math.Min(_remaining, available), buffer.Length);
+                    int count = _work.Allow(Math.Min(Math.Min(_remaining, available), buffer.Length));
                     _input.Span.Slice(_position, count).CopyTo(buffer);
                     _position += count;
                     _remaining -= count;
                     _delimiterDue = _remaining == 0;
-                    _work.Inspect(count);
+                    _work.Spend(count);
+                    _work.Reach(_position);
                     return count;
                 }
 
@@ -197,7 +308,8 @@ namespace XMAT.Operations.Inspection
                     }
 
                     _position += 2;
-                    _work.Inspect(2);
+                    _work.Spend(2);
+                    _work.Reach(_position);
                     _delimiterDue = false;
                 }
 
@@ -281,14 +393,15 @@ namespace XMAT.Operations.Inspection
             }
         }
 
-        // The next CRLF-terminated line, at most MaxLineBytes long; false when the stored prefix ends first.
+        // The next CRLF-terminated line, at most MaxLineBytes long, looked for in no more bytes than that; false when the
+        // stored prefix ends first.
         private bool TryReadLine(out ReadOnlySpan<byte> line)
         {
             ReadOnlySpan<byte> rest = _input.Span[_position..];
-            int end = rest.IndexOf("\r\n"u8);
-            if (end < 0 || end > MaxLineBytes)
+            int end = rest[..Math.Min(rest.Length, MaxLineBytes + 2)].IndexOf("\r\n"u8);
+            if (end < 0)
             {
-                if (end > MaxLineBytes || rest.Length > MaxLineBytes + 1)
+                if (rest.Length >= MaxLineBytes + 2)
                 {
                     throw new BodyPreviewFramingException();
                 }
@@ -299,7 +412,8 @@ namespace XMAT.Operations.Inspection
 
             line = rest[..end];
             _position += end + 2;
-            _work.Inspect(end + 2);
+            _work.Spend(end + 2);
+            _work.Reach(_position);
             return true;
         }
 

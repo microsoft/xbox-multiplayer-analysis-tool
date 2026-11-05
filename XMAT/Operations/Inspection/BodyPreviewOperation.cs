@@ -4,6 +4,7 @@
 
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -23,6 +24,9 @@ namespace XMAT.Operations.Inspection
         internal const int MaxConcurrentPreviews = 2;
 
         private const int InitialOutputBytes = 64 * 1024;
+
+        // Decoders are asked for at most this much at a time, so work is checked before each step.
+        private const int ReadChunkBytes = 64 * 1024;
 
         private static readonly SemaphoreSlim Workers = new(MaxConcurrentPreviews, MaxConcurrentPreviews);
 
@@ -150,7 +154,7 @@ namespace XMAT.Operations.Inspection
                     !TryContentCoding(contentEncoding, out string coding))
                 {
                     Notice(BodyPreviewNotice.UnsupportedCoding);
-                    return Bytes(BodyPreviewState.Unsupported, input.Span, complete: false, hex, 0, null);
+                    return Bytes(BodyPreviewState.Unsupported, input.Span, complete: false, hex, 0, null, stored: true);
                 }
 
                 bool framed = false;
@@ -160,7 +164,7 @@ namespace XMAT.Operations.Inspection
                         !TryTransferCoding(transferEncoding, out bool chunked))
                     {
                         Notice(BodyPreviewNotice.UnsupportedCoding);
-                        return Bytes(BodyPreviewState.Unsupported, input.Span, complete: false, hex, 0, null);
+                        return Bytes(BodyPreviewState.Unsupported, input.Span, complete: false, hex, 0, null, stored: true);
                     }
 
                     framed = chunked && LooksFramed(input.Span);
@@ -170,7 +174,7 @@ namespace XMAT.Operations.Inspection
                 if (decoded.Malformed)
                 {
                     Notice(BodyPreviewNotice.MalformedCoding);
-                    return Bytes(BodyPreviewState.Malformed, input.Span, complete: false, hex, 0, null);
+                    return Bytes(BodyPreviewState.Malformed, input.Span, complete: false, hex, 0, null, stored: true);
                 }
 
                 return Present(decoded, contentType, hex);
@@ -293,7 +297,8 @@ namespace XMAT.Operations.Inspection
                     // The stored bytes themselves, never copied.
                     int byWork = (int)Math.Clamp(_work.Remaining, 0, int.MaxValue);
                     int length = Math.Min(input.Length, Math.Min(_limits.MaxDecodedBytes, byWork));
-                    _work.Inspect(length);
+                    _work.Spend(length);
+                    _work.Reach(length);
                     if (length < input.Length)
                     {
                         Notice(length == byWork && byWork < _limits.MaxDecodedBytes
@@ -308,16 +313,32 @@ namespace XMAT.Operations.Inspection
                 while (true)
                 {
                     var output = new Output(_limits.MaxDecodedBytes);
-                    Stream source = framed
-                        ? new BodyPreviewChunkedStream(input, prefix, _work)
-                        : new BodyPreviewInputStream(input, _work);
+                    BodyPreviewChunkedStream chunks = framed ? new BodyPreviewChunkedStream(input, prefix, _work) : null;
+                    var source = new BodyPreviewSourceStream(chunks ?? (Stream)new BodyPreviewInputStream(input, _work));
                     try
                     {
                         using Stream decoder = Open(source, rawDeflate ? null : coding, rawDeflate);
                         bool more = output.Fill(decoder, _work);
+                        bool complete = !prefix && !more;
                         if (more)
                         {
                             Notice(BodyPreviewNotice.DecodedLimit);
+                        }
+                        else if (coding != null && Incomplete(rawDeflate ? null : coding, source, output.Length))
+                        {
+                            // The compressed data ends before its end: the start that decoded is shown, and a stored prefix
+                            // already says why.
+                            if (!prefix)
+                            {
+                                Notice(BodyPreviewNotice.Incomplete);
+                            }
+
+                            complete = false;
+                        }
+                        else if (chunks != null)
+                        {
+                            // The framing after the compressed data must parse to its last chunk too.
+                            Drain(chunks);
                         }
 
                         if (rawDeflate)
@@ -325,7 +346,7 @@ namespace XMAT.Operations.Inspection
                             Notice(BodyPreviewNotice.RawDeflate);
                         }
 
-                        return new DecodedBody(output.Memory, !prefix && !more, false);
+                        return new DecodedBody(output.Memory, complete, false);
                     }
                     catch (BodyPreviewWorkLimitException)
                     {
@@ -342,10 +363,35 @@ namespace XMAT.Operations.Inspection
                             continue;
                         }
 
-                        // The decoders end quietly where a stored prefix ends (ACompressedPrefix_ShowsWhatDecoded), so an error
-                        // is invalid data, prefix or not.
+                        // The decoders end quietly where their data ends (Incomplete tells that apart), so an error is
+                        // invalid data.
                         return new DecodedBody(default, false, true);
                     }
+                }
+            }
+
+            // Whether the compressed data ended before its end. A deflate, zlib or Brotli decoder asks its source for more
+            // only then. A gzip decoder also asks for a next member, so a gzip body is complete when its trailer ends it:
+            // ISIZE, the length of the data mod 2^32, in its last four bytes (a body of several members reads as incomplete).
+            private static bool Incomplete(string coding, BodyPreviewSourceStream source, int decodedLength)
+            {
+                if (coding != "gzip")
+                {
+                    return source.EndRequested;
+                }
+
+                ReadOnlySpan<byte> tail = source.Tail;
+                return tail.Length < 8 || BinaryPrimitives.ReadUInt32LittleEndian(tail[4..]) != (uint)decodedLength;
+            }
+
+            // Reads the framing to its end, which validates it: a missing last chunk or trailing bytes throw
+            // BodyPreviewFramingException.
+            private static void Drain(BodyPreviewChunkedStream chunks)
+            {
+                Span<byte> scratch = stackalloc byte[4096];
+                while (chunks.Read(scratch) > 0)
+                {
+                    // Data after the end of the compressed data is not shown.
                 }
             }
 
@@ -414,21 +460,25 @@ namespace XMAT.Operations.Inspection
                 BodyPreviewText shownText = text;
                 BodyPreviewTextKind kind = BodyPreviewTextKind.Text;
                 bool limited = false;
+
+                // JSON by its media type or because it starts with an object or array; plain text that only starts with a
+                // number or a word such as true is not JSON.
+                bool meantAsJson = jsonType || BodyPreviewJson.LooksLikeJson(body);
                 try
                 {
                     if (Wants(BodyPreviewParts.Json))
                     {
+                        // Each pass reads the body once at most: it starts only when that much work is left.
+                        _work.Require(body.Length);
                         documents = BodyPreviewJson.BuildTree(body, _limits, _work, out BodyPreviewJson.TreeEnd treeEnd);
                         if (treeEnd == BodyPreviewJson.TreeEnd.Limit)
                         {
                             Notice(BodyPreviewNotice.JsonLimit);
                             limited = true;
                         }
-                        else if (treeEnd == BodyPreviewJson.TreeEnd.Malformed)
+                        else if (treeEnd is BodyPreviewJson.TreeEnd.Malformed or BodyPreviewJson.TreeEnd.NotJson)
                         {
-                            // Documents followed by other text: JSON when it starts with an object or array; plain text that
-                            // only starts with a number or a word such as true is not JSON.
-                            if (BodyPreviewJson.LooksLikeJson(body))
+                            if (meantAsJson)
                             {
                                 Notice(BodyPreviewNotice.JsonMalformed);
                             }
@@ -441,6 +491,7 @@ namespace XMAT.Operations.Inspection
 
                     if (Wants(BodyPreviewParts.Text) && jsonType)
                     {
+                        _work.Require(body.Length);
                         var formatted = new BodyPreviewText(_limits.MaxTextChars, _limits.MaxTextLines);
                         switch (BodyPreviewJson.Format(body, _limits, _work, formatted))
                         {
@@ -453,6 +504,11 @@ namespace XMAT.Operations.Inspection
                             case BodyPreviewJson.FormatEnd.DepthLimit:
                                 Notice(BodyPreviewNotice.JsonLimit);
                                 limited = true;
+                                break;
+
+                            case BodyPreviewJson.FormatEnd.Malformed:
+                                // Shown as it is, never rewritten into valid JSON.
+                                Notice(BodyPreviewNotice.JsonMalformed);
                                 break;
                         }
                     }
@@ -548,9 +604,10 @@ namespace XMAT.Operations.Inspection
                     {
                         int take = Math.Min(DecodeChunkBytes, body.Length - position);
                         bool last = position + take == body.Length;
+                        _work.Spend(take);
                         decoder.Convert(body.Slice(position, take), chars, last && complete, out int used, out int produced, out _);
                         position += used;
-                        _work.Spend(used + produced);
+                        _work.Spend(produced);
                         ReadOnlySpan<char> decoded = chars.AsSpan(0, produced);
                         int shown = Math.Min(decoded.Length, text.Remaining + 1);
                         if (decoded[..shown].IndexOfAny(NotTextCharacters) >= 0)
@@ -611,19 +668,36 @@ namespace XMAT.Operations.Inspection
                     charset);
             }
 
-            // A byte dump of at most MaxByteDumpBytes bytes in place of the text. A complete state becomes Truncated when the
-            // dump or the bytes are only part of the body.
+            // A byte dump of at most MaxByteDumpBytes bytes in place of the text, of the stored body (stored) or of the decoded
+            // bytes. A complete state becomes Truncated when the dump or the bytes are only part of the body.
             private BodyPreview Bytes(
-                BodyPreviewState state, ReadOnlySpan<byte> bytes, bool complete, string hex, long decodedBytes, string charset)
+                BodyPreviewState state,
+                ReadOnlySpan<byte> bytes,
+                bool complete,
+                string hex,
+                long decodedBytes,
+                string charset,
+                bool stored = false)
             {
                 int max = (int)Math.Min(_limits.MaxByteDumpBytes, (long)DumpLines() * DumpBytesPerLine);
-                bool cut = bytes.Length > max;
-                if (cut)
+                int wanted = Math.Min(bytes.Length, max);
+                int shown = Afford(wanted);
+                if (shown < wanted)
+                {
+                    Notice(BodyPreviewNotice.WorkLimit);
+                }
+
+                if (bytes.Length > max)
                 {
                     Notice(BodyPreviewNotice.TextLimit);
                 }
 
-                if (state == BodyPreviewState.Complete && (cut || !complete))
+                if (stored)
+                {
+                    _work.Reach(shown);
+                }
+
+                if (state == BodyPreviewState.Complete && (shown < bytes.Length || !complete))
                 {
                     state = BodyPreviewState.Truncated;
                 }
@@ -632,23 +706,33 @@ namespace XMAT.Operations.Inspection
                 return Result(
                     state,
                     wantsText ? BodyPreviewTextKind.Bytes : BodyPreviewTextKind.None,
-                    wantsText ? Dump(bytes[..Math.Min(bytes.Length, max)]) : null,
+                    wantsText ? Dump(bytes[..shown]) : null,
                     hex,
                     null,
                     decodedBytes,
                     charset);
             }
 
-            // The Hex part: the start of the stored body, at most MaxTextLines lines that fit in MaxTextChars.
+            // The Hex part: the start of the stored body, at most MaxTextLines lines that fit in MaxTextChars and the work
+            // left.
             private string HexPart(ReadOnlySpan<byte> stored)
             {
-                long max = (long)DumpLines() * DumpBytesPerLine;
-                if (stored.Length > max)
+                int shown = Afford((int)Math.Min(stored.Length, (long)DumpLines() * DumpBytesPerLine));
+                if (shown < stored.Length)
                 {
                     Notice(BodyPreviewNotice.HexLimit);
                 }
 
-                return Dump(stored[..(int)Math.Min(stored.Length, max)]);
+                _work.Reach(shown);
+                return Dump(stored[..shown]);
+            }
+
+            // At most count units of the work left, spent before the caller does them.
+            private int Afford(int count)
+            {
+                int allowed = (int)Math.Clamp(_work.Remaining, 0, count);
+                _work.Spend(allowed);
+                return allowed;
             }
 
             private int DumpLines() => Math.Min(_limits.MaxTextLines, (_limits.MaxTextChars + 2) / DumpCharsPerLine);
@@ -745,7 +829,8 @@ namespace XMAT.Operations.Inspection
                             ref _buffer, (int)Math.Min(_max, Math.Max(InitialOutputBytes, (long)_buffer.Length * 2)));
                     }
 
-                    int read = decoder.Read(_buffer, Length, _buffer.Length - Length);
+                    int wanted = work.Allow(Math.Min(ReadChunkBytes, _buffer.Length - Length));
+                    int read = decoder.Read(_buffer, Length, wanted);
                     if (read == 0)
                     {
                         return false;

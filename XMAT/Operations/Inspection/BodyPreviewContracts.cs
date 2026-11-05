@@ -99,6 +99,10 @@ namespace XMAT.Operations.Inspection
         // "deflate" was decoded as raw deflate after the zlib format failed.
         internal const string RawDeflate = "body.preview.raw-deflate";
 
+        // The compressed data ends before its end (a gzip trailer, or the end of a deflate, zlib or Brotli stream): the start
+        // that decoded is shown, and the body counts as only partly read.
+        internal const string Incomplete = "body.preview.incomplete";
+
         // Transfer-Encoding said chunked and the body looked framed, but the framing did not parse: the body is shown as
         // stored.
         internal const string FramingIgnored = "body.preview.framing-ignored";
@@ -125,8 +129,9 @@ namespace XMAT.Operations.Inspection
         // Only part of the body was read, so it is neither formatted nor shown as a JSON tree.
         internal const string JsonIncomplete = "body.preview.json-incomplete";
 
-        // One or more JSON objects or arrays were followed by something that is not JSON: the tree has the documents before
-        // it.
+        // The body is meant as JSON (a JSON media type, or it starts with an object or array) but is not valid JSON, or valid
+        // documents are followed by something else: the tree has the complete documents before it, and the text is the body
+        // as it is.
         internal const string JsonMalformed = "body.preview.json-malformed";
 
         // The operation's diagnostic code when the preview was cancelled; never a notice.
