@@ -216,6 +216,57 @@ namespace XMAT.Tests
             }
         });
 
+        // With the headers and framing unchanged, a new body alone, as when the selected row's response body arrives,
+        // cancels the preview in progress and is previewed once; its preview is shown, never the earlier body's,
+        // whether that one was still running or already shown.
+        [Fact]
+        public Task ANewBodyAlone_IsPreviewedOnce_AndReplacesTheEarlierBodysPreview() => _application.RunAsync(async () =>
+        {
+            var previews = new ControlledPreviews();
+            var view = new RequestResponseView { PreviewRunner = previews.Run };
+            Window host = await ShowAsync(view);
+            try
+            {
+                Dictionary<string, string> headers = Headers("Content-Type: text/plain");
+                SetInputs(view, headers, "first"u8.ToArray());
+                await SettleAsync();
+                PreviewCall first = Assert.Single(previews.Calls);
+
+                view.BodyBytes = "second"u8.ToArray();
+                Assert.True(first.Token.IsCancellationRequested);
+                Assert.Equal((Pending, string.Empty), (Message(view, "BodyMessage"), BodyText(view)));
+                await SettleAsync();
+                Assert.Equal(2, previews.Calls.Count);
+                BodyPreviewRequest second = previews.Calls[1].Request;
+                Assert.Equal(("text/plain", BodyFraming.Advisory), (second.ContentType, second.Framing));
+                Assert.Equal("second"u8.ToArray(), second.Body.ToArray());
+
+                previews.Complete(0, Preview("first"));
+                await SettleAsync();
+                Assert.Equal((Pending, string.Empty), (Message(view, "BodyMessage"), BodyText(view)));
+                previews.Complete(1, Preview("second"));
+                await SettleAsync();
+                Assert.Equal("second", BodyText(view));
+
+                // A body that arrives after the earlier one's preview was shown replaces it at once, and is previewed
+                // once too.
+                view.BodyBytes = "third"u8.ToArray();
+                Assert.Equal((Pending, string.Empty), (Message(view, "BodyMessage"), BodyText(view)));
+                await SettleAsync();
+                Assert.Equal(3, previews.Calls.Count);
+                Assert.Equal("third"u8.ToArray(), previews.Calls[2].Request.Body.ToArray());
+                previews.Complete(2, Preview("third"));
+                await SettleAsync();
+                Assert.Equal("third", BodyText(view));
+                Assert.Same(headers, view.HeaderDictionary);
+                Assert.False(view.BodyIsDecoded);
+            }
+            finally
+            {
+                host.Close();
+            }
+        });
+
         // An empty body, and a body that XMAT did not keep, say so instead of showing an empty body. Notices are shown
         // in the message bars of both tabs, never in the body.
         [Fact]
