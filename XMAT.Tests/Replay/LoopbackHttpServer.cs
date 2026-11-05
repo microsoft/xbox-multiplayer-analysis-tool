@@ -120,6 +120,12 @@ namespace XMAT.Tests.Replay
                 {
                     return;
                 }
+                catch (InvalidOperationException) when (_stop.IsCancellationRequested)
+                {
+                    // DisposeAsync stopped the listener between two accepts: TcpListener says "Not listening" before it
+                    // looks at the token.
+                    return;
+                }
 
                 Interlocked.Increment(ref _connections);
                 _serving.Add(ServeAsync(client));
