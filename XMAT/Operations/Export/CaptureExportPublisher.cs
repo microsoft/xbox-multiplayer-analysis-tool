@@ -25,7 +25,6 @@ namespace XMAT.Operations.Export
             CancellationToken cancellationToken)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(destination);
-            _ = allowUnprotected;
             ArgumentNullException.ThrowIfNull(validateDestination);
             ArgumentNullException.ThrowIfNull(writeStaged);
             string normalized = Path.GetFullPath(destination);

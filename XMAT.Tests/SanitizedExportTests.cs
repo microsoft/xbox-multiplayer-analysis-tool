@@ -567,8 +567,8 @@ namespace XMAT.Tests
             var binding = document.Descendants(presentation + "CommandBinding")
                 .Single(element => (string)element.Attribute("Command") == command);
             Assert.Equal("{x:Static local:AppCommands.ExportSanitized}", command);
-            Assert.Equal("ExportSanitized_Executed", (string)binding.Attribute("Executed"));
-            Assert.Equal("ExportSanitized_CanExecute", (string)binding.Attribute("CanExecute"));
+            Assert.Equal("Export_Executed", (string)binding.Attribute("Executed"));
+            Assert.Equal("Export_CanExecute", (string)binding.Attribute("CanExecute"));
             Assert.Contains(menu.Elements(presentation + "MenuItem"),
                 element => (string)element.Attribute("Command") == "{x:Static local:AppCommands.Export}");
             Assert.NotSame(AppCommands.Export, AppCommands.ExportSanitized);

@@ -80,7 +80,7 @@ namespace XMAT.WebServiceCapture.Models
         // host of an authority as sent (trimmed, without its port), otherwise the trimmed text.
         // DNS spelling and a final dot are kept so that dotted and dotless names match different
         // patterns, and IPv6 is canonical text without brackets.
-        internal static string MatchCandidate(string host)
+        private static string MatchCandidate(string host)
         {
             if (HostAuthority.TryNormalizeHost(host, out string identity) ||
                 HostAuthority.TryParse(host, out identity, out _))
@@ -94,20 +94,22 @@ namespace XMAT.WebServiceCapture.Models
             new("^" + Regex.Escape(entry).Replace("\\*", ".*") + "$",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
-        internal static bool Matches(Regex pattern, string host, string path = null)
+        internal static (string Host, string HostAndPath) MatchCandidates(
+            string host,
+            string path = null)
         {
             string candidate = MatchCandidate(host) ?? string.Empty;
-            if (pattern.IsMatch(candidate))
-            {
-                return true;
-            }
-            if (string.IsNullOrEmpty(path))
-            {
-                return false;
-            }
-            string normalizedPath = path.StartsWith('/') ? path : "/" + path;
-            return pattern.IsMatch(candidate + normalizedPath);
+            string normalizedPath = string.IsNullOrEmpty(path)
+                ? null
+                : path.StartsWith('/') ? path : "/" + path;
+            return (candidate, normalizedPath == null ? null : candidate + normalizedPath);
         }
+
+        internal static bool Matches(
+            Regex pattern,
+            (string Host, string HostAndPath) candidates) =>
+            pattern.IsMatch(candidates.Host) ||
+            (candidates.HostAndPath != null && pattern.IsMatch(candidates.HostAndPath));
     }
 
     /// <summary>

@@ -23,9 +23,7 @@ namespace XMAT.Operations.Export
         private readonly IReadOnlyList<SqLtSchemaColumn> _captureFields;
         private readonly IReadOnlyList<SqLtSchemaColumn> _deviceFields;
         private readonly Dictionary<string, RawExportRow> _deferredDescriptors = new(StringComparer.Ordinal);
-        private readonly HashSet<string> _describedDevices = new(StringComparer.Ordinal);
         private readonly HashSet<string> _capturedDevices = new(StringComparer.Ordinal);
-        private readonly bool _includeOnlyCapturedDevices;
         private bool _completed;
         private long _rowsWritten;
 
@@ -33,8 +31,7 @@ namespace XMAT.Operations.Export
             string path,
             IReadOnlyList<SqLtSchemaColumn> captureFields,
             IReadOnlyList<SqLtSchemaColumn> deviceFields,
-            IReadOnlyDictionary<string, RawExportRow> deviceDescriptors,
-            bool includeOnlyCapturedDevices = false)
+            IReadOnlyDictionary<string, RawExportRow> deviceDescriptors)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
             ArgumentNullException.ThrowIfNull(captureFields);
@@ -47,7 +44,6 @@ namespace XMAT.Operations.Export
 
             _captureFields = captureFields;
             _deviceFields = deviceFields;
-            _includeOnlyCapturedDevices = includeOnlyCapturedDevices;
             _connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
                 DataSource = path,
@@ -66,19 +62,7 @@ namespace XMAT.Operations.Export
                 {
                     if (descriptor.Values.TryGetValue("DeviceName", out object value) && value is string name)
                     {
-                        if (_includeOnlyCapturedDevices)
-                        {
-                            _deferredDescriptors.TryAdd(name, descriptor);
-                        }
-                        else
-                        {
-                            Insert(_deviceInsert, deviceFields, descriptor);
-                            _describedDevices.Add(name);
-                        }
-                    }
-                    else if (!_includeOnlyCapturedDevices)
-                    {
-                        Insert(_deviceInsert, deviceFields, descriptor);
+                        _deferredDescriptors.TryAdd(name, descriptor);
                     }
                 }
             }
@@ -134,19 +118,13 @@ namespace XMAT.Operations.Export
             }
             try
             {
-                if (_includeOnlyCapturedDevices)
+                foreach (string deviceName in _capturedDevices)
                 {
-                    foreach (string deviceName in _capturedDevices)
+                    if (_deferredDescriptors.TryGetValue(deviceName, out RawExportRow descriptor))
                     {
-                        if (_deferredDescriptors.TryGetValue(deviceName, out RawExportRow descriptor))
-                        {
-                            Insert(_deviceInsert, _deviceFields, descriptor);
-                            _describedDevices.Add(deviceName);
-                        }
+                        Insert(_deviceInsert, _deviceFields, descriptor);
+                        continue;
                     }
-                }
-                foreach (string deviceName in _capturedDevices.Except(_describedDevices, StringComparer.Ordinal))
-                {
                     cancellationToken.ThrowIfCancellationRequested();
                     Insert(
                         _deviceInsert,

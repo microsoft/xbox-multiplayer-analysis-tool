@@ -40,10 +40,9 @@ namespace XMAT.Tests
             var dialogs = new Dialogs { Destination = new("subset.xmatcap", CaptureExportFormat.Xmatcap, true) };
             var operation = new Operation(app);
 
-            await Workflow(dialogs, snapshot, operation)
-                .RunAsync(app, tab, CaptureExportScope.Selected, selection, sanitizedOnly: false);
+            await Workflow(dialogs, snapshot, operation).RunAsync(app, tab, selection, sanitizedOnly: false);
 
-            Assert.Equal(new[] { "confirm Selected Game PC", "destination", "progress", "result" }, dialogs.Calls);
+            Assert.Equal(new[] { "confirm Game PC", "destination", "progress", "result" }, dialogs.Calls);
             Assert.Equal(new CaptureExportCounts(4, 4, 3, 2, 0, 0, 1, 1), dialogs.Counts);
             ExportCaptureRequest request = operation.Request;
             Assert.Same(snapshot, request.Snapshot);
@@ -88,7 +87,7 @@ namespace XMAT.Tests
             using (busy)
             {
                 await Workflow(dialogs, snapshot, operation)
-                    .RunAsync(app, Tab(app, "Game PC"), CaptureExportScope.Visible, Selection(), sanitizedOnly: false);
+                    .RunAsync(app, Tab(app, "Game PC"), Selection(), sanitizedOnly: false);
             }
 
             Assert.Equal(step, dialogs.Calls[^1].Split(' ')[0]);
@@ -117,8 +116,8 @@ namespace XMAT.Tests
             Assert.Same(selected, Assert.Single(snapshot.Tabs));
             Assert.Equal(
                 sanitized
-                    ? new[] { "confirm Tab Game PC", "destination sanitized", "consent", "progress", "result" }
-                    : new[] { "confirm Tab Game PC", "destination", "progress", "result" },
+                    ? new[] { "confirm Game PC", "destination sanitized", "consent", "progress", "result" }
+                    : new[] { "confirm Game PC", "destination", "progress", "result" },
                 dialogs.Calls);
             CaptureSelectionSpec all = operation.Request.Selection;
             Assert.True(
@@ -138,17 +137,18 @@ namespace XMAT.Tests
         {
             var app = new CaptureAppModel();
             CaptureExportFormat format = Enum.Parse<CaptureExportFormat>(formatName);
+            var snapshot = new Snapshot(true, Session(1));
             var dialogs = new Dialogs { Destination = new(labeled, format, false) };
             dialogs.Destinations.Enqueue(new(mislabeled, format, false));
             var operation = new Operation(app);
 
-            await Workflow(dialogs, new Snapshot(true, Session(1)), operation)
-                .RunAsync(app, Tab(app, "Game PC"), CaptureExportScope.Visible, Selection(), sanitizedOnly: false);
+            await Workflow(dialogs, snapshot, operation).RunAsync(app, Tab(app, "Game PC"), Selection(), sanitizedOnly: false);
 
             Assert.Equal(
                 new[] { "destination", "failure " + CaptureExportErrorCodes.FormatMismatch, "destination" },
                 dialogs.Calls.Skip(1).Take(3));
             Assert.Equal((labeled, format), (Assert.Single(operation.Requests).OutputPath, operation.Request.Format));
+            AssertReleased(app, snapshot);
         }
 
         // Where staging cannot be made private, the export asks once about this destination: yes repeats the same export
@@ -175,7 +175,7 @@ namespace XMAT.Tests
                     operation.Failures.Enqueue((Enum.Parse<OperationOutcome>(outcome), CaptureExportErrorCodes.OutputUnprotected));
                 }
 
-                await workflow.RunAsync(app, Tab(app, "Game PC"), CaptureExportScope.Visible, Selection(), sanitizedOnly: false);
+                await workflow.RunAsync(app, Tab(app, "Game PC"), Selection(), sanitizedOnly: false);
 
                 Assert.Equal(calls.Split('|'), dialogs.Calls.Skip(2));
                 Assert.Equal(calls.Split('|').Count(call => call == "progress"), operation.Requests.Count);
@@ -205,7 +205,6 @@ namespace XMAT.Tests
             Tab(app, ProcessCaptures.Device, controller);
             string output = Path.Join(directory.Root, "large-copy.xmatcap");
             var dialogs = new Dialogs { Destination = new(output, CaptureExportFormat.Xmatcap, false) };
-            dialogs.Owner = dialogs;
 
             await CaptureExportWorkflow.For(dialogs).RunForSelectedTabAsync(app, sanitizedOnly: false);
 
@@ -257,7 +256,7 @@ namespace XMAT.Tests
         }
 
         private static CaptureExportWorkflow Workflow(Dialogs dialogs, Snapshot snapshot, Operation operation) =>
-            new(dialogs.Owner, dialogs, tab =>
+            new(dialogs, tab =>
             {
                 snapshot.Tabs.Add(tab);
                 return snapshot;
@@ -272,11 +271,10 @@ namespace XMAT.Tests
             next.Dispose();
         }
 
-        // Records each dialog as "name [scope] [tab]" and answers as configured; the save dialog first answers with the
-        // queued Destinations.
+        // Records each dialog (the confirmation with its tab) and answers as configured; the save dialog first answers with
+        // the queued Destinations.
         private sealed class Dialogs : ICaptureExportDialogService
         {
-            internal object Owner { get; set; } = new();
             internal List<string> Calls { get; } = new();
             internal bool Confirm { get; init; } = true;
             internal CaptureExportDestination Destination { get; init; } = new("subset.saz", CaptureExportFormat.Saz, false);
@@ -286,40 +284,35 @@ namespace XMAT.Tests
             internal CaptureExportCounts Counts { get; private set; }
             internal OperationResult<ExportCaptureResult> Result { get; private set; }
 
-            public Task ShowBusyAsync(object owner) => Record(owner, "busy", Task.CompletedTask);
+            public Task ShowBusyAsync() => Record("busy", Task.CompletedTask);
 
-            public Task ShowNothingToExportAsync(object owner, CaptureExportScope scope, CaptureExportCounts counts) =>
-                Record(owner, $"nothing {scope}", Task.CompletedTask, counts);
+            public Task ShowNothingToExportAsync(CaptureExportCounts counts) => Record("nothing", Task.CompletedTask, counts);
 
-            public Task<bool> ConfirmAsync(object owner, CaptureExportScope scope, string tabName, CaptureExportCounts counts) =>
-                Record(owner, $"confirm {scope} {tabName}", Task.FromResult(Confirm), counts);
+            public Task<bool> ConfirmAsync(string tabName, CaptureExportCounts counts) =>
+                Record("confirm " + tabName, Task.FromResult(Confirm), counts);
 
-            public Task<CaptureExportDestination> ChooseDestinationAsync(object owner, bool sanitizedOnly) =>
+            public Task<CaptureExportDestination> ChooseDestinationAsync(bool sanitizedOnly) =>
                 Record(
-                    owner,
                     sanitizedOnly ? "destination sanitized" : "destination",
                     Task.FromResult(Destinations.Count > 0 ? Destinations.Dequeue() : Destination));
 
-            public Task<bool> ConfirmSanitizedAsync(object owner) => Record(owner, "consent", Task.FromResult(Consent));
+            public Task<bool> ConfirmSanitizedAsync() => Record("consent", Task.FromResult(Consent));
 
-            public Task<bool> ConfirmUnprotectedAsync(object owner, string path) =>
-                Record(owner, "unprotected " + path, Task.FromResult(AllowUnprotected));
+            public Task<bool> ConfirmUnprotectedAsync(string path) =>
+                Record("unprotected " + path, Task.FromResult(AllowUnprotected));
 
             public Task<OperationResult<ExportCaptureResult>> RunWithProgressAsync(
-                object owner,
                 Func<IProgress<OperationProgress>, CancellationToken, Task<OperationResult<ExportCaptureResult>>> export) =>
-                Record(owner, "progress", export(null, CancellationToken.None));
+                Record("progress", export(null, CancellationToken.None));
 
-            public Task ShowResultAsync(object owner, CaptureExportScope scope, OperationResult<ExportCaptureResult> result)
+            public Task ShowResultAsync(OperationResult<ExportCaptureResult> result)
             {
                 Result = result;
-                return Record(
-                    owner, result.Succeeded ? "result" : "failure " + result.Diagnostics[0].Code, Task.CompletedTask);
+                return Record(result.Succeeded ? "result" : "failure " + result.Diagnostics[0].Code, Task.CompletedTask);
             }
 
-            private T Record<T>(object owner, string call, T answer, CaptureExportCounts counts = null)
+            private T Record<T>(string call, T answer, CaptureExportCounts counts = null)
             {
-                Assert.Same(Owner, owner);
                 Calls.Add(call);
                 Counts = counts ?? Counts;
                 return answer;

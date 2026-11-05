@@ -1550,12 +1550,13 @@ namespace XMAT.Tests
                 BindingFlags.NonPublic).SetValue(target, value);
         }
 
-        private sealed class TestDataset : IDataset
+        private sealed class TestDataset : IDataset, IRawCaptureDataset
         {
             private readonly IDataRecord _record;
 
             public IEnumerable<IFieldDefinition> FieldDefs => Array.Empty<IFieldDefinition>();
             public IEnumerable<IDataRecord> DataRecords => new[] { _record };
+            public IReadOnlyList<SqLtSchemaColumn> Columns => Array.Empty<SqLtSchemaColumn>();
             public int FilteredReadCount { get; private set; }
             internal bool RejectFilteredReads { get; set; }
 

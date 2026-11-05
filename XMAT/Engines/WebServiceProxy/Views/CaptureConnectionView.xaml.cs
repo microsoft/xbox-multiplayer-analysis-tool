@@ -93,16 +93,16 @@ namespace XMAT.WebServiceCapture
         internal Func<FilterCaptureSessionsRequest, CancellationToken, OperationResult<FilterCaptureSessionsResult>>
             ProcessSelection { get; set; } = FilterCaptureSessionsOperation.Select;
 
-        // The sessions that an export from this list covers: Visible follows every active filter (the Status, Host and
-        // Method checkboxes as exact values, and the process filter); Selected also keeps only the selected rows' keys.
-        internal CaptureSelectionSpec ExportSelection(CaptureExportScope scope) =>
+        // The sessions that an export from this list covers: the visible ones follow every active filter (the Status, Host
+        // and Method checkboxes as exact values, and the process filter); selectedOnly also keeps only the selected rows.
+        internal CaptureSelectionSpec ExportSelection(bool selectedOnly) =>
             new(
                 _attachedController?.ProcessFilter ?? ProcessFilterSpec.Empty,
                 new HostSelection(
                     HostMatchMode.Exact, CheckedValues(HostFilters, _attachedController?.HostFilterList), ImmutableArray<string>.Empty),
                 CheckedValues(StatusFilters, _attachedController?.StatusFilterList),
                 CheckedValues(MethodFilters, _attachedController?.MethodFilterList),
-                scope == CaptureExportScope.Selected
+                selectedOnly
                     ? ConnectionList.SelectedItems.OfType<ProxyConnectionModel>().Select(row => row.RowKey).ToImmutableHashSet()
                     : null,
                 false);
@@ -1368,8 +1368,6 @@ namespace XMAT.WebServiceCapture
         private static MenuItem ExportItem(string header, RoutedCommand command, IInputElement target) =>
             new() { Header = Localization.GetLocalizedString(header), CommandTarget = target, Command = command };
 
-        // Export Selected needs a selected row and Export Visible a visible one; neither starts while another capture data
-        // operation runs.
         private void ExportSessions_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
             e.CanExecute = _attachedController != null && CaptureAppModel.AppModel.CanModifyCaptureData &&
@@ -1382,7 +1380,7 @@ namespace XMAT.WebServiceCapture
         private async void ExportSessions_Executed(object sender, ExecutedRoutedEventArgs e)
         {
             if (!TryGetCaptureContext(DataContext, out ICaptureDeviceContext tab, out _) ||
-                Window.GetWindow(this) is not ICaptureExportDialogService owner)
+                Window.GetWindow(this) is not ICaptureExportDialogService dialogs)
             {
                 return;
             }
@@ -1393,11 +1391,8 @@ namespace XMAT.WebServiceCapture
                 ApplyProcessEditor();
             }
 
-            CaptureExportScope scope = e.Command == WebServiceProxyCommands.ExportSelectedSessions
-                ? CaptureExportScope.Selected
-                : CaptureExportScope.Visible;
-            await CaptureExportWorkflow.For(owner)
-                .RunAsync(CaptureAppModel.AppModel, tab, scope, ExportSelection(scope), sanitizedOnly: false);
+            CaptureSelectionSpec selection = ExportSelection(e.Command == WebServiceProxyCommands.ExportSelectedSessions);
+            await CaptureExportWorkflow.For(dialogs).RunAsync(CaptureAppModel.AppModel, tab, selection, sanitizedOnly: false);
         }
 
         internal static bool TryGetCaptureContext(
