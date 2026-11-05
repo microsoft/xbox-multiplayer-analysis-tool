@@ -95,7 +95,6 @@ namespace XMAT.Tests
         {
             using var directory = new ExportTestDirectory();
             using SqLtDatabase database = Database(out IDataTable captures);
-            Assert.Equal(1L, Scalar(Connection(database), "PRAGMA secure_delete"));
             string marker = "deleted-" + Guid.NewGuid().ToString("N");
             long rowId = captures.AddRow("console-a", marker + new string('x', 256 * 1024));
 

@@ -132,7 +132,7 @@ namespace XMAT.Tests
             collection.CollectionChanged += (_, args) => changes.Add(args.Action);
 
             int removed = collection.RemoveByRowKeys(new HashSet<CaptureRowKey> { deletedKey });
-            ForceCollection();
+            GcTestSupport.ForceCollection();
 
             Assert.Equal(1, removed);
             Assert.Equal(new[] { NotifyCollectionChangedAction.Reset }, changes);
@@ -165,19 +165,5 @@ namespace XMAT.Tests
                 new WeakReference<byte[]>(model.Payload));
         }
 
-        private static void ForceCollection()
-        {
-            GC.Collect(
-                GC.MaxGeneration,
-                GCCollectionMode.Forced,
-                blocking: true,
-                compacting: true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(
-                GC.MaxGeneration,
-                GCCollectionMode.Forced,
-                blocking: true,
-                compacting: true);
-        }
     }
 }

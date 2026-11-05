@@ -177,7 +177,8 @@ namespace XMAT.Tests
 
         // B1: a view that throws on any change of the rows after the deletion committed, on the small Remove path (1 row)
         // and the bulk Reset path (17 rows). The notice says the sessions were deleted, never that nothing was; the row and
-        // timeline menus opened on victims let go of them; the capture data operation ends; and the victims are collectable.
+        // timeline menus opened on victims let go of them; the capture data operation ends; the selected WebSocket frame of a
+        // victim leaves the list and the selection; and the victims, their response bodies and that frame are collectable.
         [Theory]
         [InlineData(1)]
         [InlineData(17)]
@@ -188,27 +189,25 @@ namespace XMAT.Tests
                 using var tab = new LiveCaptureTab();
                 WeakReference[] victims = DeleteWhileAViewFails(window, tab, count);
                 WpfTestHost.Pump();
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
+                GcTestSupport.ForceCollection();
                 Assert.All(victims, victim => Assert.False(victim.IsAlive));
             });
         }
 
-        // Deletes rows 1 to COUNT through the Delete key while both menus target victims and an observer subscribed last
-        // throws on every change of the rows; no strong reference to a victim outlives this method.
+        // Deletes rows 1 to COUNT through the Delete key while the grid selects them, the details pane shows the first one's
+        // body, its WebSocket frame is selected, both menus target victims and an observer subscribed last throws on every
+        // change of the rows; no strong reference to a victim, a body or the frame outlives this method.
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static WeakReference[] DeleteWhileAViewFails(Window window, LiveCaptureTab tab, int count)
         {
             ProxyConnectionModel[] victims = Enumerable.Range(1, count).Select(number => tab.Add(number)).ToArray();
             tab.Add(count + 1);
+            tab.Frame(1, "victim frame");
+            WebSocketMessageModel frame = Assert.Single(tab.Controller.WebSocketMessages);
             (CaptureConnectionView view, DataGrid grid, RecordingDeleteDialogs dialogs) = Show(window, tab);
+            tab.Controller.SelectedWebSocketMessage = frame;
             Select(grid, victims);
-            ContextMenu rowMenu = CaptureProcessFilterViewTests.Open(CaptureProcessFilterViewTests.Container(grid, victims[0]));
-            rowMenu.IsOpen = false;
-            ContextMenu timelineMenu = CaptureProcessFilterViewTests.Open(
-                Bars((CaptureTimelineView)view.FindName("TimelineView")).First(bar => victims.Contains(bar.Tag as ProxyConnectionModel)));
-            timelineMenu.IsOpen = false;
+            ContextMenu[] menus = OpenMenus(view, grid, victims);
             var failures = 0;
             NotifyCollectionChangedEventHandler fail = (_, _) =>
             {
@@ -229,13 +228,47 @@ namespace XMAT.Tests
             Assert.Equal(Localization.GetLocalizedString("CAPTURE_DELETE_VIEW_FAILED"), Assert.Single(dialogs.Notices));
             Assert.Equal(new long[] { count + 1 }, tab.Controller.ProxyConnections.Select(row => row.RequestNumber));
             Assert.True(XMAT.Models.CaptureAppModel.AppModel.CanModifyCaptureData);
-            Assert.All(new[] { rowMenu, timelineMenu }, menu =>
+            AssertReleased(menus);
+            Assert.Empty(tab.Controller.WebSocketMessages);
+            Assert.Null(tab.Controller.SelectedWebSocketMessage);
+            return victims.SelectMany(victim => new object[] { victim, victim.ResponseBody }).Append(frame)
+                .Select(item => new WeakReference(item)).ToArray();
+        }
+
+        // Opens the row menu on the first of ROWS and the timeline menu on a bar of one of them, closing each again as a
+        // click elsewhere would; both keep their items and target until a confirmed deletion releases them.
+        private static ContextMenu[] OpenMenus(CaptureConnectionView view, DataGrid grid, params ProxyConnectionModel[] rows)
+        {
+            ContextMenu rowMenu = CaptureProcessFilterViewTests.Open(CaptureProcessFilterViewTests.Container(grid, rows[0]));
+            rowMenu.IsOpen = false;
+            ContextMenu timelineMenu = CaptureProcessFilterViewTests.Open(
+                Bars((CaptureTimelineView)view.FindName("TimelineView")).First(bar => rows.Contains(bar.Tag as ProxyConnectionModel)));
+            timelineMenu.IsOpen = false;
+            return new[] { rowMenu, timelineMenu };
+        }
+
+        private static void AssertReleased(ContextMenu[] menus) =>
+            Assert.All(menus, menu => Assert.Equal((0, (UIElement)null, false), (menu.Items.Count, menu.PlacementTarget, menu.IsOpen)));
+
+        // B1 when the tab becomes read-only while the confirmation is open: nothing is deleted, and both menus still let go.
+        [Fact]
+        public void ATabMadeReadOnlyWhileConfirming_DeletesNothing_AndReleasesTheMenus()
+        {
+            _application.Run(window =>
             {
-                Assert.Empty(menu.Items);
-                Assert.Null(menu.PlacementTarget);
-                Assert.False(menu.IsOpen);
+                using var tab = new LiveCaptureTab();
+                ProxyConnectionModel row = tab.Add(1);
+                (CaptureConnectionView view, DataGrid grid, RecordingDeleteDialogs dialogs) = Show(window, tab);
+                Select(grid, row);
+                ContextMenu[] menus = OpenMenus(view, grid, row);
+                dialogs.WhileConfirming = () => tab.IsReadOnly = true;
+
+                Press(grid, Key.Delete);
+
+                Assert.Equal(Localization.GetLocalizedString("CAPTURE_DELETE_UNAVAILABLE"), Assert.Single(dialogs.Notices));
+                Assert.Same(row, Assert.Single(tab.Controller.ProxyConnections));
+                AssertReleased(menus);
             });
-            return victims.Select(victim => new WeakReference(victim)).ToArray();
         }
 
         // An opened capture file and an imported SAZ are read-only: the row menu offers export, its delete items are
@@ -273,52 +306,6 @@ namespace XMAT.Tests
                     Assert.Empty(dialogs.Prompts);
                 }
             });
-        }
-
-        [Fact]
-        public void Delete_ReleasesTheSession_AndUpdatesTheIndicatorAndTimeline()
-        {
-            _application.Run(window =>
-            {
-                using var tab = new LiveCaptureTab();
-                ProxyConnectionModel survivor = tab.Add(1);
-                tab.Add(2, process: "svchost.exe");
-                WeakReference[] released = DeleteWhileEveryViewHoldsIt(window, tab, survivor);
-                WpfTestHost.Pump();
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
-                Assert.All(released, reference => Assert.False(reference.IsAlive));
-            });
-        }
-
-        // Deletes session 3 while the grid selects it, the details pane shows its body, the row menu targets it, a timeline
-        // bar draws it and its WebSocket frame is selected; no strong reference to it outlives this method.
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static WeakReference[] DeleteWhileEveryViewHoldsIt(Window window, LiveCaptureTab tab, ProxyConnectionModel survivor)
-        {
-            ProxyConnectionModel victim = tab.Add(3);
-            tab.Frame(3, "victim frame");
-            WebSocketMessageModel frame = Assert.Single(tab.Controller.WebSocketMessages);
-            tab.Controller.SetProcessFilter(Spec(null, new[] { "svchost.exe" }));
-            (CaptureConnectionView view, DataGrid grid, _) = Show(window, tab);
-            var timeline = (CaptureTimelineView)view.FindName("TimelineView");
-            var indicator = (TextBlock)view.FindName("ProcessFilterIndicator");
-            tab.Controller.SelectedWebSocketMessage = frame;
-            Select(grid, victim);
-            CaptureProcessFilterViewTests.Open(CaptureProcessFilterViewTests.Container(grid, victim)).IsOpen = false;
-            Assert.Contains(Bars(timeline), bar => ReferenceEquals(bar.Tag, victim));
-            Assert.Equal(Indicator(included: 2, total: 3), indicator.Text);
-
-            Press(grid, Key.Delete);
-
-            Assert.Equal(new[] { survivor }, grid.Items.Cast<ProxyConnectionModel>());
-            Assert.Same(survivor, tab.Controller.SelectedConnectionModel);
-            Assert.Empty(tab.Controller.WebSocketMessages);
-            Assert.Null(tab.Controller.SelectedWebSocketMessage);
-            Assert.Equal(new object[] { survivor }, Bars(timeline).Select(bar => bar.Tag).Where(tag => tag != null));
-            Assert.Equal(Indicator(included: 1, total: 2), indicator.Text);
-            return new[] { new WeakReference(victim), new WeakReference(victim.ResponseBody), new WeakReference(frame) };
         }
 
         private static (CaptureConnectionView View, DataGrid Grid, RecordingDeleteDialogs Dialogs) Show(Window window, ICaptureDeviceContext tab)

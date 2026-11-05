@@ -61,7 +61,8 @@ namespace XMAT.WebServiceCapture
         private long _processIncluded;
         private long _processUnknown;
         private bool _showingProcessSpec;
-        // While a deletion resets the rows and restores the selection, Auto Scroll does not move the grid.
+        // While a deletion removes rows and restores the selection, neither Auto Scroll nor a change of the capture's selected
+        // row scrolls the grid; the restored row is scrolled into view once.
         private bool _deleting;
 
         [Flags]
@@ -462,8 +463,9 @@ namespace XMAT.WebServiceCapture
                 // A notification without new selectors changes nothing.
                 RequestFilterRefresh();
             }
-            if (string.IsNullOrEmpty(args.PropertyName) ||
-                args.PropertyName == nameof(WebServiceDeviceCaptureController.SelectedConnectionModel))
+            if (!_deleting &&
+                (string.IsNullOrEmpty(args.PropertyName) ||
+                    args.PropertyName == nameof(WebServiceDeviceCaptureController.SelectedConnectionModel)))
             {
                 WebServiceDeviceCaptureController controller =
                     (sender as WebServiceDeviceCaptureController);
@@ -1445,10 +1447,19 @@ namespace XMAT.WebServiceCapture
                 return;
             }
 
-            string notice = CaptureAppModel.AppModel.CaptureDeviceContexts.Contains(tab) &&
-                ReferenceEquals(tab.CaptureController, controller) && CanDelete(tab, controller)
-                    ? Delete(controller, plan)
-                    : Localization.GetLocalizedString("CAPTURE_DELETE_UNAVAILABLE");
+            string notice;
+            try
+            {
+                notice = CaptureAppModel.AppModel.CaptureDeviceContexts.Contains(tab) &&
+                    ReferenceEquals(tab.CaptureController, controller) && CanDelete(tab, controller)
+                        ? Delete(controller, plan)
+                        : Localization.GetLocalizedString("CAPTURE_DELETE_UNAVAILABLE");
+            }
+            finally
+            {
+                ReleaseMenus();
+            }
+
             if (notice != null)
             {
                 await dialogs.ShowDeleteNoticeAsync(notice);
@@ -1488,6 +1499,33 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        // The row and timeline menus keep the rows they last opened on. Once a deletion is confirmed, whether it ran,
+        // failed or found the tab unavailable, each is closed and let go; a failure is logged, never thrown over the result.
+        private void ReleaseMenus()
+        {
+            foreach (Action release in new Action[]
+            {
+                () =>
+                {
+                    var rowMenu = (ContextMenu)Resources["HostListRowMenu"];
+                    rowMenu.IsOpen = false;
+                    rowMenu.Items.Clear();
+                    rowMenu.ClearValue(ContextMenu.PlacementTargetProperty);
+                },
+                () => TimelineView.ReleaseMenuTargets(),
+            })
+            {
+                try
+                {
+                    release();
+                }
+                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, $"Releasing a menu after deleting sessions failed: {exception}");
+                }
+            }
+        }
+
         // What a delete command acts on, frozen when it runs: keys in the grid's order, weak targets and counts, never rows.
         private sealed record DeletePlan(
             CaptureDeletePrompt Prompt,
@@ -1523,15 +1561,12 @@ namespace XMAT.WebServiceCapture
                 current);
         }
 
-        // After the deletion's single reset, Delete selects the next surviving visible row in the frozen order, else the
-        // previous one, else none, and Shift+Delete keeps the surviving selection and current row; the grid's current row and
-        // cell, the details pane and the timeline follow through the capture's selected row. The menus let go of deleted rows.
+        // After the rows are removed (one Remove each for a few rows, else one Reset), Delete selects the next surviving
+        // visible row in the frozen order, else the previous one, else none, and Shift+Delete keeps the surviving selection
+        // and current row. Done once, on both paths: the grid's current row and cell, the details pane and the timeline
+        // follow through the capture's selected row, and the restored row is scrolled into view.
         private void RestoreAfterDeletion(WebServiceDeviceCaptureController controller, DeletePlan plan, CaptureDeleteResult result)
         {
-            var menu = (ContextMenu)Resources["HostListRowMenu"];
-            menu.Items.Clear();
-            menu.ClearValue(ContextMenu.PlacementTargetProperty);
-            TimelineView.ReleaseMenuTargets();
             var deleted = result.Deleted.ToHashSet();
             if (deleted.Count == 0)
             {
