@@ -337,6 +337,13 @@ namespace XMAT.Operations.Export
                     limit ? CaptureExportErrorCodes.InputLimit : input.Code,
                     limit ? "The capture exceeds an export safety limit." : input.DiagnosticMessage);
             }
+            if (CaptureExportPublisher.IsLocking(exception))
+            {
+                return (
+                    OperationOutcome.Conflict,
+                    "export.output.locked",
+                    "The export destination is locked.");
+            }
             return exception switch
             {
                 OperationCanceledException => (
@@ -354,10 +361,6 @@ namespace XMAT.Operations.Export
                 CaptureSaveException { Failure: CaptureSaveFailure.Refused } save => (
                     OperationOutcome.Conflict,
                     "export.output.open-capture",
-                    save.Message),
-                CaptureSaveException { Failure: CaptureSaveFailure.DestinationLocked } save => (
-                    OperationOutcome.Conflict,
-                    "export.output.locked",
                     save.Message),
                 CaptureSaveException save => (
                     OperationOutcome.Failed,

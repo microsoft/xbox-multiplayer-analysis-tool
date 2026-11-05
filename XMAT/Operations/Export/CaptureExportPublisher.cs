@@ -187,6 +187,10 @@ namespace XMAT.Operations.Export
                     MoveFile(staged, destination, replaceExisting);
                     return exists;
                 }
+                catch (IOException exception) when (IsAlreadyExists(exception))
+                {
+                    throw new CaptureExportDestinationException("export.output.exists");
+                }
                 catch (Exception exception) when (IsLocking(exception) && attempt < FileSystemAttempts)
                 {
                     await Task.Delay(RetryDelay, cancellationToken).ConfigureAwait(false);
@@ -243,11 +247,14 @@ namespace XMAT.Operations.Export
             }
         }
 
-        private static bool IsLocking(Exception exception)
+        private static bool IsAlreadyExists(IOException exception) =>
+            (exception.HResult & 0xFFFF) is 80 or 183;
+
+        internal static bool IsLocking(Exception exception)
         {
             if (exception is CaptureSaveException { Failure: CaptureSaveFailure.DestinationLocked })
             {
-                return true;
+                return exception.InnerException != null && IsLocking(exception.InnerException);
             }
             return exception is IOException io && (io.HResult & 0xFFFF) is 32 or 33;
         }
