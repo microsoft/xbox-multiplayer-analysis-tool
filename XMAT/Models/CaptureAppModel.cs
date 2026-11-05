@@ -208,6 +208,10 @@ namespace XMAT.Models
             return context;
         }
 
+        // The open capture tab that an analysis read, while it still holds the sessions that the analysis saw; null once
+        // that tab was closed or its sessions were deleted, cleared or reloaded. It never selects a tab.
+        internal ICaptureDeviceContext ResolveCaptureSource(CaptureSourceStamp stamp) => null;
+
         internal bool TryBeginAnalysis(out IDisposable analysisLease)
         {
             lock (_analysisStateLock)
@@ -734,6 +738,18 @@ namespace XMAT.Models
             }
 
             return true;
+        }
+
+        // Deletes sessions of a writable capture tab on the UI thread. Deleting is a capture data operation: returns false,
+        // deleting nothing, while another one or an analysis runs. Analyses of that capture become historical.
+        internal bool TryDeleteSessions(
+            WebServiceDeviceCaptureController controller,
+            IReadOnlyList<CaptureDeleteTarget> targets,
+            IReadOnlySet<Operations.Captures.CaptureRowKey> currentlyVisible,
+            out CaptureDeleteResult result)
+        {
+            result = null;
+            return false;
         }
 
         internal Task ImportDataCapturesAsync(

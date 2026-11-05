@@ -12,6 +12,13 @@ using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.WebServiceCapture
 {
+    internal enum CaptureRowLookup
+    {
+        Current,
+        Retired,
+        Missing,
+    }
+
     internal sealed class CaptureRowRegistry
     {
         private readonly object _syncRoot = new();
@@ -276,6 +283,37 @@ namespace XMAT.WebServiceCapture
             {
                 return IsCurrentCore(key);
             }
+        }
+
+        internal CaptureRowLookup Lookup(CaptureRowKey key) =>
+            IsCurrent(key) ? CaptureRowLookup.Current : CaptureRowLookup.Missing;
+
+        internal CaptureRowLookup Lookup(
+            ClientProcessContext connection,
+            long requestToken,
+            out CaptureRowKey key)
+        {
+            ArgumentNullException.ThrowIfNull(connection);
+            lock (_syncRoot)
+            {
+                if (!_requests.TryGetValue(
+                        new RequestKey(
+                            connection,
+                            requestToken),
+                        out key))
+                {
+                    return CaptureRowLookup.Missing;
+                }
+                return IsCurrentCore(key)
+                    ? CaptureRowLookup.Current
+                    : CaptureRowLookup.Missing;
+            }
+        }
+
+        internal void Retire(IReadOnlyList<CaptureRowKey> keys)
+        {
+            ArgumentNullException.ThrowIfNull(keys);
+            throw new NotSupportedException();
         }
 
         internal void AdvanceGeneration()

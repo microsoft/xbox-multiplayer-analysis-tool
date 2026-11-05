@@ -93,6 +93,9 @@ namespace XMAT.WebServiceCapture
         internal Func<FilterCaptureSessionsRequest, CancellationToken, OperationResult<FilterCaptureSessionsResult>>
             ProcessSelection { get; set; } = FilterCaptureSessionsOperation.Select;
 
+        // The windows of a deletion; the main window's when null. Tests substitute them.
+        internal ICaptureDeleteDialogService DeleteDialogs { get; set; }
+
         // The sessions that an export from this list covers: the visible ones follow every active filter (the Status, Host
         // and Method checkboxes as exact values, and the process filter); selectedOnly also keeps only the selected rows.
         internal CaptureSelectionSpec ExportSelection(bool selectedOnly) =>

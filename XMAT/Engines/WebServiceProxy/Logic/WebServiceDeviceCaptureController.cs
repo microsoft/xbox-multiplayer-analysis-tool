@@ -156,9 +156,16 @@ namespace XMAT.WebServiceCapture
         public ObservableCollection<CheckedListItem> MethodFilterList { get; set; }
         public WebSocketMessagesCollection WebSocketMessages { get; }
         public string DeviceName { get; }
+        internal bool CanDeleteSessions => false;
+        internal CaptureSourceStamp SourceStamp => new(_sourceId, 0);
         public ProcessFilterSpec ProcessFilter { get; private set; }
         internal ClientProcessResolver ProcessResolverOverride { get; set; }
         internal TimeSpan? CaptureCallbackDrainTimeoutOverride { get; set; }
+
+        internal CaptureDeleteResult DeleteSessions(
+            IReadOnlyList<CaptureDeleteTarget> targets,
+            IReadOnlySet<CaptureRowKey> currentlyVisible) =>
+            throw new NotSupportedException();
         public ProxyConnectionModel SelectedConnectionModel
         {
             get => _selectedConnectionModel;
