@@ -1,0 +1,543 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
+
+using System.IO.Compression;
+using System.Text;
+using XMAT.Operations;
+using XMAT.Operations.Inspection;
+
+namespace XMAT.Tests.Inspection
+{
+    // BodyPreviewOperation, the bounded preview behind every body view: decoding, text, JSON and the limits, on in-memory
+    // bodies only.
+    public class BodyPreviewOperationTests
+    {
+        private const string JsonType = "application/json";
+        private const BodyPreviewParts AllParts = BodyPreviewParts.Text | BodyPreviewParts.Json | BodyPreviewParts.Hex;
+
+        [Theory]
+        [InlineData("gzip")]
+        [InlineData("x-gzip")]
+        [InlineData("deflate")]
+        [InlineData("br")]
+        [InlineData("GZip, identity")]
+        public void SupportedCodings_AreDecoded(string coding)
+        {
+            byte[] plain = Encoding.UTF8.GetBytes("h\u00e9llo w\u00f6rld");
+
+            BodyPreview preview = Preview(Compress(coding, plain), "text/plain", coding);
+
+            Assert.Equal((BodyPreviewState.Complete, BodyPreviewTextKind.Text), (preview.State, preview.TextKind));
+            Assert.Equal("h\u00e9llo w\u00f6rld", preview.Text);
+            Assert.Equal(("utf-8", plain.Length), (preview.Charset, preview.DecodedBytes));
+            Assert.Empty(preview.Notices);
+        }
+
+        // HTTP's deflate is zlib; raw deflate is decoded once, as a fallback that says so.
+        [Fact]
+        public void RawDeflate_IsAFallbackThatSaysSo()
+        {
+            BodyPreview preview = Preview(Compress("raw", "raw body"u8.ToArray()), "text/plain", "deflate");
+
+            Assert.Equal((BodyPreviewState.Complete, "raw body"), (preview.State, preview.Text));
+            Assert.Equal(new[] { BodyPreviewNotice.RawDeflate }, preview.Notices);
+        }
+
+        [Theory]
+        [InlineData("gzip")]
+        [InlineData("deflate")]
+        [InlineData("br")]
+        public void CorruptCompressedData_IsMalformed_AndShownAsTheStoredBytes(string coding)
+        {
+            // A complete gzip header, then a deflate block of the reserved type 3; and bytes that are neither zlib nor deflate.
+            byte[] corrupt = coding == "gzip"
+                ? new byte[] { 0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }
+                : new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
+
+            BodyPreview preview = Preview(corrupt, "text/plain", coding);
+
+            Assert.Equal((BodyPreviewState.Malformed, BodyPreviewTextKind.Bytes), (preview.State, preview.TextKind));
+            Assert.Equal(Dump(corrupt), preview.Text);
+            Assert.Equal(new[] { BodyPreviewNotice.MalformedCoding }, preview.Notices);
+            Assert.Empty(preview.JsonDocuments);
+        }
+
+        [Theory]
+        [InlineData("compress", null)]
+        [InlineData("gzip, br", null)]
+        [InlineData("zstd", null)]
+        [InlineData(null, "gzip, chunked")]
+        public void CodingsThatThePreviewDoesNotDecode_AreShownAsBytes(string contentEncoding, string transferEncoding)
+        {
+            byte[] body = "not decoded"u8.ToArray();
+
+            BodyPreview preview = Preview(body, "text/plain", contentEncoding, transferEncoding);
+
+            Assert.Equal((BodyPreviewState.Unsupported, BodyPreviewTextKind.Bytes), (preview.State, preview.TextKind));
+            Assert.Equal(Dump(body), preview.Text);
+            Assert.Equal(new[] { BodyPreviewNotice.UnsupportedCoding }, preview.Notices);
+        }
+
+        [Theory]
+        [InlineData("text/plain; charset=utf-16le", "FF-FE-61-00-F1-00-62-00", "a\u00f1b", "utf-16le")]
+        [InlineData("text/plain; charset=utf-16le", "61-00-F1-00-62-00", "a\u00f1b", "utf-16le")]
+        [InlineData("text/plain; charset=UTF-16BE", "00-61-00-F1-00-62", "a\u00f1b", "utf-16be")]
+        [InlineData("text/plain; charset=utf-16", "FE-FF-00-61-00-F1-00-62", "a\u00f1b", "utf-16be")]
+        [InlineData("text/plain; charset=\"utf-8\"", "EF-BB-BF-63-61-66-C3-A9", "caf\u00e9", "utf-8")]
+        [InlineData("text/plain", "EF-BB-BF-63-61-66-C3-A9", "caf\u00e9", "utf-8")]
+        [InlineData(null, "FF-FE-61-00-62-00", "ab", "utf-16le")]
+        [InlineData("text/plain; charset=iso-8859-1", "63-61-66-E9", "caf\u00e9", "iso-8859-1")]
+        [InlineData("text/plain; charset=us-ascii", "61-62-63", "abc", "us-ascii")]
+        public void Text_IsDecodedWithItsCharset(string contentType, string hex, string text, string charset)
+        {
+            BodyPreview preview = Preview(Convert.FromHexString(hex.Replace("-", "", StringComparison.Ordinal)), contentType);
+
+            Assert.Equal((BodyPreviewState.Complete, BodyPreviewTextKind.Text), (preview.State, preview.TextKind));
+            Assert.Equal((text, charset), (preview.Text, preview.Charset));
+        }
+
+        // Bytes that are not valid text are never replaced by question marks: malformed for a message that says it is text,
+        // binary otherwise, and shown as bytes either way.
+        [Theory]
+        [InlineData("text/plain; charset=us-ascii", "63-61-66-E9", true)]
+        [InlineData("text/plain", "63-C3-28", true)]
+        [InlineData(JsonType, "7B-C3-28-7D", true)]
+        [InlineData("image/png", "89-50-4E-47-0D-0A-1A-0A", false)]
+        [InlineData(null, "61-62-00-63-64", false)]
+        [InlineData("text/plain", "61-62-07-63", false)]
+        public void BytesThatAreNotText_AreShownAsBytes(string contentType, string hex, bool malformed)
+        {
+            byte[] body = Convert.FromHexString(hex.Replace("-", "", StringComparison.Ordinal));
+            BodyPreviewState state = malformed ? BodyPreviewState.Malformed : BodyPreviewState.Complete;
+            string notice = malformed ? BodyPreviewNotice.MalformedText : BodyPreviewNotice.Binary;
+
+            BodyPreview preview = Preview(body, contentType);
+
+            Assert.Equal((state, BodyPreviewTextKind.Bytes, Dump(body)), (preview.State, preview.TextKind, preview.Text));
+            Assert.Equal(new[] { notice }, preview.Notices);
+            Assert.Empty(preview.JsonDocuments);
+        }
+
+        [Fact]
+        public void ACharsetThatThePreviewDoesNotDecode_IsShownAsBytes()
+        {
+            BodyPreview preview = Preview("abc"u8.ToArray(), "text/plain; charset=windows-1252");
+
+            Assert.Equal((BodyPreviewState.Unsupported, BodyPreviewTextKind.Bytes), (preview.State, preview.TextKind));
+            Assert.Equal(new[] { BodyPreviewNotice.UnsupportedCharset }, preview.Notices);
+        }
+
+        // A cut never leaves half a character: not half a surrogate pair at the text limit, and not a partial UTF-8 sequence
+        // at the decoded limit or at the end of a stored prefix, which is not invalid text.
+        [Fact]
+        public void Truncation_KeepsWholeCharacters()
+        {
+            BodyPreview textCut = Preview(Encoding.UTF8.GetBytes("ab\U0001F600cd"), "text/plain", limits: new(MaxTextChars: 3));
+            BodyPreview decodedCut = Preview("a\u00e9b"u8.ToArray(), "text/plain", limits: new(MaxDecodedBytes: 2));
+            BodyPreview prefix = Preview(new byte[] { 0x61, 0xC3 }, "text/plain", storedPrefix: true);
+
+            Assert.Equal(("ab", BodyPreviewState.Truncated), (textCut.Text, textCut.State));
+            Assert.Equal(new[] { BodyPreviewNotice.TextLimit }, textCut.Notices);
+            Assert.Equal(("a", BodyPreviewState.Truncated), (decodedCut.Text, decodedCut.State));
+            Assert.Equal(new[] { BodyPreviewNotice.DecodedLimit }, decodedCut.Notices);
+            Assert.Equal(("a", BodyPreviewState.Truncated), (prefix.Text, prefix.State));
+            Assert.Equal(new[] { BodyPreviewNotice.StoredPrefix }, prefix.Notices);
+        }
+
+        // A small compressed body that expands to 32 MiB decodes 4 MiB at most and shows 256 Ki characters, allocating a
+        // bounded amount on the way.
+        [Theory]
+        [InlineData("gzip")]
+        [InlineData("deflate")]
+        [InlineData("br")]
+        public void ACompressionBomb_StaysWithinTheLimits(string coding)
+        {
+            byte[] bomb = Compress(coding, Enumerable.Repeat((byte)'A', 32 * 1024 * 1024).ToArray());
+            Assert.True(bomb.Length < 1024 * 1024);
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            BodyPreview preview = Preview(bomb, "text/plain", coding);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Equal(BodyPreviewLimits.Default.MaxDecodedBytes, preview.DecodedBytes);
+            Assert.Equal(BodyPreviewLimits.Default.MaxTextChars, preview.Text.Length);
+            Assert.Equal((BodyPreviewState.Truncated, bomb.Length), (preview.State, preview.StoredBytes));
+            Assert.Equal(new[] { BodyPreviewNotice.DecodedLimit, BodyPreviewNotice.TextLimit }, preview.Notices);
+            Assert.InRange(allocated, 0, 24L * 1024 * 1024);
+        }
+
+        // A large stored body is read only as far as the limits go, and never copied.
+        [Fact]
+        public void ALargePlainBody_IsReadOnlyAsFarAsTheLimitsAndNeverCopied()
+        {
+            byte[] body = Enumerable.Repeat((byte)'a', 20 * 1024 * 1024).ToArray();
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            BodyPreview preview = Preview(body, "text/plain");
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Equal(BodyPreviewState.Truncated, preview.State);
+            Assert.Equal(
+                new[] { BodyPreviewNotice.InputLimit, BodyPreviewNotice.DecodedLimit, BodyPreviewNotice.TextLimit },
+                preview.Notices);
+            Assert.Equal((BodyPreviewLimits.Default.MaxDecodedBytes, BodyPreviewLimits.Default.MaxDecodedBytes), (preview.InspectedBytes, preview.DecodedBytes));
+            Assert.InRange(allocated, 0, 4L * 1024 * 1024);
+        }
+
+        [Fact]
+        public void Text_HasAtMostMaxTextLinesLines()
+        {
+            byte[] body = Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat("x\n", 10_000)));
+
+            BodyPreview preview = Preview(body, "text/plain");
+
+            Assert.Equal(BodyPreviewLimits.Default.MaxTextLines, preview.Text.Split('\n').Length);
+            Assert.Equal(new[] { BodyPreviewNotice.TextLimit }, preview.Notices);
+        }
+
+        [Fact]
+        public void Json_IsFormattedAsWritten()
+        {
+            byte[] body = "{\"a\":[1,{\"b\":\"c\\u0041\"}],\"e\":{},\"f\":[],\"g\":null}"u8.ToArray();
+
+            BodyPreview preview = Preview(body, JsonType + "; charset=utf-8");
+
+            Assert.Equal((BodyPreviewState.Complete, BodyPreviewTextKind.Json), (preview.State, preview.TextKind));
+            Assert.Equal(
+                "{\r\n  \"a\": [\r\n    1,\r\n    {\r\n      \"b\": \"c\\u0041\"\r\n    }\r\n  ],\r\n  \"e\": {},\r\n  \"f\": [],\r\n" +
+                    "  \"g\": null\r\n}",
+                preview.Text);
+            Assert.Empty(preview.Notices);
+        }
+
+        [Fact]
+        public void JsonTree_LabelsNamesAndValues()
+        {
+            string longValue = new('v', 2000);
+            byte[] body = Encoding.UTF8.GetBytes(
+                "{\"s\":\"x\\u00e9\",\"n\":12.5,\"t\":true,\"f\":false,\"z\":null,\"o\":{},\"a\":[1],\"l\":\"" + longValue + "\"}");
+
+            BodyPreview preview = Preview(body, "text/plain");
+
+            BodyPreviewNode root = Assert.Single(preview.JsonDocuments);
+            Assert.Equal("[root]", root.Label);
+            Assert.Equal(
+                new[] { "s=x\u00e9", "n=12.5", "t=true", "f=false", "z=null", "o", "a", "l=" + new string('v', 1024) + "\u2026" },
+                root.Children.Select(child => child.Label));
+            Assert.Equal("0=1", Assert.Single(root.Children[6].Children).Label);
+            Assert.Equal(BodyPreviewTextKind.Text, preview.TextKind);
+        }
+
+        // Several documents share one budget of nodes; a document after the limit is left out and the limit is noticed.
+        [Fact]
+        public void SeveralJsonDocuments_ShareOneBudget()
+        {
+            byte[] body = "{\"a\":1}\r\n{\"b\":2}\r\n{\"c\":3}"u8.ToArray();
+
+            BodyPreview all = Preview(body, JsonType);
+            BodyPreview limited = Preview(body, JsonType, limits: new(MaxJsonNodes: 5));
+            BodyPreview fewChars = Preview(body, JsonType, limits: new(MaxJsonChars: 12));
+
+            Assert.Equal(new[] { "a=1", "b=2", "c=3" }, all.JsonDocuments.Select(root => Assert.Single(root.Children).Label));
+            Assert.Equal("{\r\n  \"a\": 1\r\n}\r\n{\r\n  \"b\": 2\r\n}\r\n{\r\n  \"c\": 3\r\n}", all.Text);
+            Assert.Equal(new[] { 1, 1, 0 }, limited.JsonDocuments.Select(root => root.Children.Count));
+            Assert.Equal((BodyPreviewState.Truncated, true), (limited.State, limited.HasNotice(BodyPreviewNotice.JsonLimit)));
+            Assert.Equal("a=1", Assert.Single(Assert.Single(fewChars.JsonDocuments).Children).Label);
+            Assert.True(fewChars.HasNotice(BodyPreviewNotice.JsonLimit));
+        }
+
+        // Bytes that are not text are dumped up to MaxByteDumpBytes.
+        [Fact]
+        public void AByteDump_StopsAtItsLimit()
+        {
+            byte[] body = Enumerable.Range(0, 10_000).Select(value => (byte)(value % 7)).ToArray();
+
+            BodyPreview preview = Preview(body, "application/octet-stream");
+
+            Assert.Equal((BodyPreviewState.Truncated, BodyPreviewTextKind.Bytes), (preview.State, preview.TextKind));
+            Assert.Equal(Dump(body.Take(BodyPreviewLimits.Default.MaxByteDumpBytes).ToArray()), preview.Text);
+            Assert.Equal(new[] { BodyPreviewNotice.Binary, BodyPreviewNotice.TextLimit }, preview.Notices);
+        }
+
+        // A stored prefix that ends inside compressed data shows what decoded, never as invalid data.
+        [Theory]
+        [InlineData("gzip")]
+        [InlineData("deflate")]
+        [InlineData("br")]
+        public void ACompressedPrefix_ShowsWhatDecoded(string coding)
+        {
+            string text = string.Concat(Enumerable.Range(0, 20_000).Select(value => value.ToString(System.Globalization.CultureInfo.InvariantCulture) + " "));
+            byte[] compressed = Compress(coding, Encoding.ASCII.GetBytes(text));
+
+            BodyPreview preview = Preview(compressed[..(compressed.Length / 2)], "text/plain", coding, storedPrefix: true);
+
+            Assert.Equal((BodyPreviewState.Truncated, BodyPreviewTextKind.Text), (preview.State, preview.TextKind));
+            Assert.StartsWith("0 1 2 3 4 5", preview.Text, StringComparison.Ordinal);
+            Assert.True(text.StartsWith(preview.Text, StringComparison.Ordinal));
+            Assert.Equal(new[] { BodyPreviewNotice.StoredPrefix }, preview.Notices);
+        }
+
+        // A tree stops at the depth and node limits; formatting a document deeper than the limit shows the body as it is, also
+        // when the tree is not asked for.
+        [Fact]
+        public void DeepAndWideJson_StopAtTheLimits()
+        {
+            byte[] deep = Encoding.ASCII.GetBytes(new string('[', 100) + "1" + new string(']', 100));
+            byte[] wide = Encoding.ASCII.GetBytes("[" + string.Join(",", Enumerable.Range(0, 5000)) + "]");
+
+            BodyPreview deepPreview = Preview(deep, JsonType);
+            BodyPreview deepText = Preview(deep, JsonType, parts: BodyPreviewParts.Text);
+            BodyPreview widePreview = Preview(wide, JsonType);
+
+            Assert.Equal(BodyPreviewLimits.Default.MaxJsonDepth, Depth(Assert.Single(deepPreview.JsonDocuments)));
+            Assert.Equal((BodyPreviewState.Truncated, BodyPreviewTextKind.Text), (deepPreview.State, deepPreview.TextKind));
+            Assert.Equal(Encoding.ASCII.GetString(deep), deepPreview.Text);
+            Assert.Equal(new[] { BodyPreviewNotice.JsonLimit }, deepPreview.Notices);
+            Assert.Equal((BodyPreviewState.Truncated, BodyPreviewTextKind.Text), (deepText.State, deepText.TextKind));
+            Assert.Equal(new[] { BodyPreviewNotice.JsonLimit }, deepText.Notices);
+            Assert.Equal(BodyPreviewLimits.Default.MaxJsonNodes, Count(Assert.Single(widePreview.JsonDocuments)));
+            Assert.Equal((BodyPreviewState.Truncated, BodyPreviewTextKind.Json), (widePreview.State, widePreview.TextKind));
+            Assert.Equal(BodyPreviewLimits.Default.MaxTextLines, widePreview.Text.Split('\n').Length);
+            Assert.Equal(new[] { BodyPreviewNotice.JsonLimit, BodyPreviewNotice.TextLimit }, widePreview.Notices);
+        }
+
+        // Formatting adds indentation; the formatted text is bounded like any other.
+        [Fact]
+        public void JsonFormatting_StaysWithinTheTextLimit()
+        {
+            byte[] body = Encoding.ASCII.GetBytes("[" + string.Join(",", Enumerable.Repeat("[[[1]]]", 100)) + "]");
+
+            BodyPreview preview = Preview(body, JsonType, limits: new(MaxTextChars: 1000));
+
+            Assert.Equal((BodyPreviewTextKind.Json, 1000), (preview.TextKind, preview.Text.Length));
+            Assert.StartsWith("[\r\n  [\r\n    [\r\n      [\r\n        1", preview.Text, StringComparison.Ordinal);
+            Assert.Equal(new[] { BodyPreviewNotice.TextLimit }, preview.Notices);
+        }
+
+        // Documents followed by something that is not JSON: the tree keeps the complete documents, and the text is the body
+        // as it is. Text that only starts with a number is not JSON at all.
+        [Fact]
+        public void JsonFollowedByOtherText_KeepsTheDocumentsBeforeIt()
+        {
+            byte[] body = "{\"a\":1} oops"u8.ToArray();
+
+            BodyPreview preview = Preview(body, JsonType);
+            BodyPreview plain = Preview("5 apples"u8.ToArray(), "text/plain");
+
+            Assert.Equal("a=1", Assert.Single(Assert.Single(preview.JsonDocuments).Children).Label);
+            Assert.Equal((BodyPreviewTextKind.Text, "{\"a\":1} oops"), (preview.TextKind, preview.Text));
+            Assert.Equal(new[] { BodyPreviewNotice.JsonMalformed }, preview.Notices);
+            Assert.Empty(plain.JsonDocuments);
+            Assert.Empty(plain.Notices);
+        }
+
+        // Only part of the body: never formatted or parsed as if it were the whole document.
+        [Fact]
+        public void PartOfABody_IsNeverParsedAsJson()
+        {
+            byte[] body = "{\"a\":1,\"b\":2}"u8.ToArray();
+
+            BodyPreview stored = Preview(body, JsonType, storedPrefix: true);
+            BodyPreview input = Preview(body, JsonType, limits: new(MaxInputBytes: 8));
+            BodyPreview plain = Preview("[1,2,"u8.ToArray(), null, storedPrefix: true);
+
+            Assert.Empty(stored.JsonDocuments);
+            Assert.Equal((BodyPreviewState.Truncated, BodyPreviewTextKind.Text, "{\"a\":1,\"b\":2}"), (stored.State, stored.TextKind, stored.Text));
+            Assert.Equal(new[] { BodyPreviewNotice.StoredPrefix, BodyPreviewNotice.JsonIncomplete }, stored.Notices);
+            Assert.Empty(input.JsonDocuments);
+            Assert.Equal(new[] { BodyPreviewNotice.InputLimit, BodyPreviewNotice.JsonIncomplete }, input.Notices);
+            Assert.Equal(new[] { BodyPreviewNotice.StoredPrefix, BodyPreviewNotice.JsonIncomplete }, plain.Notices);
+        }
+
+        // A missing body is never shown as an empty one.
+        [Fact]
+        public void EmptyAndNotRetainedBodies_AreTold()
+        {
+            var markers = new Dictionary<string, string>
+            {
+                ["x-xmat-response-body-not-kept"] = "1048576",
+                ["content-type"] = JsonType,
+            };
+
+            BodyPreview empty = Preview(Array.Empty<byte>(), JsonType);
+            BodyPreview notRetained = BodyPreviewOperation.Build(
+                BodyPreviewRequest.FromHeaders(markers, ReadOnlyMemory<byte>.Empty), CancellationToken.None);
+
+            Assert.Equal((BodyPreviewState.Empty, BodyPreviewTextKind.None, ""), (empty.State, empty.TextKind, empty.Text));
+            Assert.Empty(empty.Notices);
+            Assert.Equal((BodyPreviewState.NotRetained, BodyPreviewTextKind.None), (notRetained.State, notRetained.TextKind));
+        }
+
+        [Theory]
+        [InlineData(false, "chunked", "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n", false, "hello world", null)]
+        [InlineData(false, "chunked", "hello world", false, "hello world", null)]
+        [InlineData(true, "chunked", "5\r\nhello\r\n0\r\n\r\n", false, "5\r\nhello\r\n0\r\n\r\n", null)]
+        [InlineData(false, "chunked", "5\r\nhelloXX0\r\n\r\n", false, "5\r\nhelloXX0\r\n\r\n", BodyPreviewNotice.FramingIgnored)]
+        [InlineData(false, "chunked", "a\r\n01234", true, "01234", BodyPreviewNotice.StoredPrefix)]
+        [InlineData(false, null, "5\r\nhello\r\n0\r\n\r\n", false, "5\r\nhello\r\n0\r\n\r\n", null)]
+        public void ChunkFraming_IsDecodedOnlyWhereItIs(
+            bool decoded, string transferEncoding, string body, bool storedPrefix, string text, string notice)
+        {
+            BodyFraming framing = decoded ? BodyFraming.Decoded : BodyFraming.Advisory;
+            BodyPreview preview = BodyPreviewOperation.Build(
+                new BodyPreviewRequest(
+                    Encoding.ASCII.GetBytes(body), "text/plain", null, transferEncoding, framing, StoredPrefix: storedPrefix),
+                CancellationToken.None);
+
+            Assert.Equal(text, preview.Text);
+            Assert.Equal(notice == null ? Array.Empty<string>() : new[] { notice }, preview.Notices);
+        }
+
+        [Fact]
+        public void AChunkedCompressedBody_IsDeframedThenDecoded()
+        {
+            byte[] gzip = Compress("gzip", "framed and compressed"u8.ToArray());
+            byte[] body = Encoding.ASCII.GetBytes($"{gzip.Length:x}\r\n").Concat(gzip).Concat("\r\n0\r\n\r\n"u8.ToArray()).ToArray();
+
+            BodyPreview preview = Preview(body, "text/plain", "gzip", "chunked");
+
+            Assert.Equal((BodyPreviewState.Complete, "framed and compressed"), (preview.State, preview.Text));
+        }
+
+        [Fact]
+        public void HeaderValuesLongerThanTheLimit_AreNotUsed()
+        {
+            string longValue = new('x', BodyPreviewLimits.Default.MaxHeaderChars + 1);
+
+            BodyPreview encoding = Preview("abc"u8.ToArray(), "text/plain", "gzip;" + longValue);
+            BodyPreview type = Preview("{\"a\":1}"u8.ToArray(), JsonType + ";" + longValue);
+
+            Assert.Equal(BodyPreviewState.Unsupported, encoding.State);
+            Assert.Equal(new[] { BodyPreviewNotice.HeaderLimit, BodyPreviewNotice.UnsupportedCoding }, encoding.Notices);
+            Assert.Equal((BodyPreviewTextKind.Text, "{\"a\":1}"), (type.TextKind, type.Text));
+            Assert.Equal(new[] { BodyPreviewNotice.HeaderLimit }, type.Notices);
+        }
+
+        // The work limit stops a preview where it is; it is never followed by the raw-deflate retry.
+        [Theory]
+        [InlineData("deflate")]
+        [InlineData("raw")]
+        public void TheWorkLimit_StopsThePreview_AndIsNeverRetried(string coding)
+        {
+            byte[] body = Compress(coding, Enumerable.Repeat((byte)'b', 100_000).ToArray());
+
+            BodyPreview preview = Preview(body, "text/plain", "deflate", limits: new(MaxWork: 200));
+
+            Assert.Equal(BodyPreviewState.Truncated, preview.State);
+            Assert.Contains(BodyPreviewNotice.WorkLimit, preview.Notices);
+            Assert.DoesNotContain(BodyPreviewNotice.RawDeflate, preview.Notices);
+            Assert.InRange(preview.DecodedBytes, 0, 200);
+        }
+
+        [Fact]
+        public void TheHexPart_IsTheStartOfTheStoredBody_AndNeverChangesTheState()
+        {
+            byte[] small = { 0x00, 0x10, 0xFF };
+            byte[] large = Enumerable.Repeat((byte)'a', 70_000).ToArray();
+
+            BodyPreview smallPreview = Preview(small, "application/octet-stream", parts: BodyPreviewParts.Hex);
+            BodyPreview largePreview = Preview(large, "text/plain", parts: AllParts);
+
+            Assert.Equal(("00 10 FF", BodyPreviewTextKind.None), (smallPreview.Hex, smallPreview.TextKind));
+            Assert.Equal(BodyPreviewLimits.Default.MaxTextLines, largePreview.Hex.Split("\r\n").Length);
+            Assert.Equal((BodyPreviewState.Complete, 70_000), (largePreview.State, largePreview.Text.Length));
+            Assert.Equal(new[] { BodyPreviewNotice.HexLimit }, largePreview.Notices);
+        }
+
+        [Fact]
+        public void LimitsAreNeverRaisedAboveTheDefaults()
+        {
+            byte[] body = Enumerable.Repeat((byte)'a', 300 * 1024).ToArray();
+
+            BodyPreview preview = Preview(body, "text/plain", limits: new(MaxTextChars: int.MaxValue));
+
+            Assert.Equal(BodyPreviewLimits.Default.MaxTextChars, preview.Text.Length);
+        }
+
+        [Fact]
+        public void TheStoredBody_IsNeverChanged()
+        {
+            byte[] gzip = Compress("gzip", "{\"a\":1}"u8.ToArray());
+            byte[] framed = "7\r\n{\"a\":1}\r\n0\r\n\r\n"u8.ToArray();
+            byte[][] copies = { gzip.ToArray(), framed.ToArray() };
+
+            Preview(gzip, JsonType, "gzip", parts: AllParts);
+            Preview(framed, JsonType, transferEncoding: "chunked", parts: AllParts);
+
+            Assert.Equal(copies[0], gzip);
+            Assert.Equal(copies[1], framed);
+        }
+
+        [Fact]
+        public async Task ACancelledPreview_ReturnsCancelled_AndNeverAPartialPreview()
+        {
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            var request = new BodyPreviewRequest("abc"u8.ToArray(), "text/plain");
+
+            OperationResult<BodyPreview> result = await new BodyPreviewOperation().ExecuteAsync(request, OperationContext.None, cancelled.Token);
+
+            Assert.Equal(OperationOutcome.Cancelled, result.Outcome);
+            Assert.Equal(BodyPreviewNotice.Cancelled, Assert.Single(result.Diagnostics).Code);
+            Assert.Null(result.Value);
+            Assert.Throws<OperationCanceledException>(() => BodyPreviewOperation.Build(request, cancelled.Token));
+        }
+
+        // The work never runs on the caller's thread: ExecuteAsync returns before a slow preview is done.
+        [Fact]
+        public async Task APreview_RunsOffTheCallersThread()
+        {
+            byte[] bomb = Compress("gzip", Enumerable.Repeat((byte)'A', 32 * 1024 * 1024).ToArray());
+            var request = new BodyPreviewRequest(bomb, "text/plain", "gzip");
+
+            Task<OperationResult<BodyPreview>> running = new BodyPreviewOperation().ExecuteAsync(request, OperationContext.None, CancellationToken.None);
+            bool completedOnReturn = running.IsCompleted;
+            OperationResult<BodyPreview> result = await running;
+
+            Assert.False(completedOnReturn);
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            Assert.Equal(BodyPreviewLimits.Default.MaxDecodedBytes, result.Value.DecodedBytes);
+        }
+
+        private static BodyPreview Preview(
+            byte[] body,
+            string contentType,
+            string contentEncoding = null,
+            string transferEncoding = null,
+            bool storedPrefix = false,
+            BodyPreviewParts parts = BodyPreviewParts.Text | BodyPreviewParts.Json,
+            BodyPreviewLimits limits = null) =>
+            BodyPreviewOperation.Build(
+                new BodyPreviewRequest(
+                    body, contentType, contentEncoding, transferEncoding, BodyFraming.Advisory, false, storedPrefix, parts, limits),
+                CancellationToken.None);
+
+        private static byte[] Compress(string coding, byte[] plain)
+        {
+            using var output = new MemoryStream();
+            using (Stream compressor = coding.Split(',')[0].Trim().ToUpperInvariant() switch
+            {
+                "GZIP" or "X-GZIP" => new GZipStream(output, CompressionLevel.Fastest, leaveOpen: true),
+                "DEFLATE" => new ZLibStream(output, CompressionLevel.Fastest, leaveOpen: true),
+                "RAW" => new DeflateStream(output, CompressionLevel.Fastest, leaveOpen: true),
+                "BR" => new BrotliStream(output, CompressionLevel.Fastest, leaveOpen: true),
+                _ => throw new ArgumentOutOfRangeException(nameof(coding)),
+            })
+            {
+                compressor.Write(plain);
+            }
+
+            return output.ToArray();
+        }
+
+        private static string Dump(byte[] bytes) =>
+            string.Join(
+                "\r\n",
+                bytes.Chunk(16).Select(line => string.Join(" ", line.Select(value => value.ToString("X2", System.Globalization.CultureInfo.InvariantCulture)))));
+
+        private static int Depth(BodyPreviewNode node) => 1 + (node.Children.Count == 0 ? 0 : node.Children.Max(Depth));
+
+        private static int Count(BodyPreviewNode node) => 1 + node.Children.Sum(Count);
+    }
+}
