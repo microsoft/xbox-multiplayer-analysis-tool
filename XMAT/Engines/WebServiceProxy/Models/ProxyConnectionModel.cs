@@ -12,17 +12,6 @@ namespace XMAT.WebServiceCapture.Models
 {
     public class ProxyConnectionModel : INotifyPropertyChanged
     {
-        public string ResponseText
-        {
-            get => PublicUtilities.BodyAsText(ResponseHeaders, ResponseBody);
-        }
-
-        public string RequestText
-        {
-            get => PublicUtilities.BodyAsText(RequestHeaders, RequestBody);
-        }
-
-
         public readonly string UnknownStringValue = string.Empty;
         public const Int64 UnknownRowId = -1;
 

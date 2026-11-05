@@ -125,6 +125,27 @@ listeners, but two global proxy endpoints do not duplicate the same device traff
 **Auto Scroll** is enabled by default to follow incoming connections. Turn it off
 to keep a request in view. Status codes appear when responses arrive.
 
+### Body previews
+
+The **Body** and **JSON** tabs show one preview of the selected request's or
+response's body, prepared in the background so that selecting connections stays
+responsive; **Preparing the preview...** shows until it is ready, and a preview that is
+no longer needed is cancelled. XMAT decodes one `gzip`, `deflate` or Brotli (`br`)
+content encoding, reads text in the charset of the `Content-Type` (or a byte order
+mark, or else strict UTF-8), and formats JSON when the content type says JSON. Content
+that is not text, or that cannot be decoded, is shown as bytes in hexadecimal. A
+preview reads at most 16 MiB of the body, decodes at most 4 MiB, and shows at most
+256 Ki characters or 4,096 lines, or 4 KiB as bytes. The JSON tree stops at 2,048
+nodes or 64 levels, cuts values at 1,024 characters, and expands only the root of a
+single document.
+
+A line above the body says what the preview does not show and why, for example that
+only its start is shown, that it is shown as bytes, or that the JSON is cut. An empty
+body says that it is empty, and a body that XMAT did not keep (see
+[Replay requests](#replay-requests)) says so, instead of showing an empty body. Bodies
+in the **XMAT Replays** tab, and the composer's response, are shown as the HTTP stack
+delivered them: their chunked framing is never removed a second time.
+
 ### Filter connections
 
 Use the toolbar lists to filter by status code, host, or method. Lists contain the
@@ -371,12 +392,14 @@ WebSocket connections through the proxy are captured automatically.
 2. Filter by **direction** (client to server or server to client) or **message type**
    (text, binary, or close).
 3. Select a message and inspect its payload as **text**, formatted **JSON**, or
-   **hexadecimal** bytes.
+   **hexadecimal** bytes. One preview, prepared in the background with the limits of
+   [body previews](#body-previews), fills the three tabs: a text message is read as
+   UTF-8, and the **Hex** tab shows at most the first 64 KiB.
 
 Only the most recent messages are retained: up to **5,000 messages or 32 MB of
 payload per capture**, whichever limit is reached first. Individual payloads are
-captured up to **1 MB**. WebSocket messages are **not saved to or loaded from
-`.XMATCAP` files**.
+captured up to **1 MB**; the preview of a cut payload says so and shows no JSON tree.
+WebSocket messages are **not saved to or loaded from `.XMATCAP` files**.
 
 ## Stop proxying safely
 

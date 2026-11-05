@@ -206,27 +206,23 @@
                     </Border>
 
                     <!--
-                    NOTE: someday we can get rid of the BodyText binding if the JsonConverter can be made into a MultiValueConverter like
-                    the way that the BodyConverter works off of the HeadersDictionary and BodyBytes.
+                    Each view previews its body off the UI thread. The rows of the Replays tab (IsReplay) hold bodies that the HTTP
+                    stack already de-framed, so their Transfer-Encoding is never decoded again; captured and imported rows' may be.
                     -->
                     <local:RequestResponseView x:Name="RequestViewControl" Grid.Row="1" Grid.ColumnSpan="2" Title="Request"
                                                FirstLineAndHeaders="{Binding SelectedItem.RequestLineAndHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                HeaderDictionary="{Binding SelectedItem.RequestHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.RequestBody, ElementName=ConnectionList, Mode=OneWay}"
-                                               BodyText="{Binding SelectedItem.RequestText, ElementName=ConnectionList, Mode=OneWay}"
+                                               BodyIsDecoded="{Binding SelectedItem.IsReplay, ElementName=ConnectionList, Mode=OneWay}"
                                                />
 
                     <GridSplitter Grid.Row="2" Grid.ColumnSpan="2" Height="4" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
 
-                    <!--
-                    NOTE: someday we can get rid of the BodyText binding if the JsonConverter can be made into a MultiValueConverter like
-                    the way that the BodyConverter works off of the HeadersDictionary and BodyBytes.
-                    -->
                     <local:RequestResponseView x:Name="ResponseViewControl" Grid.Row="3" Grid.ColumnSpan="2" Title="Response"
                                                FirstLineAndHeaders="{Binding SelectedItem.ResponseLineAndHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                HeaderDictionary="{Binding SelectedItem.ResponseHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.ResponseBody, ElementName=ConnectionList, Mode=OneWay}"
-                                               BodyText="{Binding SelectedItem.ResponseText, ElementName=ConnectionList, Mode=OneWay}"
+                                               BodyIsDecoded="{Binding SelectedItem.IsReplay, ElementName=ConnectionList, Mode=OneWay}"
                                                />
 
                     <Grid Grid.Row="1" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch">
