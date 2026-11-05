@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Immutable;
+using System.Reflection;
 using System.Security.Cryptography;
+using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
@@ -149,6 +151,14 @@ namespace XMAT.Tests.Operations.Export
 
         internal static string Sha256(string path) =>
             Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
+        internal static SqliteException SqliteFailure(int code)
+        {
+            ConstructorInfo constructor = typeof(SqliteException)
+                .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Single(candidate => candidate.GetParameters().Length == 3);
+            return (SqliteException)constructor.Invoke(new object[] { "injected sqlite failure", code, code });
+        }
     }
 
     internal sealed class FakeExportSnapshot : ICaptureExportSnapshot
@@ -175,21 +185,25 @@ namespace XMAT.Tests.Operations.Export
         internal List<IReadOnlyList<CaptureRowKey>> ReadRequests { get; } = new();
         internal HashSet<CaptureRowKey> Missing { get; } = new();
         internal HashSet<CaptureRowKey> Mutated { get; } = new();
+        internal int MaxConsumed { get; set; } = int.MaxValue;
         internal Action<string> DestinationValidation { get; set; }
 
-        public IReadOnlyList<RawExportRow> ReadChunk(
+        public CaptureExportChunk ReadChunk(
             IReadOnlyList<CaptureRowKey> keys,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReadRequests.Add(keys.ToArray());
-            if (keys.Any(Mutated.Contains))
+            CaptureRowKey[] consumed = keys.Take(MaxConsumed).ToArray();
+            if (consumed.Any(Mutated.Contains))
             {
                 throw new InvalidOperationException("The payload changed.");
             }
-            return keys.Where(key => !Missing.Contains(key) && _rows.ContainsKey(key))
-                .Select(key => _rows[key])
-                .ToList();
+            return new CaptureExportChunk(
+                consumed,
+                consumed.Where(key => !Missing.Contains(key) && _rows.ContainsKey(key))
+                    .Select(key => _rows[key])
+                    .ToList());
         }
 
         public void ValidateDestination(string path) => DestinationValidation?.Invoke(path);

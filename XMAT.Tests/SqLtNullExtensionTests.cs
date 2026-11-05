@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Reflection;
 using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
@@ -158,6 +159,10 @@ namespace XMAT.Tests
             Assert.True(((IRawDataRecord)record).TryReadRaw("Mismatch", out object mismatch));
             Assert.Equal(7L, mismatch);
             Assert.Null(record.Str("Mismatch"));
+            var rawOverrides = (IReadOnlyDictionary<string, object>)typeof(SqLtDataRecord)
+                .GetField("_rawValues", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(record);
+            Assert.Equal(new[] { "Mismatch" }, rawOverrides.Keys);
         }
 
         [Fact]

@@ -84,7 +84,7 @@ namespace XMAT.Operations.Export
                         "export.request.invalid",
                         "The export request is invalid.");
                 }
-                if (!FormatMatches(request.Format, request.OutputPath))
+                if (!CaptureExportFormats.HasExpectedExtension(request.Format, request.OutputPath))
                 {
                     throw new CaptureExportException(
                         CaptureExportErrorCodes.FormatMismatch,
@@ -177,15 +177,16 @@ namespace XMAT.Operations.Export
                         {
                             token.ThrowIfCancellationRequested();
                             CaptureRowKey[] requested = selected.Keys.Skip(offset).Take(64).ToArray();
-                            IReadOnlyList<RawExportRow> rows;
+                            CaptureExportChunk chunk;
                             try
                             {
-                                rows = snapshot.ReadChunk(requested, token);
+                                chunk = snapshot.ReadChunk(requested, token);
                             }
                             catch (InvalidOperationException exception)
                             {
                                 throw new CaptureSnapshotChangedException(exception);
                             }
+                            IReadOnlyList<RawExportRow> rows = chunk.Rows;
                             var requestedSet = requested.ToHashSet();
                             if (rows == null ||
                                 rows.Any(row =>
@@ -356,14 +357,6 @@ namespace XMAT.Operations.Export
                     "export.internal",
                     "Export could not be completed because of an internal failure."),
             };
-        }
-
-        private static bool FormatMatches(CaptureExportFormat format, string path)
-        {
-            string extension = Path.GetExtension(path);
-            return format == CaptureExportFormat.Xmatcap
-                ? string.Equals(extension, ".xmatcap", StringComparison.OrdinalIgnoreCase)
-                : string.Equals(extension, ".saz", StringComparison.OrdinalIgnoreCase);
         }
 
         private static void PrecheckDestination(ExportCaptureRequest request)

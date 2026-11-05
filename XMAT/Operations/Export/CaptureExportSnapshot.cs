@@ -26,7 +26,7 @@ namespace XMAT.Operations.Export
             new("CaptureType", SqLtDeclaredType.Integer),
         ];
 
-        private readonly Func<IReadOnlyList<CaptureRowKey>, CancellationToken, IReadOnlyList<RawExportRow>> _readChunk;
+        private readonly Func<IReadOnlyList<CaptureRowKey>, CancellationToken, CaptureExportChunk> _readChunk;
         private readonly Action<string> _validateDestination;
         private readonly Action _dispose;
         private int _disposed;
@@ -40,7 +40,7 @@ namespace XMAT.Operations.Export
             string inputKind,
             SqLtFileIdentity? inputIdentity,
             string inputSha256,
-            Func<IReadOnlyList<CaptureRowKey>, CancellationToken, IReadOnlyList<RawExportRow>> readChunk,
+            Func<IReadOnlyList<CaptureRowKey>, CancellationToken, CaptureExportChunk> readChunk,
             Action<string> validateDestination,
             Action dispose = null)
         {
@@ -66,7 +66,7 @@ namespace XMAT.Operations.Export
         public SqLtFileIdentity? InputIdentity { get; }
         public string InputSha256 { get; }
 
-        public IReadOnlyList<RawExportRow> ReadChunk(
+        public CaptureExportChunk ReadChunk(
             IReadOnlyList<CaptureRowKey> keys,
             CancellationToken cancellationToken)
         {
@@ -135,7 +135,7 @@ namespace XMAT.Operations.Export
                 }
             }
 
-            IReadOnlyList<RawExportRow> ReadRows(
+            CaptureExportChunk ReadRows(
                 IReadOnlyList<CaptureRowKey> keys,
                 CancellationToken cancellationToken)
             {
@@ -151,7 +151,7 @@ namespace XMAT.Operations.Export
                         result.Add(new RawExportRow(key, row.Record.RowId, 0, values));
                     }
                 }
-                return result;
+                return new CaptureExportChunk(keys.ToArray(), result);
             }
 
             void ValidateDestination(string destination)

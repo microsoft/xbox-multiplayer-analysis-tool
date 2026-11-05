@@ -122,6 +122,25 @@ namespace XMAT.Tests.Cli
             Assert.Equal(new[] { input }, Directory.GetFileSystemEntries(directory.Root));
         }
 
+        // xmat's own dispatch runs export without configuring HeadlessStorage, which export does not use. This host has
+        // already fixed it, as every process does once PublicUtilities is in use, so configuring it would fail the run.
+        [Fact]
+        public async Task Dispatch_ExportsWithoutConfiguringHeadlessStorage()
+        {
+            Assert.Null(HeadlessStorage.Freeze());
+            using var directory = new CliTestDirectory();
+            string input = ProcessCaptures.WriteXmatcap(directory.Root, "capture.xmatcap", ProcessCaptures.MixedSessions);
+            string output = Path.Join(directory.Root, "subset.saz");
+            using var stdout = new MemoryStream();
+            using var stderr = new StringWriter();
+
+            int exitCode = await CliApplication.RunAsync(
+                new[] { "export", input, "--out", output }, new CliConsole(stdout, stderr));
+
+            Assert.True(exitCode == CliExitCodes.Success, stderr.ToString());
+            Assert.True(File.Exists(output));
+        }
+
         // Until selection completes (for example when the input cannot be read) nothing is counted or published.
         [Fact]
         public void Json_WritesTheAllowListedExportBlockAndNoArtifacts()

@@ -38,7 +38,7 @@ namespace XMAT.Tests.Operations.Export
                 1,
                 ClientProcessRecordCodec.ToFields(Process("Resolved.exe", 5000)).ToArray());
             original.SetClientProcess(Process("Resolved.exe", 5000));
-            RawExportRow row = Assert.Single(snapshot.ReadChunk([Key(1)], CancellationToken.None));
+            RawExportRow row = Assert.Single(snapshot.ReadChunk([Key(1)], CancellationToken.None).Rows);
 
             Assert.True(snapshot.IsLive);
             Assert.Equal("records", snapshot.InputKind);
@@ -72,7 +72,7 @@ namespace XMAT.Tests.Operations.Export
 
             Assert.Throws<InvalidOperationException>(
                 () => snapshot.ReadChunk([Key(1)], CancellationToken.None));
-            Assert.Empty(snapshot.ReadChunk([Key(2)], CancellationToken.None));
+            Assert.Empty(snapshot.ReadChunk([Key(2)], CancellationToken.None).Rows);
         }
 
         [Fact]
@@ -123,6 +123,11 @@ namespace XMAT.Tests.Operations.Export
             using ICaptureExportSnapshot snapshot = new RelabeledSnapshot(
                 controller.CreateExportSnapshot("d1", AnalysisLimits.Default),
                 "xmatcap");
+            CaptureExportChunk first = snapshot.ReadChunk(
+                snapshot.Sessions.Select(session => session.Key).ToArray(),
+                CancellationToken.None);
+            Assert.Single(first.ConsumedKeys);
+            Assert.Single(first.Rows);
             var writer = new RecordingExportWriter();
             var operation = new ExportCaptureSessionsOperation
             {
@@ -216,7 +221,7 @@ namespace XMAT.Tests.Operations.Export
             public string InputKind => inputKind;
             public SqLtFileIdentity? InputIdentity => inner.InputIdentity;
             public string InputSha256 => inner.InputSha256;
-            public IReadOnlyList<RawExportRow> ReadChunk(
+            public CaptureExportChunk ReadChunk(
                 IReadOnlyList<CaptureRowKey> keys,
                 CancellationToken cancellationToken) =>
                 inner.ReadChunk(keys, cancellationToken);

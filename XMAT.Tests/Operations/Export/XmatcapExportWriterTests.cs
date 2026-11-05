@@ -4,6 +4,7 @@
 
 using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations;
 using XMAT.Operations.Export;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
@@ -108,6 +109,32 @@ namespace XMAT.Tests.Operations.Export
             Assert.False(File.Exists(output));
         }
 
+        [Theory]
+        [InlineData(13, CaptureExportErrorCodes.WriteFailed, nameof(OperationOutcome.Failed))]
+        [InlineData(18, CaptureExportErrorCodes.InputLimit, nameof(OperationOutcome.InvalidInput))]
+        [InlineData(19, null, null)]
+        public void Write_ClassifiesSqliteFailures(int sqliteCode, string expectedCode, string outcomeName)
+        {
+            using var directory = new ExportTestDirectory();
+            using var writer = new XmatcapExportWriter(
+                directory.PathOf(sqliteCode + ".xmatcap"),
+                CaptureFields(),
+                DeviceFields,
+                new Dictionary<string, RawExportRow>());
+            var row = new RawExportRow(Key(1), 1, 1, new ThrowingValues(SqliteFailure(sqliteCode)));
+
+            Exception failure = Record.Exception(() => writer.Write(row, CancellationToken.None));
+
+            if (expectedCode == null)
+            {
+                Assert.IsType<SqliteException>(failure);
+                return;
+            }
+            CaptureExportException expected = Assert.IsType<CaptureExportException>(failure);
+            Assert.Equal(expectedCode, expected.Code);
+            Assert.Equal(Enum.Parse<OperationOutcome>(outcomeName), expected.Outcome);
+        }
+
         [Fact]
         public void Complete_SynthesizesADeviceDescriptorForAnImportedTab()
         {
@@ -149,6 +176,19 @@ namespace XMAT.Tests.Operations.Export
             }.ToString());
             connection.Open();
             return connection;
+        }
+
+        private sealed class ThrowingValues(SqliteException failure) : IReadOnlyDictionary<string, object>
+        {
+            public object this[string key] => throw failure;
+            public IEnumerable<string> Keys => Array.Empty<string>();
+            public IEnumerable<object> Values => Array.Empty<object>();
+            public int Count => 1;
+            public bool ContainsKey(string key) => true;
+            public bool TryGetValue(string key, out object value) => throw failure;
+            public IEnumerator<KeyValuePair<string, object>> GetEnumerator() =>
+                Enumerable.Empty<KeyValuePair<string, object>>().GetEnumerator();
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
         }
 
     }

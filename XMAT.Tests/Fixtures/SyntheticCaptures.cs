@@ -40,6 +40,7 @@ namespace XMAT.Tests.Fixtures
         MissingHost,
         MalformedHost,
         EmptyHostWithPort,
+        RequestOnly,
     }
 
     internal static class SyntheticCaptures
@@ -441,11 +442,14 @@ namespace XMAT.Tests.Fixtures
                     $"raw/{frame:D4}_c.txt",
                     request,
                     Encoding.ASCII);
-                WriteTextEntry(
-                    archive,
-                    $"raw/{frame:D4}_s.txt",
-                    response,
-                    Encoding.ASCII);
+                if (frames[index] != SyntheticSazFrameKind.RequestOnly)
+                {
+                    WriteTextEntry(
+                        archive,
+                        $"raw/{frame:D4}_s.txt",
+                        response,
+                        Encoding.ASCII);
+                }
                 WriteTextEntry(
                     archive,
                     $"raw/{frame:D4}_m.xml",

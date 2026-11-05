@@ -318,7 +318,7 @@ namespace XMAT.WebServiceCapture
                     }),
             };
 
-            IReadOnlyList<RawExportRow> ReadRows(
+            CaptureExportChunk ReadRows(
                 IReadOnlyList<CaptureRowKey> keys,
                 CancellationToken cancellationToken)
             {
@@ -374,7 +374,7 @@ namespace XMAT.WebServiceCapture
                         ExportReadBatchObserver?.Invoke(batchCount, batchBytes);
                     }
                 }
-                return result;
+                return new CaptureExportChunk(keys.ToArray(), result);
             }
 
             return new CaptureExportSnapshot(
