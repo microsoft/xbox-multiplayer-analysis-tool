@@ -1,0 +1,40 @@
+<Window x:Class="XMAT.WebServiceCapture.SaveRequestWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Save request" Width="560" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{DynamicResource PanelBackgroundBrush}"
+        Foreground="{DynamicResource PrimaryForegroundBrush}">
+  <!-- Asks how to save one request: a template unless the user includes the captured content, for this save only
+       (SaveRequestWindow.xaml.cs). -->
+  <StackPanel Margin="12">
+    <TextBlock x:Name="TemplateText" TextWrapping="Wrap"/>
+    <TextBlock x:Name="PendingText" Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+    <CheckBox x:Name="IncludeContentBox" Margin="0,12,0,0" Checked="Choice_Changed" Unchecked="Choice_Changed"/>
+    <TextBlock x:Name="ContentText" Margin="20,6,0,0" TextWrapping="Wrap"/>
+    <TextBlock x:Name="RecognizedText" Margin="20,6,0,0" TextWrapping="Wrap"/>
+    <!-- The recognized names, escaped and cut (UntrustedText), one per line, at most SaveRequestWindow.MaxShownNames of
+         them, in an area of bounded height that scrolls. -->
+    <ScrollViewer x:Name="NamesScroll" Margin="20,4,0,0" MaxHeight="160" Focusable="False"
+                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="Collapsed">
+      <ItemsControl x:Name="NamesList" Focusable="False">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+    <TextBlock x:Name="MoreNamesText" Margin="20,2,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+    <TextBlock x:Name="BodyNotInspectedText" Margin="20,6,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+    <StackPanel x:Name="OriginPanel" Margin="20,10,0,0" Visibility="Collapsed">
+      <TextBlock x:Name="OriginText" TextWrapping="Wrap"/>
+      <CheckBox x:Name="AllowOriginBox" Margin="0,6,0,0" IsEnabled="False" Checked="Choice_Changed"
+                Unchecked="Choice_Changed"/>
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button x:Name="SaveButton" MinWidth="90" Margin="4" Padding="8,4" IsDefault="True" Click="Save_Click"/>
+      <Button x:Name="CancelButton" MinWidth="90" Margin="4" Padding="8,4" IsCancel="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>

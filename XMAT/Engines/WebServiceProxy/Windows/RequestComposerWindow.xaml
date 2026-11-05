@@ -11,12 +11,28 @@
   <Grid Margin="12">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
     <TextBlock x:Name="ReplayNotice" Margin="0,0,0,10" TextWrapping="Wrap"/>
-    <Grid Grid.Row="1">
+    <!-- The parts that a request file left out, until each is supplied with its button; typing never supplies one. -->
+    <Border x:Name="OmissionsPanel" Grid.Row="1" Margin="0,0,0,10" Padding="8" BorderThickness="1"
+            BorderBrush="{DynamicResource BorderBrush}" Visibility="Collapsed">
+      <StackPanel>
+        <TextBlock x:Name="OmissionsText" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+        <WrapPanel Margin="0,6,0,0" Orientation="Horizontal">
+          <Button x:Name="CompleteMethodButton" Margin="0,0,8,0" Padding="8,2" Click="CompletePart_Click"/>
+          <Button x:Name="CompleteUrlButton" Margin="0,0,8,0" Padding="8,2" Click="CompletePart_Click"/>
+          <Button x:Name="CompleteHeadersButton" Margin="0,0,8,0" Padding="8,2" Click="CompletePart_Click"/>
+          <Button x:Name="CompleteNoHeadersButton" Margin="0,0,8,0" Padding="8,2" Click="CompletePart_Click"/>
+          <Button x:Name="CompleteBodyButton" Margin="0,0,8,0" Padding="8,2" Click="CompletePart_Click"/>
+          <Button x:Name="CompleteEmptyBodyButton" Margin="0,0,8,0" Padding="8,2" Click="CompletePart_Click"/>
+        </WrapPanel>
+      </StackPanel>
+    </Border>
+    <Grid Grid.Row="2">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="8"/>
@@ -84,14 +100,20 @@
       <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" ResizeDirection="Columns"/>
       <local:RequestResponseView x:Name="ResponseView" Grid.Column="2"/>
     </Grid>
-    <TextBlock x:Name="StatusText" Grid.Row="2" Margin="0,10" TextWrapping="Wrap"
+    <TextBlock x:Name="StatusText" Grid.Row="3" Margin="0,10" TextWrapping="Wrap"
                AutomationProperties.LiveSetting="Polite"/>
-    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-      <Button x:Name="CopyCurlButton" MinWidth="140" Margin="4" Padding="8,4" Click="CopyCurl_Click"
-              ToolTipService.ShowOnDisabled="True"/>
-      <Button x:Name="SendButton" MinWidth="90" Margin="4" Padding="8,4" Click="Send_Click"/>
-      <Button x:Name="CancelSendButton" MinWidth="110" Margin="4" Padding="8,4" IsEnabled="False" Click="CancelSend_Click"/>
-      <Button x:Name="CloseButton" MinWidth="90" Margin="4" Padding="8,4" IsCancel="True" Click="Close_Click"/>
-    </StackPanel>
+    <DockPanel Grid.Row="4" LastChildFill="False">
+      <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
+        <Button x:Name="OpenRequestButton" MinWidth="110" Margin="4" Padding="8,4" Click="OpenRequest_Click"/>
+        <Button x:Name="SaveRequestButton" MinWidth="110" Margin="4" Padding="8,4" Click="SaveRequest_Click"/>
+      </StackPanel>
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button x:Name="CopyCurlButton" MinWidth="140" Margin="4" Padding="8,4" Click="CopyCurl_Click"
+                ToolTipService.ShowOnDisabled="True"/>
+        <Button x:Name="SendButton" MinWidth="90" Margin="4" Padding="8,4" Click="Send_Click"/>
+        <Button x:Name="CancelSendButton" MinWidth="110" Margin="4" Padding="8,4" IsEnabled="False" Click="CancelSend_Click"/>
+        <Button x:Name="CloseButton" MinWidth="90" Margin="4" Padding="8,4" IsCancel="True" Click="Close_Click"/>
+      </StackPanel>
+    </DockPanel>
   </Grid>
 </Window>

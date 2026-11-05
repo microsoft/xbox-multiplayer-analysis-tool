@@ -243,7 +243,15 @@ namespace XMAT.Operations.Capabilities
                     "[--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] " +
                     "[--body-file FILE] [--empty-body] [--unconditional] [--http-version auto|1.1|2] [--include-sensitive] " +
                     "[--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
-                operation: ReplayOperation),
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Click(ComposerXaml, "OpenRequest_Click"),
+                    Click(ComposerXaml, "SaveRequest_Click"),
+                    Click(ComposerXaml, "CompletePart_Click"),
+                    Window("XMAT.WebServiceCapture.SaveRequestWindow"),
+                    Click("Engines/WebServiceProxy/Windows/SaveRequestWindow.xaml", "Save_Click"),
+                }),
 
             // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.
             Capability.Planned(
