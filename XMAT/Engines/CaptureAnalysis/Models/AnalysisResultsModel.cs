@@ -68,6 +68,15 @@ namespace XMAT.XboxLiveCaptureAnalysis.Models
         // were and session links are disabled.
         public bool IsSourceStale { get; private set; }
 
+        internal void MarkSourceStale()
+        {
+            if (!IsSourceStale)
+            {
+                IsSourceStale = true;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSourceStale)));
+            }
+        }
+
         public DateTime CompletedAt { get; internal set; }
         public IReadOnlyList<AnalysisArtifact> ArtifactManifest { get; internal set; }
 

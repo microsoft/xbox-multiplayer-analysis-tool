@@ -7,9 +7,11 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using Microsoft.Data.Sqlite;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT.DataAbstractionLayer
 {
@@ -18,7 +20,7 @@ namespace XMAT.DataAbstractionLayer
         public event Action<IDataTable, Int64> RowAdded;
         public event Action<IDataTable, Int64> RowUpdated;
         public event Action<IDataTable, Int64> RowsRemoved;
-        private readonly object _lockObj = new object();
+        private readonly object _lockObj;
 
         public string Name { get { return _name; } }
 
@@ -156,8 +158,52 @@ namespace XMAT.DataAbstractionLayer
 
         public IReadOnlyList<long> DeleteRows(
             string deviceName,
-            IReadOnlyList<long> rowIds) =>
-            throw new NotSupportedException();
+            IReadOnlyList<long> rowIds)
+        {
+            ArgumentNullException.ThrowIfNull(rowIds);
+            if (rowIds.Count == 0)
+            {
+                return Array.Empty<long>();
+            }
+            lock (_lockObj)
+            {
+                var deleted = new List<long>();
+                FieldDefinition device =
+                    (FieldDefinition)_fieldDefinitions[
+                        WebServiceCaptureMethod
+                            .FieldKey_DeviceName];
+                using (SqliteCommand command =
+                    _connection.CreateCommand())
+                {
+                    command.CommandText =
+                        $"DELETE FROM {_name} " +
+                        $"WHERE {device.Name} = $device " +
+                        "AND id IN (SELECT value FROM json_each($ids)) " +
+                        "RETURNING id";
+                    command.Parameters.AddWithValue(
+                        "$device",
+                        ImportedFieldValueAsParameter(
+                            device,
+                            deviceName));
+                    command.Parameters.AddWithValue(
+                        "$ids",
+                        JsonSerializer.Serialize(
+                            rowIds));
+                    using SqliteDataReader reader =
+                        command.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        deleted.Add(
+                            reader.GetInt64(0));
+                    }
+                }
+                foreach (long rowId in deleted)
+                {
+                    _rowVersions.Remove(rowId);
+                }
+                return deleted;
+            }
+        }
 
         public IDisposable EnterRead()
         {
@@ -282,8 +328,23 @@ namespace XMAT.DataAbstractionLayer
             SqliteConnection connection,
             string name,
             IEnumerable<IField> fields)
+            : this(
+                connection,
+                new object(),
+                name,
+                fields)
         {
+        }
+
+        internal SqLtDataTable(
+            SqliteConnection connection,
+            object connectionGate,
+            string name,
+            IEnumerable<IField> fields)
+        {
+            ArgumentNullException.ThrowIfNull(connectionGate);
             _name = name;
+            _lockObj = connectionGate;
 
             var columnIndex = 1;
             foreach (var field in fields)

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections.Specialized;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -31,9 +32,9 @@ namespace XMAT.Tests
             _application = application;
         }
 
-        // Rows 1, 2, 6 and 7 are visible, and 6 has no response; filters hide 3 (status 503), 4 (svchost.exe) and 5 (host
+        // Rows 1, 2, 6 and 7 are visible, and 6 has no response; filters hide 3 (host c.test), 4 (svchost.exe) and 5 (host
         // b.test). Delete selects the next surviving visible row, else the previous one, else none; Shift+Delete keeps the
-        // selection; Cancel deletes nothing. Delete in the process filter editor never deletes.
+        // selection; Cancel deletes nothing; the filters keep their choices. Delete in the process filter editor never deletes.
         [Theory]
         [InlineData(false, "2,6", true, "1,3,4,5,7", "7")]
         [InlineData(false, "7", true, "1,2,3,4,5,6", "6")]
@@ -48,14 +49,13 @@ namespace XMAT.Tests
                 using var tab = new LiveCaptureTab();
                 foreach (int number in Enumerable.Range(1, 7))
                 {
-                    tab.Add(number, number == 4 ? "svchost.exe" : "Game.exe", number == 5 ? "b.test" : "a.test",
-                        number switch { 3 => "503", 6 => null, _ => "200" });
+                    tab.Add(number, number == 4 ? "svchost.exe" : "Game.exe",
+                        number switch { 3 => "c.test", 5 => "b.test", 7 => "d.test", _ => "a.test" }, number == 6 ? null : "200");
                 }
 
                 tab.Controller.SetProcessFilter(Spec(null, new[] { "svchost.exe" }));
                 (CaptureConnectionView view, DataGrid grid, RecordingDeleteDialogs dialogs) = Show(window, tab);
-                Uncheck(view, "StatusFilters", tab.Controller.StatusFilterList, "503");
-                Uncheck(view, "HostFilters", tab.Controller.HostFilterList, "b.test");
+                Uncheck(view, "HostFilters", tab.Controller.HostFilterList, "b.test", "c.test");
                 dialogs.Answer = confirm;
                 int[] chosen = Numbers(selected);
                 Select(grid, chosen.Select(number => Row(tab, number)).ToArray());
@@ -76,6 +76,8 @@ namespace XMAT.Tests
                 Assert.Same(current, grid.SelectedItem);
                 Assert.Same(current, grid.Items.CurrentItem);
                 Assert.Same(current, tab.Controller.SelectedConnectionModel);
+                Assert.Equal(new[] { ("a.test", true), ("c.test", false), ("b.test", false), ("d.test", true) },
+                    tab.Controller.HostFilterList.Select(item => (item.Text, item.IsChecked)));
             });
         }
 
@@ -105,6 +107,30 @@ namespace XMAT.Tests
                 Assert.Equal(new CaptureDeletePrompt(true, 2, 1, 1, 0, 0), Assert.Single(dialogs.Prompts));
                 Assert.Equal(new[] { selected, tool, arrived }, tab.Controller.ProxyConnections);
                 Assert.Equal(Localization.GetLocalizedString("CAPTURE_DELETE_RETAINED", 1, 2, 1, 0), Assert.Single(dialogs.Notices));
+            });
+        }
+
+        // A view that fails after the deletion committed never makes the notice say that nothing was deleted, and the
+        // capture data operation ends.
+        [Fact]
+        public void AViewFailingAfterTheCommit_IsReported_AsADeletion()
+        {
+            _application.Run(window =>
+            {
+                using var tab = new LiveCaptureTab();
+                ProxyConnectionModel victim = tab.Add(1);
+                tab.Add(2);
+                (_, DataGrid grid, RecordingDeleteDialogs dialogs) = Show(window, tab);
+                NotifyCollectionChangedEventHandler fail = (_, _) => throw new InvalidOperationException("A view failed.");
+                tab.Controller.ProxyConnections.CollectionChanged += fail;
+                Select(grid, victim);
+
+                Press(grid, Key.Delete);
+                tab.Controller.ProxyConnections.CollectionChanged -= fail;
+
+                Assert.DoesNotContain(victim, tab.Controller.ProxyConnections);
+                Assert.Equal(Localization.GetLocalizedString("CAPTURE_DELETE_VIEW_FAILED"), Assert.Single(dialogs.Notices));
+                Assert.True(XMAT.Models.CaptureAppModel.AppModel.CanModifyCaptureData);
             });
         }
 
@@ -230,10 +256,14 @@ namespace XMAT.Tests
             WpfTestHost.Pump();
         }
 
-        // Unchecks one value of a checkbox filter, then enables the filter.
-        private static void Uncheck(CaptureConnectionView view, string filter, IEnumerable<CheckedListItem> items, string value)
+        // Unchecks values of a checkbox filter, then enables the filter.
+        private static void Uncheck(CaptureConnectionView view, string filter, IEnumerable<CheckedListItem> items, params string[] values)
         {
-            items.Single(item => item.Text == value).IsChecked = false;
+            foreach (CheckedListItem item in items.Where(item => values.Contains(item.Text)))
+            {
+                item.IsChecked = false;
+            }
+
             ((CheckBox)((CheckBoxFilters)view.FindName(filter)).FindName("EnableFilters")).IsChecked = true;
             WpfTestHost.Pump();
         }

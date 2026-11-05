@@ -410,6 +410,7 @@ namespace XMAT.Cli
         {
             CapabilityStatus.Supported => "supported",
             CapabilityStatus.Planned => "planned",
+            CapabilityStatus.PolicyException => "policyException",
             _ => "guiOnly",
         };
     }

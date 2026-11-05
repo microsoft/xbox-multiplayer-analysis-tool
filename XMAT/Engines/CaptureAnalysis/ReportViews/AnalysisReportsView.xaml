@@ -28,10 +28,19 @@
             PerEndpointReportTemplate="{StaticResource PerEndpointReportTemplate}"
             StatsReportTemplate="{StaticResource StatsReportTemplate}"
             />
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
     </UserControl.Resources>
-    <Grid
+    <DockPanel
         HorizontalAlignment="Stretch"
         VerticalAlignment="Stretch">
+        <!-- Once the analyzed capture tab is closed or its sessions change, the results are historical. -->
+        <TextBlock
+            x:Name="SourceStaleBanner"
+            DockPanel.Dock="Top"
+            Margin="4"
+            FontWeight="SemiBold"
+            TextWrapping="Wrap"
+            Visibility="{Binding IsSourceStale, FallbackValue=Collapsed, Converter={StaticResource BooleanToVisibilityConverter}}"/>
         <TabControl
             x:Name="ReportTabs"
             TabStripPlacement="Left"
@@ -48,5 +57,5 @@
                 </DataTemplate>
             </TabControl.ItemTemplate>
         </TabControl>
-    </Grid>
+    </DockPanel>
 </UserControl>

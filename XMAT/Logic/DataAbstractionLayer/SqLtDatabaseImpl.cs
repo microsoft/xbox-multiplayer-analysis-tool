@@ -32,16 +32,23 @@ namespace XMAT.DataAbstractionLayer
 
         private IDataTable CreateTableInternal(string name, IEnumerable<IField> fields)
         {
-            _commandBuilder.Clear();
-            _commandBuilder.Append("DROP TABLE IF EXISTS ");
-            _commandBuilder.Append(name);
+            lock (_connectionGate)
+            {
+                _commandBuilder.Clear();
+                _commandBuilder.Append("DROP TABLE IF EXISTS ");
+                _commandBuilder.Append(name);
 
-            _command.CommandText = _commandBuilder.ToString();
-            _command.ExecuteNonQuery();
+                _command.CommandText = _commandBuilder.ToString();
+                _command.ExecuteNonQuery();
 
-            var newTable = new SqLtDataTable(_connection, name, fields);
-            _dataTables[name] = newTable;
-            return newTable;
+                var newTable = new SqLtDataTable(
+                    _connection,
+                    _connectionGate,
+                    name,
+                    fields);
+                _dataTables[name] = newTable;
+                return newTable;
+            }
         }
 
         private void InitializeInternal()
@@ -54,6 +61,17 @@ namespace XMAT.DataAbstractionLayer
             _connection = new SqliteConnection("Data Source=:memory:");
             _connection.Open();
             WritableConnectionOpened?.Invoke(_connection);
+            using (SqliteCommand secureDelete = _connection.CreateCommand())
+            {
+                secureDelete.CommandText = "PRAGMA secure_delete=ON";
+                secureDelete.ExecuteNonQuery();
+                secureDelete.CommandText = "PRAGMA secure_delete";
+                if (Convert.ToInt64(secureDelete.ExecuteScalar()) != 1)
+                {
+                    throw new InvalidOperationException(
+                        "SQLite did not enable secure deletion.");
+                }
+            }
 
             _command = new SqliteCommand();
             _command.Connection = _connection;
@@ -119,8 +137,11 @@ namespace XMAT.DataAbstractionLayer
                     saveDbConnection.Open();
                     BackupFailureInjection?.Invoke(
                         temporaryPath);
-                    _connection.BackupDatabase(
-                        saveDbConnection);
+                    lock (_connectionGate)
+                    {
+                        _connection.BackupDatabase(
+                            saveDbConnection);
+                    }
                 }
 
                 MoveFailureInjection?.Invoke(
@@ -324,6 +345,7 @@ namespace XMAT.DataAbstractionLayer
         private SqliteConnection _connection;
         private SqliteCommand _command;
         private StringBuilder _commandBuilder;
+        private readonly object _connectionGate = new();
 
         private readonly Dictionary<string, SqLtDataTable> _dataTables = new Dictionary<string, SqLtDataTable>();
     }

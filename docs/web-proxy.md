@@ -203,6 +203,34 @@ Clearing never overlaps saving, exporting, importing or analyzing captures: **Cl
 Capture** is unavailable while one of them runs, and if one starts at the same moment,
 XMAT reports that another capture operation is in progress and clears nothing.
 
+### Delete sessions
+
+Select sessions in the capture list and press **Delete**, or right-click one and choose
+**Delete Selected Sessions**. **Shift+Delete** (**Delete Unselected Sessions**) deletes
+the visible sessions that are not selected and keeps the selected ones. Only sessions
+that the list shows are deleted: sessions that the Status, Host, Method or process
+filters hide stay in the capture. The keys delete only in the capture list, never in
+the timeline or the filter boxes.
+
+XMAT asks first, with **Cancel** as the default answer. The confirmation counts the
+sessions to delete, the sessions that stay (including hidden ones) and the sessions to
+delete that have no complete recorded response. Deleting cannot be undone. Sessions that
+arrive while the confirmation is open, and sessions that a filter hides by the time you
+confirm, are kept, and XMAT then reports how many it deleted and kept.
+
+You can delete sessions while the capture runs. XMAT keeps forwarding the traffic of a
+deleted session that is still in progress, but does not record the rest of it.
+
+Opened capture files and imported Fiddler archives are read-only, so their delete
+commands are unavailable; [export the sessions to keep](capture-files.md#export-selected-or-visible-sessions)
+instead. Like clearing, deleting never overlaps saving, exporting, importing or
+analyzing captures.
+
+A capture that you save after deleting sessions does not contain their payloads: XMAT
+overwrites the storage that held them. Files saved or exported earlier still contain
+them, and XMAT's memory use may not shrink right away. Analyses of the capture become
+historical; see [Read the Per Endpoint report](live-trace-analysis.md#read-the-per-endpoint-report).
+
 ## Block or bypass hosts
 
 The **Block List** and **Bypass List** are shared by every capture in the current

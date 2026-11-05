@@ -38,6 +38,8 @@
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ShowAllProcesses}" Executed="ProcessFilterCommand_Executed" CanExecute="ProcessFilterCommand_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ExportSelectedSessions}" Executed="ExportSessions_Executed" CanExecute="ExportSessions_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ExportVisibleSessions}" Executed="ExportSessions_Executed" CanExecute="ExportSessions_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DeleteSelectedSessions}" Executed="DeleteSessions_Executed" CanExecute="DeleteSessions_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DeleteUnselectedSessions}" Executed="DeleteSessions_Executed" CanExecute="DeleteSessions_CanExecute"/>
     </UserControl.CommandBindings>
 
     <Grid>
@@ -167,6 +169,11 @@
                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"
                   ContextMenuOpening="ConnectionList_ContextMenuOpening"
                   AutoGenerateColumns="False" GridLinesVisibility="None" ScrollViewer.ScrollChanged="ConnectionList_ScrollChanged">
+            <!-- Only the grid binds Delete, so the key in a text box or filter never deletes sessions. -->
+            <DataGrid.InputBindings>
+                <KeyBinding Key="Delete" Command="{x:Static local:WebServiceProxyCommands.DeleteSelectedSessions}"/>
+                <KeyBinding Key="Delete" Modifiers="Shift" Command="{x:Static local:WebServiceProxyCommands.DeleteUnselectedSessions}"/>
+            </DataGrid.InputBindings>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="30"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
                 <DataGridTextColumn Header="STATUS" Binding="{Binding Status}"        Width="50"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>

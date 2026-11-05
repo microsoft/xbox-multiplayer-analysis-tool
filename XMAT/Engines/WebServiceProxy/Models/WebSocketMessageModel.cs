@@ -4,7 +4,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using XMAT.Operations.Captures;
@@ -90,8 +93,44 @@ namespace XMAT.WebServiceCapture.Models
         }
 
         internal int RemoveByRowKeys(
-            IReadOnlySet<CaptureRowKey> keys) =>
-            throw new NotSupportedException();
+            IReadOnlySet<CaptureRowKey> keys)
+        {
+            ArgumentNullException.ThrowIfNull(keys);
+            WebSocketMessageModel[] survivors =
+                this.Where(
+                    message =>
+                        !keys.Contains(
+                            message.RowKey))
+                .ToArray();
+            int removed =
+                Count - survivors.Length;
+            if (removed == 0)
+            {
+                return 0;
+            }
+            CheckReentrancy();
+            Items.Clear();
+            CapturedPayloadBytes = 0;
+            foreach (
+                WebSocketMessageModel survivor in
+                survivors)
+            {
+                Items.Add(survivor);
+                CapturedPayloadBytes +=
+                    survivor.PayloadLength;
+            }
+            OnPropertyChanged(
+                new PropertyChangedEventArgs(
+                    nameof(Count)));
+            OnPropertyChanged(
+                new PropertyChangedEventArgs(
+                    "Item[]"));
+            OnCollectionChanged(
+                new NotifyCollectionChangedEventArgs(
+                    NotifyCollectionChangedAction
+                        .Reset));
+            return removed;
+        }
 
         protected override void InsertItem(int index, WebSocketMessageModel item)
         {
