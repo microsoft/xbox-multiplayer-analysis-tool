@@ -175,8 +175,8 @@ namespace XMAT.Operations.Export
         internal const string WriteFailed = "export.write.failed";
     }
 
-    // Only expected input, sanitizer, and write failures use this type. Cancellation and unexpected internal failures
-    // retain their native classification.
+    // Only expected input, destination-protection, sanitizer, and write failures use this type. Cancellation and
+    // unexpected internal failures retain their native classification.
     internal sealed class CaptureExportException : Exception
     {
         internal CaptureExportException(
@@ -298,6 +298,13 @@ namespace XMAT.Operations.Export
                         "export.request.invalid",
                         "The export request is invalid.");
                 }
+                if (!FormatMatches(request.Format, request.OutputPath))
+                {
+                    throw new CaptureExportException(
+                        CaptureExportErrorCodes.FormatMismatch,
+                        OperationOutcome.InvalidInput);
+                }
+                PrecheckDestination(request);
                 CaptureInputReader.ValidateLimits(request.Limits);
                 OperationResult<CaptureSelectionSpec> validated =
                     CaptureSelectionValidator.Validate(request.Selection);
@@ -321,7 +328,6 @@ namespace XMAT.Operations.Export
                     {
                         snapshot = CaptureExportSnapshot.FromLoadedInput(
                             loaded,
-                            request.Limits,
                             request.DeviceId);
                         ownsSnapshot = true;
                     }
@@ -370,7 +376,6 @@ namespace XMAT.Operations.Export
                 sessionByKey = snapshot.Sessions.ToDictionary(session => session.Key);
                 context.Progress.Report(new OperationProgress(ReadPhase, 0));
                 context.Progress.Report(new OperationProgress(WritePhase, 0));
-                context.Progress.Report(new OperationProgress(PublishPhase, 0));
                 PublishedCapture published = await Publisher.PublishAsync(
                     request.OutputPath,
                     request.ReplaceExisting,
@@ -436,6 +441,7 @@ namespace XMAT.Operations.Export
                         {
                             throw new InvalidOperationException("The export writer reported an inconsistent row count.");
                         }
+                        context.Progress.Report(new OperationProgress(PublishPhase, 0));
                         return Task.CompletedTask;
                     },
                     cancellationToken).ConfigureAwait(false);
@@ -480,12 +486,18 @@ namespace XMAT.Operations.Export
             }
             catch (CaptureInputException exception)
             {
+                string code = exception.Code is "analysis.input.too-large" or "analysis.input.limit"
+                    ? CaptureExportErrorCodes.InputLimit
+                    : exception.Code;
+                string message = code == CaptureExportErrorCodes.InputLimit
+                    ? "The capture exceeds an export input limit."
+                    : exception.DiagnosticMessage;
                 return Failure(
                     OperationOutcome.InvalidInput,
                     result,
                     diagnostics,
-                    exception.Code,
-                    exception.DiagnosticMessage);
+                    code,
+                    message);
             }
             catch (CaptureExportException exception)
             {
@@ -594,6 +606,31 @@ namespace XMAT.Operations.Export
                 {
                     snapshot?.Dispose();
                 }
+            }
+        }
+
+        private static bool FormatMatches(CaptureExportFormat format, string path)
+        {
+            string extension = Path.GetExtension(path);
+            return format == CaptureExportFormat.Xmatcap
+                ? string.Equals(extension, ".xmatcap", StringComparison.OrdinalIgnoreCase)
+                : string.Equals(extension, ".saz", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void PrecheckDestination(ExportCaptureRequest request)
+        {
+            string output = Path.GetFullPath(request.OutputPath);
+            if (!string.IsNullOrWhiteSpace(request.InputPath) &&
+                string.Equals(
+                    output,
+                    Path.GetFullPath(request.InputPath),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new CaptureExportDestinationException("export.output.is-source");
+            }
+            if (!request.ReplaceExisting && File.Exists(output))
+            {
+                throw new CaptureExportDestinationException("export.output.exists");
             }
         }
 

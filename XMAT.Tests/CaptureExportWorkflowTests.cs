@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Immutable;
-using System.Reflection;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.Operations;
@@ -237,7 +236,7 @@ namespace XMAT.Tests
                     value,
                     new[] { new OperationDiagnostic(code, OperationDiagnosticSeverity.Error, "operation-text-canary") });
 
-            string message = ExportResultMessage(result);
+            string message = MainWindow.ExportResultMessage(result);
             bool Says(string text, params object[] values) =>
                 message.Contains(Localization.GetLocalizedString(text, values), StringComparison.Ordinal);
 
@@ -248,11 +247,6 @@ namespace XMAT.Tests
             Assert.DoesNotContain("operation-text-canary", message, StringComparison.Ordinal);
             Assert.DoesNotContain("NO_IMPL_", message, StringComparison.Ordinal);
         }
-
-        // The text of an export's last message box, MainWindow.ExportResultMessage (reached by name until it exists).
-        private static string ExportResultMessage(OperationResult<ExportCaptureResult> result) =>
-            (string)(typeof(MainWindow).GetMethod("ExportResultMessage", BindingFlags.Static | BindingFlags.NonPublic) ??
-                throw new MissingMethodException(nameof(MainWindow), "ExportResultMessage")).Invoke(null, new object[] { result });
 
         private static ICaptureDeviceContext Tab(CaptureAppModel app, string name, IDeviceCaptureController controller = null)
         {

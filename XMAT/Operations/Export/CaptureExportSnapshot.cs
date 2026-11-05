@@ -76,11 +76,9 @@ namespace XMAT.Operations.Export
 
         internal static CaptureExportSnapshot FromLoadedInput(
             LoadedInput input,
-            AnalysisLimits limits,
             string selectedDeviceId = null)
         {
             ArgumentNullException.ThrowIfNull(input);
-            ArgumentNullException.ThrowIfNull(limits);
             IReadOnlyList<SqLtSchemaColumn> captureFields = input.CaptureFields ??
                 WebProxyCaptureSchema.Fields.Select(field => new SqLtSchemaColumn(
                     field.Name,
@@ -153,12 +151,6 @@ namespace XMAT.Operations.Export
                         Dictionary<string, object> values =
                             CaptureRawValues.Read(row.Record, captureFields);
                         CaptureRawValues.OverlayProcess(values, row.Process);
-                        if (CaptureRawValues.Measure(values) > limits.MaxEntryBytes)
-                        {
-                            throw new CaptureExportException(
-                                CaptureExportErrorCodes.InvalidBody,
-                                OperationOutcome.InvalidInput);
-                        }
                         result.Add(new RawExportRow(key, row.Record.RowId, 0, values));
                     }
                 }

@@ -371,9 +371,9 @@ namespace XMAT.Cli
                 return CliParseResult.UsageError(
                     command,
                     "cli.usage.invalid-value",
-                    "--host and --exclude-host take host names or host/path patterns (an empty value only with " +
-                        "--host-mode exact); --status and --method take the values that the capture shows. Each value is " +
-                        "at most 260 characters, at most 64 of each option.");
+                    "--host and --exclude-host take host names or host/path patterns (at most 64 of each, 260 characters " +
+                        "each), or with --host-mode exact any host value that the capture shows, the empty one included; " +
+                        "--status and --method take any of the values that the capture shows.");
             }
 
             return CliParseResult.Success(new CliRequest(

@@ -82,17 +82,18 @@ namespace XMAT.Operations.Export
                     }
                 }
             }
-            catch (Exception exception) when (exception is not OperationCanceledException &&
-                exception is not CaptureExportException)
+            catch (Exception exception) when (IsWriteFailure(exception))
             {
-                _captureInsert?.Dispose();
-                _deviceInsert?.Dispose();
-                _transaction?.Dispose();
-                _connection.Dispose();
+                Dispose();
                 throw new CaptureExportException(
                     CaptureExportErrorCodes.WriteFailed,
                     OperationOutcome.Failed,
                     exception);
+            }
+            catch
+            {
+                Dispose();
+                throw;
             }
         }
 
@@ -115,8 +116,7 @@ namespace XMAT.Operations.Export
                 }
                 _rowsWritten++;
             }
-            catch (Exception exception) when (exception is not OperationCanceledException &&
-                exception is not CaptureExportException)
+            catch (Exception exception) when (IsWriteFailure(exception))
             {
                 throw new CaptureExportException(
                     CaptureExportErrorCodes.WriteFailed,
@@ -167,8 +167,7 @@ namespace XMAT.Operations.Export
                 _completed = true;
                 return new ExportWriteSummary(_rowsWritten, null);
             }
-            catch (Exception exception) when (exception is not OperationCanceledException &&
-                exception is not CaptureExportException)
+            catch (Exception exception) when (IsWriteFailure(exception))
             {
                 throw new CaptureExportException(
                     CaptureExportErrorCodes.WriteFailed,
@@ -241,5 +240,8 @@ namespace XMAT.Operations.Export
             };
 
         private static string Quote(string identifier) => $"\"{identifier.Replace("\"", "\"\"")}\"";
+
+        private static bool IsWriteFailure(Exception exception) =>
+            exception is SqliteException or IOException or UnauthorizedAccessException;
     }
 }

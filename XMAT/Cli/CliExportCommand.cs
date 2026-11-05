@@ -10,14 +10,21 @@ using XMAT.Operations.Export;
 namespace XMAT.Cli
 {
     // xmat export INPUT --out FILE [...] is the command-line adapter of the shared export operation (the GUI's adapter is
-    // CaptureExportWorkflow). The operation stages, hashes and publishes FILE; it never replaces an existing file and
-    // never changes INPUT. The JSON reports the publication in its export block, so artifacts stays empty.
+    // CaptureExportWorkflow). The operation stages FILE in a folder that only the current user can open, then hashes and
+    // publishes it; it never replaces an existing file, never publishes where access cannot be restricted, and never
+    // changes INPUT. The JSON reports the publication in its export block, so artifacts stays empty.
     internal static class CliExportCommand
     {
-        internal static async Task<CliReport> RunAsync(CliRequest request, string runId, CancellationToken cancellationToken)
+        // A test passes the operation, with its own publisher; xmat uses the shared one.
+        internal static async Task<CliReport> RunAsync(
+            CliRequest request,
+            string runId,
+            CancellationToken cancellationToken,
+            IOperation<ExportCaptureRequest, ExportCaptureResult> operation = null)
         {
             var report = new CliReport(CliCommands.Export, runId) { Export = CliExportReport.From(request) };
-            OperationResult<ExportCaptureResult> result = await new ExportCaptureSessionsOperation().ExecuteAsync(
+            operation ??= new ExportCaptureSessionsOperation();
+            OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
                 new ExportCaptureRequest(
                     request.Input,
                     null,

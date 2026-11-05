@@ -37,10 +37,20 @@ In a capture list, right-click a request and choose **Export Selected Sessions..
 status, host, method and process filters show). XMAT confirms how many sessions it
 will export, then asks for the file; the save dialog's file type chooses an
 `.XMATCAP` subset (the original rows, ids and columns), a `.SAZ` archive or a
-sanitized `.SAZ`. The completion message reports **Exported N of M sessions** and any
-sessions it skipped. An existing file is replaced only after you confirm it in the
-save dialog and the export completes. `xmat export` makes the same exports from the
-command line (see [Command line](cli.md)).
+sanitized `.SAZ`. A file name that does not end in the chosen type's extension is
+refused with an explanation and the save dialog opens again; nothing is written. The
+completion message reports **Exported N of M sessions**, where M counts the capture's
+sessions when the export started, and any sessions it skipped. An existing file is
+replaced only after you confirm it in the save dialog and the export completes. While
+an export runs, the capture cannot be stopped. `xmat export` makes the same exports
+from the command line (see [Command line](cli.md)).
+
+An exported file can be opened only by your Windows account, also when it replaces a
+file, and so can the temporary folder next to it that XMAT writes it in. On storage
+where Windows cannot restrict access (such as FAT drives or some network shares), XMAT
+asks before exporting there; if you agree, the file is exported without that
+protection and the completion message says so. The answer covers only that export;
+`xmat export` never exports there.
 
 A `.SAZ` export also keeps XMAT's own values as session flags: the request number,
 connection id, exact request and response times, scheme, request path (with its
@@ -178,10 +188,10 @@ archive rather than truncating it.
 
 ### Cancellation and failures
 
-Longer exports show a cancellable progress window. Cancel, Escape, or closing that
-window requests cancellation and waits for the worker and cleanup before releasing
-the operation guard. An existing destination is replaced only after a complete export,
-not on cancellation or failure.
+Longer exports show a progress window with the current step and Cancel. Cancel,
+Escape, or closing that window requests cancellation and waits for the worker and
+cleanup before releasing the operation guard. An existing destination is replaced only
+after a complete export, not on cancellation or failure.
 
 ### Review before sharing
 

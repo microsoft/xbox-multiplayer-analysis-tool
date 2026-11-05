@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -60,7 +60,7 @@ namespace XMAT
             var dialog = new SaveFileDialog
             {
                 Filter = sanitizedOnly ? SanitizedFilter : $"{XMATFilter}|{FiddlerFilter}|{SanitizedFilter}",
-                Title = Localization.GetLocalizedString(sanitizedOnly ? "FILE_EXPORT_SANITIZED" : "EXPORT_TITLE"),
+                Title = Localization.GetLocalizedString(sanitizedOnly ? "EXPORT_SANITIZED_TITLE" : "EXPORT_TITLE"),
             };
             if (dialog.ShowDialog(this) != true)
             {
@@ -77,22 +77,41 @@ namespace XMAT
             Task.FromResult(MessageBox.Show(
                 this,
                 Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM"),
-                Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
+                Localization.GetLocalizedString("EXPORT_SANITIZED_TITLE"),
                 MessageBoxButton.OKCancel,
                 MessageBoxImage.Warning) == MessageBoxResult.OK);
 
-        // The export runs on a worker; after a short delay a progress window offers Cancel until it ends.
+        Task<bool> ICaptureExportDialogService.ConfirmUnprotectedAsync(object owner, string path) =>
+            Task.FromResult(MessageBox.Show(
+                this,
+                Localization.GetLocalizedString("EXPORT_UNPROTECTED_CONFIRM", path),
+                Localization.GetLocalizedString("EXPORT_UNPROTECTED_TITLE"),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No) == MessageBoxResult.Yes);
+
+        // The export runs on a worker and reports its phases to a progress window, which appears after a short delay with
+        // the latest phase and Cancel; an export that ends sooner closes it unseen.
         async Task<OperationResult<ExportCaptureResult>> ICaptureExportDialogService.RunWithProgressAsync(
             object owner,
             Func<IProgress<OperationProgress>, CancellationToken, Task<OperationResult<ExportCaptureResult>>> export)
         {
             using var cancellation = new CancellationTokenSource();
+            var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var window = new SanitizedExportProgressWindow(finished.Task, cancellation.Cancel) { Owner = this };
             using (PublicUtilities.BlockingOperation())
             {
-                Task<OperationResult<ExportCaptureResult>> running = Task.Run(() => export(null, cancellation.Token));
+                Task<OperationResult<ExportCaptureResult>> running = Task.Run(() => export(window, cancellation.Token));
+                _ = running.ContinueWith(
+                    _ => finished.TrySetResult(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
                 if (await Task.WhenAny(running, Task.Delay(250)) != running)
                 {
-                    new SanitizedExportProgressWindow(running, cancellation.Cancel) { Owner = this }.ShowDialog();
+                    window.ShowDialog();
+                }
+                else
+                {
+                    finished.TrySetResult();
+                    window.Close();
                 }
 
                 return await running;
@@ -100,37 +119,81 @@ namespace XMAT
         }
 
         Task ICaptureExportDialogService.ShowResultAsync(
-            object owner, CaptureExportScope scope, OperationResult<ExportCaptureResult> result)
+            object owner, CaptureExportScope scope, OperationResult<ExportCaptureResult> result) =>
+            ShowExportMessage(
+                ExportResultMessage(result),
+                result.Outcome == OperationOutcome.Cancelled || (result.Succeeded && result.Value?.OutputProtected != false)
+                    ? MessageBoxImage.Information
+                    : result.Value?.Published == true ? MessageBoxImage.Warning : MessageBoxImage.Error);
+
+        // The text of an export's last message box, from the result's facts and codes and never the operation's own
+        // English text. A published file is reported as N of the capture's M sessions, with a warning when Windows could
+        // not restrict access to it; otherwise the destination is unchanged, unless the GUI itself stopped unexpectedly.
+        internal static string ExportResultMessage(OperationResult<ExportCaptureResult> result)
         {
             if (result.Outcome == OperationOutcome.Cancelled)
             {
-                return ShowExportMessage(Localization.GetLocalizedString("EXPORT_CANCELLED"), MessageBoxImage.Information);
+                return Localization.GetLocalizedString("EXPORT_CANCELLED");
             }
 
-            if (!result.Succeeded || result.Value?.Counts is not { } counts)
+            ExportCaptureResult value = result.Value;
+            var lines = new List<string>();
+            if (value?.Published == true)
             {
-                OperationDiagnostic error = result.Diagnostics.FirstOrDefault(
-                    diagnostic => diagnostic.Severity == OperationDiagnosticSeverity.Error) ??
-                    (result.Diagnostics.Count > 0 ? result.Diagnostics[0] : null);
-                return ShowExportMessage(
-                    Localization.GetLocalizedString("EXPORT_FAILED", error?.Message, error?.Code), MessageBoxImage.Error);
-            }
+                if (value.Counts is { } counts)
+                {
+                    lines.Add(Localization.GetLocalizedString("EXPORT_COMPLETE", counts.Exported, counts.Total));
+                    if (counts.SkippedIncomplete + counts.Unavailable != 0)
+                    {
+                        lines.Add(Localization.GetLocalizedString(
+                            "EXPORT_COMPLETE_SKIPPED", counts.SkippedIncomplete, counts.Unavailable));
+                    }
+                }
 
-            var message = new StringBuilder(Localization.GetLocalizedString("EXPORT_COMPLETE", counts.Exported, counts.Selected));
-            if (counts.SkippedIncomplete + counts.Unavailable != 0)
+                if (value.Format == CaptureExportFormat.SanitizedSaz && value.Sanitization is { } sanitized)
+                {
+                    lines.Add(Localization.GetLocalizedString(
+                        "EXPORT_SANITIZED_SUMMARY", sanitized.RedactedValues, sanitized.OmittedBodies, sanitized.OmittedHeaders));
+                }
+
+                if (value.OutputProtected == false)
+                {
+                    lines.Add(Localization.GetLocalizedString("EXPORT_UNPROTECTED_WARNING"));
+                }
+
+                if (!result.Succeeded)
+                {
+                    lines.Add(Localization.GetLocalizedString("EXPORT_PUBLISHED_CLEANUP_FAILED"));
+                }
+            }
+            else
             {
-                message.AppendLine().AppendLine().Append(Localization.GetLocalizedString(
-                    "EXPORT_COMPLETE_SKIPPED", counts.SkippedIncomplete, counts.Unavailable));
+                string code = result.Outcome == OperationOutcome.CleanupFailed
+                    ? "export.cleanup.failed"
+                    : result.Diagnostics.FirstOrDefault(
+                        diagnostic => diagnostic.Severity == OperationDiagnosticSeverity.Error)?.Code;
+                lines.Add(Localization.GetLocalizedString(ExportErrorKey(code)));
+                if (code != "export.gui.failed")
+                {
+                    lines.Add(Localization.GetLocalizedString("EXPORT_UNCHANGED"));
+                }
             }
 
-            if (result.Value.Format == CaptureExportFormat.SanitizedSaz && result.Value.Sanitization is { } sanitized)
-            {
-                message.AppendLine().AppendLine().Append(Localization.GetLocalizedString(
-                    "EXPORT_SANITIZED_SUMMARY", sanitized.RedactedValues, sanitized.OmittedBodies, sanitized.OmittedHeaders));
-            }
-
-            return ShowExportMessage(message.ToString(), MessageBoxImage.Information);
+            return string.Join(Environment.NewLine + Environment.NewLine, lines);
         }
+
+        // The localized reason for a failure code; a code that the GUI does not know gets the generic text.
+        private static string ExportErrorKey(string code) => code switch
+        {
+            "export.cleanup.failed" => "EXPORT_ERROR_CLEANUP",
+            "export.output.exists" or "export.output.is-source" or "export.output.open-capture" => "EXPORT_ERROR_DESTINATION",
+            CaptureExportErrorCodes.FormatMismatch => "EXPORT_ERROR_FORMAT",
+            CaptureExportErrorCodes.InputLimit => "EXPORT_ERROR_LIMIT",
+            CaptureExportErrorCodes.InvalidHttp or CaptureExportErrorCodes.InvalidBody => "EXPORT_ERROR_INPUT",
+            "export.snapshot.changed" or "export.no-eligible-rows" => "EXPORT_ERROR_CHANGED",
+            CaptureExportErrorCodes.WriteFailed or CaptureExportErrorCodes.SanitizerFailed => "EXPORT_ERROR_WRITE",
+            _ => "EXPORT_ERROR_UNKNOWN",
+        };
 
         // A live capture's sessions without a complete response are skipped; stopping the capture includes them.
         private static string SkippedLiveSessions(CaptureExportCounts counts) =>

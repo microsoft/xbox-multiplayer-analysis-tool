@@ -142,7 +142,8 @@ namespace XMAT.Models
         internal bool CanBeginCaptureDataOperation =>
             CanModifyCaptureData &&
             !IsAnyCaptureRunning;
-        internal bool CanStopCaptures => !IsAnalysisRunning;
+        // Stop waits for a capture-data operation such as an export, which reads the running capture until it publishes.
+        internal bool CanStopCaptures => !IsAnalysisRunning && !IsCaptureDataOperationRunning;
         // File > Export and Export Sanitized: the selected web capture, running or not, when it has sessions.
         internal bool CanExportSelectedCapture =>
             CanModifyCaptureData &&

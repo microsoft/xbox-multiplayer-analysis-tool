@@ -117,13 +117,16 @@ xmat --version
   limits, and never changes it. `--process` and `--exclude-process` work as for `analyze`; `--host` and
   `--exclude-host` take a host or host/path pattern (as the Block and Bypass lists do, the default `--host-mode glob`)
   or, with `--host-mode exact`, the host exactly as the capture list shows it; `--status` and `--method` take exact
-  values. Each of these is repeatable (at most 64 values of 260 characters each), and a session must match every
-  option that was given and no exclusion. An empty `--status=`, `--method=` or exact `--host=` selects the sessions
+  values. Each of these is repeatable, and a session must match every option that was given and no exclusion; glob
+  hosts, like process selectors, are limited to 64 values of 260 characters each, while exact hosts, statuses and
+  methods are literal sets of any size. An empty `--status=`, `--method=` or exact `--host=` selects the sessions
   shown without one, and `--match-none` selects nothing, so the JSON shows the counts without writing a file. xmat
   never replaces a file: an existing `FILE`, or `FILE` naming the input, is a conflict (`export.output.exists`,
-  `export.output.is-source`, exit code 5). The file is staged privately and published whole, or not at all when the run
-  fails or is cancelled. A selection with no session to write publishes nothing (`export.no-eligible-rows`, exit
-  code 3).
+  `export.output.is-source`, exit code 5). The file is staged privately, in a folder next to it that only the current
+  user can open, and published whole with that access, or not at all when the run fails or is cancelled. Where Windows
+  cannot restrict access to that folder (storage without Windows permissions, such as FAT drives or some network
+  shares), xmat publishes nothing (`export.output.unprotected`, exit code 6). A selection with no session to write
+  publishes nothing (`export.no-eligible-rows`, exit code 3).
 - Exact rule evaluation has one work and live-memory budget shared across all selected devices, consoles, endpoints
   and rules, and never samples, truncates or publishes partial findings. Analysis uses safety budgets, not a fixed
   duration limit. In testing, one regular 1 Hz polling key completed at 75 minutes but exceeded the budget at
@@ -232,7 +235,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 | 3 | Invalid input or nothing to analyze or export: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, the process selectors leave no session, or `export` has no session to write |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists, or `export`'s `--out` names the input |
-| 6 | The operation failed, for example the output could not be written, or `--out` is on storage without Windows permissions (`cli.output.unprotected`) |
+| 6 | The operation failed, for example the output could not be written, or `--out` is on storage without Windows permissions (`cli.output.unprotected`; `export.output.unprotected` for `export`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
 | 70 | Internal error, for example a process selection that does not match the analyzed sessions (`analysis.process-filter.consistency`), or a `help`, `--version` or passing `doctor` run whose JSON document could not be produced (`cli.internal.output`) |

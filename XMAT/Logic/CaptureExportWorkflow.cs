@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -51,6 +52,9 @@ namespace XMAT
 
         Task<bool> ConfirmSanitizedAsync(object owner);
 
+        // Asks, for this export only, whether to publish where Windows cannot restrict access to the file.
+        Task<bool> ConfirmUnprotectedAsync(object owner, string path);
+
         // Shows progress with Cancel while export runs.
         Task<OperationResult<ExportCaptureResult>> RunWithProgressAsync(
             object owner,
@@ -60,8 +64,9 @@ namespace XMAT
     }
 
     // Exports sessions of one capture tab. It holds the data-operation lease from the snapshot to the publication, asks
-    // for confirmation with counts, a destination and, for a sanitized archive, consent, then runs the shared export
-    // operation with progress and Cancel. The snapshot is always disposed and the lease always released.
+    // for confirmation with counts, a destination named for its format and, for a sanitized archive, consent, then runs
+    // the shared export operation with progress and Cancel. Where Windows cannot restrict access to the destination it
+    // asks once whether to publish anyway. The snapshot is always disposed and the lease always released.
     internal sealed class CaptureExportWorkflow
     {
         private readonly object _owner;
@@ -127,6 +132,18 @@ namespace XMAT
                 }
 
                 CaptureExportDestination destination = await _dialogs.ChooseDestinationAsync(_owner, sanitizedOnly);
+                while (destination != null && !HasFormatExtension(destination))
+                {
+                    await ShowFailureAsync(scope, OperationOutcome.InvalidInput, new[]
+                    {
+                        new OperationDiagnostic(
+                            CaptureExportErrorCodes.FormatMismatch,
+                            OperationDiagnosticSeverity.Error,
+                            "The file name does not end in the chosen format's extension."),
+                    });
+                    destination = await _dialogs.ChooseDestinationAsync(_owner, sanitizedOnly);
+                }
+
                 if (destination == null ||
                     (destination.Format == CaptureExportFormat.SanitizedSaz && !await _dialogs.ConfirmSanitizedAsync(_owner)))
                 {
@@ -143,10 +160,23 @@ namespace XMAT
                     destination.ReplaceExisting,
                     AnalysisLimits.Default,
                     AllowUnprotectedOutput: false);
-                OperationResult<ExportCaptureResult> result = await _dialogs.RunWithProgressAsync(
-                    _owner,
-                    (progress, cancellationToken) =>
-                        _operation.ExecuteAsync(request, new OperationContext(progress: progress), cancellationToken));
+                Task<OperationResult<ExportCaptureResult>> Run(ExportCaptureRequest export) =>
+                    _dialogs.RunWithProgressAsync(
+                        _owner,
+                        (progress, cancellationToken) =>
+                            _operation.ExecuteAsync(export, new OperationContext(progress: progress), cancellationToken));
+                OperationResult<ExportCaptureResult> result = await Run(request);
+                if (result.Outcome == OperationOutcome.Failed &&
+                    result.Diagnostics.Any(diagnostic => diagnostic.Code == CaptureExportErrorCodes.OutputUnprotected))
+                {
+                    if (!await _dialogs.ConfirmUnprotectedAsync(_owner, destination.Path))
+                    {
+                        return CaptureExportWorkflowResult.Cancelled;
+                    }
+
+                    result = await Run(request with { AllowUnprotectedOutput = true });
+                }
+
                 await _dialogs.ShowResultAsync(_owner, scope, result);
                 return result.Outcome switch
                 {
@@ -164,8 +194,18 @@ namespace XMAT
             }
             finally
             {
-                snapshot?.Dispose();
-                lease.Dispose();
+                try
+                {
+                    snapshot?.Dispose();
+                }
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, $"Capture export snapshot could not be closed: {ex}");
+                }
+                finally
+                {
+                    lease.Dispose();
+                }
             }
         }
 
@@ -183,6 +223,13 @@ namespace XMAT
                     null,
                     false),
                 sanitizedOnly);
+
+        // A file is named for its format: .xmatcap for a capture, .saz for a Fiddler archive, sanitized or not.
+        private static bool HasFormatExtension(CaptureExportDestination destination) =>
+            string.Equals(
+                Path.GetExtension(destination.Path),
+                destination.Format == CaptureExportFormat.Xmatcap ? ".xmatcap" : ".saz",
+                StringComparison.OrdinalIgnoreCase);
 
         private async Task<CaptureExportWorkflowResult> ShowFailureAsync(
             CaptureExportScope scope,

@@ -101,13 +101,12 @@ namespace XMAT.DataAbstractionLayer
 
             foreach (var fieldDef in _fieldDefs)
             {
-                object rawValue = recordReader.IsDBNull(fieldDef.Value.ColumnIndex)
-                    ? null
-                    : recordReader.GetValue(fieldDef.Value.ColumnIndex);
+                object stored = recordReader.GetValue(fieldDef.Value.ColumnIndex);
+                object rawValue = stored == DBNull.Value ? null : stored;
                 _rawValues[fieldDef.Key] = rawValue;
                 _fieldValues[fieldDef.Value.ColumnIndex] = untypedColumns?.Contains(fieldDef.Key) == true
                     ? rawValue as string
-                    : FieldValue.GetFieldValue(recordReader, fieldDef.Value);
+                    : FieldValue.GetFieldValue(rawValue, fieldDef.Value);
             }
         }
 

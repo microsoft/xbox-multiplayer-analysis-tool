@@ -95,6 +95,16 @@ namespace XMAT.Operations.Export
                 normalized = ImmutableArray<string>.Empty;
                 return true;
             }
+            if (mode == HostMatchMode.Exact)
+            {
+                if (values.Any(value => value == null))
+                {
+                    normalized = default;
+                    return false;
+                }
+                normalized = values;
+                return true;
+            }
             if (values.Length > MaximumValues)
             {
                 normalized = default;
@@ -103,18 +113,18 @@ namespace XMAT.Operations.Export
             }
 
             var builder = ImmutableArray.CreateBuilder<string>();
-            var seen = new HashSet<string>(
-                mode == HostMatchMode.Exact ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string value in values)
             {
-                if (value == null || value.Length > MaximumValueLength || value.Any(char.IsControl))
+                if (value == null ||
+                    value.Length > MaximumValueLength ||
+                    value.Any(char.IsControl))
                 {
                     normalized = default;
                     return false;
                 }
                 string canonical = value;
-                if (mode == HostMatchMode.Glob &&
-                    (value.Length == 0 || !HostListEntry.TryNormalizeValue(value, out canonical, out _)))
+                if (value.Length == 0 || !HostListEntry.TryNormalizeValue(value, out canonical, out _))
                 {
                     normalized = default;
                     return false;
@@ -152,29 +162,17 @@ namespace XMAT.Operations.Export
                 code = null;
                 return true;
             }
-            if (source.Length > MaximumValues)
-            {
-                normalized = null;
-                code = "export.selection.limit";
-                return false;
-            }
 
-            var builder = ImmutableArray.CreateBuilder<string>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (string value in source)
             {
-                if (value == null || value.Length > MaximumValueLength || value.Any(char.IsControl))
+                if (value == null)
                 {
                     normalized = null;
                     code = $"export.selection.invalid-{field}";
                     return false;
                 }
-                if (seen.Add(value))
-                {
-                    builder.Add(value);
-                }
             }
-            normalized = builder.ToImmutable();
+            normalized = source;
             code = null;
             return true;
         }
@@ -311,20 +309,25 @@ namespace XMAT.Operations.Export
         private sealed class HostMatcher
         {
             private readonly HostMatchMode _mode;
-            private readonly ImmutableArray<string>? _includeExact;
-            private readonly ImmutableArray<string> _excludeExact;
+            private readonly HashSet<string> _includeExact;
+            private readonly HashSet<string> _excludeExact;
             private readonly Regex[] _includePatterns;
             private readonly Regex[] _excludePatterns;
 
             private HostMatcher(HostSelection selection)
             {
                 _mode = selection.Mode;
-                _includeExact = selection.Include;
-                _excludeExact = selection.Exclude;
                 if (_mode == HostMatchMode.Glob)
                 {
                     _includePatterns = Compile(selection.Include);
                     _excludePatterns = selection.Exclude.Select(HostListEntry.CreatePattern).ToArray();
+                }
+                else
+                {
+                    _includeExact = selection.Include.HasValue
+                        ? selection.Include.Value.ToHashSet(StringComparer.Ordinal)
+                        : null;
+                    _excludeExact = selection.Exclude.ToHashSet(StringComparer.Ordinal);
                 }
             }
 
@@ -335,9 +338,8 @@ namespace XMAT.Operations.Export
                 if (_mode == HostMatchMode.Exact)
                 {
                     string value = host ?? string.Empty;
-                    bool exactIncluded =
-                        !_includeExact.HasValue || _includeExact.Value.Contains(value, StringComparer.Ordinal);
-                    return exactIncluded && !_excludeExact.Contains(value, StringComparer.Ordinal);
+                    bool exactIncluded = _includeExact == null || _includeExact.Contains(value);
+                    return exactIncluded && !_excludeExact.Contains(value);
                 }
 
                 bool globIncluded = _includePatterns == null ||

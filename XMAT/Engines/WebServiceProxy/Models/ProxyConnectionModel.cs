@@ -39,6 +39,7 @@ namespace XMAT.WebServiceCapture.Models
         public Int64 Id { get; private set; }
         public DateTime RequestTime { get; private set; }
         public TimeSpan Duration { get; private set; }
+        internal bool HasRecordedResponseTimestamp { get; private set; }
         public string Status { get; private set; }
         public string Scheme { get; private set; }
         public string Host { get; private set; }
@@ -118,6 +119,7 @@ namespace XMAT.WebServiceCapture.Models
             Status = status;
             RequestTime = requestTime;
             Duration = duration;
+            HasRecordedResponseTimestamp = !string.IsNullOrEmpty(responseLineAndHeaders);
             Scheme = scheme;
             if (HostAuthority.TryParse(hostAndPort, out string host, out int? port))
             {
@@ -155,6 +157,7 @@ namespace XMAT.WebServiceCapture.Models
             Status = model.Status;
             RequestTime = model.RequestTime;
             Duration = model.Duration;
+            HasRecordedResponseTimestamp = model.HasRecordedResponseTimestamp;
             Scheme = model.Scheme;
             Host = model.Host;
             Port = model.Port;
@@ -366,6 +369,7 @@ namespace XMAT.WebServiceCapture.Models
             }
 
             var responseTimestamp = dataRecord.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp);
+            HasRecordedResponseTimestamp = !string.IsNullOrEmpty(responseTimestamp);
             if (!string.IsNullOrEmpty(responseTimestamp))
             {
                 Duration = DateTime.Parse(responseTimestamp) - RequestTime;
