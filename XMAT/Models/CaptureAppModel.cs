@@ -220,13 +220,12 @@ namespace XMAT.Models
         // sessions change.
         private void RefreshAnalysisSources()
         {
-            foreach (ICaptureAnalysisRun run in _analysisRuns)
+            foreach (var results in _analysisRuns
+                .Select(run => run.AnalysisData)
+                .OfType<XboxLiveCaptureAnalysis.Models.AnalysisResultsModel>()
+                .Where(candidate => ResolveCaptureSource(candidate.SourceStamp) == null))
             {
-                if (run.AnalysisData is XboxLiveCaptureAnalysis.Models.AnalysisResultsModel results &&
-                    ResolveCaptureSource(results.SourceStamp) == null)
-                {
-                    results.MarkSourceStale();
-                }
+                results.MarkSourceStale();
             }
         }
 

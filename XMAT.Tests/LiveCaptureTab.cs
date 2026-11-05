@@ -5,6 +5,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
@@ -52,9 +53,6 @@ namespace XMAT.Tests
         public IDeviceCaptureController CaptureController => Controller;
         internal WebServiceDeviceCaptureController Controller { get; }
 
-        // The connection and request of session NUMBER, for other events that the proxy raises about it.
-        internal (ClientProcessContext Client, ClientRequest Request) Session(int number) => _sessions[number];
-
         // Records request NUMBER from PROCESS and, unless STATUS is null, its response; returns its row.
         internal ProxyConnectionModel Add(int number, string process = "Game.exe", string host = "a.test", string status = "200")
         {
@@ -93,20 +91,27 @@ namespace XMAT.Tests
             typeof(WebServiceDeviceCaptureController).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)
                 .CreateDelegate<TDelegate>(Controller);
 
-        // Stops the capture callbacks and drains the UI updates they queued before the database closes. The shared
-        // dispatcher is pumped for a bounded time and never blocked on work that needs it.
+        // Stops the capture callbacks and drains the UI updates they queued, then closes the database. Each step is attempted
+        // even if the other fails, and the first failure is reported. The shared dispatcher is pumped for a bounded time and
+        // never blocked on work that needs it.
         public void Dispose()
         {
-            try
+            ExceptionDispatchInfo failure = null;
+            foreach (Func<Task> step in new Func<Task>[] { _callbacks.StopAcceptingAndWaitAsync, _uiUpdates.CompleteAndDrainAsync })
             {
-                Complete(_callbacks.StopAcceptingAndWaitAsync());
-                Complete(_uiUpdates.CompleteAndDrainAsync());
+                try
+                {
+                    Complete(step());
+                }
+                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+                {
+                    failure ??= ExceptionDispatchInfo.Capture(exception);
+                }
             }
-            finally
-            {
-                _app.CaptureDeviceContexts.Remove(this);
-                _database.Dispose();
-            }
+
+            _app.CaptureDeviceContexts.Remove(this);
+            _database.Dispose();
+            failure?.Throw();
         }
 
         private static void Complete(Task task)

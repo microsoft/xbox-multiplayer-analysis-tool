@@ -22,20 +22,6 @@ namespace XMAT.Tests
     [Collection(CaptureUiApplicationCollection.Name)]
     public sealed class CaptureDeleteControllerTests
     {
-        [Theory]
-        [InlineData(false)]
-        [InlineData(true)]
-        public void RequestCreation_AssignsTheStableCaptureRowIdentity(bool connect) =>
-            WpfTestHost.Run(_ =>
-            {
-                using var capture = new RaceHarness();
-                Captured row = capture.Add(1, 1000, connect: connect);
-
-                Assert.NotEqual(default, row.Request.RowKey);
-                Assert.Equal(row.Key, row.Request.RowKey);
-                Assert.Equal(CaptureRowLookup.Current, capture.Registry.Lookup(row.Key));
-            });
-
         [Fact]
         public void DeleteSessions_DatabaseFailureLeavesBindingsAndModelsActive() =>
             WpfTestHost.Run(_ =>
@@ -62,7 +48,7 @@ namespace XMAT.Tests
         [InlineData(DeleteRace.Http2Sibling)]
         [InlineData(DeleteRace.WebSocket)]
         [InlineData(DeleteRace.Resolver)]
-        public void DeleteSessions_InFlightRacesNeverReviveTheDeletedIdentity(DeleteRace race) =>
+        public void DeleteSessions_StableRequestIdentityAndInFlightRacesNeverReviveTheDeletedIdentity(DeleteRace race) =>
             WpfTestHost.Run(_ =>
             {
                 using var capture = new RaceHarness();
@@ -94,13 +80,13 @@ namespace XMAT.Tests
                 ClientProcessContext client = capture.Client(1015);
                 Captured sibling = capture.Add(1, 1015, client: client);
                 Captured deleted = capture.Add(2, 1015, client: client);
-                Assert.True(capture.Frame(sibling, "sibling before delete"));
-                Assert.True(capture.Frame(deleted, "deleted before delete"));
+                capture.Frame(sibling, "sibling before delete");
+                capture.Frame(deleted, "deleted before delete");
                 capture.Delete(deleted, sibling);
 
                 capture.Controller.ClearAllCaptures();
-                Assert.True(capture.Frame(deleted, "deleted after clear"));
-                Assert.True(capture.Frame(sibling, "sibling after clear"));
+                capture.Frame(deleted, "deleted after clear");
+                capture.Frame(sibling, "sibling after clear");
 
                 WebSocketMessageModel message = Assert.Single(capture.Controller.WebSocketMessages);
                 Assert.Equal("sibling after clear", message.PayloadText);
@@ -285,6 +271,9 @@ namespace XMAT.Tests
                 Pump();
                 IDataRecord record = Record(number, connectionId);
                 ProxyConnectionModel model = Controller.ProxyConnections.Single(row => row.RecordRowId == record.RowId);
+                Assert.NotEqual(default, request.RowKey);
+                Assert.Equal(model.RowKey, request.RowKey);
+                Assert.Equal(CaptureRowLookup.Current, Registry.Lookup(model.RowKey));
                 return new Captured(request, client, model, connectionId);
             }
 
@@ -333,7 +322,7 @@ namespace XMAT.Tests
                 Pump();
             }
 
-            internal bool Frame(Captured row, string text)
+            internal void Frame(Captured row, string text)
             {
                 Invoke(
                     "WebProxy_WebSocketMessage",
@@ -344,7 +333,6 @@ namespace XMAT.Tests
                         Message = Encoding.UTF8.GetBytes(text),
                     });
                 Pump();
-                return true;
             }
 
             internal string Status(Captured row) =>

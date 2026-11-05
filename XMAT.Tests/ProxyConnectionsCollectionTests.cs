@@ -186,35 +186,31 @@ namespace XMAT.Tests
             Assert.All(changes, change => Assert.Same(models[change.Index], change.Item));
         }
 
-        [Fact]
-        public void BulkRemove_PublishesOneReset()
+        [Theory]
+        [InlineData(0)]
+        [InlineData(17)]
+        public void BulkAndZeroRemoval_PublishesResetOrNothing(int removeCount)
         {
             (ProxyConnectionsCollection connections, ProxyConnectionModel[] models) = Connections(20);
-            int[] removedIndices = Enumerable.Range(0, 17).ToArray();
+            int[] removedIndices = Enumerable.Range(0, removeCount).ToArray();
+            IReadOnlySet<CaptureRowKey> keys = removeCount == 0
+                ? new HashSet<CaptureRowKey> { new(Guid.NewGuid(), 1, 99, 99), }
+                : removedIndices.Select(index => models[index].RowKey).ToHashSet();
             var changes = new List<NotifyCollectionChangedAction>();
             connections.CollectionChanged += (_, args) => changes.Add(args.Action);
 
-            int removed = connections.RemoveByRowKeys(
-                removedIndices.Select(index => models[index].RowKey).ToHashSet());
+            int removed = connections.RemoveByRowKeys(keys);
 
-            Assert.Equal(17, removed);
+            Assert.Equal(removeCount, removed);
             AssertState(connections, models, removedIndices);
-            Assert.Equal(new[] { NotifyCollectionChangedAction.Reset }, changes);
-        }
-
-        [Fact]
-        public void RemovingNoMatchesPublishesNothing()
-        {
-            (ProxyConnectionsCollection connections, ProxyConnectionModel[] models) = Connections(5);
-            var changes = new List<NotifyCollectionChangedAction>();
-            connections.CollectionChanged += (_, args) => changes.Add(args.Action);
-
-            int removed = connections.RemoveByRowKeys(
-                new HashSet<CaptureRowKey> { new(Guid.NewGuid(), 1, 99, 99), });
-
-            Assert.Equal(0, removed);
-            AssertState(connections, models, Array.Empty<int>());
-            Assert.Empty(changes);
+            if (removeCount == 0)
+            {
+                Assert.Empty(changes);
+            }
+            else
+            {
+                Assert.Equal(new[] { NotifyCollectionChangedAction.Reset }, changes);
+            }
         }
 
         [Fact]
@@ -223,6 +219,8 @@ namespace XMAT.Tests
             (ProxyConnectionsCollection connections, ProxyConnectionModel[] models) = Connections(6);
             int[] removedIndices = [1, 3, 4];
             var injected = new InvalidOperationException("Injected Remove observer failure.");
+            var changes = new List<NotifyCollectionChangedAction>();
+            connections.CollectionChanged += (_, args) => changes.Add(args.Action);
             connections.CollectionChanged += (_, args) =>
             {
                 if (args.Action == NotifyCollectionChangedAction.Remove)
@@ -235,6 +233,7 @@ namespace XMAT.Tests
                 connections.RemoveByRowKeys(removedIndices.Select(index => models[index].RowKey).ToHashSet()));
 
             Assert.Same(injected, failure);
+            Assert.Equal(new[] { NotifyCollectionChangedAction.Remove, NotifyCollectionChangedAction.Reset }, changes);
             AssertState(connections, models, removedIndices);
         }
 
@@ -245,7 +244,7 @@ namespace XMAT.Tests
             (WeakReference<ProxyConnectionModel> Model, WeakReference<byte[]> Body) references =
                 AddAndBatchRemoveBody(connections);
 
-            ForceCollection();
+            GcTestSupport.ForceCollection();
 
             Assert.False(references.Model.TryGetTarget(out _));
             Assert.False(references.Body.TryGetTarget(out _));
@@ -257,7 +256,7 @@ namespace XMAT.Tests
             var connections = new ProxyConnectionsCollection();
             WeakReference<ProxyConnectionModel> reference = AddAndRemove(connections);
 
-            ForceCollection();
+            GcTestSupport.ForceCollection();
 
             Assert.False(reference.TryGetTarget(out _));
         }
@@ -368,21 +367,17 @@ namespace XMAT.Tests
             Guid source = Guid.NewGuid();
             ProxyConnectionModel[] models = Enumerable.Range(0, count)
                 .Select(index => connections.AddFromDataRecord(
-                    new Record(index + 1, index + 1, 1000 + index),
-                    false,
+                    new Record(index + 1, index + 1, 1000 + index), false,
                     new CaptureRowKey(source, 1, index + 1, index + 1)))
                 .ToArray();
             return (connections, models);
         }
 
         private static void AssertState(
-            ProxyConnectionsCollection connections,
-            ProxyConnectionModel[] models,
+            ProxyConnectionsCollection connections, ProxyConnectionModel[] models,
             IReadOnlyCollection<int> removedIndices)
         {
-            ProxyConnectionModel[] survivors = models
-                .Where((_, index) => !removedIndices.Contains(index))
-                .ToArray();
+            ProxyConnectionModel[] survivors = models.Where((_, index) => !removedIndices.Contains(index)).ToArray();
             Assert.Equal(survivors, connections);
             for (var index = 0; index < models.Length; index++)
             {
@@ -398,13 +393,6 @@ namespace XMAT.Tests
                     Assert.Same(model, connections.ById((int)model.RequestNumber));
                 }
             }
-        }
-
-        private static void ForceCollection()
-        {
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
         }
     }
 }

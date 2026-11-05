@@ -47,9 +47,14 @@ namespace XMAT.XboxLiveCaptureAnalysis
         // The capture tab that the analysis read, found by its stamp and never by name, while it holds the analyzed sessions.
         private ICaptureDeviceContext AnalyzedSource(out CaptureAppModel app)
         {
-            var report = DataContext as PerEndpointReportModel;
-            app = report?.CaptureAppModel as CaptureAppModel;
-            return app?.ResolveCaptureSource(report.SourceStamp);
+            if (DataContext is not PerEndpointReportModel { CaptureAppModel: CaptureAppModel owner } report)
+            {
+                app = null;
+                return null;
+            }
+
+            app = owner;
+            return owner.ResolveCaptureSource(report.SourceStamp);
         }
 
         private void GoToId_CanExecute(object sender, CanExecuteRoutedEventArgs e)

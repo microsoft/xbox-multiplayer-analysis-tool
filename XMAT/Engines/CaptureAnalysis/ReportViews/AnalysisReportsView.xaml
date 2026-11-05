@@ -28,7 +28,6 @@
             PerEndpointReportTemplate="{StaticResource PerEndpointReportTemplate}"
             StatsReportTemplate="{StaticResource StatsReportTemplate}"
             />
-        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
     </UserControl.Resources>
     <DockPanel
         HorizontalAlignment="Stretch"

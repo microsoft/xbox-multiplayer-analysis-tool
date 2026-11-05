@@ -215,10 +215,11 @@ namespace XMAT.WebServiceCapture
                 IReadOnlyList<long> committed = ((IExactCaptureRowDelete)_dataTable).DeleteRows(
                     DeviceName,
                     candidates.Select(candidate => candidate.RowId).ToArray());
-                foreach (long rowId in committed)
+                if (committed.Count != 0)
                 {
-                    committedIds.Add(rowId);
+                    AdvanceSourceStamp();
                 }
+                committedIds.UnionWith(committed);
                 foreach (DeleteCandidate candidate in candidates)
                 {
                     if (committedIds.Contains(candidate.RowId) &&
@@ -232,10 +233,6 @@ namespace XMAT.WebServiceCapture
                     }
                 }
                 _captureRows.Retire(deleted);
-                if (deleted.Count != 0)
-                {
-                    Interlocked.Increment(ref _retirementEpoch);
-                }
                 stamp = SourceStamp;
             }
 
@@ -1808,10 +1805,10 @@ namespace XMAT.WebServiceCapture
             return _captureRows.TryUpdate(processContext?.RunId ?? Guid.Empty, key, update);
         }
 
-        private void HandleRowAdded(IDataRecord record, CaptureRowKey key = default, bool resolving = false)
+        private void HandleRowAdded(IDataRecord record, CaptureRowKey key, bool resolving = false)
         {
             if (record != null && record.Str(WebServiceCaptureMethod.FieldKey_DeviceName).Equals(
-                    DeviceName) && (key.SourceId == Guid.Empty || _captureRows.IsCurrent(key)))
+                    DeviceName) && _captureRows.IsCurrent(key))
             {
                 ProxyConnectionModel model = ProxyConnections.AddFromDataRecord(record, false, key);
                 if (resolving && model.ClientProcess.Status == ClientProcessStatus.NotRecorded)
@@ -1821,15 +1818,13 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private void HandleRowUpdated(IDataRecord record, CaptureRowKey key = default)
+        private void HandleRowUpdated(IDataRecord record, CaptureRowKey key)
         {
             if (record != null && record.Str(WebServiceCaptureMethod.FieldKey_DeviceName).Equals(
-                    DeviceName) && (key.SourceId == Guid.Empty || _captureRows.IsCurrent(key)))
+                    DeviceName) && _captureRows.IsCurrent(key))
             {
-                ProxyConnectionModel model = key.SourceId == Guid.Empty
-                    ? ProxyConnections.UpdateFromDataRecord(record)
-                    : ProxyConnections.UpdateFromDataRecord(key, record);
-                if (model == null && key.SourceId != Guid.Empty)
+                ProxyConnectionModel model = ProxyConnections.UpdateFromDataRecord(key, record);
+                if (model == null)
                 {
                     ProxyConnections.AddFromDataRecord(record, false, key);
                 }

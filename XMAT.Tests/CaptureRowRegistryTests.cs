@@ -146,7 +146,6 @@ namespace XMAT.Tests
                 CaptureRowLookup.Retired,
                 registry.Lookup(connection, 15, out CaptureRowKey retiredRequest));
             Assert.Equal(deleted, retiredRequest);
-            Assert.False(registry.TryGet(connection, 15, out _));
             Assert.False(registry.TryGetOrCreateStream(connection, 15, out _));
             Assert.False(registry.TryUpdate(run, deleted, () => deletedWrite = true));
             Assert.True(registry.TryUpdate(run, survivor, () => survivorWrite = true));
@@ -160,6 +159,7 @@ namespace XMAT.Tests
             Assert.True(registry.TryGetOrCreateStream(connection, 16, out CaptureRowKey survivingStream));
             Assert.Equal(survivor, survivingStream);
             registry.CloseConnection(connection);
+            Assert.Equal(CaptureRowLookup.Retired, registry.Lookup(connection, 15, out _));
             registry.FinishRun(run);
 
             Assert.Equal(CaptureRowLookup.Missing, registry.Lookup(deleted));
@@ -202,7 +202,7 @@ namespace XMAT.Tests
             Assert.Equal(CaptureRowLookup.Current, registry.Lookup(secondUnaffected));
             Assert.Contains(applied, item => item.Key == firstUnaffected && item.Process.Name == "first.exe");
             Assert.Contains(applied, item => item.Key == secondUnaffected && item.Process.Name == "second.exe");
-            Assert.InRange(visits, 0, retired.Length * 2);
+            Assert.Equal(retired.Length, visits);
         }
 
         [Fact]
@@ -328,6 +328,9 @@ namespace XMAT.Tests
             ClientProcessContext connection = Connection(run, 1015);
             registry.StartRun(run);
             CaptureRowKey old = Register(registry, connection, requestToken: 25, rowId: 55);
+            CaptureRowKey deleted = Register(registry, connection, requestToken: 26, rowId: 56);
+            Assert.True(registry.TryGetOrCreateStream(connection, 26, out _));
+            registry.Retire([deleted]);
 
             registry.AdvanceGeneration();
             bool associated = registry.TryGetOrCreateStream(connection, 25, out CaptureRowKey current);
@@ -337,6 +340,7 @@ namespace XMAT.Tests
             Assert.NotEqual(default, current);
             Assert.NotEqual(old.Generation, current.Generation);
             Assert.True(registry.IsCurrent(current));
+            Assert.False(registry.TryGetOrCreateStream(connection, 26, out _));
         }
 
         [Fact]
@@ -380,7 +384,7 @@ namespace XMAT.Tests
                 1017,
                 57);
 
-            ForceCollection();
+            GcTestSupport.ForceCollection();
 
             Assert.True(registry.IsCurrent(key));
             Assert.False(reference.TryGetTarget(out _));
@@ -404,7 +408,7 @@ namespace XMAT.Tests
                 registry.AdvanceGeneration();
             }
 
-            ForceCollection();
+            GcTestSupport.ForceCollection();
 
             Assert.All(references, reference => Assert.False(reference.TryGetTarget(out _)));
         }
@@ -600,11 +604,5 @@ namespace XMAT.Tests
             return (reference, key);
         }
 
-        private static void ForceCollection()
-        {
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-        }
     }
 }
