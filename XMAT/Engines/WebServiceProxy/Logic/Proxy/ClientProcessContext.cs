@@ -19,6 +19,7 @@ namespace XMAT.WebServiceCapture.Proxy
         internal ClientProcessContext(Guid runId, long connectionToken, IPEndPoint clientEndPoint, IPEndPoint
             proxyEndPoint, DateTimeOffset acceptedAtUtc, long acceptedAtTimestamp)
         {
+            ContextId = Guid.NewGuid();
             RunId = runId;
             ConnectionToken = connectionToken;
             ClientEndPoint = clientEndPoint;
@@ -27,6 +28,7 @@ namespace XMAT.WebServiceCapture.Proxy
             AcceptedAtTimestamp = acceptedAtTimestamp;
         }
 
+        internal Guid ContextId { get; }
         internal Guid RunId { get; }
         internal long ConnectionToken { get; }
         internal IPEndPoint ClientEndPoint { get; }

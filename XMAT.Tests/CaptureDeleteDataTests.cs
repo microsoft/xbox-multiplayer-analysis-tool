@@ -74,8 +74,8 @@ namespace XMAT.Tests
             release.Set();
             await Task.WhenAll(deletion, writer);
 
-            Assert.Equal(new[] { rowId }, deletion.Result);
-            Assert.True(writer.Result > 0);
+            Assert.Equal(new[] { rowId }, await deletion);
+            Assert.True(await writer > 0);
             Assert.Single(trace.Dataset.DataRecords);
         }
 

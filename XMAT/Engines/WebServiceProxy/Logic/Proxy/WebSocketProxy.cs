@@ -31,6 +31,7 @@ namespace XMAT.WebServiceCapture.Proxy
         private int _connectionID;
         private int _requestNumber;
         private ClientProcessContext _processContext;
+        private CaptureRowKey _rowKey;
 
         public async Task StartWebSocketProxy(
             int connectionID,
@@ -45,6 +46,7 @@ namespace XMAT.WebServiceCapture.Proxy
             _requestNumber = clientRequest.RequestNumber;
             _logger = logger;
             _processContext = processContext;
+            _rowKey = clientRequest.RowKey;
             bool opened = false;
 
             try
@@ -300,7 +302,8 @@ namespace XMAT.WebServiceCapture.Proxy
                             result.MessageType,
                             message.ToArray(),
                             messageTruncated,
-                            _processContext);
+                            _processContext,
+                            _rowKey);
                         message.SetLength(0);
                         messageTruncated = false;
                     }
@@ -357,7 +360,8 @@ namespace XMAT.WebServiceCapture.Proxy
                             result.MessageType,
                             message.ToArray(),
                             messageTruncated,
-                            _processContext);
+                            _processContext,
+                            _rowKey);
                         message.SetLength(0);
                         messageTruncated = false;
                     }

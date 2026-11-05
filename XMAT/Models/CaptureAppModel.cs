@@ -210,7 +210,25 @@ namespace XMAT.Models
 
         // The open capture tab that an analysis read, while it still holds the sessions that the analysis saw; null once
         // that tab was closed or its sessions were deleted, cleared or reloaded. It never selects a tab.
-        internal ICaptureDeviceContext ResolveCaptureSource(CaptureSourceStamp stamp) => null;
+        internal ICaptureDeviceContext ResolveCaptureSource(CaptureSourceStamp stamp) =>
+            stamp.SourceId == Guid.Empty
+                ? null
+                : _captureDeviceContexts.FirstOrDefault(context =>
+                    context.CaptureController is WebServiceDeviceCaptureController controller && controller.SourceStamp == stamp);
+
+        // Analyses whose source no longer resolves become historical; called on the UI thread after the tabs or their
+        // sessions change.
+        private void RefreshAnalysisSources()
+        {
+            foreach (ICaptureAnalysisRun run in _analysisRuns)
+            {
+                if (run.AnalysisData is XboxLiveCaptureAnalysis.Models.AnalysisResultsModel results &&
+                    ResolveCaptureSource(results.SourceStamp) == null)
+                {
+                    results.MarkSourceStale();
+                }
+            }
+        }
 
         internal bool TryBeginAnalysis(out IDisposable analysisLease)
         {
@@ -298,6 +316,7 @@ namespace XMAT.Models
                 }
             }
 
+            RefreshAnalysisSources();
             InvalidateCommands();
         }
 
@@ -616,6 +635,7 @@ namespace XMAT.Models
                 {
                     transfer();
                 }
+                RefreshAnalysisSources();
                 IDeviceCaptureController[] distinctOwners =
                     owners.Where(owner =>
                             _captureDeviceContexts.Any(
@@ -734,7 +754,14 @@ namespace XMAT.Models
 
             using (operation)
             {
-                controller.ClearAllCaptures();
+                try
+                {
+                    controller.ClearAllCaptures();
+                }
+                finally
+                {
+                    RefreshAnalysisSources();
+                }
             }
 
             return true;
@@ -748,8 +775,26 @@ namespace XMAT.Models
             IReadOnlySet<Operations.Captures.CaptureRowKey> currentlyVisible,
             out CaptureDeleteResult result)
         {
+            ArgumentNullException.ThrowIfNull(controller);
             result = null;
-            return false;
+            if (!TryBeginCaptureDataOperation(out IDisposable operation))
+            {
+                return false;
+            }
+
+            using (operation)
+            {
+                try
+                {
+                    result = controller.DeleteSessions(targets, currentlyVisible);
+                }
+                finally
+                {
+                    RefreshAnalysisSources();
+                }
+            }
+
+            return true;
         }
 
         internal Task ImportDataCapturesAsync(
@@ -842,6 +887,11 @@ namespace XMAT.Models
                             PublicUtilities.AppLog(LogLevel.ERROR, $"Failed to clean up Fiddler import: {cleanupException}");
                         }
                         throw;
+                    }
+                    finally
+                    {
+                        // Importing again into an existing tab replaces its sessions, so its analyses become historical.
+                        RefreshAnalysisSources();
                     }
                 }
                 break;

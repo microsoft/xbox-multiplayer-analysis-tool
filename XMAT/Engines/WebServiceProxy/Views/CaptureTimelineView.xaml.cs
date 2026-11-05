@@ -505,6 +505,13 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        // The menu keeps the items and the bar of its last opening until it opens again; a deletion releases them.
+        internal void ReleaseMenuTargets()
+        {
+            _hostListMenu.Items.Clear();
+            _hostListMenu.ClearValue(ContextMenu.PlacementTargetProperty);
+        }
+
         private TextBlock GetHostLabel(int index)
         {
             if (index == _hostLabels.Count)

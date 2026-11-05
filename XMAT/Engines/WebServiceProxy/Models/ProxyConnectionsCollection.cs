@@ -4,7 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Processes;
@@ -124,8 +126,47 @@ namespace XMAT.WebServiceCapture.Models
         }
 
         internal int RemoveByRowKeys(
-            IReadOnlySet<CaptureRowKey> keys) =>
-            throw new NotSupportedException();
+            IReadOnlySet<CaptureRowKey> keys)
+        {
+            ArgumentNullException.ThrowIfNull(keys);
+            lock (_lockObj)
+            {
+                ProxyConnectionModel[] survivors =
+                    this.Where(
+                        model =>
+                            !keys.Contains(
+                                model.RowKey))
+                    .ToArray();
+                int removed =
+                    Count - survivors.Length;
+                if (removed == 0)
+                {
+                    return 0;
+                }
+                CheckReentrancy();
+                Items.Clear();
+                _requestToConnections.Clear();
+                _keyToConnection.Clear();
+                foreach (
+                    ProxyConnectionModel survivor in
+                    survivors)
+                {
+                    Items.Add(survivor);
+                    Index(survivor);
+                }
+                OnPropertyChanged(
+                    new PropertyChangedEventArgs(
+                        nameof(Count)));
+                OnPropertyChanged(
+                    new PropertyChangedEventArgs(
+                        "Item[]"));
+                OnCollectionChanged(
+                    new NotifyCollectionChangedEventArgs(
+                        NotifyCollectionChangedAction
+                            .Reset));
+                return removed;
+            }
+        }
 
         protected override void InsertItem(int index, ProxyConnectionModel item)
         {
