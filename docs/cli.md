@@ -297,8 +297,8 @@ the URL, otherwise null), `iteration`, `outcome`, `status` (null without a respo
 `redirects`, `transport` (`direct` or `connect-to`, as the send was configured), `httpVersion` (the version asked
 for: `auto`, `1.1` or `2`), `responseVersion` (the version of the response, such as `1.1` or `2`, null without
 one), `code`, `verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`, its
-`differences`, `status` and `body`, and its `detail`, null without `--verify-diff`, otherwise the `state` of its
-`diff.json` and, once published, its `file`) and, once published, its `files`) and `totals` (`replays`,
+`differences`, a list of `status` and `body`, and its `detail`, null without `--verify-diff`, otherwise the `state` of
+its `diff.json` and, once published, its `file`) and, once published, its `files`) and `totals` (`replays`,
 `completed`, `failed`, `matched` and `mismatched`); `replay` also reports `input` and `limits` like `analyze`.
 `summary.json` of a replay holds `schema` (`xmat-replay/1`), `command`, `runId`, `version`, the same fields and the
 run's `warnings`.

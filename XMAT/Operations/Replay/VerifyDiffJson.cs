@@ -5,35 +5,53 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json;
 
 namespace XMAT.Operations.Replay
 {
     // diff.json: one verification detail (VerifyDiff), schema "xmat.verify-diff", version 1, enum values in camel case.
-    // It is written through a buffer that refuses to hold more than the cap and a writer's room for one token, so a detail
-    // too large for the cap costs at most that much memory before it is refused.
+    // Measure counts its bytes without keeping them, in one block no larger than a writer's room for one token; Write streams
+    // it; Serialize returns its bytes.
     internal static class VerifyDiffJson
     {
         private static readonly JsonWriterOptions Options = new() { Indented = true };
 
-        // The detail as diff.json, or null when it is longer than maxBytes.
-        internal static byte[] Serialize(VerifyDiff diff, int maxBytes = int.MaxValue)
+        // The length of the detail as diff.json, or -1 once it is longer than maxBytes, which stops the writing.
+        internal static int Measure(VerifyDiff diff, int maxBytes)
         {
             ArgumentNullException.ThrowIfNull(diff);
-            var output = new CappedBuffer(maxBytes);
+            var counter = new CountingBuffer(maxBytes);
             try
             {
-                using (var writer = new Utf8JsonWriter(output, Options))
+                using (var writer = new Utf8JsonWriter(counter, Options))
                 {
                     Write(writer, diff);
                 }
             }
             catch (CapReachedException)
             {
-                return null;
+                return -1;
             }
 
-            return output.ToArray();
+            return counter.Written;
+        }
+
+        // Writes the detail as diff.json to stream.
+        internal static void Write(VerifyDiff diff, Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(diff);
+            ArgumentNullException.ThrowIfNull(stream);
+            using var writer = new Utf8JsonWriter(stream, Options);
+            Write(writer, diff);
+        }
+
+        // The detail as diff.json.
+        internal static byte[] Serialize(VerifyDiff diff)
+        {
+            using var bytes = new MemoryStream();
+            Write(diff, bytes);
+            return bytes.ToArray();
         }
 
         private static void Write(Utf8JsonWriter writer, VerifyDiff diff)
@@ -205,28 +223,31 @@ namespace XMAT.Operations.Replay
             where T : struct, Enum =>
             JsonNamingPolicy.CamelCase.ConvertName(value.ToString());
 
-        // At most max bytes written, and the room a writer asks for beyond them to write one more token (its largest is a
-        // value of MaxValueChars characters, escaped); CapReachedException otherwise, and from then on for every call, so a
-        // writer that flushes as it is disposed fails the same way.
-        private sealed class CappedBuffer : IBufferWriter<byte>
+        // Counts the bytes that a writer writes, up to max, and keeps none of them: each request gets the same block, as large
+        // as the largest token that the writer asks room for (a value of MaxValueChars characters escaped is a few KiB).
+        // CapReachedException once more than max were written, and from then on for every call, so a writer that flushes as
+        // it is disposed fails the same way.
+        private sealed class CountingBuffer : IBufferWriter<byte>
         {
-            private const int Slack = 16 * 1024;
+            private const int MostBlockBytes = 64 * 1024;
 
             private readonly long _max;
-            private byte[] _buffer = Array.Empty<byte>();
-            private int _written;
+            private byte[] _block = Array.Empty<byte>();
+            private long _written;
             private bool _reached;
 
-            internal CappedBuffer(int max)
+            internal CountingBuffer(int max)
             {
                 _max = max;
             }
+
+            internal int Written => (int)_written;
 
             public void Advance(int count)
             {
                 ArgumentOutOfRangeException.ThrowIfNegative(count);
                 ThrowIfReached();
-                if (count > _buffer.Length - _written)
+                if (count > _block.Length)
                 {
                     throw new InvalidOperationException("The writer advanced past its buffer.");
                 }
@@ -242,33 +263,28 @@ namespace XMAT.Operations.Replay
             public Memory<byte> GetMemory(int sizeHint = 0)
             {
                 Ensure(sizeHint);
-                return _buffer.AsMemory(_written);
+                return _block;
             }
 
             public Span<byte> GetSpan(int sizeHint = 0)
             {
                 Ensure(sizeHint);
-                return _buffer.AsSpan(_written);
+                return _block;
             }
-
-            internal byte[] ToArray() => _buffer.AsSpan(0, _written).ToArray();
 
             private void Ensure(int sizeHint)
             {
                 ThrowIfReached();
-                long needed = (long)_written + Math.Max(sizeHint, 1);
-                if (needed <= _buffer.Length)
-                {
-                    return;
-                }
-
-                long most = Math.Min(_max + Slack, Array.MaxLength);
-                if (needed > most)
+                int wanted = Math.Max(sizeHint, 4096);
+                if (wanted > MostBlockBytes)
                 {
                     Reach();
                 }
 
-                Array.Resize(ref _buffer, (int)Math.Min(Math.Max(needed, Math.Max(4096L, 2L * _buffer.Length)), most));
+                if (_block.Length < wanted)
+                {
+                    _block = new byte[wanted];
+                }
             }
 
             private void ThrowIfReached()
@@ -285,7 +301,6 @@ namespace XMAT.Operations.Replay
                 throw new CapReachedException();
             }
         }
-
         private sealed class CapReachedException : Exception
         {
         }

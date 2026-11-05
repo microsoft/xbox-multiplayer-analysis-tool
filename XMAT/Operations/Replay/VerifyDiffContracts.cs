@@ -92,8 +92,9 @@ namespace XMAT.Operations.Replay
     //   one line, path or value, which is then cut and marked so.
     // - MaxChanges: the JSON changes, and separately the byte ranges. MaxHunks and ContextLines: the text hunks.
     // - MaxSteps: line and JSON comparisons (each line or JSON value compared is a step). MaxWork: the bytes and characters
-    //   read, decoded, hashed and compared, the end checks included. MaxScratchBytes: what the comparisons allocate (line
-    //   tables, diff frontiers, JSON value tables), checked before each allocation.
+    //   read, decoded, hashed and compared, the end checks included. MaxScratchBytes: what the comparisons allocate (the
+    //   decoded text of each side, line tables, diff frontiers, JSON value tables, names and strings), reserved before each
+    //   allocation: a side whose text does not fit is shown as bytes.
     // - MaxSerializedBytes: one detail as VerifyDiffJson writes it, at least MinSerializedBytes, which the metadata-only
     //   fallback (Unavailable, without Body) always fits. MaxRetainedBytes: the details that the GUI keeps for the rows of
     //   its Replays tab, earlier runs included, counted as VerifyDiff.SerializedBytes: a payload budget, not a measure of

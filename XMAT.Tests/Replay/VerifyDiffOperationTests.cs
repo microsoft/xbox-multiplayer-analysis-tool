@@ -179,34 +179,23 @@ namespace XMAT.Tests.Replay
             Assert.Equal((2, 13, 2, 13), (hunk.OriginalStart, hunk.OriginalCount, hunk.ActualStart, hunk.ActualCount));
         }
 
-        // Equal hashes never prove equal lines: two different lines whose hashes collide still differ.
+        // Equal hashes never prove equal lines: with a hash under which every line collides, different lines still differ.
         [Fact]
         public void Lines_WithCollidingHashesAreComparedByTheirText()
         {
-            var seen = new Dictionary<int, string>();
-            string first = null;
-            string second = null;
-            for (int index = 0; first == null && index < 2_000_000; index++)
-            {
-                string text = index.ToString("D8", System.Globalization.CultureInfo.InvariantCulture);
-                int hash = VerifyDiffTextSide.LineHash(text, VerifyDiffTextSide.LineFeed);
-                if (seen.TryGetValue(hash, out string other))
-                {
-                    (first, second) = (other, text);
-                }
-                else
-                {
-                    seen.Add(hash, text);
-                }
-            }
+            ProxyConnectionModel original = Original(TextType, Utf8("same\nfirst\n"));
+            ReplayExchange actual = Actual(Utf8("same\nsecnd\n"));
 
-            Assert.NotNull(first);
-            VerifyDiff diff = Diff(Original(TextType, Utf8($"same\n{first}\n")), Actual(Utf8($"same\n{second}\n")));
+            VerifyDiff diff = VerifyDiffOperation.Explain(
+                ReplayVerifier.CompareSides(original, actual, DecodeLimit),
+                VerifyDiffLimits.Default,
+                CancellationToken.None,
+                (text, lineBreak) => 0);
 
             Assert.Equal(VerifyEquivalence.Different, diff.Body.Text.Equivalence);
             Assert.Equal(
-                new[] { "- " + first, "+ " + second },
-                Assert.Single(diff.Body.Text.Hunks).Lines.Where(line => line.Kind != VerifyLineKind.Context).Select(Render));
+                new[] { "  same", "- first", "+ secnd" },
+                Assert.Single(diff.Body.Text.Hunks).Lines.Select(Render));
         }
 
         [Fact]
@@ -530,13 +519,15 @@ namespace XMAT.Tests.Replay
                 new VerifyDiffLimits(MaxChars: 10));
 
             VerifyTextLine line = Assert.Single(Assert.Single(diff.Body.Text.Hunks).Lines);
-            Assert.Equal((VerifyLineKind.Removed, "xxxxxxxxxx", true), (line.Kind, line.Text, line.Cut));
+            Assert.Equal((VerifyLineKind.Removed, "xxxxxxxxx", "\n", true), (line.Kind, line.Text, line.Break, line.Cut));
             Assert.Contains(VerifyDiffLimitation.CharLimit, diff.Limitations);
             Assert.Equal(VerifyEquivalence.Different, diff.Body.Text.Equivalence);
         }
 
         // Steps or scratch that run out stop the comparison of the lines between the common ones, which then show as one
-        // coarse hunk: still a correct difference.
+        // coarse hunk: still a correct difference. The scratch case: each side's decoded text (19 chars, 38 bytes) and
+        // line table (6 x 13 bytes) take 232 bytes; frontiers d = 0..4 take 100 more and d = 5 would not fit 360, and once
+        // they are returned the hunk tables (8 x 13 bytes) do.
         [Theory]
         [InlineData("steps", VerifyDiffLimitation.StepLimit)]
         [InlineData("scratch", VerifyDiffLimitation.ScratchLimit)]
@@ -544,7 +535,7 @@ namespace XMAT.Tests.Replay
         {
             string original = string.Concat(Enumerable.Range(1, 6).Select(line => $"a{line}\n"));
             string actual = string.Concat(Enumerable.Range(1, 6).Select(line => $"b{line}\n"));
-            VerifyDiffLimits limits = limit == "steps" ? new VerifyDiffLimits(MaxSteps: 20) : new VerifyDiffLimits(MaxScratchBytes: 270);
+            VerifyDiffLimits limits = limit == "steps" ? new VerifyDiffLimits(MaxSteps: 20) : new VerifyDiffLimits(MaxScratchBytes: 360);
 
             VerifyDiff diff = Diff(Original(TextType, Utf8(original)), Actual(Utf8(actual)), limits);
 
@@ -599,6 +590,7 @@ namespace XMAT.Tests.Replay
             Assert.Contains(VerifyDiffLimitation.ChangeLimit, diff.Limitations);
         }
 
+        // Work bounds the byte view, and the examined bytes say how far it actually read.
         [Fact]
         public void Work_IsBounded()
         {
@@ -610,7 +602,74 @@ namespace XMAT.Tests.Replay
 
             Assert.Contains(VerifyDiffLimitation.WorkLimit, diff.Limitations);
             VerifyByteRange range = Assert.Single(diff.Body.Binary.Ranges);
-            Assert.Equal((0L, 64L), (range.Offset, range.OriginalLength));
+            Assert.Equal(0L, range.Offset);
+            Assert.InRange(range.OriginalLength, 1, 64);
+            Assert.Equal((range.OriginalLength, range.OriginalLength), (diff.Original.ExaminedBytes, diff.Actual.ExaminedBytes));
+
+            // No work was left to read the excerpts.
+            Assert.Equal((string.Empty, string.Empty), (range.Original, range.Actual));
+        }
+
+        // A line's break is shown too, so it counts against the characters as well.
+        [Fact]
+        public void LineBreaks_CountAgainstMaxChars()
+        {
+            VerifyDiff diff = Diff(
+                Original(TextType, Utf8(string.Concat(Enumerable.Repeat("\r\n", 100)))),
+                Actual(Utf8(string.Concat(Enumerable.Repeat("\n", 100)))),
+                new VerifyDiffLimits(MaxChars: 10));
+
+            Assert.Contains(VerifyDiffLimitation.CharLimit, diff.Limitations);
+            Assert.InRange(
+                diff.Body.Text.Hunks.SelectMany(hunk => hunk.Lines).Sum(line => line.Text.Length + line.Break.Length), 1, 10);
+        }
+
+        // Finding members by name hashes and compares their names, which is charged: a long name can use up the work.
+        [Fact]
+        public void JsonMemberNames_AreChargedAsTheyAreHashed()
+        {
+            const int Name = 100_000;
+            string name = new('k', Name);
+
+            VerifyDiff diff = Diff(
+                Original(JsonType, Utf8($"{{\"{name}\":1}}")),
+                Actual(Utf8($"{{ \"{name}\":1}}")),
+                new VerifyDiffLimits(MaxWork: 16L * Name));
+
+            Assert.Equal(VerifyEquivalence.Unknown, diff.Body.Json.Values);
+            Assert.Contains(VerifyDiffLimitation.WorkLimit, diff.Limitations);
+        }
+
+        // Reading a document is charged twice its length (the bytes, then the names and strings unescaped and hashed):
+        // with work for the text but not for both documents, there is no JSON view.
+        [Fact]
+        public void JsonDocuments_AreChargedForReadingAndUnescaping()
+        {
+            const int Name = 100_000;
+            string name = new('k', Name);
+
+            VerifyDiff diff = Diff(
+                Original(JsonType, Utf8($"{{\"{name}\":1}}")),
+                Actual(Utf8($"{{ \"{name}\":1}}")),
+                new VerifyDiffLimits(MaxWork: 13L * Name));
+
+            Assert.Equal((null, VerifyJsonUnavailable.Limit), (diff.Body.Json, diff.Body.JsonUnavailable));
+            Assert.Contains(VerifyDiffLimitation.WorkLimit, diff.Limitations);
+        }
+
+        // A side's decoded text is reserved as scratch before it is allocated; a side whose text does not fit shows as bytes.
+        [Fact]
+        public void DecodedText_IsReservedAsScratch()
+        {
+            VerifyDiff diff = Diff(
+                Original(TextType, Utf8(new string('x', 2000) + "\n")),
+                Actual(Utf8(new string('y', 2000) + "\n")),
+                new VerifyDiffLimits(MaxScratchBytes: 1000));
+
+            Assert.Null(diff.Body.Text);
+            Assert.NotNull(diff.Body.Binary);
+            Assert.Contains(VerifyDiffLimitation.ScratchLimit, diff.Limitations);
+            Assert.Null(diff.Original.Charset);
         }
 
         [Fact]

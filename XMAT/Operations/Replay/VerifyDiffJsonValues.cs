@@ -99,8 +99,9 @@ namespace XMAT.Operations.Replay
                 unavailable = null;
                 try
                 {
-                    // The pass reads every byte, whitespace included.
-                    budget.SpendOrStop(json.Length);
+                    // The pass reads every byte, whitespace included, then unescapes and hashes names and escaped strings,
+                    // which are never longer than the text.
+                    budget.SpendOrStop(2L * json.Length);
                     budget.ReserveOrStop((long)limits.MaxJsonNodes * NodeBytes);
                     var document = new Document(json, limits.MaxJsonNodes);
                     var reader = new Utf8JsonReader(
@@ -120,8 +121,9 @@ namespace XMAT.Operations.Replay
                         switch (reader.TokenType)
                         {
                             case JsonTokenType.PropertyName:
+                                // Unescaped, a name is no longer than as written: reserved before it is allocated.
+                                budget.ReserveOrStop((2L * reader.ValueSpan.Length) + EntryBytes);
                                 string text = reader.GetString();
-                                budget.ReserveOrStop((2L * text.Length) + EntryBytes);
                                 if (!open[^1].Names.Add(text))
                                 {
                                     unavailable = VerifyJsonUnavailable.DuplicateKeys;
@@ -179,9 +181,8 @@ namespace XMAT.Operations.Replay
                                 document.Nodes[value].End = end;
                                 if (kind == Kind.String && reader.ValueIsEscaped)
                                 {
-                                    string unescaped = reader.GetString();
-                                    budget.ReserveOrStop((2L * unescaped.Length) + EntryBytes);
-                                    document.Strings.Add(unescaped);
+                                    budget.ReserveOrStop((2L * reader.ValueSpan.Length) + EntryBytes);
+                                    document.Strings.Add(reader.GetString());
                                     document.Nodes[value].Unescaped = document.Strings.Count - 1;
                                 }
 
@@ -394,12 +395,22 @@ namespace XMAT.Operations.Replay
 
             private void Objects(int x, int y)
             {
+                // The members are found by name: each name is hashed once into the table and once to look it up, and
+                // compared once when found; all of it is charged before it starts.
                 int members = 0;
+                long nameChars = 0;
                 for (int child = _b.Nodes[y].First; child >= 0; child = _b.Nodes[child].Next)
                 {
                     members++;
+                    nameChars += _b.Names[_b.Nodes[child].Name].Length;
                 }
 
+                for (int child = _a.Nodes[x].First; child >= 0; child = _a.Nodes[child].Next)
+                {
+                    nameChars += _a.Names[_a.Nodes[child].Name].Length;
+                }
+
+                _budget.SpendOrStop(3 * nameChars);
                 long entries = (long)members * Document.EntryBytes;
                 _budget.ReserveOrStop(entries);
                 try
@@ -478,7 +489,8 @@ namespace XMAT.Operations.Replay
                 }
             }
 
-            // Strings as written are equal, or else their unescaped texts are (escapes differ).
+            // Strings as written are equal, or else their unescaped texts are (escapes differ). A string written without
+            // escapes is decoded to compare it, within reserved scratch that is returned once it is compared.
             private bool StringsEqual(Node p, Node q)
             {
                 if (BytesEqual(_a, p.Start + 1, p.End - p.Start - 2, _b, q.Start + 1, q.End - q.Start - 2))
@@ -491,12 +503,21 @@ namespace XMAT.Operations.Replay
                     return false;
                 }
 
-                string first = p.Unescaped >= 0 ? _a.Strings[p.Unescaped] : Written(_a, p);
-                string second = q.Unescaped >= 0 ? _b.Strings[q.Unescaped] : Written(_b, q);
-                _budget.SpendOrStop((long)first.Length + second.Length);
-                if (!string.Equals(first, second, StringComparison.Ordinal))
+                long decoded = (p.Unescaped < 0 ? 2L * (p.End - p.Start - 2) : 0) + (q.Unescaped < 0 ? 2L * (q.End - q.Start - 2) : 0);
+                _budget.ReserveOrStop(decoded);
+                try
                 {
-                    return false;
+                    string first = p.Unescaped >= 0 ? _a.Strings[p.Unescaped] : Written(_a, p);
+                    string second = q.Unescaped >= 0 ? _b.Strings[q.Unescaped] : Written(_b, q);
+                    _budget.SpendOrStop((long)first.Length + second.Length);
+                    if (!string.Equals(first, second, StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+                }
+                finally
+                {
+                    _budget.Release(decoded);
                 }
 
                 _escapesDiffer = true;

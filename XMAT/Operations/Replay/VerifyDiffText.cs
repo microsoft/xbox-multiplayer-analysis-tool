@@ -9,15 +9,18 @@ using XMAT.Operations.Inspection;
 
 namespace XMAT.Operations.Replay
 {
+    // A line's hash (VerifyDiffTextSide.LineHash, unless a test gives one): it only tells lines apart, so lines with equal
+    // hashes are compared by their text.
+    internal delegate int VerifyDiffLineHasher(ReadOnlySpan<char> text, byte lineBreak);
+
     // A side's examined bytes read as text by BodyTextRules (strictly, in the charset that the rules choose), split into at
     // most MaxLines lines, each with the break that ends it: "\r\n", "\n", "\r", "\u2028", "\u2029" or none.
     internal sealed class VerifyDiffTextSide
     {
         // The break that ends a line, as an index into BreakTexts.
-        internal const byte LineFeed = 2;
-
         private const byte NoBreak = 0;
         private const byte CarriageReturnLineFeed = 1;
+        private const byte LineFeed = 2;
         private const byte CarriageReturn = 3;
         private const byte LineSeparator = 4;
         private const byte ParagraphSeparator = 5;
@@ -64,10 +67,17 @@ namespace XMAT.Operations.Replay
         // The examined bytes as text, or null when they do not read as text: a charset that the rules do not decode,
         // invalid text, or a control character other than tab, CR and LF. allExamined says that the examined bytes are all
         // of the compared bytes; otherwise the text may end inside a character, which is then left out. Charged to work;
-        // the line table to scratch.
+        // the decoded text and the line table are reserved as scratch before they are allocated. read is how many of the
+        // examined bytes were decoded: all of them, or none when the work or the scratch ran out first.
         internal static VerifyDiffTextSide TryRead(
-            VerifyBody side, ReadOnlySpan<byte> examined, bool allExamined, VerifyDiffBudget budget)
+            VerifyBody side,
+            ReadOnlySpan<byte> examined,
+            bool allExamined,
+            VerifyDiffBudget budget,
+            VerifyDiffLineHasher hasher,
+            out long read)
         {
+            read = 0;
             BodyTextFormat format =
                 BodyTextRules.Read(side.ContentType, BodyPreviewLimits.Default.MaxHeaderChars, examined);
             if (!format.Supported)
@@ -76,13 +86,20 @@ namespace XMAT.Operations.Replay
             }
 
             ReadOnlySpan<byte> bytes = examined[format.Preamble..];
-            if (!budget.Spend(bytes.Length))
+            int most = format.Encoding.GetMaxCharCount(bytes.Length);
+            try
+            {
+                budget.SpendOrStop(bytes.Length);
+                budget.ReserveOrStop((long)most * sizeof(char));
+            }
+            catch (VerifyDiffLimitException)
             {
                 return null;
             }
 
-            var chars = new char[format.Encoding.GetMaxCharCount(bytes.Length)];
+            var chars = new char[most];
             int length;
+            read = examined.Length;
             try
             {
                 format.Encoding.GetDecoder().Convert(bytes, chars, allExamined, out _, out length, out _);
@@ -133,6 +150,7 @@ namespace XMAT.Operations.Replay
             var lengths = new int[lines];
             var breaks = new byte[lines];
             var hashes = new int[lines];
+            VerifyDiffLineHasher hash = hasher ?? new VerifyDiffLineHasher(LineHash);
             int start = 0;
             for (int line = 0; line < lines; line++)
             {
@@ -140,7 +158,7 @@ namespace XMAT.Operations.Replay
                 starts[line] = start;
                 lengths[line] = textLength;
                 breaks[line] = lineBreak;
-                hashes[line] = LineHash(text.Slice(start, textLength), lineBreak);
+                hashes[line] = hash(text.Slice(start, textLength), lineBreak);
                 start = next;
             }
 
@@ -499,6 +517,15 @@ namespace XMAT.Operations.Replay
                     Op op = ops[index];
                     VerifyDiffTextSide side = op == Op.Insert ? b : a;
                     int line = op == Op.Insert ? bBefore[index] : aBefore[index];
+
+                    // The break is shown too: it is counted first, so that a line shows its true break, and its text then
+                    // gets what is left.
+                    if (!budget.Count(side.Break(line).Length))
+                    {
+                        stopped = true;
+                        break;
+                    }
+
                     string text = budget.Take(side.Line(line), out bool cut);
                     if (text == null)
                     {

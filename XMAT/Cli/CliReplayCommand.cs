@@ -290,8 +290,7 @@ namespace XMAT.Cli
 
                 if (exchange.VerifyDiff is VerifyDiff diff)
                 {
-                    byte[] detail = VerifyDiffJson.Serialize(diff);
-                    _output.WriteFile(folder + "/" + DiffFile, stream => stream.Write(detail));
+                    _output.WriteFile(folder + "/" + DiffFile, stream => VerifyDiffJson.Write(diff, stream));
                     _report.Details[result.Id] = diff.State;
                 }
             }

@@ -145,6 +145,25 @@ namespace XMAT.Operations.Replay
 
         internal string TakeOrStop(ReadOnlySpan<char> text, out bool cut) =>
             Take(text, out cut) ?? throw new VerifyDiffLimitException();
+
+        // Counts characters that the detail shows besides its text, such as a line's break; false, with CharLimit, when
+        // they are more than are left.
+        internal bool Count(int chars)
+        {
+            if (chars <= 0)
+            {
+                return true;
+            }
+
+            if (chars > Limits.MaxChars - _chars)
+            {
+                Limit(VerifyDiffLimitation.CharLimit);
+                return false;
+            }
+
+            _chars += chars;
+            return true;
+        }
     }
 
     // A ceiling of VerifyDiffLimits ended a stage of the detail; the budget recorded which.

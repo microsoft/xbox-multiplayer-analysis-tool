@@ -68,15 +68,19 @@ namespace XMAT.Operations.Replay
             return Explain(comparison, (request.Limits ?? VerifyDiffLimits.Default).Clamped(), cancellationToken);
         }
 
-        // The detail of a comparison, measured as diff.json.
-        internal static VerifyDiff Explain(ReplayComparison comparison, VerifyDiffLimits limits, CancellationToken cancellationToken)
+        // The detail of a comparison, measured as diff.json. hasher replaces the line hash, for tests.
+        internal static VerifyDiff Explain(
+            ReplayComparison comparison,
+            VerifyDiffLimits limits,
+            CancellationToken cancellationToken,
+            VerifyDiffLineHasher hasher = null)
         {
             ArgumentNullException.ThrowIfNull(comparison);
             ArgumentNullException.ThrowIfNull(limits);
             VerifyDiff detail;
             try
             {
-                detail = new Builder(comparison, limits, cancellationToken).Build();
+                detail = new Builder(comparison, limits, hasher, cancellationToken).Build();
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -92,24 +96,24 @@ namespace XMAT.Operations.Replay
 
         // The detail with its size as diff.json. A detail that does not fit maxBytes, or that cannot be written, keeps
         // everything but its body (Unavailable); that metadata always fits the least maxBytes (MinSerializedBytes), and it is
-        // measured once, never retried.
+        // measured once, never retried. Measuring keeps none of the bytes.
         private static VerifyDiff Measure(VerifyDiff detail, int maxBytes)
         {
-            byte[] written;
+            int size;
             string reason = VerifyDiffLimitation.SerializedLimit;
             try
             {
-                written = VerifyDiffJson.Serialize(detail, maxBytes);
+                size = VerifyDiffJson.Measure(detail, maxBytes);
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex) && ex is not OperationCanceledException)
             {
-                written = null;
+                size = -1;
                 reason = VerifyDiffLimitation.Internal;
             }
 
-            if (written != null)
+            if (size >= 0)
             {
-                return detail with { SerializedBytes = written.Length };
+                return detail with { SerializedBytes = size };
             }
 
             VerifyDiff fallback = detail with
@@ -118,9 +122,13 @@ namespace XMAT.Operations.Replay
                 Limitations = With(detail.Limitations, reason),
                 Body = null,
             };
-            byte[] metadata = VerifyDiffJson.Serialize(fallback, maxBytes) ??
+            int metadata = VerifyDiffJson.Measure(fallback, maxBytes);
+            if (metadata < 0)
+            {
                 throw new InvalidOperationException("A verification detail without its body is larger than its limit.");
-            return fallback with { SerializedBytes = metadata.Length };
+            }
+
+            return fallback with { SerializedBytes = metadata };
         }
 
         // A detail without body differences: the sides as compared, a Decoded side's end not checked.
@@ -170,11 +178,14 @@ namespace XMAT.Operations.Replay
         {
             private readonly ReplayComparison _comparison;
             private readonly VerifyDiffBudget _budget;
+            private readonly VerifyDiffLineHasher _hasher;
 
-            internal Builder(ReplayComparison comparison, VerifyDiffLimits limits, CancellationToken cancellationToken)
+            internal Builder(
+                ReplayComparison comparison, VerifyDiffLimits limits, VerifyDiffLineHasher hasher, CancellationToken cancellationToken)
             {
                 _comparison = comparison;
                 _budget = new VerifyDiffBudget(limits, cancellationToken);
+                _hasher = hasher;
             }
 
             internal VerifyDiff Build()
@@ -246,7 +257,8 @@ namespace XMAT.Operations.Replay
             }
 
             // The body differences: text when both sides' bases are content and their examined bytes read as text, bytes
-            // otherwise; and JSON values when a side looks like JSON.
+            // otherwise; and JSON values when a side looks like JSON. Each side's ExaminedBytes is how far into its bytes
+            // the text or the byte view actually read.
             private VerifyBodyDiff Body(bool endsKnown, Examined sides)
             {
                 VerifyBody original = _comparison.Original;
@@ -256,8 +268,6 @@ namespace XMAT.Operations.Replay
                 ReadOnlyMemory<byte> actualBytes = actual.Compared[..Math.Min(actual.Compared.Length, most)];
                 bool originalAll = originalBytes.Length == original.Compared.Length;
                 bool actualAll = actualBytes.Length == actual.Compared.Length;
-                sides.Original = originalBytes.Length;
-                sides.Actual = actualBytes.Length;
                 if (!originalAll || !actualAll)
                 {
                     _budget.Limit(VerifyDiffLimitation.ExaminedLimit);
@@ -268,16 +278,29 @@ namespace XMAT.Operations.Replay
                 VerifyDiffTextSide actualText = null;
                 if (IsContent(original.Basis) && IsContent(actual.Basis))
                 {
-                    originalText = VerifyDiffTextSide.TryRead(original, originalBytes.Span, originalAll, _budget);
-                    actualText = originalText == null
-                        ? null
-                        : VerifyDiffTextSide.TryRead(actual, actualBytes.Span, actualAll, _budget);
+                    originalText = VerifyDiffTextSide.TryRead(
+                        original, originalBytes.Span, originalAll, _budget, _hasher, out long originalRead);
+                    sides.Original = originalRead;
+                    if (originalText != null)
+                    {
+                        actualText = VerifyDiffTextSide.TryRead(
+                            actual, actualBytes.Span, actualAll, _budget, _hasher, out long actualRead);
+                        sides.Actual = actualRead;
+                    }
                 }
 
                 if (originalText == null || actualText == null)
                 {
                     VerifyByteDiff bytes = VerifyDiffBytes.Diff(
-                        originalBytes.Span, original.Compared.Length, actualBytes.Span, actual.Compared.Length, _budget);
+                        originalBytes.Span,
+                        original.Compared.Length,
+                        actualBytes.Span,
+                        actual.Compared.Length,
+                        _budget,
+                        out long originalScanned,
+                        out long actualScanned);
+                    sides.Original = Math.Max(sides.Original, originalScanned);
+                    sides.Actual = Math.Max(sides.Actual, actualScanned);
                     return new VerifyBodyDiff(false, null, bytes, null, looksLikeJson ? VerifyJsonUnavailable.NotWhole : null);
                 }
 
@@ -322,7 +345,7 @@ namespace XMAT.Operations.Replay
                 return format.JsonType || BodyPreviewJson.LooksLikeJson(examined[format.Preamble..]);
             }
 
-            // How much of each side the body differences examined, and the charset each was read as text with.
+            // How far into each side's bytes the body differences read, and the charset each was read as text with.
             private sealed class Examined
             {
                 internal long Original { get; set; }
