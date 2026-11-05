@@ -137,28 +137,43 @@ namespace XMAT.WebServiceCapture
             e.Handled = true;
         }
 
-        // View verification differences applies to a row that Reissue and verify recorded from a send that it verified,
-        // also when the tab did not keep the differences: the window then says so.
+        // View verification differences applies to a row that Reissue and verify recorded from a send that it
+        // verified, also when the tab did not keep the differences (the window then says so), while it is a row of this
+        // view's tab.
         private void ViewVerifyDiff_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            e.CanExecute = e.Parameter is ProxyConnectionModel { IsVerified: true };
+            e.CanExecute = VerifiedRowOfThisTab(e.Parameter, out _) != null;
             e.Handled = true;
         }
 
-        // Opens the recorded verification of the very row that the command names, while it is a row of this view's tab:
-        // never a row found again by its number or its tab's name. Nothing is sent or compared again.
+        // Opens the recorded verification of the very row that the command names. Nothing is sent or compared again.
         private void ViewVerifyDiff_Executed(object sender, ExecutedRoutedEventArgs e)
         {
             e.Handled = true;
-            if (e.Parameter is not ProxyConnectionModel { IsVerified: true } row ||
-                !TryGetCaptureContext(DataContext, out _, out WebServiceDeviceCaptureController controller) ||
-                !controller.ProxyConnections.Any(shown => ReferenceEquals(shown, row)))
+            ProxyConnectionModel row = VerifiedRowOfThisTab(e.Parameter, out WebServiceDeviceCaptureController controller);
+            if (row == null)
             {
                 return;
             }
 
             var window = new VerifyDiffWindow(row, controller) { Owner = Window.GetWindow(this) };
             (ShowVerifyDiff ?? (opened => opened.Show()))(window);
+        }
+
+        // The command's parameter when it is a row recorded from a verified send and, as this very object, a row of
+        // this view's tab, with that tab's controller; otherwise null, as for a copy of such a row or a row of another
+        // tab. A row is never found again by its number or its tab's name.
+        private ProxyConnectionModel VerifiedRowOfThisTab(object parameter, out WebServiceDeviceCaptureController controller)
+        {
+            if (parameter is not ProxyConnectionModel { IsVerified: true } row ||
+                !TryGetCaptureContext(DataContext, out _, out controller) ||
+                !controller.ProxyConnections.Any(shown => ReferenceEquals(shown, row)))
+            {
+                controller = null;
+                return null;
+            }
+
+            return row;
         }
 
         // Shows a verification differences window, by default without blocking XMAT; tests replace it.

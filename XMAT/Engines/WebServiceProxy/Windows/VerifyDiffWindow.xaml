@@ -24,13 +24,15 @@
         <TextBlock x:Name="DetailText" Margin="0,6,0,0" TextWrapping="Wrap"/>
       </StackPanel>
     </ScrollViewer>
+    <!-- The text can be selected and copied, as a body in the request details can (docs\web-proxy.md); no undo history
+         keeps text that the window cleared. -->
     <TabControl x:Name="DiffTabs" Grid.Row="3" Margin="0,10,0,0">
       <TabItem x:Name="BodyTab" Header="Body">
-        <TextBox x:Name="BodyDiffText" IsReadOnly="True" TextWrapping="NoWrap" FontFamily="Consolas"
+        <TextBox x:Name="BodyDiffText" IsReadOnly="True" IsUndoEnabled="False" TextWrapping="NoWrap" FontFamily="Consolas"
                  HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
       </TabItem>
       <TabItem x:Name="JsonTab" Header="JSON">
-        <TextBox x:Name="JsonDiffText" IsReadOnly="True" TextWrapping="NoWrap" FontFamily="Consolas"
+        <TextBox x:Name="JsonDiffText" IsReadOnly="True" IsUndoEnabled="False" TextWrapping="NoWrap" FontFamily="Consolas"
                  HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
       </TabItem>
     </TabControl>

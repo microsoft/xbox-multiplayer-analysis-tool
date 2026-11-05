@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using XMAT.Operations.Replay;
 
 namespace XMAT.WebServiceCapture
@@ -149,13 +150,13 @@ namespace XMAT.WebServiceCapture
         private static readonly string[] JsonLineBreaks = { "\r\n", "\r", "\n" };
 
         // The text of a record. The differences are bounded (VerifyDiffLimits: 64 Ki characters, 256 changes, 128 hunks,
-        // a line or value cut at 1,024 characters), and so is their text.
-        internal static VerifyDiffPresentation Of(RecordedVerification recorded)
+        // a line or value cut at 1,024 characters), and so is their text. It stops, with OperationCanceledException, once
+        // cancellationToken is cancelled: before it starts, and between hunks, byte runs and JSON changes.
+        internal static VerifyDiffPresentation Of(RecordedVerification recorded, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(recorded);
-            string verdict = recorded.Verdict.Matches
-                ? Word("VERIFY_DIFF_MATCHED")
-                : Word("VERIFY_DIFF_DIFFERED", VerifyDiffWording.Differences(recorded.Verdict));
+            cancellationToken.ThrowIfCancellationRequested();
+            string verdict = VerdictOf(recorded.Verdict);
             VerifyDiff diff = recorded.Diff;
             if (diff == null)
             {
@@ -172,10 +173,19 @@ namespace XMAT.WebServiceCapture
             return new VerifyDiffPresentation(
                 verdict + Environment.NewLine + Status(diff),
                 DetailOf(diff),
-                BodyOf(diff.Body),
-                JsonOf(diff.Body),
+                BodyOf(diff.Body, cancellationToken),
+                JsonOf(diff.Body, cancellationToken),
                 null);
         }
+
+        // The verdict alone, worded from its codes: whether the replay matched, and how it differed. It holds no captured
+        // content, so the window can show it even when the rest of the text cannot be prepared.
+        internal static string VerdictOf(ReplayVerification verdict) =>
+            verdict?.Differences == null
+                ? string.Empty
+                : verdict.Matches
+                    ? Word("VERIFY_DIFF_MATCHED")
+                    : Word("VERIFY_DIFF_DIFFERED", VerifyDiffWording.Differences(verdict));
 
         // Shows a line break mark for each character that would start a new line in a text box, so that text never
         // passes for more lines than it is.
@@ -258,7 +268,7 @@ namespace XMAT.WebServiceCapture
                 Worded(VerifyDiffWording.Key(side.End), side.End),
                 side.Charset == null ? Word("VERIFY_DIFF_NOT_TEXT") : Word("VERIFY_DIFF_TEXT_CHARSET", OneLine(side.Charset)));
 
-        private static string BodyOf(VerifyBodyDiff body)
+        private static string BodyOf(VerifyBodyDiff body, CancellationToken cancellationToken)
         {
             if (body == null)
             {
@@ -272,15 +282,17 @@ namespace XMAT.WebServiceCapture
 
             if (body.Text != null)
             {
-                return TextOf(body.Text);
+                return TextOf(body.Text, cancellationToken);
             }
 
-            return body.Binary != null ? BytesOf(body.Binary) : Word("VERIFY_DIFF_BODY_UNAVAILABLE");
+            return body.Binary != null
+                ? BytesOf(body.Binary, cancellationToken)
+                : Word("VERIFY_DIFF_BODY_UNAVAILABLE");
         }
 
         // The hunks as in a unified diff: "@@ -start,count +start,count @@", then each line after "- " (only captured),
         // "+ " (only replayed) or two spaces (both), its cut mark and the mark of its break.
-        private static string TextOf(VerifyTextDiff text)
+        private static string TextOf(VerifyTextDiff text, CancellationToken cancellationToken)
         {
             var output = new StringBuilder(Worded(VerifyDiffWording.TextKey(text.Equivalence), text.Equivalence));
             IReadOnlyList<VerifyTextHunk> hunks = text.Hunks ?? Array.Empty<VerifyTextHunk>();
@@ -302,6 +314,7 @@ namespace XMAT.WebServiceCapture
             output.AppendLine().Append(Word("VERIFY_DIFF_BREAK_LEGEND", Word("VERIFY_DIFF_CUT")));
             foreach (VerifyTextHunk hunk in hunks)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 output.AppendLine().AppendLine().Append(CultureInfo.InvariantCulture,
                     $"@@ -{hunk.OriginalStart},{hunk.OriginalCount} +{hunk.ActualStart},{hunk.ActualCount} @@");
                 foreach (VerifyTextLine line in hunk.Lines ?? Array.Empty<VerifyTextLine>())
@@ -324,7 +337,7 @@ namespace XMAT.WebServiceCapture
 
         // Both lengths, then each run of differing bytes: its offset, its length on each side and the hex excerpt of each
         // side, with "..." when the run is longer than its excerpt.
-        private static string BytesOf(VerifyByteDiff bytes)
+        private static string BytesOf(VerifyByteDiff bytes, CancellationToken cancellationToken)
         {
             var output = new StringBuilder(Word("VERIFY_DIFF_BYTES", bytes.OriginalLength, bytes.ActualLength));
             IReadOnlyList<VerifyByteRange> ranges = bytes.Ranges ?? Array.Empty<VerifyByteRange>();
@@ -335,6 +348,7 @@ namespace XMAT.WebServiceCapture
 
             foreach (VerifyByteRange range in ranges)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 output.AppendLine().Append(Word("VERIFY_DIFF_RANGE", range.Offset, range.OriginalLength, range.ActualLength));
                 AppendExcerpt(output, "VERIFY_DIFF_CAPTURED", range.Original, range.OriginalLength);
                 AppendExcerpt(output, "VERIFY_DIFF_REPLAYED", range.Actual, range.ActualLength);
@@ -366,7 +380,7 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private static string JsonOf(VerifyBodyDiff body)
+        private static string JsonOf(VerifyBodyDiff body, CancellationToken cancellationToken)
         {
             if (body == null)
             {
@@ -400,6 +414,7 @@ namespace XMAT.WebServiceCapture
 
             foreach (VerifyJsonChange change in json.Changes ?? Array.Empty<VerifyJsonChange>())
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 output.AppendLine().AppendLine().Append(Word(
                     "VERIFY_DIFF_JSON_CHANGE",
                     Worded(VerifyDiffWording.Key(change.Kind), change.Kind),

@@ -2,7 +2,9 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -264,8 +266,9 @@ namespace XMAT.Tests.Replay
         });
 
         // The row menu offers View verification differences on replay rows only, and it applies to rows of verified sends
-        // only, also when their differences were not kept: the window then says so, with the verdict. It opens only a row
-        // of the view's own tab, the very object that it names: a copy with the same number and record opens nothing.
+        // only, also when their differences were not kept: the window then says so, with the verdict. It applies only to a
+        // row of the view's own tab, the very object that it names: neither a copy with the same number and record nor a
+        // verified row of another tab with the same name and number is enabled or opens anything.
         [Fact]
         public Task ViewVerifyDiff_AppliesOnlyToRowsOfVerifiedSends_OfTheViewsOwnTab() => _application.RunAsync(async () =>
         {
@@ -283,20 +286,26 @@ namespace XMAT.Tests.Replay
                 recorder.Add(Sent(null), Answered());
                 ProxyConnectionModel[] rows = replays.ProxyConnections.ToArray();
                 ProxyConnectionModel captured = Capture(9, 80, "/captured", "body");
+                var copy = new ProxyConnectionModel(rows[0]) { Verification = rows[0].Verification };
+                var otherTab = new WebServiceDeviceCaptureController(
+                    replays.DeviceName, DeviceType.Unknown, true, new ProxyPortPool());
+                Add(Recorder(otherTab, budget: 3000), TextDiff("another tab's", 100));
+                ProxyConnectionModel foreign = Assert.Single(otherTab.ProxyConnections);
+                Assert.Equal((rows[0].RequestNumber, true), (foreign.RequestNumber, foreign.IsVerified));
 
                 (host, CaptureConnectionView view, DataGrid grid) = await ShowReplaysAsync(model);
                 view.ShowVerifyDiff = opened.Add;
                 Assert.Equal(
-                    new[] { true, true, false, false, false },
-                    new object[] { rows[0], rows[1], rows[2], captured, null }
+                    new[] { true, true, false, false, false, false, false },
+                    new object[] { rows[0], rows[1], rows[2], captured, copy, foreign, null }
                         .Select(row => WebServiceProxyCommands.ViewVerifyDiff.CanExecute(row, view)));
                 ContextMenu menu = HostListUiTests.Open(HostListUiTests.Row(grid, rows[2]));
                 Assert.Same(rows[2], Assert.Single(
                     menu.Items.OfType<MenuItem>(), entry => entry.Command == WebServiceProxyCommands.ViewVerifyDiff).CommandParameter);
                 menu.IsOpen = false;
 
-                var copy = new ProxyConnectionModel(rows[0]) { Verification = rows[0].Verification };
                 WebServiceProxyCommands.ViewVerifyDiff.Execute(copy, view);
+                WebServiceProxyCommands.ViewVerifyDiff.Execute(foreign, view);
                 WebServiceProxyCommands.ViewVerifyDiff.Execute(rows[2], view);
                 Assert.Empty(opened);
                 WebServiceProxyCommands.ViewVerifyDiff.Execute(rows[1], view);
@@ -405,11 +414,13 @@ namespace XMAT.Tests.Replay
             }
         });
 
-        // Text prepared for a record that the window no longer shows, because its row left the tab meanwhile, is dropped.
+        // Text prepared for a record that the window no longer shows, because its row left the tab meanwhile, is
+        // dropped, also when a formatter that does not stop once cancelled prepared it.
         [Fact]
         public Task TheWindow_DropsTextPreparedForARecordThatItNoLongerShows() => _application.RunAsync(async () =>
         {
             var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             using var release = new ManualResetEventSlim();
             VerifyDiffWindow window = null;
             try
@@ -417,12 +428,14 @@ namespace XMAT.Tests.Replay
                 WebServiceDeviceCaptureController replays = ReplaysOf(model);
                 Add(Recorder(replays, VerifyDiffLimits.MaxRetainedBytes), TextDiff("two"));
                 ProxyConnectionModel row = Assert.Single(replays.ProxyConnections);
-                window = new VerifyDiffWindow(row, replays, recorded =>
+                window = new VerifyDiffWindow(row, replays, (recorded, _) =>
                 {
+                    started.TrySetResult();
                     release.Wait(Patience);
                     return VerifyDiffPresentation.Of(recorded);
                 });
                 Assert.Equal(Words("VERIFY_DIFF_PENDING"), Message(window));
+                await started.Task.WaitAsync(Patience);
 
                 replays.ProxyConnections.Remove(row);
                 Assert.Null(window.Shown);
@@ -441,6 +454,140 @@ namespace XMAT.Tests.Replay
                 await RemoveAllAsync(model);
             }
         });
+
+        // Closing the window while its text is being prepared cancels that work: the formatter sees the cancellation,
+        // Presented completes, nothing is shown or reported as failed, and once the tab no longer has the row, nothing
+        // keeps the record that the text was being prepared from.
+        [Fact]
+        public Task ClosingTheWindow_StopsPreparingItsText_AndKeepsNothing() => _application.RunAsync(async () =>
+        {
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                WebServiceDeviceCaptureController replays = ReplaysOf(model);
+                (VerifyDiffWindow window, WeakReference record) = OpenWhilePreparing(replays, started, cancelled);
+                await started.Task.WaitAsync(Patience);
+
+                window.Close();
+                Assert.True(await cancelled.Task.WaitAsync(Patience));
+                await window.Presented.WaitAsync(Patience);
+                await SettleAsync();
+
+                Assert.Null(window.Shown);
+                Assert.All(
+                    new[] { "SummaryText", "DetailText", "BodyDiffText", "JsonDiffText" },
+                    name => Assert.Equal(string.Empty, Shown(window, name)));
+                Assert.Null(Message(window));
+                replays.ProxyConnections.RemoveAll();
+                await CollectAsync(record);
+                Assert.False(record.IsAlive);
+                GC.KeepAlive(window);
+            }
+            finally
+            {
+                await RemoveAllAsync(model);
+            }
+        });
+
+        // Once the window lets go of its record, because its tab's rows were replaced while it was open or after it closed,
+        // it keeps neither the tab's former rows, nor the record, nor the tab's controller, although the window itself is
+        // still referenced.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public Task TheWindow_KeepsNothingOfTheTab_OnceItLetsGo(bool closedFirst) => _application.RunAsync(async () =>
+        {
+            Released released = OpenThenLetGo(closedFirst);
+            try
+            {
+                await released.Window.Presented.WaitAsync(Patience);
+                await SettleAsync();
+                await CollectAsync(released.Rows, released.Record, released.Controller);
+
+                Assert.Null(released.Window.Shown);
+                Assert.False(released.Rows.IsAlive);
+                Assert.False(released.Record.IsAlive);
+                Assert.False(released.Controller.IsAlive);
+                Assert.Equal(
+                    closedFirst ? null : Words("VERIFY_DIFF_STALE", 1L, CaptureAppModel.ReplayContextName),
+                    Message(released.Window));
+            }
+            finally
+            {
+                if (!closedFirst)
+                {
+                    released.Window.Close();
+                }
+            }
+        });
+
+        // When the text cannot be prepared, the window still shows the verdict, worded from its codes alone, and says that
+        // the differences could not be shown.
+        [Fact]
+        public Task AFailedFormatting_StillShowsTheVerdict() => _application.RunAsync(async () =>
+        {
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            VerifyDiffWindow window = null;
+            try
+            {
+                WebServiceDeviceCaptureController replays = ReplaysOf(model);
+                Add(Recorder(replays, VerifyDiffLimits.MaxRetainedBytes), TextDiff("two"));
+                ProxyConnectionModel row = Assert.Single(replays.ProxyConnections);
+                window = new VerifyDiffWindow(
+                    row, replays, (_, _) => throw new InvalidOperationException("The formatter failed."));
+                await window.Presented.WaitAsync(Patience);
+
+                Assert.Same(row.Verification, window.Shown);
+                Assert.Equal(Words("VERIFY_DIFF_DIFFERED", Words("REPLAY_DIFFERENCE_BODY")), Shown(window, "SummaryText"));
+                Assert.Equal(Words("VERIFY_DIFF_FAILED"), Message(window));
+                Assert.All(
+                    new[] { "DetailText", "BodyDiffText", "JsonDiffText" },
+                    name => Assert.Equal(string.Empty, Shown(window, name)));
+            }
+            finally
+            {
+                window?.Close();
+                await RemoveAllAsync(model);
+            }
+        });
+
+        // Preparing the text stops once it is cancelled: before it starts, and between hunks, byte runs and JSON changes.
+        [Fact]
+        public void PreparingTheText_StopsOnceCancelled()
+        {
+            var differed = new ReplayVerification(new[] { ReplayVerifier.BodyDifference });
+            Assert.Throws<OperationCanceledException>(() => VerifyDiffPresentation.Of(
+                new RecordedVerification(differed, Diff(differed, Equal())), new CancellationToken(true)));
+
+            VerifyTextHunk hunk = TextDiff("two").Body.Text.Hunks[0];
+            var range = new VerifyByteRange(0, 1, 1, "41", "42");
+            var change = new VerifyJsonChange("$.a", false, VerifyJsonChangeKind.Changed, "1", false, "2", false);
+            var bodies = new Func<CancellationTokenSource, VerifyBodyDiff>[]
+            {
+                source => new VerifyBodyDiff(
+                    false,
+                    new VerifyTextDiff(VerifyEquivalence.Different, CancelledAt(1, source, hunk, hunk)),
+                    null,
+                    null,
+                    null),
+                source => new VerifyBodyDiff(false, null, new VerifyByteDiff(2, 2, CancelledAt(1, source, range, range)), null, null),
+                source => new VerifyBodyDiff(
+                    false,
+                    new VerifyTextDiff(VerifyEquivalence.Same, Array.Empty<VerifyTextHunk>()),
+                    null,
+                    new VerifyJsonDiff(VerifyEquivalence.Different, Array.Empty<string>(), CancelledAt(1, source, change, change)),
+                    null),
+            };
+            foreach (Func<CancellationTokenSource, VerifyBodyDiff> body in bodies)
+            {
+                using var source = new CancellationTokenSource();
+                var recorded = new RecordedVerification(differed, Diff(differed, body(source)));
+                Assert.Throws<OperationCanceledException>(() => VerifyDiffPresentation.Of(recorded, source.Token));
+                Assert.True(source.IsCancellationRequested);
+            }
+        }
 
         // A text body's differences: the verdict and both status codes; whether they are complete and each limitation, a
         // code that this version does not know named; how verify read each body; then the hunks, each line with the mark of
@@ -670,7 +817,7 @@ namespace XMAT.Tests.Replay
         private static void AssertWorded<T>(IReadOnlyCollection<T> values, Func<T, string> keyOf)
         {
             Assert.NotEmpty(values);
-            Assert.Empty(values.Where(value => keyOf(value) == null));
+            Assert.DoesNotContain(values, value => keyOf(value) == null);
             string[] keys = values.Select(keyOf).ToArray();
             Assert.All(keys, key => Assert.DoesNotContain("NO_IMPL_", Localization.GetLocalizedString(key, AnyArguments)));
             Assert.Equal(keys.Length, keys.Distinct().Count());
@@ -811,6 +958,95 @@ namespace XMAT.Tests.Replay
             {
                 await model.RemoveDeviceContextAsync(context);
             }
+        }
+
+        // A verified row of replays and a window on it whose formatter says when it starts, then waits until it is
+        // cancelled, says whether it was, and stops. Only a weak reference to the row's record is returned, so that the
+        // caller keeps nothing of it.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static (VerifyDiffWindow Window, WeakReference Record) OpenWhilePreparing(
+            WebServiceDeviceCaptureController replays, TaskCompletionSource started, TaskCompletionSource<bool> cancelled)
+        {
+            Add(Recorder(replays, VerifyDiffLimits.MaxRetainedBytes), TextDiff("two"));
+            ProxyConnectionModel row = Assert.Single(replays.ProxyConnections);
+            var window = new VerifyDiffWindow(row, replays, (recorded, token) =>
+            {
+                started.TrySetResult();
+                cancelled.TrySetResult(token.WaitHandle.WaitOne(Patience));
+                token.ThrowIfCancellationRequested();
+                return VerifyDiffPresentation.Of(recorded, token);
+            });
+            return (window, new WeakReference(row.Verification));
+        }
+
+        // A window on the verified row of a tab of its own, which then lets go of the row's record: the tab's rows are
+        // replaced while it is open, or after it closed. Besides the window, only weak references are returned, so that
+        // the caller keeps nothing of the tab.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static Released OpenThenLetGo(bool closedFirst)
+        {
+            var controller = new WebServiceDeviceCaptureController(
+                CaptureAppModel.ReplayContextName, DeviceType.Unknown, true, new ProxyPortPool());
+            Add(Recorder(controller, VerifyDiffLimits.MaxRetainedBytes), TextDiff("two"));
+            ProxyConnectionModel row = Assert.Single(controller.ProxyConnections);
+            var window = new VerifyDiffWindow(row, controller);
+            var released = new Released(
+                window,
+                new WeakReference(controller.ProxyConnections),
+                new WeakReference(row.Verification),
+                new WeakReference(controller));
+            if (closedFirst)
+            {
+                window.Close();
+            }
+
+            controller.ReplaceLoadedCapturesFrom(new WebServiceDeviceCaptureController(
+                "Loaded", DeviceType.Unknown, true, new ProxyPortPool()));
+            return released;
+        }
+
+        // Collects until nothing references the targets any more, at most three times, letting finished work leave its
+        // threads in between.
+        private static async Task CollectAsync(params WeakReference[] references)
+        {
+            for (int attempt = 0; attempt < 3 && references.Any(reference => reference.IsAlive); attempt++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+                await Task.Delay(50);
+            }
+        }
+
+        // Items that cancel source once enumeration reaches the item at index, as when the window lets go meanwhile.
+        private static IReadOnlyList<T> CancelledAt<T>(int index, CancellationTokenSource source, params T[] items) =>
+            new CancellingList<T>(items, index, source);
+
+        // A window and weak references to what it showed: its tab's former rows, the record and the tab's controller.
+        private sealed record Released(
+            VerifyDiffWindow Window, WeakReference Rows, WeakReference Record, WeakReference Controller);
+
+        private sealed class CancellingList<T>(IReadOnlyList<T> items, int index, CancellationTokenSource source)
+            : IReadOnlyList<T>
+        {
+            public int Count => items.Count;
+
+            public T this[int position] => items[position];
+
+            public IEnumerator<T> GetEnumerator()
+            {
+                for (int position = 0; position < items.Count; position++)
+                {
+                    if (position == index)
+                    {
+                        source.Cancel();
+                    }
+
+                    yield return items[position];
+                }
+            }
+
+            IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
         }
     }
 }

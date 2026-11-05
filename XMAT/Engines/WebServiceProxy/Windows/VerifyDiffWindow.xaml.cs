@@ -6,6 +6,7 @@ using System;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using XMAT.WebServiceCapture.Models;
@@ -18,22 +19,26 @@ namespace XMAT.WebServiceCapture
     // tab's name or its number, and it sends and compares nothing. Its text is prepared off the UI thread
     // (VerifyDiffPresentation) and shown only while the window still shows that record. Once the window closes, or the
     // row leaves its tab (the tab is cleared or closed, the row is removed or replaced, or the tab's rows are replaced),
-    // the window lets go of the record, which holds captured content, and of what it showed, and says why.
+    // the window lets go of the record, which holds captured content, of the row and of the tab's rows and controller,
+    // stops preparing the text and clears what it showed, and says why.
     public partial class VerifyDiffWindow : Window
     {
-        private readonly WebServiceDeviceCaptureController _controller;
-        private readonly ProxyConnectionsCollection _rows;
         private readonly string _tabName;
         private readonly long _number;
+
+        // Cancelled once the window lets go of its record (Forget): the text being prepared for it is no longer needed.
+        private readonly CancellationTokenSource _formatting = new();
+        private WebServiceDeviceCaptureController _controller;
+        private ProxyConnectionsCollection _rows;
         private ProxyConnectionModel _row;
         private RecordedVerification _shown;
 
         // row is a row of controller's tab with a recorded verification; format prepares the text off the UI thread, and
-        // tests replace it to choose when it completes.
+        // stops once its token is cancelled; tests replace it to choose when it completes.
         internal VerifyDiffWindow(
             ProxyConnectionModel row,
             WebServiceDeviceCaptureController controller,
-            Func<RecordedVerification, VerifyDiffPresentation> format = null)
+            Func<RecordedVerification, CancellationToken, VerifyDiffPresentation> format = null)
         {
             ArgumentNullException.ThrowIfNull(row);
             ArgumentNullException.ThrowIfNull(controller);
@@ -55,7 +60,7 @@ namespace XMAT.WebServiceCapture
 
             _rows.CollectionChanged += Rows_CollectionChanged;
             _controller.PropertyChanged += Controller_PropertyChanged;
-            Presented = PresentAsync(_shown, format ?? VerifyDiffPresentation.Of);
+            Presented = PresentAsync(_shown, format ?? VerifyDiffPresentation.Of, _formatting.Token);
         }
 
         // The record that the window shows: the row's own, until the window closes or the row leaves its tab, then null.
@@ -71,12 +76,20 @@ namespace XMAT.WebServiceCapture
         }
 
         private async Task PresentAsync(
-            RecordedVerification recorded, Func<RecordedVerification, VerifyDiffPresentation> format)
+            RecordedVerification recorded,
+            Func<RecordedVerification, CancellationToken, VerifyDiffPresentation> format,
+            CancellationToken cancellationToken)
         {
             VerifyDiffPresentation presentation;
             try
             {
-                presentation = await Task.Run(() => format(recorded)).ConfigureAwait(false);
+                presentation = await Task.Run(() => format(recorded, cancellationToken), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The window let go of the record (Forget): nothing is shown, and nothing went wrong.
+                return;
             }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
@@ -96,7 +109,8 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // On the UI thread: the text is shown only while the window still shows the record that it was prepared from.
+        // On the UI thread: the text is shown only while the window still shows the record that it was prepared from. Text
+        // that could not be prepared leaves the verdict, worded from its codes alone, and says so.
         private void Publish(RecordedVerification recorded, VerifyDiffPresentation presentation)
         {
             if (!ReferenceEquals(_shown, recorded))
@@ -106,6 +120,7 @@ namespace XMAT.WebServiceCapture
 
             if (presentation == null)
             {
+                SummaryText.Text = VerifyDiffPresentation.VerdictOf(recorded.Verdict);
                 ShowMessage(Localization.GetLocalizedString("VERIFY_DIFF_FAILED"));
                 return;
             }
@@ -151,13 +166,25 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // Lets go of the row and its record, which holds captured content, and of the text that showed it.
+        // Lets go of the row and its record, which holds captured content, and of the tab's rows and controller once it
+        // stops listening to them; stops preparing the text; and clears the text that showed the record.
         private void Forget()
         {
-            _rows.CollectionChanged -= Rows_CollectionChanged;
-            _controller.PropertyChanged -= Controller_PropertyChanged;
+            if (_rows != null)
+            {
+                _rows.CollectionChanged -= Rows_CollectionChanged;
+            }
+
+            if (_controller != null)
+            {
+                _controller.PropertyChanged -= Controller_PropertyChanged;
+            }
+
+            _rows = null;
+            _controller = null;
             _shown = null;
             _row = null;
+            _formatting.Cancel();
             SummaryText.Text = string.Empty;
             DetailText.Text = string.Empty;
             BodyDiffText.Text = string.Empty;

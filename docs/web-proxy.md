@@ -392,7 +392,10 @@ The differences contain captured content, such as lines of a response body or JS
 values, which can include secrets. XMAT keeps them in memory only, with the rows of the
 tab: they are never written to the application log, saved captures or exports, and
 closing or clearing the tab discards them. A window open on a row that leaves the tab
-then clears what it shows and says why.
+then clears what it shows and keeps none of the tab's requests or their differences;
+it still names the tab and the request, to say why. You can select and
+copy the window's text, as you can a body in the request details: copying puts the
+captured content that you copy on the clipboard, where other applications can read it.
 
 ## Block or bypass hosts
 
