@@ -240,6 +240,31 @@ namespace XMAT.Operations.Inspection
         Response,
     }
 
+    // How a body's content decodes, as the preview decodes it but without reading it as text or JSON
+    // (BodyPreviewOperation.InspectDecode).
+    internal enum BodyDecodeEnd
+    {
+        // All of the content decoded, and where it ends is proven.
+        Complete,
+
+        // The compressed content ends early (BodyPreviewNotice.Incomplete).
+        Incomplete,
+
+        // Where the content ends is not proven: a ceiling was reached, the stored body is only a prefix or was not kept, or
+        // something follows a first gzip member. The notices say why.
+        Unproven,
+
+        // The content coding is invalid.
+        Malformed,
+
+        // A content or transfer coding that the preview does not decode, or more than one.
+        Unsupported,
+    }
+
+    // DecodedBytes: how many decoded bytes the inspection produced. Notices: the preview's notices (BodyPreviewNotice) that
+    // say why, codes only.
+    internal sealed record BodyDecodeInspection(BodyDecodeEnd End, long DecodedBytes, IReadOnlyList<string> Notices);
+
     // One node of a JSON tree, as the JSON tab shows it: "[root]" for a document, a member name or an array index for an
     // object or array, and "name=value" for any other value, its text at most MaxJsonValueChars characters followed by
     // "…" when longer.

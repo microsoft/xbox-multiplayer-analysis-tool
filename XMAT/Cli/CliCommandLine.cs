@@ -60,7 +60,8 @@ namespace XMAT.Cli
         string Sequence = null,
         ReplayHttpVersion HttpVersion = ReplayHttpVersion.Auto,
         ReplayConnectTo ConnectTo = null,
-        bool AllowConnectTo = false)
+        bool AllowConnectTo = false,
+        bool VerifyDiff = false)
     {
         internal static CliReplay Default { get; } = new();
     }
@@ -100,6 +101,7 @@ namespace XMAT.Cli
         internal const string ConnectToOption = "--connect-to";
         internal const string UnconditionalSwitch = "--unconditional";
         internal const string VerifySwitch = "--verify";
+        internal const string VerifyDiffSwitch = "--verify-diff";
         internal const string AllowUnsafeMethodsSwitch = "--allow-unsafe-methods";
         internal const string AllowOriginChangeSwitch = "--allow-origin-change";
         internal const string AllowConnectToSwitch = "--allow-connect-to";
@@ -186,7 +188,8 @@ namespace XMAT.Cli
         private static readonly HashSet<string> RepeatableOptions = new(StringComparer.Ordinal) { HeaderOption, RemoveHeaderOption };
 
         // compose has no captured origin to change, and replay never follows a redirect to another origin, so only replay
-        // takes --allow-origin-change. Both take --allow-connect-to, the permission that --connect-to needs.
+        // takes --allow-origin-change. Both take --allow-connect-to, the permission that --connect-to needs. Only replay has
+        // captured responses to verify against (--verify, --verify-diff).
         private static readonly HashSet<string> ComposeSwitches = new(StringComparer.Ordinal)
         {
             AllowUnsafeMethodsSwitch,
@@ -194,7 +197,8 @@ namespace XMAT.Cli
         };
 
         private static readonly HashSet<string> ReplaySwitches = new(
-            ComposeSwitches.Concat(new[] { AllowOriginChangeSwitch, UnconditionalSwitch, VerifySwitch }), StringComparer.Ordinal);
+            ComposeSwitches.Concat(new[] { AllowOriginChangeSwitch, UnconditionalSwitch, VerifySwitch, VerifyDiffSwitch }),
+            StringComparer.Ordinal);
 
         // The options that analyze accepts; its command line in the capability registry names exactly these.
         internal static IReadOnlySet<string> AnalyzeOptionNames => AnalyzeOptions;
@@ -475,7 +479,10 @@ namespace XMAT.Cli
                     Origin = origin,
                     RemoveHeaders = removeHeaders,
                     Unconditional = arguments.Switches.Contains(UnconditionalSwitch),
-                    Verify = arguments.Switches.Contains(VerifySwitch),
+
+                    // --verify-diff verifies too, and also writes how each verified response differs.
+                    Verify = arguments.Switches.Contains(VerifySwitch) || arguments.Switches.Contains(VerifyDiffSwitch),
+                    VerifyDiff = arguments.Switches.Contains(VerifyDiffSwitch),
                 }));
         }
 

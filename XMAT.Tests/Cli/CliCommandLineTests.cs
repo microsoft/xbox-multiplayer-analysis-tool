@@ -76,6 +76,9 @@ namespace XMAT.Tests.Cli
         [InlineData("replay a.saz --request 1 --out results --remove-header Bad:Name", "cli.usage.invalid-value")]
         [InlineData("replay a.saz --request 1 --out results --verify=yes", "cli.usage.invalid-value")]
         [InlineData("replay a.saz --request 1 --out results --verify --verify", "cli.usage.duplicate-option")]
+        [InlineData("replay a.saz --request 1 --out results --verify-diff=yes", "cli.usage.invalid-value")]
+        [InlineData("replay a.saz --request 1 --out results --verify-diff --verify-diff", "cli.usage.duplicate-option")]
+        [InlineData("compose --url http://a.test/ --out results --verify-diff", "cli.usage.unknown-option")]
         [InlineData("replay a.saz --request 1 --out results --fail-on findings", "cli.usage.unknown-option")]
         [InlineData("compose --out results", "cli.usage.missing-option")]
         [InlineData("compose --url http://a.test/", "cli.usage.missing-option")]
@@ -184,6 +187,19 @@ namespace XMAT.Tests.Cli
                 replay.Headers);
             Assert.Equal(new[] { "Cookie", "X-Trace" }, replay.RemoveHeaders);
             Assert.True(replay.Unconditional && replay.Verify && replay.AllowUnsafeMethods && replay.AllowOriginChange);
+            Assert.False(replay.VerifyDiff);
+        }
+
+        // --verify-diff verifies too: the verdicts and exit codes are --verify's, with a detail besides.
+        [Theory]
+        [InlineData("--verify", true, false)]
+        [InlineData("--verify-diff", true, true)]
+        [InlineData("--verify --verify-diff", true, true)]
+        public void Parse_VerifyDiffAlsoVerifies(string switches, bool verify, bool verifyDiff)
+        {
+            CliReplay replay = CliCommandLine.Parse(Split("replay a.saz --request all --out r " + switches)).Request.Replay;
+
+            Assert.Equal((verify, verifyDiff), (replay.Verify, replay.VerifyDiff));
         }
 
         [Fact]
@@ -423,6 +439,50 @@ namespace XMAT.Tests.Cli
             Assert.False(unpublished.RootElement.GetProperty("replays")[0].TryGetProperty("files", out _));
             JsonElement totals = published.RootElement.GetProperty("totals");
             Assert.Equal((2, 1, 1, 0, 1), (totals.GetProperty("replays").GetInt32(), totals.GetProperty("completed").GetInt32(), totals.GetProperty("failed").GetInt32(), totals.GetProperty("matched").GetInt32(), totals.GetProperty("mismatched").GetInt32()));
+        }
+
+        // With --verify-diff, a verified send names the state of its diff.json, and its path only once published; without
+        // the switch, the detail is null.
+        [Fact]
+        public void ReplayJson_NamesEachDetailsStateAndItsFileOnlyOncePublished()
+        {
+            static CliReport Report(bool verifyDiff)
+            {
+                var report = new CliReport(CliCommands.Replay, "run")
+                {
+                    Replay = new CliReplayReport(new CliReplay(Selection: "1", Verify: true, VerifyDiff: verifyDiff), CliLimits.Default)
+                    {
+                        Items = new[]
+                        {
+                            new ReplayItemResult(
+                                1, "d1", 7, 1, ReplayOutcome.Completed, 200, TimeSpan.Zero, 5, 0, null,
+                                new ReplayVerification(new[] { ReplayVerifier.BodyDifference })),
+                        },
+                    },
+                };
+                if (verifyDiff)
+                {
+                    report.Replay.Details[1] = VerifyDiffState.Limited;
+                }
+
+                return report;
+            }
+
+            static JsonElement Detail(JsonDocument document) =>
+                document.RootElement.GetProperty("replays")[0].GetProperty("verify").GetProperty("detail");
+
+            CliReport withDetails = Report(verifyDiff: true);
+            using JsonDocument unpublished = JsonDocument.Parse(CliJson.Serialize(withDetails));
+            withDetails.Artifacts.Add(new CliArtifact("summary", "summary.json"));
+            using JsonDocument published = JsonDocument.Parse(CliJson.Serialize(withDetails));
+            using JsonDocument without = JsonDocument.Parse(CliJson.Serialize(Report(verifyDiff: false)));
+
+            Assert.Equal(
+                ("limited", JsonValueKind.Null),
+                (Detail(unpublished).GetProperty("state").GetString(), Detail(unpublished).GetProperty("file").ValueKind));
+            Assert.Equal("replays/00001/diff.json", Detail(published).GetProperty("file").GetString());
+            Assert.True(published.RootElement.GetProperty("options").GetProperty("verifyDiff").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, Detail(without).ValueKind);
         }
 
         [Theory]

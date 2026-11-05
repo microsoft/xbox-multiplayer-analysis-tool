@@ -18,15 +18,16 @@ namespace XMAT.Cli
     // xmat replay INPUT --request SPEC --out DIR [...] and xmat compose --url URL --out DIR [...]: the command-line
     // adapter of the shared replay operation (the GUI's adapter is the request composer). Nothing is sent unless every
     // selected request passes the operation's checks. A run that sent its requests publishes summary.json and each
-    // request and response under replays/, whatever the responses were: exit code 12 when a request got no complete
-    // response, otherwise 11 when --verify found a response that differs from the capture. CliStagedRun owns the
-    // publication boundary.
+    // request and response under replays/, whatever the responses were, and with --verify-diff each verified send's
+    // diff.json: exit code 12 when a request got no complete response, otherwise 11 when --verify found a response that
+    // differs from the capture. CliStagedRun owns the publication boundary.
     internal static class CliReplayCommand
     {
         internal const string SummaryPath = "summary.json";
         internal const string ReplaysPath = "replays";
         internal const string RequestFile = "request.http";
         internal const string ResponseFile = "response.http";
+        internal const string DiffFile = "diff.json";
 
         // replays/00001, replays/00002, ...: one folder per send, in plan order.
         internal static string FolderOf(int id) => ReplaysPath + "/" + id.ToString("D5", CultureInfo.InvariantCulture);
@@ -113,6 +114,13 @@ namespace XMAT.Cli
                 report.HumanLines.Add(
                     $"xmat: sent {sent} request(s): {completed} answered, {sent - completed} without a complete response; "
                     + $"wrote {SummaryPath} and {ReplaysPath} to the --out folder.");
+                if (request.Replay.VerifyDiff)
+                {
+                    report.HumanLines.Add(
+                        $"xmat: --verify-diff: wrote {report.Replay.Details.Count} {DiffFile} file(s), one for each verified "
+                        + "request; they can hold captured content.");
+                }
+
                 if (report.ExitCode == CliExitCodes.RequestsFailed)
                 {
                     report.HumanLines.Add("xmat: some requests got no complete response (exit code 12).");
@@ -147,7 +155,7 @@ namespace XMAT.Cli
             // folder and never the GUI's folder under %APPDATA%.
             HeadlessStorage.Configure(output.WorkPath);
             OperationResult<ReplayResult> result = await new ReplayOperation().ExecuteAsync(
-                CreateRequest(request, body, new FileSink(output)),
+                CreateRequest(request, body, new FileSink(output, report.Replay)),
                 OperationContext.None,
                 cancellationToken).ConfigureAwait(false);
             Apply(report, result);
@@ -176,7 +184,8 @@ namespace XMAT.Cli
                 AllowUnsafeMethods: replay.AllowUnsafeMethods,
                 AllowOriginChange: replay.AllowOriginChange,
                 AllowConnectTo: replay.AllowConnectTo,
-                Transport: new ReplayTransportOptions(replay.HttpVersion, replay.ConnectTo));
+                Transport: new ReplayTransportOptions(replay.HttpVersion, replay.ConnectTo),
+                VerifyDiff: replay.VerifyDiff);
             if (request.Command == CliCommands.Compose)
             {
                 // The operation applies and checks the method, headers and body of a composed request like any edit; with
@@ -253,14 +262,17 @@ namespace XMAT.Cli
             }
         }
 
-        // Writes the messages of each send into the staging folder as it completes, so the run holds one at a time.
+        // Writes the messages of each send into the staging folder as it completes, so the run holds one at a time, and with
+        // --verify-diff each verified send's detail (diff.json), whose state alone the report keeps.
         private sealed class FileSink : IReplayExchangeSink
         {
             private readonly CliOutputFolder _output;
+            private readonly CliReplayReport _report;
 
-            internal FileSink(CliOutputFolder output)
+            internal FileSink(CliOutputFolder output, CliReplayReport report)
             {
                 _output = output;
+                _report = report;
             }
 
             public void Add(ReplayItemResult result, ReplayExchange exchange)
@@ -274,6 +286,13 @@ namespace XMAT.Cli
                 if (exchange.Response != null)
                 {
                     _output.WriteFile(folder + "/" + ResponseFile, exchange.Response.WriteTo);
+                }
+
+                if (exchange.VerifyDiff is VerifyDiff diff)
+                {
+                    byte[] detail = VerifyDiffJson.Serialize(diff);
+                    _output.WriteFile(folder + "/" + DiffFile, stream => stream.Write(detail));
+                    _report.Details[result.Id] = diff.State;
                 }
             }
         }

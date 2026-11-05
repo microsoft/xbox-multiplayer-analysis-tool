@@ -112,6 +112,65 @@ namespace XMAT.Tests.Cli
             Assert.Contains("exit code 11", run.Stderr, StringComparison.Ordinal);
         }
 
+        // --verify-diff verifies as --verify does and publishes each verified send's diff.json, which holds captured content
+        // by design; the report, the summary and the console name only its state and path.
+        [Fact]
+        public async Task Replay_VerifyDiff_PublishesEachVerifiedSendsDetailAndAReportWithoutContent()
+        {
+            using var directory = new CliTestDirectory();
+            await using var server = new LoopbackHttpServer(
+                request => LoopbackResponse.Ok(request.Target == "/two" ? $"{Canary}-replayed\n" : "same\n"));
+            const string Head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n";
+            string input = ReplayCaptures.WriteSaz(
+                directory.Root,
+                "capture.saz",
+                new CapturedExchange("GET", server.Origin + "/one", ResponseHead: Head, ResponseBody: "same\n"u8.ToArray()),
+                new CapturedExchange(
+                    "GET", server.Origin + "/two", ResponseHead: Head, ResponseBody: Encoding.UTF8.GetBytes($"{Canary}-captured\n")));
+
+            XmatRun run = await XmatProcess.RunAsync(directory.Root, "replay", input, "--request", "all", "--verify-diff", "--out", "results");
+
+            CliAssert.ExitCode(11, run);
+            JsonElement json = run.Json();
+            Assert.True(json.GetProperty("options").GetProperty("verify").GetBoolean());
+            Assert.True(json.GetProperty("options").GetProperty("verifyDiff").GetBoolean());
+            JsonElement[] verify = json.GetProperty("replays").EnumerateArray().Select(replay => replay.GetProperty("verify")).ToArray();
+            Assert.Equal(
+                new[] { ("match", "complete", "replays/00001/diff.json"), ("mismatch", "complete", "replays/00002/diff.json") },
+                verify.Select(item => (
+                    item.GetProperty("result").GetString(),
+                    item.GetProperty("detail").GetProperty("state").GetString(),
+                    item.GetProperty("detail").GetProperty("file").GetString())));
+            string published = Path.Join(directory.Root, "results");
+            string summary = File.ReadAllText(Path.Join(published, "summary.json"));
+            using (JsonDocument document = JsonDocument.Parse(summary))
+            {
+                Assert.Equal(
+                    "replays/00002/diff.json",
+                    document.RootElement.GetProperty("replays")[1].GetProperty("verify").GetProperty("detail").GetProperty("file").GetString());
+            }
+
+            string detail = File.ReadAllText(Path.Join(published, "replays", "00002", "diff.json"));
+            using (JsonDocument document = JsonDocument.Parse(detail))
+            {
+                Assert.Equal(
+                    ("xmat.verify-diff", 1, "mismatch"),
+                    (document.RootElement.GetProperty("schema").GetString(), document.RootElement.GetProperty("version").GetInt32(),
+                        document.RootElement.GetProperty("result").GetString()));
+            }
+
+            Assert.Contains(Canary, detail, StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Join(published, "replays", "00001", "diff.json")));
+            foreach (string text in new[] { run.Stdout, run.Stderr, summary })
+            {
+                Assert.DoesNotContain(Canary, text, StringComparison.OrdinalIgnoreCase);
+            }
+
+            Assert.Contains("--verify-diff: wrote 2 diff.json file(s)", run.Stderr, StringComparison.Ordinal);
+            CliAssert.OnlyCurrentUserCanOpen(published);
+            CliAssert.NoStagingFolders(directory.Root);
+        }
+
         [Fact]
         public async Task Replay_ARequestWithoutAResponse_StillPublishesWithExitCode12()
         {

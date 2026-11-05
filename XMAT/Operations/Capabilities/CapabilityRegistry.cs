@@ -196,7 +196,7 @@ namespace XMAT.Operations.Capabilities
             Capability.Supported(
                 "request.replay", "Replay captured requests, as captured or edited", "S9",
                 cli: "replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
-                    "[--verify] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
+                    "[--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
                     "[--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] " +
                     "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] " +

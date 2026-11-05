@@ -16,10 +16,11 @@ both. Other capabilities move over time; the [capability table](#what-runs-headl
 xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N]
              [--max-record-mib N] [--max-records N]
 xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify]
-            [--url URL | --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]...
-            [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
-            [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change]
-            [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]
+            [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header "NAME: VALUE"]...
+            [--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS]
+            [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods]
+            [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N]
+            [--max-records N]
 xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]...
              [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS]
              [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods]
@@ -190,12 +191,28 @@ xmat --version
   differs from the response captured for its request in its status code or body. Bodies are compared without their
   chunked framing and gzip, deflate or Brotli content coding, each decoded up to 64 MiB (or `--max-response-mib` if
   that is smaller); a body that does not decode within that size is compared as received. Headers are not compared,
-  since dates, request ids and cookies differ on every response. A request whose captured response the GUI recorded
-  without its body (`X-XMAT-Response-Body-Not-Kept`) is not verified: its `verify` is null and the run warns
-  `replay.verify.skipped`. The JSON output and `summary.json` hold only request
+  since dates, request ids and cookies differ on every response. A request is not verified when no response was
+  captured for it (its captured status is not a number) or when the GUI recorded its captured response without its
+  body (`X-XMAT-Response-Body-Not-Kept` on an empty body; the header on a body that was kept changes nothing): its
+  `verify` is null and the run warns `replay.verify.skipped`. The JSON output and `summary.json` hold only request
   numbers, ordinal device ids, outcomes, status codes, durations, sizes, codes and the options that are numbers or
   switches, never URLs, methods, headers, bodies or the `--body-file` path. Cancelling a run publishes nothing, but
   requests already sent stay sent.
+- `--verify-diff` verifies as `--verify` does (the verdicts and exit codes are the same) and also writes, for each
+  verified send, `replays/NNNNN/diff.json`: how the replayed response differs from the captured one. It holds both
+  status codes; for each side how its body was compared (`basis`: `plain`, `decoded`, or the stored bytes when the
+  coding is not decoded, `unsupportedCoding`, `malformedCoding` or `decodedLimit`; `framing`; and `end`, whether
+  decoded content is proven to be all of it, `complete`, `incomplete`, `unproven` or `notApplicable`); and the body
+  differences as text (hunks of lines with three lines of context, each line with its break), as JSON values (each
+  changed, added or removed value with its path and both values as written, numbers exactly; or why there is no JSON
+  view), or as bytes (the lengths and the differing ranges, with excerpts of up to 16 bytes). A detail is `complete`,
+  `limited` (its `limitations` say why: a side examined only in part, an end not proven, or a limit reached) or
+  `unavailable` (no body differences, for example when they would not fit). Each side is examined up to 4 MiB, a
+  detail shows at most 64 Ki characters, 256 JSON changes or byte ranges and 128 text hunks, and a `diff.json` is at
+  most 256 KiB. JSON values are compared only when both sides are whole UTF-8 documents without a member name that
+  appears twice in one object; text that is equal except for its charset or byte order mark, and JSON whose values
+  are equal except for whitespace, member order or escapes, say so. `diff.json` holds captured content, as the
+  request and response files do, and is published privately with them. Only `replay` takes `--verify-diff`.
 - A capture that the GUI saved can include its replays as a device named `XMAT Replays`: `xmat analyze` reports it
   like any other device, and `xmat replay` can select its requests. Their numbers can repeat those of another device,
   so a selected number may need `--device` (`replay.request.ambiguous`).
@@ -273,15 +290,16 @@ whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFai
 `slice`); `help` reports `commands`, each with its `name`, `status` (`supported`), `usage` and `capabilities` (the ids
 of the capabilities that the command provides); and `--version` reports `version`. Instead of the analysis fields,
 `replay` and `compose` report `options` (`repeat`, `parallel`, `timeoutSeconds`, `maxResponseMib`, `followRedirects`,
-`unconditional`, `verify`, `allowUnsafeMethods`, `allowOriginChange`, `httpVersion`, `connectTo`, which says whether
-`--connect-to` was given but never its endpoint, and `allowConnectTo`), `replays` (one per send, in order, each with
-its `id`, `device` and `request` (null for `compose`), `sequence` (the number that `--sequence` put in the URL,
-otherwise null), `iteration`, `outcome`, `status` (null without a response), `durationMs`, `responseBytes`,
+`unconditional`, `verify`, `verifyDiff`, `allowUnsafeMethods`, `allowOriginChange`, `httpVersion`, `connectTo`,
+which says whether `--connect-to` was given but never its endpoint, and `allowConnectTo`), `replays` (one per send, in
+order, each with its `id`, `device` and `request` (null for `compose`), `sequence` (the number that `--sequence` put in
+the URL, otherwise null), `iteration`, `outcome`, `status` (null without a response), `durationMs`, `responseBytes`,
 `redirects`, `transport` (`direct` or `connect-to`, as the send was configured), `httpVersion` (the version asked
 for: `auto`, `1.1` or `2`), `responseVersion` (the version of the response, such as `1.1` or `2`, null without
-one), `code`, `verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`, and its
-`differences`, `status` and `body`) and, once published, its `files`) and `totals` (`replays`, `completed`, `failed`,
-`matched` and `mismatched`); `replay` also reports `input` and `limits` like `analyze`.
+one), `code`, `verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`, its
+`differences`, `status` and `body`, and its `detail`, null without `--verify-diff`, otherwise the `state` of its
+`diff.json` and, once published, its `file`) and, once published, its `files`) and `totals` (`replays`,
+`completed`, `failed`, `matched` and `mismatched`); `replay` also reports `input` and `limits` like `analyze`.
 `summary.json` of a replay holds `schema` (`xmat-replay/1`), `command`, `runId`, `version`, the same fields and the
 run's `warnings`.
 
@@ -303,7 +321,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 | 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
-| 11 | `--verify` and a replayed response differs from the captured one (the results are published) |
+| 11 | `--verify` (or `--verify-diff`) and a replayed response differs from the captured one (the results are published) |
 | 12 | A replayed or composed request got no complete response (the results are published) |
 | 70 | Internal error, including a `help`, `--version` or passing `doctor` run whose JSON document could not be produced (`cli.internal.output`) |
 | 130 | Cancelled before the results were published |
@@ -368,7 +386,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
 | Compose and send a new request (`request.compose`) | `xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-connect-to]` | Supported (S9) |
-| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
+| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Report navigation and analysis tabs (`view.analysis-navigation`) | (none) | GUI only. Presentation: moves between report views and tabs |

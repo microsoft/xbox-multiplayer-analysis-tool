@@ -8,7 +8,6 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -64,7 +63,19 @@ namespace XMAT.Operations.Inspection
         {
             ArgumentNullException.ThrowIfNull(request);
             cancellationToken.ThrowIfCancellationRequested();
-            return new Builder(request, cancellationToken).Build();
+            return new Builder(request, null, cancellationToken).Build();
+        }
+
+        // How the body's content decodes, as Build decodes it but without reading it as text or JSON: whether its end is
+        // proven, how many bytes decoded and the notices that say why. Its work is spent from work, a caller's budget that the
+        // caller's other stages share, and running out of it leaves the end unproven; the request's other limits apply as in
+        // Build. On the calling thread; throws OperationCanceledException when work's cancellation is requested.
+        internal static BodyDecodeInspection InspectDecode(BodyPreviewRequest request, BodyPreviewWork work)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentNullException.ThrowIfNull(work);
+            work.CheckCancellation();
+            return new Builder(request, work, CancellationToken.None).Inspect();
         }
 
         // The decoded body: the bytes the preview works from, whether they are all of the body, or invalid compressed data.
@@ -89,15 +100,6 @@ namespace XMAT.Operations.Inspection
             private const int DumpCharsPerLine = (DumpBytesPerLine * 3) - 1 + 2;
             private const int MaxSizeLineBytes = 8192;
 
-            private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
-            private static readonly Encoding StrictUtf16Le = new UnicodeEncoding(false, false, true);
-            private static readonly Encoding StrictUtf16Be = new UnicodeEncoding(true, false, true);
-            private static readonly Encoding StrictAscii =
-                Encoding.GetEncoding("us-ascii", EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
-
-            // Controls other than tab, CR and LF: text that holds one is shown as bytes.
-            private static readonly SearchValues<char> NotTextCharacters = SearchValues.Create(NotTextList());
-
             private static readonly SearchValues<byte> HexDigits = SearchValues.Create("0123456789abcdefABCDEF"u8);
 
             private readonly BodyPreviewRequest _request;
@@ -105,11 +107,22 @@ namespace XMAT.Operations.Inspection
             private readonly BodyPreviewWork _work;
             private readonly List<string> _notices = new();
 
-            internal Builder(BodyPreviewRequest request, CancellationToken cancellationToken)
+            // work is a caller's budget that the preview shares with the caller's other stages, or null for one of its own
+            // (MaxWork).
+            internal Builder(BodyPreviewRequest request, BodyPreviewWork work, CancellationToken cancellationToken)
             {
                 _request = request;
                 _limits = (request.Limits ?? BodyPreviewLimits.Default).Clamped();
-                _work = new BodyPreviewWork(_limits.MaxWork, cancellationToken);
+                _work = work ?? new BodyPreviewWork(_limits.MaxWork, cancellationToken);
+            }
+
+            // The stages that come before the content is read: the input limit, the header limits, the codings and the
+            // framing, then decoding.
+            private enum Stage
+            {
+                Decoded,
+                UnsupportedCoding,
+                MalformedCoding,
             }
 
             internal BodyPreview Build()
@@ -140,7 +153,60 @@ namespace XMAT.Operations.Inspection
                     return Result(shown, BodyPreviewTextKind.None, null, hex);
                 }
 
-                ReadOnlyMemory<byte> input = stored;
+                switch (DecodeStored(stored, out ReadOnlyMemory<byte> input, out string contentType, out DecodedBody decoded))
+                {
+                    case Stage.UnsupportedCoding:
+                        return Bytes(BodyPreviewState.Unsupported, input.Span, complete: false, hex, 0, null, stored: true);
+
+                    case Stage.MalformedCoding:
+                        return Bytes(BodyPreviewState.Malformed, input.Span, complete: false, hex, 0, null, stored: true);
+                }
+
+                return Present(decoded, contentType, hex);
+            }
+
+            // The decode stages of Build alone: whether the decoded content's end is proven, without reading it as text.
+            internal BodyDecodeInspection Inspect()
+            {
+                ReadOnlyMemory<byte> stored = _request.Body;
+                if (_request.NotRetained && stored.IsEmpty)
+                {
+                    return Inspection(BodyDecodeEnd.Unproven, 0);
+                }
+
+                if (_request.StoredPrefix)
+                {
+                    Notice(BodyPreviewNotice.StoredPrefix);
+                }
+
+                if (stored.IsEmpty)
+                {
+                    return Inspection(_request.StoredPrefix ? BodyDecodeEnd.Unproven : BodyDecodeEnd.Complete, 0);
+                }
+
+                switch (DecodeStored(stored, out _, out _, out DecodedBody decoded))
+                {
+                    case Stage.UnsupportedCoding:
+                        return Inspection(BodyDecodeEnd.Unsupported, 0);
+
+                    case Stage.MalformedCoding:
+                        return Inspection(BodyDecodeEnd.Malformed, 0);
+                }
+
+                BodyDecodeEnd end = decoded.Complete
+                    ? BodyDecodeEnd.Complete
+                    : _notices.Contains(BodyPreviewNotice.Incomplete) ? BodyDecodeEnd.Incomplete : BodyDecodeEnd.Unproven;
+                return Inspection(end, decoded.Bytes.Length);
+            }
+
+            private BodyDecodeInspection Inspection(BodyDecodeEnd end, long decodedBytes) =>
+                new(end, decodedBytes, _notices.AsReadOnly());
+
+            private Stage DecodeStored(
+                ReadOnlyMemory<byte> stored, out ReadOnlyMemory<byte> input, out string contentType, out DecodedBody decoded)
+            {
+                decoded = default;
+                input = stored;
                 if (input.Length > _limits.MaxInputBytes)
                 {
                     input = input[.._limits.MaxInputBytes];
@@ -148,7 +214,7 @@ namespace XMAT.Operations.Inspection
                 }
 
                 bool prefix = _request.StoredPrefix || input.Length < stored.Length;
-                if (!TryHeader(_request.ContentType, out string contentType))
+                if (!TryHeader(_request.ContentType, out contentType))
                 {
                     contentType = null;
                 }
@@ -157,7 +223,7 @@ namespace XMAT.Operations.Inspection
                     !TryContentCoding(contentEncoding, out string coding))
                 {
                     Notice(BodyPreviewNotice.UnsupportedCoding);
-                    return Bytes(BodyPreviewState.Unsupported, input.Span, complete: false, hex, 0, null, stored: true);
+                    return Stage.UnsupportedCoding;
                 }
 
                 bool framed = false;
@@ -167,20 +233,20 @@ namespace XMAT.Operations.Inspection
                         !TryTransferCoding(transferEncoding, out bool chunked))
                     {
                         Notice(BodyPreviewNotice.UnsupportedCoding);
-                        return Bytes(BodyPreviewState.Unsupported, input.Span, complete: false, hex, 0, null, stored: true);
+                        return Stage.UnsupportedCoding;
                     }
 
                     framed = chunked && LooksFramed(input.Span);
                 }
 
-                DecodedBody decoded = Decode(input, framed, coding, prefix);
+                decoded = Decode(input, framed, coding, prefix);
                 if (decoded.Malformed)
                 {
                     Notice(BodyPreviewNotice.MalformedCoding);
-                    return Bytes(BodyPreviewState.Malformed, input.Span, complete: false, hex, 0, null, stored: true);
+                    return Stage.MalformedCoding;
                 }
 
-                return Present(decoded, contentType, hex);
+                return Stage.Decoded;
             }
 
             private bool Wants(BodyPreviewParts part) => (_request.Parts & part) != 0;
@@ -510,15 +576,18 @@ namespace XMAT.Operations.Inspection
             {
                 ReadOnlySpan<byte> bytes = decoded.Bytes.Span;
                 long decodedBytes = bytes.Length;
-                if (!TryCharset(contentType, bytes, out Encoding encoding, out string charset, out int preamble, out bool declared))
+                BodyTextFormat format = BodyTextRules.Read(contentType, _limits.MaxHeaderChars, bytes);
+                if (!format.Supported)
                 {
                     Notice(BodyPreviewNotice.UnsupportedCharset);
                     return Bytes(BodyPreviewState.Unsupported, bytes, decoded.Complete, hex, decodedBytes, null);
                 }
 
-                bool declaredText = declared || IsTextType(contentType);
+                Encoding encoding = format.Encoding;
+                string charset = format.Charset;
+                bool declaredText = format.DeclaredText;
 
-                ReadOnlySpan<byte> body = bytes[preamble..];
+                ReadOnlySpan<byte> body = bytes[format.Preamble..];
                 var text = new BodyPreviewText(_limits.MaxTextChars, _limits.MaxTextLines);
                 switch (DecodeText(body, decoded.Complete, encoding, text))
                 {
@@ -537,8 +606,8 @@ namespace XMAT.Operations.Inspection
                         return Text(BodyPreviewState.Truncated, BodyPreviewTextKind.Text, text, null, hex, decodedBytes, charset);
                 }
 
-                bool jsonType = contentType != null && contentType.Contains("json", StringComparison.OrdinalIgnoreCase);
-                bool jsonCharset = ReferenceEquals(encoding, StrictUtf8) || ReferenceEquals(encoding, StrictAscii);
+                bool jsonType = format.JsonType;
+                bool jsonCharset = format.JsonCharset;
                 if (!decoded.Complete || !jsonCharset)
                 {
                     // A prefix is never parsed as if it were the whole document.
@@ -620,74 +689,6 @@ namespace XMAT.Operations.Inspection
                 return Text(state, kind, shownText, documents, hex, decodedBytes, charset);
             }
 
-            // The body's charset: the one Content-Type declares (declared), else the one its byte order mark says, else UTF-8;
-            // false for a declared charset that the preview does not decode. preamble is the length of a byte order mark to
-            // skip.
-            private static bool TryCharset(
-                string contentType,
-                ReadOnlySpan<byte> bytes,
-                out Encoding encoding,
-                out string charset,
-                out int preamble,
-                out bool declared)
-            {
-                string name = null;
-                if (contentType != null && MediaTypeHeaderValue.TryParse(contentType, out MediaTypeHeaderValue media))
-                {
-                    name = media.CharSet?.Trim().Trim('"');
-                }
-
-                declared = !string.IsNullOrEmpty(name);
-                bool utf8Bom = bytes.StartsWith((ReadOnlySpan<byte>)[0xEF, 0xBB, 0xBF]);
-                bool littleEndianBom = bytes.StartsWith((ReadOnlySpan<byte>)[0xFF, 0xFE]);
-                bool bigEndianBom = bytes.StartsWith((ReadOnlySpan<byte>)[0xFE, 0xFF]);
-                switch (declared ? name.ToUpperInvariant() : null)
-                {
-                    case null:
-                        (encoding, charset, preamble) = utf8Bom
-                            ? (StrictUtf8, "utf-8", 3)
-                            : littleEndianBom
-                                ? (StrictUtf16Le, "utf-16le", 2)
-                                : bigEndianBom ? (StrictUtf16Be, "utf-16be", 2) : (StrictUtf8, "utf-8", 0);
-                        return true;
-
-                    case "UTF-8":
-                    case "UTF8":
-                        (encoding, charset, preamble) = (StrictUtf8, "utf-8", utf8Bom ? 3 : 0);
-                        return true;
-
-                    case "UTF-16":
-                        (encoding, charset, preamble) = bigEndianBom
-                            ? (StrictUtf16Be, "utf-16be", 2)
-                            : (StrictUtf16Le, "utf-16le", littleEndianBom ? 2 : 0);
-                        return true;
-
-                    case "UTF-16LE":
-                    case "UNICODE":
-                        (encoding, charset, preamble) = (StrictUtf16Le, "utf-16le", littleEndianBom ? 2 : 0);
-                        return true;
-
-                    case "UTF-16BE":
-                        (encoding, charset, preamble) = (StrictUtf16Be, "utf-16be", bigEndianBom ? 2 : 0);
-                        return true;
-
-                    case "US-ASCII":
-                    case "ASCII":
-                        (encoding, charset, preamble) = (StrictAscii, "us-ascii", 0);
-                        return true;
-
-                    case "ISO-8859-1":
-                    case "ISO_8859-1":
-                    case "LATIN1":
-                        (encoding, charset, preamble) = (Encoding.Latin1, "iso-8859-1", 0);
-                        return true;
-
-                    default:
-                        (encoding, charset, preamble) = (null, null, 0);
-                        return false;
-                }
-            }
-
             // Decodes the text into text until it is full; a body that is only a prefix may end inside a character, which
             // is then left out rather than taken for invalid text.
             private TextEnd DecodeText(ReadOnlySpan<byte> body, bool complete, Encoding encoding, BodyPreviewText text)
@@ -707,7 +708,7 @@ namespace XMAT.Operations.Inspection
                         _work.Spend(produced);
                         ReadOnlySpan<char> decoded = chars.AsSpan(0, produced);
                         int shown = Math.Min(decoded.Length, text.Remaining + 1);
-                        if (decoded[..shown].IndexOfAny(NotTextCharacters) >= 0)
+                        if (BodyTextRules.HasNotText(decoded[..shown]))
                         {
                             return TextEnd.Binary;
                         }
@@ -834,14 +835,6 @@ namespace XMAT.Operations.Inspection
 
             private int DumpLines() => Math.Min(_limits.MaxTextLines, (_limits.MaxTextChars + 2) / DumpCharsPerLine);
 
-            // A media type that says the body is text: text/*, or JSON, XML or JavaScript of any kind.
-            private static bool IsTextType(string contentType) =>
-                contentType != null &&
-                (contentType.TrimStart().StartsWith("text/", StringComparison.OrdinalIgnoreCase) ||
-                    contentType.Contains("json", StringComparison.OrdinalIgnoreCase) ||
-                    contentType.Contains("xml", StringComparison.OrdinalIgnoreCase) ||
-                    contentType.Contains("javascript", StringComparison.OrdinalIgnoreCase));
-
             // "XX XX ...", 16 bytes a line, lines joined by CRLF.
             private static string Dump(ReadOnlySpan<byte> bytes)
             {
@@ -878,20 +871,6 @@ namespace XMAT.Operations.Inspection
                     _work.Inspected,
                     decodedBytes,
                     charset);
-
-            private static char[] NotTextList()
-            {
-                var list = new List<char>();
-                for (char character = '\0'; character < '\u00A0'; character++)
-                {
-                    if (char.IsControl(character) && character is not ('\t' or '\r' or '\n'))
-                    {
-                        list.Add(character);
-                    }
-                }
-
-                return list.ToArray();
-            }
         }
 
         // The decoded bytes, at most max of them, in a buffer that grows only as far as the decoder fills it.

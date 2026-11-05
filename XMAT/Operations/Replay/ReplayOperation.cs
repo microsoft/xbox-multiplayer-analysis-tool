@@ -61,6 +61,9 @@ namespace XMAT.Operations.Replay
         // Verify decodes each body up to this size, or MaxResponseBytes if smaller; beyond it, bodies compare as stored.
         internal long MaxVerifyDecodedBytes { get; set; } = ReplayOptions.MaxVerifyDecodedBytes;
 
+        // The ceilings of the verification differences (ReplayOptions.VerifyDiff); null for the defaults.
+        internal VerifyDiffLimits VerifyDiffLimits { get; set; }
+
         // The expanded URLs of a sequence are kept until the run ends, so their total length is bounded.
         internal long MaxSequenceUrlCharacters { get; set; } = ReplayOptions.MaxSequenceUrlCharacters;
 
@@ -245,18 +248,18 @@ namespace XMAT.Operations.Replay
             if (options.Verify)
             {
                 // Every captured response's headers are read here, before any parallel send reads them.
-                int notKept = 0;
+                int notVerifiable = 0;
                 foreach (ReplayItem item in items)
                 {
-                    notKept += item.ResponseBodyNotKept ? 1 : 0;
+                    notVerifiable += item.Original != null && !item.Verifiable ? 1 : 0;
                 }
 
-                if (notKept > 0)
+                if (notVerifiable > 0)
                 {
                     diagnostics.Add(new OperationDiagnostic(
                         VerifySkippedCode,
                         OperationDiagnosticSeverity.Warning,
-                        "Some requests are not verified: their captured response was recorded without its body."));
+                        "Some requests are not verified: no response was captured for them, or it was recorded without its body."));
                 }
             }
 
@@ -702,15 +705,25 @@ namespace XMAT.Operations.Replay
                 {
                     ReplayExchange exchange =
                         await sender.SendAsync(step.Item.Draft, sendOptions, token).ConfigureAwait(false);
-                    ReplayVerification verification =
-                        options.Verify && step.Item.Original != null && !step.Item.ResponseBodyNotKept &&
-                            exchange.Outcome == ReplayOutcome.Completed
-                            ? ReplayVerifier.Compare(
-                                step.Item.Original,
-                                exchange,
-                                Math.Min(options.MaxResponseBytes, MaxVerifyDecodedBytes),
-                                token)
-                            : null;
+                    ReplayVerification verification = null;
+                    if (options.Verify && step.Item.Verifiable && exchange.Outcome == ReplayOutcome.Completed)
+                    {
+                        long maxDecodedBytes = Math.Min(options.MaxResponseBytes, MaxVerifyDecodedBytes);
+                        if (options.VerifyDiff)
+                        {
+                            // One comparison gives the verdict and its detail, which only the sink receives.
+                            VerifyDiff diff = await VerifyDiffOperation.CompareAsync(
+                                new VerifyDiffRequest(step.Item.Original, exchange, maxDecodedBytes, VerifyDiffLimits),
+                                token).ConfigureAwait(false);
+                            exchange.SetVerifyDiff(diff);
+                            verification = diff.Verification;
+                        }
+                        else
+                        {
+                            verification = ReplayVerifier.Compare(step.Item.Original, exchange, maxDecodedBytes, token);
+                        }
+                    }
+
                     var result = new ReplayItemResult(
                         step.Id,
                         step.Item.DeviceId,
@@ -775,9 +788,15 @@ namespace XMAT.Operations.Replay
             int? SourceIndex = null,
             long? Sequence = null)
         {
-            // The captured response was recorded by the GUI without its body, so verify has nothing to compare it with.
-            internal bool ResponseBodyNotKept =>
-                Original?.ResponseHeaders.ContainsKey(RequestReplayDraft.ResponseBodyNotKeptHeader) == true;
+            // Whether verify can compare a replay with the captured response: there is one, with a status, and its body was
+            // kept. The GUI records a response without its body with a marker (RequestReplayDraft.ResponseBodyNotKeptHeader),
+            // which counts only on an empty body: a stored head can come from a peer, and a forged marker never hides a body
+            // from verify. A response that was not captured is not verified, never taken for a status that differs.
+            internal bool Verifiable =>
+                Original != null &&
+                int.TryParse(Original.Status, NumberStyles.None, CultureInfo.InvariantCulture, out _) &&
+                !(Original.ResponseHeaders.ContainsKey(RequestReplayDraft.ResponseBodyNotKeptHeader) &&
+                    (Original.ResponseBody?.Length ?? 0) == 0);
         }
 
         private sealed record Prepared(
