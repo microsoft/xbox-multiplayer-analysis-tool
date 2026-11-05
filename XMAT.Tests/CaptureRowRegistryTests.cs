@@ -166,6 +166,46 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void Retire_RequestVisitsScaleWithVictimsAndPreserveUnrelatedRows()
+        {
+            var applied = new List<(CaptureRowKey Key, ClientProcessInfo Process)>();
+            var registry = Registry(applied);
+            Guid run = Guid.NewGuid();
+            ClientProcessContext first = Connection(run, 1020);
+            ClientProcessContext second = Connection(run, 1021);
+            registry.StartRun(run);
+            var firstKeys = new List<CaptureRowKey>();
+            var secondKeys = new List<CaptureRowKey>();
+            for (var index = 0; index < 1000; index++)
+            {
+                firstKeys.Add(Register(registry, first, index + 1, index + 1));
+                secondKeys.Add(Register(registry, second, index + 1, index + 1001));
+            }
+            CaptureRowKey[] retired = firstKeys.Take(5).Concat(secondKeys.Take(5)).ToArray();
+            CaptureRowKey firstUnaffected = firstKeys[^1];
+            CaptureRowKey secondUnaffected = secondKeys[^1];
+            var visits = 0;
+            registry.VisitObserver = (kind, count) =>
+            {
+                if (kind == "requests")
+                {
+                    visits += count;
+                }
+            };
+
+            registry.Retire(retired);
+            first.Publish(Local("first.exe", 1020));
+            second.Publish(Local("second.exe", 1021));
+
+            Assert.All(retired, key => Assert.Equal(CaptureRowLookup.Retired, registry.Lookup(key)));
+            Assert.Equal(CaptureRowLookup.Current, registry.Lookup(firstUnaffected));
+            Assert.Equal(CaptureRowLookup.Current, registry.Lookup(secondUnaffected));
+            Assert.Contains(applied, item => item.Key == firstUnaffected && item.Process.Name == "first.exe");
+            Assert.Contains(applied, item => item.Key == secondUnaffected && item.Process.Name == "second.exe");
+            Assert.InRange(visits, 0, retired.Length * 2);
+        }
+
+        [Fact]
         public void Register_SeededIdentityDoesNotReapplyTheValueAlreadyInserted()
         {
             var applied = new List<(CaptureRowKey Key, ClientProcessInfo Process)>();

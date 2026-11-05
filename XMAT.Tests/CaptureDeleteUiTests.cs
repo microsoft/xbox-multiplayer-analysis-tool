@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -81,6 +82,70 @@ namespace XMAT.Tests
             });
         }
 
+        // Contract amendment 1: one deleted row reaches the grid as a Remove and 17 as one Reset. On both paths, with the grid
+        // sorted by descending request number, the surviving rows keep their objects and order; Delete selects the next
+        // surviving visible row in that order and Shift+Delete keeps the selection and current row; the details pane and the
+        // indicator follow; Auto Scroll never moves the grid during the deletion; and the timeline draws no deleted row.
+        [Theory]
+        [InlineData(false, 1)]
+        [InlineData(false, 17)]
+        [InlineData(true, 1)]
+        [InlineData(true, 17)]
+        public void FewDeletedRowsArriveAsRemoves_ManyAsOneReset_AndTheViewIsRestoredOnce(bool unselected, int count)
+        {
+            _application.Run(window =>
+            {
+                using var tab = new LiveCaptureTab();
+                foreach (int number in Enumerable.Range(1, 30))
+                {
+                    tab.Add(number, number % 5 == 0 ? "svchost.exe" : "Game.exe");
+                }
+
+                tab.Controller.SetProcessFilter(Spec(null, new[] { "svchost.exe" }));
+                (CaptureConnectionView view, DataGrid grid, RecordingDeleteDialogs dialogs) = Show(window, tab);
+                grid.Items.SortDescriptions.Add(
+                    new SortDescription(nameof(ProxyConnectionModel.RequestNumber), ListSortDirection.Descending));
+                WpfTestHost.Pump();
+                ProxyConnectionModel[] visible = grid.Items.Cast<ProxyConnectionModel>().ToArray();
+                ProxyConnectionModel[] victims = visible.Skip(2).Take(count).ToArray();
+                ProxyConnectionModel[] selected = unselected ? visible.Except(victims).ToArray() : victims;
+                ProxyConnectionModel current = unselected ? visible[0] : visible[2 + count];
+                Select(grid, selected);
+                view.AutoScroll = true;
+                grid.ScrollIntoView(visible[^1]);
+                WpfTestHost.Pump();
+                var changes = new List<NotifyCollectionChangedAction>();
+                ((INotifyCollectionChanged)grid.Items).CollectionChanged += (_, args) => changes.Add(args.Action);
+                var broughtIntoView = new List<object>();
+                grid.AddHandler(
+                    FrameworkElement.RequestBringIntoViewEvent,
+                    new RequestBringIntoViewEventHandler(
+                        (_, args) => broughtIntoView.Add((args.TargetObject as FrameworkElement)?.DataContext)),
+                    handledEventsToo: true);
+
+                Press(grid, Key.Delete, unselected ? ModifierKeys.Shift : ModifierKeys.None);
+
+                Assert.Equal(
+                    new[] { count == 1 ? NotifyCollectionChangedAction.Remove : NotifyCollectionChangedAction.Reset }, changes);
+                Assert.Empty(dialogs.Notices);
+                Assert.Equal(30 - count, tab.Controller.ProxyConnections.Count);
+                Assert.Equal(visible.Except(victims), grid.Items.Cast<ProxyConnectionModel>());
+                Assert.Equal(
+                    (unselected ? selected : new[] { current }).OrderBy(row => row.RequestNumber),
+                    grid.SelectedItems.Cast<ProxyConnectionModel>().OrderBy(row => row.RequestNumber));
+                Assert.Same(current, grid.SelectedItem);
+                Assert.Same(current, grid.Items.CurrentItem);
+                Assert.Same(current, tab.Controller.SelectedConnectionModel);
+                Assert.Same(current.ResponseBody, ((RequestResponseView)view.FindName("ResponseViewControl")).BodyBytes);
+                Assert.Equal(
+                    Indicator(included: 24 - count, total: 30 - count), ((TextBlock)view.FindName("ProcessFilterIndicator")).Text);
+                Assert.All(broughtIntoView.OfType<ProxyConnectionModel>(), row => Assert.Same(current, row));
+                Assert.DoesNotContain(
+                    Bars((CaptureTimelineView)view.FindName("TimelineView")),
+                    bar => victims.Contains(bar.Tag as ProxyConnectionModel));
+            });
+        }
+
         // The rows were frozen before the confirmation opened: a row that arrives meanwhile is not part of the command, and a
         // frozen row that a filter hides meanwhile is kept, which a notice reports.
         [Fact]
@@ -110,28 +175,67 @@ namespace XMAT.Tests
             });
         }
 
-        // A view that fails after the deletion committed never makes the notice say that nothing was deleted, and the
-        // capture data operation ends.
-        [Fact]
-        public void AViewFailingAfterTheCommit_IsReported_AsADeletion()
+        // B1: a view that throws on any change of the rows after the deletion committed, on the small Remove path (1 row)
+        // and the bulk Reset path (17 rows). The notice says the sessions were deleted, never that nothing was; the row and
+        // timeline menus opened on victims let go of them; the capture data operation ends; and the victims are collectable.
+        [Theory]
+        [InlineData(1)]
+        [InlineData(17)]
+        public void AViewFailingAfterTheCommit_IsReportedAsADeletion_AndReleasesTheMenusAndTheVictims(int count)
         {
             _application.Run(window =>
             {
                 using var tab = new LiveCaptureTab();
-                ProxyConnectionModel victim = tab.Add(1);
-                tab.Add(2);
-                (_, DataGrid grid, RecordingDeleteDialogs dialogs) = Show(window, tab);
-                NotifyCollectionChangedEventHandler fail = (_, _) => throw new InvalidOperationException("A view failed.");
-                tab.Controller.ProxyConnections.CollectionChanged += fail;
-                Select(grid, victim);
-
-                Press(grid, Key.Delete);
-                tab.Controller.ProxyConnections.CollectionChanged -= fail;
-
-                Assert.DoesNotContain(victim, tab.Controller.ProxyConnections);
-                Assert.Equal(Localization.GetLocalizedString("CAPTURE_DELETE_VIEW_FAILED"), Assert.Single(dialogs.Notices));
-                Assert.True(XMAT.Models.CaptureAppModel.AppModel.CanModifyCaptureData);
+                WeakReference[] victims = DeleteWhileAViewFails(window, tab, count);
+                WpfTestHost.Pump();
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+                Assert.All(victims, victim => Assert.False(victim.IsAlive));
             });
+        }
+
+        // Deletes rows 1 to COUNT through the Delete key while both menus target victims and an observer subscribed last
+        // throws on every change of the rows; no strong reference to a victim outlives this method.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static WeakReference[] DeleteWhileAViewFails(Window window, LiveCaptureTab tab, int count)
+        {
+            ProxyConnectionModel[] victims = Enumerable.Range(1, count).Select(number => tab.Add(number)).ToArray();
+            tab.Add(count + 1);
+            (CaptureConnectionView view, DataGrid grid, RecordingDeleteDialogs dialogs) = Show(window, tab);
+            Select(grid, victims);
+            ContextMenu rowMenu = CaptureProcessFilterViewTests.Open(CaptureProcessFilterViewTests.Container(grid, victims[0]));
+            rowMenu.IsOpen = false;
+            ContextMenu timelineMenu = CaptureProcessFilterViewTests.Open(
+                Bars((CaptureTimelineView)view.FindName("TimelineView")).First(bar => victims.Contains(bar.Tag as ProxyConnectionModel)));
+            timelineMenu.IsOpen = false;
+            var failures = 0;
+            NotifyCollectionChangedEventHandler fail = (_, _) =>
+            {
+                failures++;
+                throw new InvalidOperationException("A view failed.");
+            };
+            tab.Controller.ProxyConnections.CollectionChanged += fail;
+            try
+            {
+                Press(grid, Key.Delete);
+            }
+            finally
+            {
+                tab.Controller.ProxyConnections.CollectionChanged -= fail;
+            }
+
+            Assert.NotEqual(0, failures);
+            Assert.Equal(Localization.GetLocalizedString("CAPTURE_DELETE_VIEW_FAILED"), Assert.Single(dialogs.Notices));
+            Assert.Equal(new long[] { count + 1 }, tab.Controller.ProxyConnections.Select(row => row.RequestNumber));
+            Assert.True(XMAT.Models.CaptureAppModel.AppModel.CanModifyCaptureData);
+            Assert.All(new[] { rowMenu, timelineMenu }, menu =>
+            {
+                Assert.Empty(menu.Items);
+                Assert.Null(menu.PlacementTarget);
+                Assert.False(menu.IsOpen);
+            });
+            return victims.Select(victim => new WeakReference(victim)).ToArray();
         }
 
         // An opened capture file and an imported SAZ are read-only: the row menu offers export, its delete items are

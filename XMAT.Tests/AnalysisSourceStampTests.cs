@@ -5,8 +5,12 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.Operations.Captures;
+using XMAT.SharedInterfaces;
+using XMAT.Tests.Cli;
+using XMAT.Tests.Operations.Analysis;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using XMAT.XboxLiveCaptureAnalysis;
@@ -17,7 +21,8 @@ namespace XMAT.Tests
 {
     // An analysis keeps the stamp of the capture it read. Its session links open that tab only while the tab still holds
     // the analyzed sessions: the stamp, never the capture's name, is resolved before any tab is selected. Once sessions
-    // are deleted or cleared, or the tab is closed, the links are disabled and the results say they are historical.
+    // are deleted, cleared or reloaded, or the tab is closed, the links are disabled and the results say they are
+    // historical.
     [Collection(CaptureUiApplicationCollection.Name)]
     public sealed class AnalysisSourceStampTests
     {
@@ -39,13 +44,8 @@ namespace XMAT.Tests
                 using var source = new LiveCaptureTab(app);
                 ProxyConnectionModel first = source.Add(1), second = source.Add(2);
                 CaptureSourceStamp analyzed = source.Controller.SourceStamp;
-                var report = new PerEndpointReportModel(app, source.DeviceName, AnalysisHostIdentityTests.CreateInGameEventsReport());
-                report.SourceStamp = analyzed;
-                var links = new PerEndpointReportView { DataContext = report };
-                var results = new AnalysisResultsModel { SourceStamp = analyzed };
-                app.AnalysisRuns.Add(new AnalysisRunModel(null, 1) { AnalysisData = results });
-                var reports = new AnalysisReportsView { DataContext = results };
-                WpfTestHost.Show(window, new StackPanel { Children = { links, reports } });
+                (PerEndpointReportView links, AnalysisReportsView reports, AnalysisResultsModel results) =
+                    ShowAnalysis(window, app, source.DeviceName, analyzed);
                 app.SelectedDeviceContext = twin;
 
                 Assert.Same(source, app.ResolveCaptureSource(analyzed));
@@ -77,6 +77,88 @@ namespace XMAT.Tests
                 app.CaptureDeviceContexts.Remove(source);
                 Assert.Null(app.ResolveCaptureSource(current));
             });
+        }
+
+        // B3: opening the analyzed capture file again replaces the sessions of its tab. The analysis becomes historical, and
+        // its session links neither resolve nor select a tab.
+        [Fact]
+        public void ReloadingTheAnalyzedCapture_MakesTheAnalysisHistorical_AndItsLinksSelectNoTab()
+        {
+            using var directory = new CliTestDirectory();
+            string path = ProcessCaptures.WriteXmatcap(directory.Root, "analyzed.xmatcap", ProcessCaptures.MixedSessions);
+            _application.Run(window =>
+            {
+                var app = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+                using var current = new LiveCaptureTab(app, "Current tab");
+                app.LoadDataCaptures(path);
+                ICaptureDeviceContext loaded = Assert.Single(app.CaptureDeviceContexts, context => context.IsReadOnly);
+                try
+                {
+                    CaptureSourceStamp analyzed = ((WebServiceDeviceCaptureController)loaded.CaptureController).SourceStamp;
+                    (PerEndpointReportView links, AnalysisReportsView reports, AnalysisResultsModel results) =
+                        ShowAnalysis(window, app, loaded.DeviceName, analyzed);
+                    Assert.Same(loaded, app.ResolveCaptureSource(analyzed));
+                    app.SelectedDeviceContext = current;
+
+                    app.LoadDataCaptures(path);
+                    WpfTestHost.Pump();
+
+                    Assert.Same(loaded, Assert.Single(app.CaptureDeviceContexts, context => context.IsReadOnly));
+                    Assert.Null(app.ResolveCaptureSource(analyzed));
+                    Assert.True(results.IsSourceStale);
+                    Assert.Equal(Visibility.Visible, ((TextBlock)reports.FindName("SourceStaleBanner")).Visibility);
+                    Assert.False(CaptureAnalysisCommands.GoToId.CanExecute("1", links));
+                    CaptureAnalysisCommands.GoToId.Execute("1", links);
+                    Assert.Same(current, app.SelectedDeviceContext);
+                }
+                finally
+                {
+                    app.CaptureDeviceContexts.Remove(loaded);
+                    LoadedCaptureDatabaseRegistry.Release(loaded.CaptureController);
+                }
+            });
+        }
+
+        // R5: session links without an analyzed source (no report, a report without the capture application, or one whose
+        // stamp names no capture) can't execute, and executing them does nothing.
+        [Fact]
+        public void SessionLinks_WithoutAnAnalyzedSource_CannotExecuteAndDoNothing()
+        {
+            _application.Run(window =>
+            {
+                var app = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+                var links = new PerEndpointReportView();
+                WpfTestHost.Show(window, links);
+                foreach (object context in new object[]
+                {
+                    null,
+                    new PerEndpointReportModel(null, "detached", AnalysisHostIdentityTests.CreateInGameEventsReport()),
+                    new PerEndpointReportModel(app, "unstamped", AnalysisHostIdentityTests.CreateInGameEventsReport()),
+                })
+                {
+                    links.DataContext = context;
+                    Assert.False(CaptureAnalysisCommands.GoToId.CanExecute("1", links));
+                    CaptureAnalysisCommands.GoToId.Execute("1", links);
+                }
+
+                Assert.Null(app.SelectedDeviceContext);
+            });
+        }
+
+        // Shows the session links and the results of an analysis of the capture NAME that STAMP identifies.
+        private static (PerEndpointReportView Links, AnalysisReportsView Reports, AnalysisResultsModel Results) ShowAnalysis(
+            Window window, CaptureAppModel app, string name, CaptureSourceStamp stamp)
+        {
+            var report = new PerEndpointReportModel(app, name, AnalysisHostIdentityTests.CreateInGameEventsReport())
+            {
+                SourceStamp = stamp,
+            };
+            var results = new AnalysisResultsModel { SourceStamp = stamp };
+            app.AnalysisRuns.Add(new AnalysisRunModel(null, 1) { AnalysisData = results });
+            var links = new PerEndpointReportView { DataContext = report };
+            var reports = new AnalysisReportsView { DataContext = results };
+            WpfTestHost.Show(window, new StackPanel { Children = { links, reports } });
+            return (links, reports, results);
         }
     }
 }
