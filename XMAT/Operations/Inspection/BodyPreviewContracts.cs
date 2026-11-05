@@ -103,6 +103,10 @@ namespace XMAT.Operations.Inspection
         // that decoded is shown, and the body counts as only partly read.
         internal const string Incomplete = "body.preview.incomplete";
 
+        // Something follows the first gzip member, more members or other bytes (which GZipStream ignores): everything that
+        // decoded is shown, but the preview proves where only the first member ends, so the body counts as only partly read.
+        internal const string UnverifiedEnd = "body.preview.unverified-end";
+
         // Transfer-Encoding said chunked and the body looked framed, but the framing did not parse: the body is shown as
         // stored.
         internal const string FramingIgnored = "body.preview.framing-ignored";

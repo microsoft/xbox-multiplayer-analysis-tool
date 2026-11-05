@@ -124,11 +124,17 @@ namespace XMAT.Operations.Inspection
             int nodes = 0;
             long chars = 0;
             var reader = new Utf8JsonReader(json, Options(limits));
+            int tokens = 0;
             try
             {
                 while (reader.Read())
                 {
-                    work.Spend(reader.ValueSpan.Length + 1);
+                    // The pass was charged before it started (all of the body); here only cancellation is checked.
+                    if ((++tokens & 1023) == 0)
+                    {
+                        work.CheckCancellation();
+                    }
+
                     switch (reader.TokenType)
                     {
                         case JsonTokenType.PropertyName:
@@ -222,6 +228,7 @@ namespace XMAT.Operations.Inspection
             ReadOnlySpan<byte> json, BodyPreviewLimits limits, BodyPreviewWork work, BodyPreviewText text)
         {
             var reader = new Utf8JsonReader(json, Options(limits));
+            int tokens = 0;
             var hasElements = new List<bool>();
             bool afterName = false;
             bool started = false;
@@ -229,7 +236,12 @@ namespace XMAT.Operations.Inspection
             {
                 while (reader.Read())
                 {
-                    work.Spend(reader.ValueSpan.Length + 1);
+                    // The pass was charged before it started (all of the body); here only cancellation is checked.
+                    if ((++tokens & 1023) == 0)
+                    {
+                        work.CheckCancellation();
+                    }
+
                     JsonTokenType token = reader.TokenType;
                     if (token is JsonTokenType.EndObject or JsonTokenType.EndArray)
                     {

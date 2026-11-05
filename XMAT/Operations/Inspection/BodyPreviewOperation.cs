@@ -82,6 +82,7 @@ namespace XMAT.Operations.Inspection
         private sealed class Builder
         {
             private const int DecodeChunkBytes = 64 * 1024;
+            private const int GzipTrailerBytes = 8;
             private const int DumpBytesPerLine = 16;
 
             // "XX" per byte, a space between bytes and CRLF between lines.
@@ -312,6 +313,11 @@ namespace XMAT.Operations.Inspection
                 }
 
                 bool rawDeflate = false;
+                if (coding == "gzip")
+                {
+                    return InflateGzip(input, framed, prefix);
+                }
+
                 while (true)
                 {
                     var output = new Output(_limits.MaxDecodedBytes);
@@ -326,16 +332,11 @@ namespace XMAT.Operations.Inspection
                         {
                             Notice(BodyPreviewNotice.DecodedLimit);
                         }
-                        else if (coding != null && Incomplete(rawDeflate ? null : coding, source, output.Length))
+                        else if (coding != null && source.EndRequested)
                         {
-                            // The compressed data ends before its end: the start that decoded is shown, and a stored prefix
-                            // already says why.
-                            if (!prefix)
-                            {
-                                Notice(BodyPreviewNotice.Incomplete);
-                            }
-
-                            complete = false;
+                            // A deflate, zlib or Brotli decoder asks for more after its data ended only when the data stops
+                            // before its end: the start that decoded is shown, and a stored prefix already says why.
+                            return Ended(output, prefix);
                         }
                         else if (chunks != null)
                         {
@@ -365,25 +366,117 @@ namespace XMAT.Operations.Inspection
                             continue;
                         }
 
-                        // The decoders end quietly where their data ends (Incomplete tells that apart), so an error is
+                        // The decoders end quietly where their data ends (EndRequested tells that apart), so an error is
                         // invalid data.
                         return new DecodedBody(default, false, true);
                     }
                 }
             }
 
-            // Whether the compressed data ended before its end. A deflate, zlib or Brotli decoder asks its source for more
-            // only then. A gzip decoder also asks for a next member, so a gzip body is complete when its trailer ends it:
-            // ISIZE, the length of the data mod 2^32, in its last four bytes (a body of several members reads as incomplete).
-            private static bool Incomplete(string coding, BodyPreviewSourceStream source, int decodedLength)
+            // gzip, decoded as zlib decodes it but with proof of where it ends: the member header is read here, the deflate
+            // data inflated raw, its last bytes handed over one at a time (BodyPreviewTailStream) so that its end is known
+            // exactly, and the trailer that must follow it checked: CRC-32 and ISIZE. One member that ends with its whole
+            // trailer is complete; deflate data or a trailer that stops early is incomplete; anything after the trailer is
+            // decoded with GZipStream, as more members, which the preview does not prove complete.
+            private DecodedBody InflateGzip(ReadOnlyMemory<byte> input, bool framed, bool prefix)
             {
-                if (coding != "gzip")
+                var output = new Output(_limits.MaxDecodedBytes);
+                try
                 {
-                    return source.EndRequested;
+                    long length = framed ? new BodyPreviewChunkedStream(input, prefix, _work).Measure() : input.Length;
+                    using Stream source = framed
+                        ? new BodyPreviewChunkedStream(input, prefix, _work)
+                        : new BodyPreviewInputStream(input, _work);
+                    int header = BodyPreviewGzip.ReadHeader(source);
+                    if (header < 0)
+                    {
+                        return Ended(output, prefix);
+                    }
+
+                    var tail = new BodyPreviewTailStream(source, length - header);
+                    bool more;
+                    using (var deflate = new DeflateStream(tail, CompressionMode.Decompress, leaveOpen: true))
+                    {
+                        more = output.Fill(deflate, _work);
+                    }
+
+                    if (more)
+                    {
+                        Notice(BodyPreviewNotice.DecodedLimit);
+                        return new DecodedBody(output.Memory, false, false);
+                    }
+
+                    long after = length - header - tail.Handed;
+                    if (tail.EndRequested || after < GzipTrailerBytes)
+                    {
+                        return Ended(output, prefix);
+                    }
+
+                    if (after > GzipTrailerBytes)
+                    {
+                        return InflateMembers(input, framed, prefix);
+                    }
+
+                    Span<byte> trailer = stackalloc byte[GzipTrailerBytes];
+                    if (!BodyPreviewGzip.TryRead(source, trailer))
+                    {
+                        return Ended(output, prefix);
+                    }
+
+                    _work.Spend(output.Length);
+                    if (BinaryPrimitives.ReadUInt32LittleEndian(trailer) != BodyPreviewGzip.Crc32(output.Memory.Span) ||
+                        BinaryPrimitives.ReadUInt32LittleEndian(trailer[4..]) != (uint)output.Length)
+                    {
+                        return new DecodedBody(default, false, true);
+                    }
+
+                    return new DecodedBody(output.Memory, !prefix, false);
+                }
+                catch (BodyPreviewWorkLimitException)
+                {
+                    Notice(BodyPreviewNotice.WorkLimit);
+                    return new DecodedBody(output.Memory, false, false);
+                }
+                catch (InvalidDataException)
+                {
+                    return new DecodedBody(default, false, true);
+                }
+            }
+
+            // More than one gzip member: GZipStream decodes them all, but where the last one ends is not proven.
+            private DecodedBody InflateMembers(ReadOnlyMemory<byte> input, bool framed, bool prefix)
+            {
+                var output = new Output(_limits.MaxDecodedBytes);
+                try
+                {
+                    using Stream source = framed
+                        ? new BodyPreviewChunkedStream(input, prefix, _work)
+                        : new BodyPreviewInputStream(input, _work);
+                    using var gzip = new GZipStream(source, CompressionMode.Decompress);
+                    Notice(output.Fill(gzip, _work) ? BodyPreviewNotice.DecodedLimit : BodyPreviewNotice.UnverifiedEnd);
+                    return new DecodedBody(output.Memory, false, false);
+                }
+                catch (BodyPreviewWorkLimitException)
+                {
+                    Notice(BodyPreviewNotice.WorkLimit);
+                    return new DecodedBody(output.Memory, false, false);
+                }
+                catch (InvalidDataException)
+                {
+                    return new DecodedBody(default, false, true);
+                }
+            }
+
+            // Compressed data that stops before its end: the start that decoded is shown, and a stored prefix already says
+            // why.
+            private DecodedBody Ended(Output output, bool prefix)
+            {
+                if (!prefix)
+                {
+                    Notice(BodyPreviewNotice.Incomplete);
                 }
 
-                ReadOnlySpan<byte> tail = source.Tail;
-                return tail.Length < 8 || BinaryPrimitives.ReadUInt32LittleEndian(tail[4..]) != (uint)decodedLength;
+                return new DecodedBody(output.Memory, false, false);
             }
 
             // Reads the framing to its end, which validates it: a missing last chunk or trailing bytes throw
@@ -470,8 +563,8 @@ namespace XMAT.Operations.Inspection
                 {
                     if (Wants(BodyPreviewParts.Json))
                     {
-                        // Each pass reads the body once at most: it starts only when that much work is left.
-                        _work.Require(body.Length);
+                        // Each pass reads the body once at most, and is charged for all of it before it starts.
+                        _work.Spend(body.Length);
                         documents = BodyPreviewJson.BuildTree(body, _limits, _work, out BodyPreviewJson.TreeEnd treeEnd);
                         if (treeEnd == BodyPreviewJson.TreeEnd.Limit)
                         {
@@ -493,7 +586,7 @@ namespace XMAT.Operations.Inspection
 
                     if (Wants(BodyPreviewParts.Text) && jsonType)
                     {
-                        _work.Require(body.Length);
+                        _work.Spend(body.Length);
                         var formatted = new BodyPreviewText(_limits.MaxTextChars, _limits.MaxTextLines);
                         switch (BodyPreviewJson.Format(body, _limits, _work, formatted))
                         {
@@ -517,8 +610,10 @@ namespace XMAT.Operations.Inspection
                 }
                 catch (BodyPreviewWorkLimitException)
                 {
+                    // A pass is charged before it starts, so the tree of a finished pass is complete; the text is shown as
+                    // it is.
                     Notice(BodyPreviewNotice.WorkLimit);
-                    return Text(BodyPreviewState.Truncated, BodyPreviewTextKind.Text, text, null, hex, decodedBytes, charset);
+                    return Text(BodyPreviewState.Truncated, BodyPreviewTextKind.Text, text, documents, hex, decodedBytes, charset);
                 }
 
                 BodyPreviewState state = limited ? BodyPreviewState.Truncated : BodyPreviewState.Complete;

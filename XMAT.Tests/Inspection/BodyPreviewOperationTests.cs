@@ -315,6 +315,105 @@ namespace XMAT.Tests.Inspection
             Assert.Equal(new[] { BodyPreviewNotice.Incomplete, BodyPreviewNotice.JsonIncomplete }, preview.Notices);
         }
 
+        // A gzip body is complete only when its deflate data ends with its whole eight-byte trailer right after it: an empty
+        // member that has lost its ISIZE (whose CRC of zero equals its length of zero) is as incomplete as any other.
+        [Theory]
+        [InlineData(0)]
+        [InlineData(1)]
+        [InlineData(4)]
+        [InlineData(7)]
+        [InlineData(8)]
+        public void AGzipBody_IsCompleteOnlyWithItsWholeTrailer(int missing)
+        {
+            byte[] empty = EmptyGzip[..^missing];
+            byte[] text = Compress("gzip", "hello gzip"u8.ToArray())[..^missing];
+
+            BodyPreview emptyPreview = Preview(empty, "text/plain", "gzip");
+            BodyPreview textPreview = Preview(text, "text/plain", "gzip");
+
+            string[] notices = missing == 0 ? Array.Empty<string>() : new[] { BodyPreviewNotice.Incomplete };
+            BodyPreviewState state = missing == 0 ? BodyPreviewState.Complete : BodyPreviewState.Truncated;
+            Assert.Equal((state, ""), (emptyPreview.State, emptyPreview.Text));
+            Assert.Equal(notices, emptyPreview.Notices);
+            Assert.Equal((state, "hello gzip"), (textPreview.State, textPreview.Text));
+            Assert.Equal(notices, textPreview.Notices);
+        }
+
+        // A file name, comment, extra field and header CRC are read as zlib reads them.
+        [Fact]
+        public void AGzipHeaderWithOptionalFields_IsRead()
+        {
+            byte[] member = GzipMember("named"u8.ToArray(), extra: new byte[] { 1, 2, 3 }, name: "file.txt", comment: "a note", headerCrc: true);
+
+            BodyPreview preview = Preview(member, "text/plain", "gzip");
+
+            Assert.Equal((BodyPreviewState.Complete, "named"), (preview.State, preview.Text));
+            Assert.Empty(preview.Notices);
+        }
+
+        // A gzip member that zlib would refuse is malformed: a wrong CRC-32, ISIZE or header CRC, reserved flags, or a next
+        // member whose header is invalid.
+        [Theory]
+        [InlineData("crc")]
+        [InlineData("isize")]
+        [InlineData("header-crc")]
+        [InlineData("reserved-flags")]
+        [InlineData("invalid-next-member")]
+        public void AGzipMemberThatZlibRefuses_IsMalformed(string damage)
+        {
+            // Without a header CRC for the reserved flags, which the header CRC would refuse on its own.
+            byte[] member = GzipMember("checked"u8.ToArray(), name: "f", headerCrc: damage != "reserved-flags");
+            switch (damage)
+            {
+                case "crc": member[^8] ^= 0x01; break;
+                case "isize": member[^4] ^= 0x01; break;
+                case "header-crc": member[13] ^= 0x01; break;
+                case "reserved-flags": member[3] |= 0x20; break;
+                default: member = member.Concat(new byte[] { 0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 3, 0xFF, 0xFF, 0xFF }).ToArray(); break;
+            }
+
+            BodyPreview preview = Preview(member, "text/plain", "gzip");
+
+            Assert.Equal(BodyPreviewState.Malformed, preview.State);
+            Assert.Equal(new[] { BodyPreviewNotice.MalformedCoding }, preview.Notices);
+        }
+
+        // Whatever follows the first gzip member, another member, a cut one or other bytes, everything that decoded is shown,
+        // but the preview proves where only the first member ends.
+        [Theory]
+        [InlineData("member", "onetwo")]
+        [InlineData("cut-member", "onetwo")]
+        [InlineData("other-bytes", "one")]
+        public void WhatFollowsTheFirstGzipMember_IsShownButNotProvenComplete(string follows, string text)
+        {
+            byte[] next = follows switch
+            {
+                "member" => Compress("gzip", "two"u8.ToArray()),
+                "cut-member" => Compress("gzip", "two"u8.ToArray())[..^4],
+                _ => Enumerable.Repeat((byte)'x', 32).ToArray(),
+            };
+            byte[] body = Compress("gzip", "one"u8.ToArray()).Concat(next).ToArray();
+
+            BodyPreview preview = Preview(body, "text/plain", "gzip");
+
+            Assert.Equal((BodyPreviewState.Truncated, text), (preview.State, preview.Text));
+            Assert.Equal(new[] { BodyPreviewNotice.UnverifiedEnd }, preview.Notices);
+        }
+
+        // Each JSON pass is charged all of the body before it starts, whitespace included: with work left for one pass but
+        // not two, the tree is built and the text is shown as it is.
+        [Fact]
+        public void EachJsonPass_IsChargedTheWholeBody()
+        {
+            string spaces = new(' ', 100_000);
+            byte[] body = Encoding.ASCII.GetBytes("[" + spaces + "1" + spaces + "]");
+
+            BodyPreview preview = Preview(body, JsonType, limits: new(MaxWork: (4L * body.Length) + 1000));
+
+            Assert.Equal("0=1", Assert.Single(Assert.Single(preview.JsonDocuments).Children).Label);
+            Assert.Equal((BodyPreviewState.Truncated, BodyPreviewTextKind.Text), (preview.State, preview.TextKind));
+            Assert.Equal(new[] { BodyPreviewNotice.WorkLimit }, preview.Notices);
+        }
         // Framing is checked to its last chunk even when the compressed data inside ends first; framing that stops before it
         // does not parse, so the body is shown as stored.
         [Theory]
@@ -638,6 +737,37 @@ namespace XMAT.Tests.Inspection
                     body, contentType, contentEncoding, transferEncoding, BodyFraming.Advisory, false, storedPrefix, parts, limits),
                 CancellationToken.None);
 
+        // An empty gzip member: header, an empty final stored block and a trailer of zero CRC and length.
+        private static readonly byte[] EmptyGzip = Convert.FromHexString("1F8B0800000000000003" + "0300" + "00000000" + "00000000");
+
+        // A gzip member built by hand around raw deflate data, with the optional header fields that GZipStream never writes.
+        // Its CRC-32 values come from GZipStream's own trailers, not from the code under test.
+        private static byte[] GzipMember(byte[] data, byte[] extra = null, string name = null, string comment = null, bool headerCrc = false)
+        {
+            byte flags = (byte)((extra != null ? 4 : 0) | (name != null ? 8 : 0) | (comment != null ? 16 : 0) | (headerCrc ? 2 : 0));
+            var header = new List<byte> { 0x1F, 0x8B, 8, flags, 0, 0, 0, 0, 0, 3 };
+            if (extra != null)
+            {
+                header.AddRange(new[] { (byte)extra.Length, (byte)(extra.Length >> 8) });
+                header.AddRange(extra);
+            }
+
+            foreach (string text in new[] { name, comment }.Where(text => text != null))
+            {
+                header.AddRange(Encoding.ASCII.GetBytes(text));
+                header.Add(0);
+            }
+
+            if (headerCrc)
+            {
+                header.AddRange(Crc32(header.ToArray())[..2]);
+            }
+
+            return header.Concat(Compress("raw", data)).Concat(Crc32(data)).Concat(BitConverter.GetBytes((uint)data.Length)).ToArray();
+        }
+
+        // The CRC-32 of data as GZipStream writes it in its trailer (little-endian); zero for no data.
+        private static byte[] Crc32(byte[] data) => data.Length == 0 ? new byte[4] : Compress("gzip", data)[^8..^4];
         private static byte[] Compress(string coding, byte[] plain)
         {
             using var output = new MemoryStream();

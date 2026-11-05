@@ -10,7 +10,7 @@ using System.Threading;
 namespace XMAT.Operations.Inspection
 {
     // The work that one preview may still do (BodyPreviewLimits.MaxWork) and how far into the stored body it read. A stage
-    // asks how much it may do (Allow) or whether a whole pass fits (Require) before it works, then spends what it did;
+    // asks how much it may do (Allow) before it works, or spends a whole pass before it starts it, then spends what it did;
     // cancellation is checked at the same points.
     internal sealed class BodyPreviewWork
     {
@@ -42,15 +42,8 @@ namespace XMAT.Operations.Inspection
             return (int)Math.Min(wanted, _maxWork - _spent);
         }
 
-        // Throws BodyPreviewWorkLimitException unless units of work are left, before a pass that may do that much.
-        internal void Require(long units)
-        {
-            _cancellationToken.ThrowIfCancellationRequested();
-            if (_maxWork - _spent < units)
-            {
-                throw new BodyPreviewWorkLimitException();
-            }
-        }
+        // For a pass whose work was spent before it started.
+        internal void CheckCancellation() => _cancellationToken.ThrowIfCancellationRequested();
 
         // Throws BodyPreviewWorkLimitException once the work is over the limit.
         internal void Spend(long units)
@@ -77,15 +70,11 @@ namespace XMAT.Operations.Inspection
     {
     }
 
-    // What a decoder reads from: its last eight bytes (a gzip trailer), and whether the decoder asked for more after the data
-    // had ended, which a deflate or Brotli decoder does only when its compressed data is incomplete.
+    // What a decoder reads from, and whether the decoder asked for more after the data had ended, which a deflate, zlib or
+    // Brotli decoder does only when its compressed data is incomplete.
     internal sealed class BodyPreviewSourceStream : Stream
     {
-        private const int TailBytes = 8;
-
         private readonly Stream _inner;
-        private readonly byte[] _tail = new byte[TailBytes];
-        private int _tailLength;
 
         internal BodyPreviewSourceStream(Stream inner)
         {
@@ -93,8 +82,6 @@ namespace XMAT.Operations.Inspection
         }
 
         internal bool EndRequested { get; private set; }
-
-        internal ReadOnlySpan<byte> Tail => _tail.AsSpan(0, _tailLength);
 
         public override bool CanRead => true;
 
@@ -123,21 +110,6 @@ namespace XMAT.Operations.Inspection
             if (read == 0)
             {
                 EndRequested = true;
-                return 0;
-            }
-
-            ReadOnlySpan<byte> data = buffer[..read];
-            if (data.Length >= TailBytes)
-            {
-                data[^TailBytes..].CopyTo(_tail);
-                _tailLength = TailBytes;
-            }
-            else
-            {
-                int keep = Math.Min(_tailLength, TailBytes - data.Length);
-                _tail.AsSpan(_tailLength - keep, keep).CopyTo(_tail);
-                data.CopyTo(_tail.AsSpan(keep));
-                _tailLength = keep + data.Length;
             }
 
             return read;
@@ -163,6 +135,76 @@ namespace XMAT.Operations.Inspection
 
             base.Dispose(disposing);
         }
+    }
+
+    // The deflate data of a gzip member and what follows it, length bytes in all: handed to the decoder freely up to the
+    // last nine bytes, then one byte per read. A decoder asks only for the bytes it needs, so where it stops shows exactly
+    // where its deflate data ended: a complete member leaves exactly its eight-byte trailer.
+    internal sealed class BodyPreviewTailStream : Stream
+    {
+        private const int TrailerBytes = 8;
+
+        private readonly Stream _inner;
+        private readonly long _length;
+
+        internal BodyPreviewTailStream(Stream inner, long length)
+        {
+            _inner = inner;
+            _length = length;
+        }
+
+        // How many bytes the decoder took.
+        internal long Handed { get; private set; }
+
+        // Whether the decoder asked for more after the data had ended.
+        internal bool EndRequested { get; private set; }
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (buffer.IsEmpty)
+            {
+                return 0;
+            }
+
+            long free = _length - TrailerBytes - 1 - Handed;
+            int wanted = free > 0 ? (int)Math.Min(buffer.Length, free) : 1;
+            int read = _inner.Read(buffer[..wanted]);
+            if (read == 0)
+            {
+                EndRequested = true;
+                return 0;
+            }
+
+            Handed += read;
+            return read;
+        }
+
+        public override void Flush()
+        {
+            // Read-only: nothing to flush.
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     // The stored bytes as a read-only stream, without copying them.
@@ -236,6 +278,7 @@ namespace XMAT.Operations.Inspection
         private int _remaining;
         private bool _delimiterDue;
         private bool _done;
+        private bool _measuring;
 
         internal BodyPreviewChunkedStream(ReadOnlyMemory<byte> input, bool prefix, BodyPreviewWork work)
         {
@@ -246,6 +289,22 @@ namespace XMAT.Operations.Inspection
 
         // Whether the stored prefix ended before the last chunk.
         internal bool EndedEarly { get; private set; }
+
+        // The length of the data, read from the framing alone, which is checked as reading checks it; the data itself is
+        // skipped, never copied. The stream is then at its end.
+        internal long Measure()
+        {
+            _measuring = true;
+            Span<byte> skipped = stackalloc byte[1];
+            long length = 0;
+            int read;
+            while ((read = Read(skipped)) > 0)
+            {
+                length += read;
+            }
+
+            return length;
+        }
 
         public override bool CanRead => true;
 
@@ -280,8 +339,13 @@ namespace XMAT.Operations.Inspection
                         return EndEarly();
                     }
 
-                    int count = _work.Allow(Math.Min(Math.Min(_remaining, available), buffer.Length));
-                    _input.Span.Slice(_position, count).CopyTo(buffer);
+                    int wanted = _measuring ? Math.Min(_remaining, available) : Math.Min(Math.Min(_remaining, available), buffer.Length);
+                    int count = _work.Allow(wanted);
+                    if (!_measuring)
+                    {
+                        _input.Span.Slice(_position, count).CopyTo(buffer);
+                    }
+
                     _position += count;
                     _remaining -= count;
                     _delimiterDue = _remaining == 0;
