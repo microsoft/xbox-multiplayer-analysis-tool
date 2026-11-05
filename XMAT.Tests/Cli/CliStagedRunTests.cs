@@ -281,7 +281,7 @@ namespace XMAT.Tests.Cli
         }
 
         [Fact]
-        public void PrivateFolder_IsPrivateUnderABroadParentAndNeverClaimsAnExistingFolder()
+        public async Task PrivateFolder_IsPrivateAndHasExactlyOneOwner()
         {
             using var directory = new CliTestDirectory();
             string parentPath = Path.Join(directory.Root, "broad");
@@ -300,8 +300,30 @@ namespace XMAT.Tests.Cli
             PrivateFolder.Create(privatePath);
 
             Assert.True(PrivateFolder.IsPrivate(privatePath));
+            string sentinel = Path.Join(privatePath, "sentinel.txt");
+            File.WriteAllText(sentinel, "keep");
             Assert.Throws<IOException>(() => PrivateFolder.Create(privatePath));
-            Assert.True(Directory.Exists(privatePath));
+            Assert.Equal("keep", File.ReadAllText(sentinel));
+
+            string concurrentPath = Path.Join(parentPath, "concurrent");
+            using var barrier = new Barrier(9);
+            Task<bool>[] creators = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                try
+                {
+                    PrivateFolder.Create(concurrentPath);
+                    return true;
+                }
+                catch (IOException)
+                {
+                    return false;
+                }
+            })).ToArray();
+            barrier.SignalAndWait();
+            bool[] owners = await Task.WhenAll(creators);
+            Assert.Single(owners, owner => owner);
+            Assert.True(PrivateFolder.IsPrivate(concurrentPath));
         }
 
         // A report that cannot be serialized (here a null warning, which also breaks the text on standard error) is replaced

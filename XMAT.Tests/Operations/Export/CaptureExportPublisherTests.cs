@@ -120,6 +120,20 @@ namespace XMAT.Tests.Operations.Export
             Assert.Equal("export.output.exists", raced.Code);
             Assert.Equal("racer", File.ReadAllText(destination));
             Assert.Equal(new[] { destination }, Directory.GetFileSystemEntries(directory.Root));
+
+            File.Delete(destination);
+            Directory.CreateDirectory(destination);
+            CaptureExportDestinationException directoryFailure =
+                await Assert.ThrowsAsync<CaptureExportDestinationException>(
+                    () => publisher.PublishAsync(
+                        destination,
+                        replaceExisting: false,
+                        allowUnprotected: false,
+                        _ => { },
+                        (path, cancellationToken) => File.WriteAllTextAsync(path, "unexpected", cancellationToken),
+                        CancellationToken.None));
+            Assert.Equal("export.output.exists", directoryFailure.Code);
+            Assert.Empty(Directory.GetFileSystemEntries(destination));
         }
 
         [Fact]
@@ -138,7 +152,7 @@ namespace XMAT.Tests.Operations.Export
             {
                 foreach (string destination in new[] { loaded, alias })
                 {
-                    await Assert.ThrowsAsync<CaptureSaveException>(
+                    CaptureSaveException failure = await Assert.ThrowsAsync<CaptureSaveException>(
                         () => publisher.PublishAsync(
                             destination,
                             replaceExisting: true,
@@ -150,6 +164,7 @@ namespace XMAT.Tests.Operations.Export
                                 return File.WriteAllTextAsync(path, "unexpected", cancellationToken);
                             },
                             CancellationToken.None));
+                    Assert.Equal(CaptureSaveFailure.Refused, failure.Failure);
                 }
             }
             finally
@@ -198,6 +213,67 @@ namespace XMAT.Tests.Operations.Export
                 CancellationToken.None);
             Assert.False(result.Protected);
             Assert.Equal("complete", File.ReadAllText(destination));
+        }
+
+        [Theory]
+        [InlineData("transient")]
+        [InlineData("cancel")]
+        [InlineData("cleanup")]
+        public async Task Publish_RetriesWithoutRepeatingTheWriter(string mode)
+        {
+            using var directory = new ExportTestDirectory();
+            string destination = directory.PathOf("retry.xmatcap");
+            using var cancellation = new CancellationTokenSource();
+            FileStream blocker = null;
+            var writes = 0;
+            var publisher = new CaptureExportPublisher();
+            Task<PublishedCapture> publish = publisher.PublishAsync(
+                destination,
+                replaceExisting: true,
+                allowUnprotected: false,
+                _ => { },
+                (staged, _) =>
+                {
+                    writes++;
+                    File.WriteAllText(staged, "complete");
+                    string blocked = mode == "cleanup" ? staged : destination;
+                    if (mode != "cleanup")
+                    {
+                        File.WriteAllText(destination, "old");
+                    }
+                    blocker = new FileStream(blocked, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                    return mode == "cleanup"
+                        ? Task.FromException(new IOException("injected write failure"))
+                        : Task.CompletedTask;
+                },
+                cancellation.Token);
+
+            try
+            {
+                if (mode == "transient")
+                {
+                    await Task.Delay(150);
+                    blocker.Dispose();
+                    blocker = null;
+                    PublishedCapture result = await publish;
+                    Assert.Equal("complete", File.ReadAllText(destination));
+                    Assert.True(result.Protected);
+                }
+                else if (mode == "cancel")
+                {
+                    cancellation.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => publish);
+                }
+                else
+                {
+                    await Assert.ThrowsAsync<CaptureExportCleanupException>(() => publish);
+                }
+            }
+            finally
+            {
+                blocker?.Dispose();
+            }
+            Assert.Equal(1, writes);
         }
     }
 }

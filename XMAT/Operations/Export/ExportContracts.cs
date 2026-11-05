@@ -28,6 +28,17 @@ namespace XMAT.Operations.Export
         SanitizedSaz,
     }
 
+    internal static class CaptureExportFormats
+    {
+        internal static bool HasExpectedExtension(CaptureExportFormat format, string path)
+        {
+            string extension = System.IO.Path.GetExtension(path);
+            return format == CaptureExportFormat.Xmatcap
+                ? string.Equals(extension, ".xmatcap", StringComparison.OrdinalIgnoreCase)
+                : string.Equals(extension, ".saz", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     // Include null disables host inclusion. A present default or empty array is enabled and matches nothing. Exclude
     // default is normalized to empty. Exact mode accepts "" as the GUI's missing-host value; glob mode rejects it.
     internal sealed record HostSelection(
@@ -101,7 +112,7 @@ namespace XMAT.Operations.Export
         SqLtFileIdentity? InputIdentity { get; }
         string InputSha256 { get; }
 
-        IReadOnlyList<RawExportRow> ReadChunk(
+        CaptureExportChunk ReadChunk(
             IReadOnlyList<CaptureRowKey> keys,
             CancellationToken cancellationToken);
 
@@ -116,6 +127,10 @@ namespace XMAT.Operations.Export
         long RowId,
         long PayloadVersion,
         IReadOnlyDictionary<string, object> Values);
+
+    internal sealed record CaptureExportChunk(
+        IReadOnlyList<CaptureRowKey> ConsumedKeys,
+        IReadOnlyList<RawExportRow> Rows);
 
     internal interface ICaptureExportWriter : IDisposable
     {

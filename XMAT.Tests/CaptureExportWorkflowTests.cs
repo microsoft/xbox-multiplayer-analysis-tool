@@ -365,7 +365,7 @@ namespace XMAT.Tests
             public SqLtFileIdentity? InputIdentity => null;
             public string InputSha256 => null;
 
-            public IReadOnlyList<RawExportRow> ReadChunk(IReadOnlyList<CaptureRowKey> keys, CancellationToken cancellationToken) =>
+            public CaptureExportChunk ReadChunk(IReadOnlyList<CaptureRowKey> keys, CancellationToken cancellationToken) =>
                 throw new NotSupportedException();
 
             public void ValidateDestination(string path)

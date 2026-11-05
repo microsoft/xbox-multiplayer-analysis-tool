@@ -9,8 +9,10 @@ using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Export;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Fixtures;
 using XMAT.Tests.Operations.Analysis;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Models;
 using static XMAT.Tests.Operations.Export.ExportTestData;
 
 namespace XMAT.Tests.Operations.Export
@@ -70,19 +72,68 @@ namespace XMAT.Tests.Operations.Export
         }
 
         [Fact]
+        public async Task Execute_SazBodiesRoundTripAsTextThroughXmatcapAndAnalysis()
+        {
+            using var directory = new ExportTestDirectory();
+            string source = SyntheticCaptures.WriteSazFrames(
+                directory.Root,
+                "source.saz",
+                [SyntheticSazFrameKind.Valid, SyntheticSazFrameKind.RequestOnly]);
+            string output = directory.PathOf("from-saz.xmatcap");
+            ProxyConnectionModel[] expected = FiddlerSazHandler.ImportSazFile(source, CancellationToken.None).ToArray();
+
+            OperationResult<ExportCaptureResult> export = await new ExportCaptureSessionsOperation().ExecuteAsync(
+                new ExportCaptureRequest(
+                    source,
+                    null,
+                    null,
+                    Selection(),
+                    CaptureExportFormat.Xmatcap,
+                    output,
+                    ReplaceExisting: false,
+                    AnalysisLimits.Default,
+                    AllowUnprotectedOutput: false),
+                OperationContext.None,
+                CancellationToken.None);
+
+            Assert.Equal(OperationOutcome.Succeeded, export.Outcome);
+            using var capture = new SqLtReadonlyDatabase(output);
+            IDataRecord[] rows = capture.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords.ToArray();
+            Assert.Equal(2, rows.Length);
+            for (var index = 0; index < rows.Length; index++)
+            {
+                var raw = (IRawDataRecord)rows[index];
+                Assert.True(raw.TryReadRaw(WebServiceCaptureMethod.FieldKey_RequestBody, out object request));
+                Assert.True(raw.TryReadRaw(WebServiceCaptureMethod.FieldKey_ResponseBody, out object response));
+                Assert.IsType<string>(request);
+                Assert.IsType<string>(response);
+                var model = new ProxyConnectionModel(rows[index]);
+                Assert.Equal(expected[index].RequestBody ?? Array.Empty<byte>(), model.RequestBody);
+                Assert.Equal(expected[index].ResponseBody ?? Array.Empty<byte>(), model.ResponseBody);
+            }
+            OperationResult<AnalysisResult> analysis = await new AnalyzeCaptureOperation().ExecuteAsync(
+                new AnalyzeCaptureRequest(AnalysisInput.FromFile(output), new AnalysisOptions()),
+                OperationContext.None,
+                CancellationToken.None);
+            Assert.Equal(OperationOutcome.Succeeded, analysis.Outcome);
+            Assert.True(analysis.Value.Summary.TotalCalls > 0);
+        }
+
+        [Fact]
         public async Task Execute_CountsIncompleteAndUnavailableRowsWithoutSubstitution()
         {
             CaptureExportSession[] sessions =
             [
                 Session(1),
-                Session(2, responseHeaders: false, responseTimestamp: false),
+                Session(2),
                 Session(3),
+                Session(4),
             ];
             var snapshot = new FakeExportSnapshot(sessions, sessions.Select(session => Row(session.Key.RowId)))
             {
-                IsLive = true,
+                MaxConsumed = 1,
             };
-            snapshot.Missing.Add(Key(3));
+            snapshot.Missing.Add(Key(2));
             var writer = new RecordingExportWriter();
             var operation = Operation(snapshot, writer);
 
@@ -92,8 +143,9 @@ namespace XMAT.Tests.Operations.Export
                 CancellationToken.None);
 
             Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
-            Assert.Equal(new CaptureExportCounts(3, 3, 3, 2, 1, 1, 1, 1), result.Value.Counts);
-            Assert.Equal(new[] { Key(1) }, writer.Rows.Select(row => row.Key));
+            Assert.Equal(new CaptureExportCounts(4, 4, 4, 4, 3, 1, 0, 0), result.Value.Counts);
+            Assert.Equal(new[] { Key(1), Key(3), Key(4) }, writer.Rows.Select(row => row.Key));
+            Assert.Equal(4, snapshot.ReadRequests.Count);
             Assert.True(result.Value.Published);
         }
 
@@ -233,6 +285,16 @@ namespace XMAT.Tests.Operations.Export
             Assert.Equal(OperationOutcome.InternalError, unexpected.Outcome);
             Assert.Equal("export.internal", Assert.Single(unexpected.Diagnostics).Code);
             Assert.False(unexpected.Value.Published);
+
+            var sqliteWriter = new RecordingExportWriter
+            {
+                WriteFailure = SqliteFailure(19),
+            };
+            OperationResult<ExportCaptureResult> sqlite = await Operation(snapshot, sqliteWriter).ExecuteAsync(
+                Request(snapshot, Selection()),
+                OperationContext.None,
+                CancellationToken.None);
+            Assert.Equal(OperationOutcome.InternalError, sqlite.Outcome);
         }
 
         [Fact]
@@ -306,6 +368,35 @@ namespace XMAT.Tests.Operations.Export
             Assert.Equal(committed ? 1 : 0, result.Value.Counts.Exported);
             Assert.Equal(committed ? 123L : (long?)null, result.Value.OutputBytes);
             Assert.Equal(committed ? true : (bool?)null, result.Value.OutputProtected);
+        }
+
+        [Fact]
+        public async Task Execute_DestinationLockIsADistinctConflict()
+        {
+            using var directory = new ExportTestDirectory();
+            string output = directory.PathOf("locked.xmatcap");
+            File.WriteAllText(output, "locked");
+            using var blocker = new FileStream(output, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            var snapshot = new FakeExportSnapshot([Session(1)], [Row(1)]);
+            var operation = new ExportCaptureSessionsOperation
+            {
+                WriterFactory = (_, _, _, _) => new RecordingExportWriter(),
+            };
+
+            OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
+                Request(snapshot, Selection()) with
+                {
+                    OutputPath = output,
+                    ReplaceExisting = true,
+                },
+                OperationContext.None,
+                CancellationToken.None);
+
+            Assert.Equal(OperationOutcome.Conflict, result.Outcome);
+            Assert.Equal("export.output.locked", Assert.Single(result.Diagnostics).Code);
+            blocker.Position = 0;
+            using var reader = new StreamReader(blocker, Encoding.UTF8, true, 1024, leaveOpen: true);
+            Assert.Equal("locked", reader.ReadToEnd());
         }
 
         private static ExportCaptureSessionsOperation Operation(
