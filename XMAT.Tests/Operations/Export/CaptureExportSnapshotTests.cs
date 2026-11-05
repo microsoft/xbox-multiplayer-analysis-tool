@@ -4,8 +4,11 @@
 
 using System.Reflection;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
@@ -31,13 +34,18 @@ namespace XMAT.Tests.Operations.Export
             CaptureExportSession frozen = Assert.Single(snapshot.Sessions);
 
             _ = Add(controller, table, 2, complete: true);
+            table.UpdateRow(
+                1,
+                ClientProcessRecordCodec.ToFields(Process("Resolved.exe", 5000)).ToArray());
             original.SetClientProcess(Process("Resolved.exe", 5000));
+            RawExportRow row = Assert.Single(snapshot.ReadChunk([Key(1)], CancellationToken.None));
 
             Assert.True(snapshot.IsLive);
             Assert.Equal("records", snapshot.InputKind);
             Assert.Single(snapshot.Sessions);
             Assert.Equal(Key(1), frozen.Key);
             Assert.Equal("Game.exe", frozen.Process.Name);
+            Assert.Equal("Game.exe", row.Values[WebProxyCaptureSchema.ClientProcessName]);
             Assert.Equal("/api/1", frozen.Path);
             Assert.True(frozen.IsComplete);
         }
@@ -97,7 +105,7 @@ namespace XMAT.Tests.Operations.Export
         }
 
         [Fact]
-        public void ReadChunk_UsesBoundedRowAndByteBatches()
+        public async Task ReadChunk_UsesBoundedBatchesAndAllowsOneOversizedGuiRow()
         {
             using var database = new SqLtDatabase();
             database.Initialize();
@@ -107,20 +115,42 @@ namespace XMAT.Tests.Operations.Export
             var controller = Controller(table);
             var batches = new List<(int Rows, long Bytes)>();
             controller.ExportReadBatchObserver = (rows, bytes) => batches.Add((rows, bytes));
-            for (var index = 1; index <= 65; index++)
+            _ = Add(controller, table, 1, complete: true, responseBodyBytes: 24 * 1024 * 1024 + 1);
+            for (var index = 2; index <= 65; index++)
             {
                 _ = Add(controller, table, index, complete: true, responseBodyBytes: 256 * 1024);
             }
-            using ICaptureExportSnapshot snapshot =
-                controller.CreateExportSnapshot("d1", AnalysisLimits.Default);
+            using ICaptureExportSnapshot snapshot = new RelabeledSnapshot(
+                controller.CreateExportSnapshot("d1", AnalysisLimits.Default),
+                "xmatcap");
+            var writer = new RecordingExportWriter();
+            var operation = new ExportCaptureSessionsOperation
+            {
+                Publisher = new RecordingExportPublisher(),
+                WriterFactory = (_, _, _, _) => writer,
+            };
 
-            IReadOnlyList<RawExportRow> rows = snapshot.ReadChunk(
-                snapshot.Sessions.Select(session => session.Key).ToArray(),
+            OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
+                new ExportCaptureRequest(
+                    null,
+                    snapshot,
+                    null,
+                    Selection(),
+                    CaptureExportFormat.Xmatcap,
+                    "oversized.xmatcap",
+                    ReplaceExisting: false,
+                    AnalysisLimits.Default,
+                    AllowUnprotectedOutput: false),
+                OperationContext.None,
                 CancellationToken.None);
 
-            Assert.Equal(65, rows.Count);
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            Assert.Equal("xmatcap", snapshot.InputKind);
+            Assert.Equal(65, writer.Rows.Count);
             Assert.NotEmpty(batches);
-            Assert.All(batches, batch =>
+            Assert.Contains(batches, batch =>
+                batch.Rows == 1 && batch.Bytes > AnalysisLimits.Default.MaxEntryBytes);
+            Assert.All(batches.Where(batch => batch.Rows > 1), batch =>
             {
                 Assert.InRange(batch.Rows, 1, 64);
                 Assert.InRange(batch.Bytes, 1, 8 * 1024 * 1024);
@@ -171,6 +201,26 @@ namespace XMAT.Tests.Operations.Export
             ProxyConnectionModel model = controller.ProxyConnections.AddFromDataRecord(record, false, Key(rowId));
             model.SetClientProcess(Process());
             return model;
+        }
+
+        private sealed class RelabeledSnapshot(
+            ICaptureExportSnapshot inner,
+            string inputKind) : ICaptureExportSnapshot
+        {
+            public IReadOnlyList<SqLtSchemaColumn> CaptureFields => inner.CaptureFields;
+            public IReadOnlyList<SqLtSchemaColumn> DeviceFields => inner.DeviceFields;
+            public IReadOnlyDictionary<string, RawExportRow> DeviceDescriptors => inner.DeviceDescriptors;
+            public IReadOnlyList<CaptureExportSession> Sessions => inner.Sessions;
+            public bool IsLive => inner.IsLive;
+            public string InputKind => inputKind;
+            public SqLtFileIdentity? InputIdentity => inner.InputIdentity;
+            public string InputSha256 => inner.InputSha256;
+            public IReadOnlyList<RawExportRow> ReadChunk(
+                IReadOnlyList<CaptureRowKey> keys,
+                CancellationToken cancellationToken) =>
+                inner.ReadChunk(keys, cancellationToken);
+            public void ValidateDestination(string path) => inner.ValidateDestination(path);
+            public void Dispose() => inner.Dispose();
         }
     }
 }

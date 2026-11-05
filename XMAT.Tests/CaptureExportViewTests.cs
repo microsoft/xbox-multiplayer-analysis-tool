@@ -102,10 +102,44 @@ namespace XMAT.Tests
             "every-filter",
             "--process|game*.exe|--host-mode|exact|--host|" + PresenceHost + "|--method|POST|--status|200|--status=",
             "1,4")]
-        public async Task VisibleSessions_ExportWhatTheGridShowsAndXmatExportWrites(string filters, string arguments, string expected)
+        public Task VisibleSessions_ExportWhatTheGridShowsAndXmatExportWrites(string filters, string arguments, string expected) =>
+            AssertParity(
+                ProcessCaptures.WriteXmatcap(_directory.Root, "parity.xmatcap", Sessions),
+                (view, controller) => Filter(view, controller, filters),
+                arguments.Split('|'),
+                expected.Split(',').Select(row => long.Parse(row, CultureInfo.InvariantCulture)).ToArray());
+
+        // Exact checkboxes are literal sets of any size: 65 checked hosts, an empty one and one longer than 260 characters
+        // export what xmat export writes for the same --host values, and the unchecked host stays out of both.
+        [Fact]
+        public Task VisibleSessions_ExportAnyNumberOfExactHostsLikeXmatExport()
         {
-            string input = ProcessCaptures.WriteXmatcap(_directory.Root, "parity.xmatcap", Sessions);
-            long[] rows = expected.Split(',').Select(row => long.Parse(row, CultureInfo.InvariantCulture)).ToArray();
+            string[] checkedHosts = Enumerable.Range(1, 65).Select(index => $"host{index}.test")
+                .Append(string.Empty).Append(new string('h', 300) + ".test").ToArray();
+            DateTime start = new(2026, 11, 4, 0, 0, 0, DateTimeKind.Utc);
+            string input = WriteCapture(
+                _directory.Root,
+                "hosts.xmatcap",
+                checkedHosts.Append("other.test").Select((host, index) => new ProxyConnectionModel(
+                    index + 1, "200", start.AddSeconds(index), TimeSpan.FromMilliseconds(25), "https", host + ":443", "GET",
+                    "/", "GET / HTTP/1.1\r\n\r\n", Array.Empty<byte>(), "HTTP/1.1 200 OK\r\n\r\n", Array.Empty<byte>(),
+                    ProcessCaptures.ClientIp)));
+
+            return AssertParity(
+                input,
+                (view, controller) => Keep(view, "HostFilters", controller.HostFilterList, checkedHosts),
+                checkedHosts.Select(host => "--host=" + host).Prepend("exact").Prepend("--host-mode"),
+                Enumerable.Range(1, checkedHosts.Length).Select(row => (long)row).ToArray());
+        }
+
+        // The grid's rows, the shared export of its Visible selection and xmat export with these arguments all give these
+        // request numbers.
+        private async Task AssertParity(
+            string input,
+            Action<CaptureConnectionView, WebServiceDeviceCaptureController> filter,
+            IEnumerable<string> arguments,
+            long[] rows)
+        {
             string guiOutput = Path.Join(_directory.Root, "gui.xmatcap");
             string cliOutput = Path.Join(_directory.Root, "cli.xmatcap");
             long[] shown = null;
@@ -117,7 +151,7 @@ namespace XMAT.Tests
                 _application.Run(window =>
                 {
                     (CaptureConnectionView view, WebServiceDeviceCaptureController controller) = Show(window, database);
-                    Filter(view, controller, filters);
+                    filter(view, controller);
                     shown = ((DataGrid)view.FindName("ConnectionList")).Items.Cast<ProxyConnectionModel>()
                         .Select(row => row.RequestNumber)
                         .OrderBy(number => number)
@@ -131,21 +165,50 @@ namespace XMAT.Tests
                 {
                     gui = await new ExportCaptureSessionsOperation().ExecuteAsync(
                         new ExportCaptureRequest(
-                            null, snapshot, null, visible, CaptureExportFormat.Xmatcap, guiOutput, false, AnalysisLimits.Default),
+                            null,
+                            snapshot,
+                            null,
+                            visible,
+                            CaptureExportFormat.Xmatcap,
+                            guiOutput,
+                            false,
+                            AnalysisLimits.Default,
+                            AllowUnprotectedOutput: false),
                         OperationContext.None,
                         CancellationToken.None);
                 }
             }
 
-            CliParseResult parsed = CliCommandLine.Parse(
-                new[] { "export", input, "--out", cliOutput }.Concat(arguments.Split('|')).ToArray());
-            CliReport cli = await CliExportCommand.RunAsync(parsed.Request, "parity", CancellationToken.None);
+            CliParseResult parsed = CliCommandLine.Parse(new[] { "export", input, "--out", cliOutput }.Concat(arguments).ToArray());
+            CliReport cli = parsed.Request == null
+                ? null
+                : await CliExportCommand.RunAsync(parsed.Request, "parity", CancellationToken.None);
 
             Assert.Equal(rows, shown);
             Assert.Equal(OperationOutcome.Succeeded, gui.Outcome);
             Assert.Equal(rows, XmatExportTests.RequestNumbers(guiOutput));
+            Assert.Null(parsed.Error?.Code);
             Assert.Equal(CliExitCodes.Success, cli.ExitCode);
             Assert.Equal(rows, XmatExportTests.RequestNumbers(cliOutput));
+        }
+
+        // A capture file of these sessions from the capture PC, in the current schema.
+        internal static string WriteCapture(string directory, string name, IEnumerable<ProxyConnectionModel> sessions)
+        {
+            string path = Path.Join(directory, name);
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            database.CreateTable(
+                    "CaptureDevices", new Field<long>("DeviceType"), new Field<string>("DeviceName"), new Field<long>("CaptureType"))
+                .AddRow((long)DeviceType.LocalPC, ProcessCaptures.Device, (long)CaptureType.WebProxy);
+            IDataTable captures = database.CreateTable(WebServiceCaptureMethod.TableName, WebProxyCaptureSchema.CreateFields());
+            foreach (ProxyConnectionModel session in sessions)
+            {
+                captures.AddRow(session.ToDataTableValues(ProcessCaptures.Device));
+            }
+
+            database.SaveToFile(path);
+            return path;
         }
 
         // The capture opened read-only in a capture tab, as File > Load Captures shows it.

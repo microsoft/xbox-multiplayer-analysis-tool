@@ -14,13 +14,10 @@ namespace XMAT.Tests.Operations.Export
     public sealed class XmatcapExportWriterTests
     {
         [Fact]
-        public void Complete_WritesRawValuesExtensionsAndOriginalIdsWithoutChangingSource()
+        public void Complete_WritesRawValuesExtensionsAndOriginalIds()
         {
             using var directory = new ExportTestDirectory();
-            string source = directory.PathOf("source.xmatcap");
             string output = directory.PathOf("subset.xmatcap");
-            File.WriteAllBytes(source, "source-bytes-must-not-change"u8.ToArray());
-            string sourceHash = Sha256(source);
             IReadOnlyList<SqLtSchemaColumn> fields = CaptureFields(
                 new SqLtSchemaColumn("QuoteText", SqLtDeclaredType.Text),
                 new SqLtSchemaColumn("ExtraInteger", SqLtDeclaredType.Integer),
@@ -54,7 +51,6 @@ namespace XMAT.Tests.Operations.Export
                 Assert.Equal(1, summary.RowsWritten);
             }
 
-            Assert.Equal(sourceHash, Sha256(source));
             using var connection = Open(output);
             using (SqliteCommand command = connection.CreateCommand())
             {
@@ -91,6 +87,28 @@ namespace XMAT.Tests.Operations.Export
                 Assert.True(capture.IsDBNull(11));
                 Assert.False(capture.Read());
             }
+        }
+
+        [Fact]
+        public void Constructor_UnexpectedFailureReleasesTheStagedFileAndRethrows()
+        {
+            using var directory = new ExportTestDirectory();
+            string output = directory.PathOf("failed.xmatcap");
+
+            Exception failure = Record.Exception(
+                () => new XmatcapExportWriter(
+                    output,
+                    CaptureFields(),
+                    DeviceFields,
+                    new Dictionary<string, RawExportRow>
+                    {
+                        ["d1"] = new RawExportRow(default, 1, 0, null),
+                    }));
+
+            Assert.NotNull(failure);
+            Assert.IsNotType<CaptureExportException>(failure);
+            File.Delete(output);
+            Assert.False(File.Exists(output));
         }
 
         [Fact]

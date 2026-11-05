@@ -5,6 +5,8 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using XMAT.Operations;
+using XMAT.Operations.Export;
 
 namespace XMAT.Tests
 {
@@ -18,6 +20,7 @@ namespace XMAT.Tests
             _application = application;
         }
 
+        // The window shows the export's latest phase, also one reported before it appeared, until Cancel is asked for.
         [Theory]
         [InlineData("button")]
         [InlineData("escape")]
@@ -36,8 +39,14 @@ namespace XMAT.Tests
                 };
                 try
                 {
+                    var progress = (IProgress<OperationProgress>)(object)dialog;
+                    progress.Report(new OperationProgress(ExportCaptureSessionsOperation.ReadPhase, 0.5));
+                    progress.Report(new OperationProgress(ExportCaptureSessionsOperation.PublishPhase, 0));
                     dialog.Show();
                     WpfTestHost.Pump();
+                    var status = (TextBlock)dialog.FindName("StatusText");
+                    Assert.Equal(Localization.GetLocalizedString("EXPORT_PHASE_PUBLISH"), status.Text);
+                    Assert.DoesNotContain("NO_IMPL_", status.Text, StringComparison.Ordinal);
                     var cancel = (Button)dialog.FindName("CancelExport");
                     switch (trigger)
                     {
@@ -56,12 +65,13 @@ namespace XMAT.Tests
                             break;
                     }
 
+                    progress.Report(new OperationProgress(ExportCaptureSessionsOperation.PublishPhase, 1));
+                    WpfTestHost.Pump();
                     Assert.Equal(1, requests);
                     Assert.True(dialog.IsVisible);
                     Assert.False(worker.Task.IsCompleted);
                     Assert.False(cancel.IsEnabled);
-                    Assert.Equal(Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLING"),
-                        ((TextBlock)dialog.FindName("StatusText")).Text);
+                    Assert.Equal(Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLING"), status.Text);
                     dialog.Close();
                     Assert.Equal(1, requests);
                     Assert.True(dialog.IsVisible);

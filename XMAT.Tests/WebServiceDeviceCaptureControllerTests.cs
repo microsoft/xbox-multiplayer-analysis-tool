@@ -9,7 +9,9 @@ using System.Net;
 using System.Reflection;
 using System.Text.Json;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Analysis;
 using XMAT.Operations.Captures;
+using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Proxy;
@@ -1217,9 +1219,13 @@ namespace XMAT.Tests
             controller.LoadCaptureDataset(dataset);
 
             var loadedRecord = Assert.Single(controller.GetCaptureRecords());
+            dataset.RejectFilteredReads = true;
+            using ICaptureExportSnapshot snapshot =
+                controller.CreateExportSnapshot("d1", AnalysisLimits.Default);
 
             Assert.Same(record, loadedRecord);
             Assert.Equal(2, dataset.FilteredReadCount);
+            Assert.Single(snapshot.Sessions);
         }
 
         [Fact]
@@ -1551,6 +1557,7 @@ namespace XMAT.Tests
             public IEnumerable<IFieldDefinition> FieldDefs => Array.Empty<IFieldDefinition>();
             public IEnumerable<IDataRecord> DataRecords => new[] { _record };
             public int FilteredReadCount { get; private set; }
+            internal bool RejectFilteredReads { get; set; }
 
             internal TestDataset(IDataRecord record)
             {
@@ -1569,6 +1576,10 @@ namespace XMAT.Tests
 
             public IEnumerable<IDataRecord> DataRecordsWhen(params IFieldValue[] fieldNamesAndValues)
             {
+                if (RejectFilteredReads)
+                {
+                    throw new InvalidOperationException("The loaded payload was materialized while freezing metadata.");
+                }
                 FilteredReadCount++;
 
                 var deviceFilter = fieldNamesAndValues.FirstOrDefault(

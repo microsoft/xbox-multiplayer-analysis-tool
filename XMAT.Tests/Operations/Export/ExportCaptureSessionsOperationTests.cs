@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Immutable;
+using System.Text;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
-using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
-using XMAT.Tests.Fixtures;
+using XMAT.SharedInterfaces;
+using XMAT.Tests.Operations.Analysis;
 using XMAT.WebServiceCapture;
 using static XMAT.Tests.Operations.Export.ExportTestData;
 
@@ -16,65 +18,55 @@ namespace XMAT.Tests.Operations.Export
     public sealed class ExportCaptureSessionsOperationTests
     {
         [Fact]
-        public async Task Execute_ExportsTheExactSubsetWithPairsIntactInBoundedChunks()
+        public async Task Execute_ExportsDistinctRequestResponsePairsWithoutChangingTheSource()
         {
-            CaptureExportSession[] sessions = Enumerable.Range(1, 130)
-                .Select(index => Session(index))
-                .ToArray();
-            RawExportRow[] rows = Enumerable.Range(1, 130).Select(index => Row(index)).ToArray();
-            var snapshot = new FakeExportSnapshot(sessions, rows);
-            ImmutableHashSet<CaptureRowKey> keys = sessions.Where((_, index) => index % 2 == 0)
-                .Select(session => session.Key)
-                .ToImmutableHashSet();
-            var writer = new RecordingExportWriter();
-            var publisher = new RecordingExportPublisher();
-            long expectedRows = -1;
-            var operation = new ExportCaptureSessionsOperation
-            {
-                Publisher = publisher,
-                WriterFactory = (_, _, _, expected) =>
-                {
-                    expectedRows = expected;
-                    return writer;
-                },
-            };
+            using var directory = new ExportTestDirectory();
+            string source = WriteMarkedCapture(directory.Root);
+            string sourceHash = Sha256(source);
+            string output = directory.PathOf("selected.xmatcap");
+            var selection = Selection(host: new HostSelection(
+                HostMatchMode.Exact,
+                ImmutableArray.Create("userpresence.xboxlive.com"),
+                ImmutableArray<string>.Empty));
             var progress = new RecordingProgress();
-            ExportCaptureRequest request = Request(snapshot, Selection(keys: keys));
 
-            OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
-                request,
+            OperationResult<ExportCaptureResult> result = await new ExportCaptureSessionsOperation().ExecuteAsync(
+                new ExportCaptureRequest(
+                    source,
+                    null,
+                    null,
+                    selection,
+                    CaptureExportFormat.Xmatcap,
+                    output,
+                    ReplaceExisting: false,
+                    AnalysisLimits.Default,
+                    AllowUnprotectedOutput: false),
                 new OperationContext(progress: progress),
                 CancellationToken.None);
 
             Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
-            Assert.Equal(65, expectedRows);
             Assert.True(result.Value.Published);
-            Assert.Equal(123, result.Value.OutputBytes);
-            Assert.Equal("output-sha256", result.Value.OutputSha256);
-            Assert.Equal(keys.OrderBy(key => key.RowId), writer.Rows.Select(row => row.Key).OrderBy(key => key.RowId));
-            Assert.All(snapshot.ReadRequests, chunk => Assert.InRange(chunk.Count, 1, 64));
-            Assert.Equal(2, snapshot.ReadRequests.Count);
-            Assert.All(writer.Rows, row =>
+            Assert.Equal(true, result.Value.OutputProtected);
+            Assert.Equal(2, result.Value.Counts.Exported);
+            Assert.Equal(sourceHash, Sha256(source));
+            int publish = progress.Updates.FindIndex(update =>
+                update.Phase == ExportCaptureSessionsOperation.PublishPhase);
+            int lastReadOrWrite = progress.Updates.FindLastIndex(update =>
+                update.Phase == ExportCaptureSessionsOperation.ReadPhase ||
+                update.Phase == ExportCaptureSessionsOperation.WritePhase);
+            Assert.True(publish > lastReadOrWrite);
+            using var capture = new SqLtReadonlyDatabase(output);
+            IDataRecord[] rows = capture.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords.ToArray();
+            Assert.Equal(new long[] { 1, 3 }, rows.Select(row =>
+                row.Int(WebServiceCaptureMethod.FieldKey_RequestNumber)));
+            foreach (IDataRecord row in rows)
             {
-                Assert.Contains("GET ", (string)row.Values[WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders]);
-                Assert.Contains("200 OK",
-                    (string)row.Values[WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders]);
-                Assert.False(string.IsNullOrEmpty(
-                    (string)row.Values[WebServiceCaptureMethod.FieldKey_RequestBody]));
-                Assert.False(string.IsNullOrEmpty(
-                    (string)row.Values[WebServiceCaptureMethod.FieldKey_ResponseBody]));
-            });
-            Assert.Equal(new[]
-            {
-                ExportCaptureSessionsOperation.SelectPhase,
-                ExportCaptureSessionsOperation.ReadPhase,
-                ExportCaptureSessionsOperation.WritePhase,
-                ExportCaptureSessionsOperation.PublishPhase,
-            }, progress.Updates.Select(update => update.Phase).Distinct());
-            Assert.Contains(progress.Updates, update =>
-                update.Phase == ExportCaptureSessionsOperation.ReadPhase && update.Fraction is >= 0 and <= 1);
-            Assert.Contains(progress.Updates, update =>
-                update.Phase == ExportCaptureSessionsOperation.WritePhase && update.Fraction is >= 0 and <= 1);
+                long number = row.Int(WebServiceCaptureMethod.FieldKey_RequestNumber);
+                Assert.Contains($"request-{number}", row.Str(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders));
+                Assert.Equal($"request-body-{number}", Decode(row.Str(WebServiceCaptureMethod.FieldKey_RequestBody)));
+                Assert.Contains($"response-{number}", row.Str(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders));
+                Assert.Equal($"response-body-{number}", Decode(row.Str(WebServiceCaptureMethod.FieldKey_ResponseBody)));
+            }
         }
 
         [Fact]
@@ -184,7 +176,12 @@ namespace XMAT.Tests.Operations.Export
             {
                 InputPath = "input.xmatcap",
             };
-            var operation = Operation(snapshot, new RecordingExportWriter());
+            var publisher = new RecordingExportPublisher();
+            var operation = new ExportCaptureSessionsOperation
+            {
+                Publisher = publisher,
+                WriterFactory = (_, _, _, _) => new RecordingExportWriter(),
+            };
 
             OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
                 request,
@@ -197,40 +194,52 @@ namespace XMAT.Tests.Operations.Export
             Assert.Null(result.Value.Devices);
             Assert.Null(result.Value.ProcessScope);
             Assert.False(result.Value.Published);
+
+            OperationResult<ExportCaptureResult> mismatch = await operation.ExecuteAsync(
+                Request(snapshot, Selection()) with { OutputPath = "result.saz" },
+                OperationContext.None,
+                CancellationToken.None);
+            Assert.Equal(OperationOutcome.InvalidInput, mismatch.Outcome);
+            Assert.Equal(CaptureExportErrorCodes.FormatMismatch, Assert.Single(mismatch.Diagnostics).Code);
+            Assert.Equal(0, publisher.Calls);
         }
 
         [Fact]
-        public async Task Execute_CancellationRetainsCancelledClassificationAndPublishesNothing()
+        public async Task Execute_CancellationAndUnexpectedWriterFailuresKeepTheirClassifications()
         {
             var snapshot = new FakeExportSnapshot([Session(1)], [Row(1)]);
-            var writer = new RecordingExportWriter
+            var cancelledWriter = new RecordingExportWriter
             {
                 WriteFailure = new OperationCanceledException(),
             };
-            var operation = Operation(snapshot, writer);
 
-            OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
+            OperationResult<ExportCaptureResult> cancelled = await Operation(snapshot, cancelledWriter).ExecuteAsync(
                 Request(snapshot, Selection()),
                 OperationContext.None,
                 CancellationToken.None);
 
-            Assert.Equal(OperationOutcome.Cancelled, result.Outcome);
-            Assert.False(result.Value.Published);
-            Assert.Equal(0, result.Value.Counts.Exported);
+            Assert.Equal(OperationOutcome.Cancelled, cancelled.Outcome);
+            Assert.False(cancelled.Value.Published);
+            Assert.Equal(0, cancelled.Value.Counts.Exported);
+
+            var unexpectedWriter = new RecordingExportWriter
+            {
+                WriteFailure = new InvalidOperationException("unexpected writer failure"),
+            };
+            OperationResult<ExportCaptureResult> unexpected = await Operation(snapshot, unexpectedWriter).ExecuteAsync(
+                Request(snapshot, Selection()),
+                OperationContext.None,
+                CancellationToken.None);
+            Assert.Equal(OperationOutcome.InternalError, unexpected.Outcome);
+            Assert.Equal("export.internal", Assert.Single(unexpected.Diagnostics).Code);
+            Assert.False(unexpected.Value.Published);
         }
 
         [Fact]
-        public async Task Execute_FileInputLeavesTheSourceByteForByteUnchanged()
+        public async Task Execute_FileAdmissionUsesExportCodesAndPrechecksDestinationConflicts()
         {
             using var directory = new ExportTestDirectory();
-            string source = SyntheticCaptures.WriteXmatcap(directory.Root, "source.xmatcap");
-            string sourceHash = Sha256(source);
-            var writer = new RecordingExportWriter();
-            var operation = new ExportCaptureSessionsOperation
-            {
-                Publisher = new RecordingExportPublisher(),
-                WriterFactory = (_, _, _, _) => writer,
-            };
+            string source = WriteMarkedCapture(directory.Root);
             var request = new ExportCaptureRequest(
                 source,
                 null,
@@ -239,16 +248,64 @@ namespace XMAT.Tests.Operations.Export
                 CaptureExportFormat.Xmatcap,
                 directory.PathOf("subset.xmatcap"),
                 ReplaceExisting: false,
-                AnalysisLimits.Default);
+                AnalysisLimits.Default with { MaxInputBytes = 1 },
+                AllowUnprotectedOutput: false);
 
-            OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
+            OperationResult<ExportCaptureResult> result = await new ExportCaptureSessionsOperation().ExecuteAsync(
                 request,
                 OperationContext.None,
                 CancellationToken.None);
 
-            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
-            Assert.Equal(sourceHash, Sha256(source));
-            Assert.Equal(sourceHash, result.Value.InputSha256);
+            Assert.Equal(OperationOutcome.InvalidInput, result.Outcome);
+            Assert.Equal("export.input.limit", Assert.Single(result.Diagnostics).Code);
+            Assert.DoesNotContain(result.Diagnostics, diagnostic =>
+                diagnostic.Code == CaptureExportErrorCodes.InvalidBody);
+            string input = directory.PathOf("malformed.xmatcap");
+            string output = directory.PathOf("existing.xmatcap");
+            File.WriteAllText(input, "not a capture");
+            File.WriteAllText(output, "keep");
+
+            OperationResult<ExportCaptureResult> conflict = await new ExportCaptureSessionsOperation().ExecuteAsync(
+                new ExportCaptureRequest(
+                    input,
+                    null,
+                    null,
+                    Selection(),
+                    CaptureExportFormat.Xmatcap,
+                    output,
+                    ReplaceExisting: false,
+                    AnalysisLimits.Default,
+                    AllowUnprotectedOutput: false),
+                OperationContext.None,
+                CancellationToken.None);
+
+            Assert.Equal(OperationOutcome.Conflict, conflict.Outcome);
+            Assert.Equal("export.output.exists", Assert.Single(conflict.Diagnostics).Code);
+            Assert.Equal("keep", File.ReadAllText(output));
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task Execute_CleanupFailurePreservesPublicationState(bool committed)
+        {
+            var snapshot = new FakeExportSnapshot([Session(1)], [Row(1)]);
+            var operation = new ExportCaptureSessionsOperation
+            {
+                Publisher = new CleanupFailurePublisher(committed),
+                WriterFactory = (_, _, _, _) => new RecordingExportWriter(),
+            };
+
+            OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
+                Request(snapshot, Selection()),
+                OperationContext.None,
+                CancellationToken.None);
+
+            Assert.Equal(OperationOutcome.CleanupFailed, result.Outcome);
+            Assert.Equal(committed, result.Value.Published);
+            Assert.Equal(committed ? 1 : 0, result.Value.Counts.Exported);
+            Assert.Equal(committed ? 123L : (long?)null, result.Value.OutputBytes);
+            Assert.Equal(committed ? true : (bool?)null, result.Value.OutputProtected);
         }
 
         private static ExportCaptureSessionsOperation Operation(
@@ -275,7 +332,50 @@ namespace XMAT.Tests.Operations.Export
                 CaptureExportFormat.Xmatcap,
                 "result.xmatcap",
                 ReplaceExisting: false,
-                AnalysisLimits.Default);
+                AnalysisLimits.Default,
+                AllowUnprotectedOutput: false);
+
+        private static string WriteMarkedCapture(string directory)
+            => ProcessCaptures.WriteXmatcap(
+                directory,
+                "marked-source.xmatcap",
+                [
+                    new ProcessSession("Game.exe", 4100, "local", PairMarker: "1"),
+                    new ProcessSession("Tool.exe", 4200, "local", Analyzable: false, PairMarker: "2"),
+                    new ProcessSession("Game.exe", 4100, "local", PairMarker: "3"),
+                ]);
+
+        private static string Decode(string value) =>
+            Encoding.UTF8.GetString(Convert.FromBase64String(value));
+
+        private sealed class CleanupFailurePublisher : ICaptureExportPublisher
+        {
+            private readonly bool _committed;
+
+            internal CleanupFailurePublisher(bool committed)
+            {
+                _committed = committed;
+            }
+
+            public async Task<PublishedCapture> PublishAsync(
+                string destination,
+                bool replaceExisting,
+                bool allowUnprotected,
+                Action<string> validateDestination,
+                Func<string, CancellationToken, Task> writeStaged,
+                CancellationToken cancellationToken)
+            {
+                _ = replaceExisting;
+                _ = allowUnprotected;
+                validateDestination(destination);
+                await writeStaged("staged-output", cancellationToken);
+                var publication = new PublishedCapture(123, "output-sha256", false, Protected: true);
+                throw new CaptureExportCleanupException(
+                    _committed ? publication : null,
+                    null,
+                    new IOException("injected cleanup failure"));
+            }
+        }
 
         private sealed class RecordingProgress : IProgress<OperationProgress>
         {

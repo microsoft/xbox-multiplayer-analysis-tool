@@ -26,7 +26,8 @@ namespace XMAT.Cli
                     request.Format.Value,
                     request.Output,
                     ReplaceExisting: false,
-                    report.Export.Limits.ToAnalysisLimits()),
+                    report.Export.Limits.ToAnalysisLimits(),
+                    AllowUnprotectedOutput: false),
                 OperationContext.None,
                 cancellationToken).ConfigureAwait(false);
             report.Export.Result = result.Value;

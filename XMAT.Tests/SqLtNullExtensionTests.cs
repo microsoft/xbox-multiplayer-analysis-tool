@@ -100,12 +100,14 @@ namespace XMAT.Tests
         [Fact]
         public void NonNullExtensions_KeepTheirValues()
         {
+            string text = new('x', 1024 * 1024);
             using SqliteConnection connection =
                 OpenMemoryDatabase();
             using SqliteCommand command =
                 connection.CreateCommand();
             command.CommandText =
-                "SELECT 1, 'value', 7";
+                "SELECT 1, $text, 7, 7";
+            command.Parameters.AddWithValue("$text", text);
             using SqliteDataReader reader =
                 command.ExecuteReader();
             Assert.True(reader.Read());
@@ -126,6 +128,12 @@ namespace XMAT.Tests
                             typeof(long),
                             2,
                             isExtension: true),
+                    ["Mismatch"] =
+                        FieldDefinition.CreateFromSchema(
+                            "Mismatch",
+                            typeof(string),
+                            3,
+                            isExtension: true),
                 };
 
             var record =
@@ -138,11 +146,18 @@ namespace XMAT.Tests
             Assert.False(
                 record.IsNull("IntegerExtension"));
             Assert.Equal(
-                "value",
+                text,
                 record.Str("TextExtension"));
             Assert.Equal(
                 7,
                 record.Int("IntegerExtension"));
+            Assert.True(((IRawDataRecord)record).TryReadRaw(
+                "TextExtension",
+                out object raw));
+            Assert.Same(raw, record.Str("TextExtension"));
+            Assert.True(((IRawDataRecord)record).TryReadRaw("Mismatch", out object mismatch));
+            Assert.Equal(7L, mismatch);
+            Assert.Null(record.Str("Mismatch"));
         }
 
         private static SqliteConnection OpenMemoryDatabase()

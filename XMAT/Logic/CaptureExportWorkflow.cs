@@ -141,7 +141,8 @@ namespace XMAT
                     destination.Format,
                     destination.Path,
                     destination.ReplaceExisting,
-                    AnalysisLimits.Default);
+                    AnalysisLimits.Default,
+                    AllowUnprotectedOutput: false);
                 OperationResult<ExportCaptureResult> result = await _dialogs.RunWithProgressAsync(
                     _owner,
                     (progress, cancellationToken) =>
