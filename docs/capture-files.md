@@ -191,7 +191,8 @@ archive rather than truncating it.
 Longer exports show a progress window with the current step and Cancel. Cancel,
 Escape, or closing that window requests cancellation and waits for the worker and
 cleanup before releasing the operation guard. An existing destination is replaced only
-after a complete export, not on cancellation or failure.
+after a complete export, not on cancellation or failure; one that another program has
+open is reported and left as it is.
 
 ### Review before sharing
 

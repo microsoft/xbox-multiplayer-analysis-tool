@@ -85,8 +85,20 @@ namespace XMAT.DataAbstractionLayer
             return true;
         }
 
-        public bool TryReadRaw(string name, out object value) =>
-            _rawValues.TryGetValue(name, out value);
+        public bool TryReadRaw(string name, out object value)
+        {
+            if (_rawValues.TryGetValue(name, out value))
+            {
+                return true;
+            }
+            if (_fieldDefs.TryGetValue(name, out IFieldDefinition fieldDefinition) &&
+                _fieldValues.TryGetValue(fieldDefinition.ColumnIndex, out value))
+            {
+                return true;
+            }
+            value = null;
+            return false;
+        }
 
         internal SqLtDataRecord(
             SqliteDataReader recordReader,
@@ -103,10 +115,14 @@ namespace XMAT.DataAbstractionLayer
             {
                 object stored = recordReader.GetValue(fieldDef.Value.ColumnIndex);
                 object rawValue = stored == DBNull.Value ? null : stored;
-                _rawValues[fieldDef.Key] = rawValue;
-                _fieldValues[fieldDef.Value.ColumnIndex] = untypedColumns?.Contains(fieldDef.Key) == true
+                object typedValue = untypedColumns?.Contains(fieldDef.Key) == true
                     ? rawValue as string
                     : FieldValue.GetFieldValue(recordReader, rawValue, fieldDef.Value);
+                _fieldValues[fieldDef.Value.ColumnIndex] = typedValue;
+                if (rawValue == null || !ReferenceEquals(rawValue, typedValue))
+                {
+                    _rawValues[fieldDef.Key] = rawValue;
+                }
             }
         }
 

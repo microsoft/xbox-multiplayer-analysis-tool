@@ -20,7 +20,6 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
-using XMAT.Operations.Analysis;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
@@ -221,10 +220,9 @@ namespace XMAT.WebServiceCapture
                 .ToList();
         }
 
-        internal ICaptureExportSnapshot CreateExportSnapshot(string ordinalDeviceId, AnalysisLimits limits)
+        internal ICaptureExportSnapshot CreateExportSnapshot(string ordinalDeviceId)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(ordinalDeviceId);
-            ArgumentNullException.ThrowIfNull(limits);
             bool ownsDataset = _captureDataSource == CaptureDataSource.ActiveTable;
             IDataset dataset = _captureDataSource == CaptureDataSource.LoadedDataset
                 ? _loadedCaptureDataset
@@ -322,59 +320,58 @@ namespace XMAT.WebServiceCapture
                 IReadOnlyList<CaptureRowKey> keys,
                 CancellationToken cancellationToken)
             {
+                var consumed = new List<CaptureRowKey>();
                 var result = new List<RawExportRow>();
                 var index = 0;
-                while (index < keys.Count)
+                long batchBytes = 0;
+                using (_captureRows.EnterMutation())
+                using (versioned?.EnterRead())
                 {
-                    var batchCount = 0;
-                    long batchBytes = 0;
-                    using (_captureRows.EnterMutation())
-                    using (versioned?.EnterRead())
+                    while (index < keys.Count && result.Count < 64)
                     {
-                        while (index < keys.Count && batchCount < 64)
+                        cancellationToken.ThrowIfCancellationRequested();
+                        CaptureRowKey key = keys[index];
+                        if (!frozen.TryGetValue(key, out FrozenExportRow expected) ||
+                            !ReferenceEquals(ProxyConnections.ByKey(key), expected.Model))
                         {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            CaptureRowKey key = keys[index];
-                            if (!frozen.TryGetValue(key, out FrozenExportRow expected) ||
-                                !ReferenceEquals(ProxyConnections.ByKey(key), expected.Model))
-                            {
-                                index++;
-                                continue;
-                            }
-                            IDataRecord record = dataset.DataRecordsFrom(expected.RowId, 1)
-                                .FirstOrDefault(candidate => candidate.RowId == expected.RowId);
-                            if (record == null)
-                            {
-                                index++;
-                                continue;
-                            }
-                            if (versioned != null && versioned.VersionOf(expected.RowId) != expected.PayloadVersion)
-                            {
-                                throw new InvalidOperationException("The capture row changed after the export snapshot.");
-                            }
-                            Dictionary<string, object> values = CaptureRawValues.Read(record, captureFields);
-                            CaptureRawValues.OverlayProcess(values, expected.Process);
-                            long rowBytes = CaptureRawValues.Measure(values);
-                            if (batchCount != 0 && batchBytes + rowBytes > 8 * 1024 * 1024)
-                            {
-                                break;
-                            }
-                            result.Add(new RawExportRow(
-                                key,
-                                expected.RowId,
-                                expected.PayloadVersion,
-                                values));
-                            batchCount++;
-                            batchBytes += rowBytes;
+                            consumed.Add(key);
                             index++;
+                            continue;
+                        }
+                        IDataRecord record = dataset.DataRecordsFrom(expected.RowId, 1)
+                            .FirstOrDefault(candidate => candidate.RowId == expected.RowId);
+                        if (record == null)
+                        {
+                            consumed.Add(key);
+                            index++;
+                            continue;
+                        }
+                        if (versioned != null && versioned.VersionOf(expected.RowId) != expected.PayloadVersion)
+                        {
+                            throw new InvalidOperationException("The capture row changed after the export snapshot.");
+                        }
+                        Dictionary<string, object> values = CaptureRawValues.Read(record, captureFields);
+                        CaptureRawValues.OverlayProcess(values, expected.Process);
+                        long rowBytes = CaptureRawValues.Measure(values);
+                        if (result.Count != 0 && batchBytes + rowBytes > 8 * 1024 * 1024)
+                        {
+                            break;
+                        }
+                        consumed.Add(key);
+                        result.Add(new RawExportRow(key, expected.RowId, expected.PayloadVersion, values));
+                        batchBytes += rowBytes;
+                        index++;
+                        if (rowBytes > 8 * 1024 * 1024)
+                        {
+                            break;
                         }
                     }
-                    if (batchCount != 0)
-                    {
-                        ExportReadBatchObserver?.Invoke(batchCount, batchBytes);
-                    }
                 }
-                return new CaptureExportChunk(keys.ToArray(), result);
+                if (result.Count != 0)
+                {
+                    ExportReadBatchObserver?.Invoke(result.Count, batchBytes);
+                }
+                return new CaptureExportChunk(consumed.ToArray(), result);
             }
 
             return new CaptureExportSnapshot(

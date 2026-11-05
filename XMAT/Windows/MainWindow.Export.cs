@@ -175,6 +175,7 @@ namespace XMAT
         {
             "export.cleanup.failed" => "EXPORT_ERROR_CLEANUP",
             "export.output.exists" or "export.output.is-source" or "export.output.open-capture" => "EXPORT_ERROR_DESTINATION",
+            "export.output.locked" => "EXPORT_ERROR_LOCKED",
             CaptureExportErrorCodes.FormatMismatch => "EXPORT_ERROR_FORMAT",
             CaptureExportErrorCodes.InputLimit => "EXPORT_ERROR_LIMIT",
             CaptureExportErrorCodes.InvalidHttp or CaptureExportErrorCodes.InvalidBody => "EXPORT_ERROR_INPUT",

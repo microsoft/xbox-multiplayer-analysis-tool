@@ -108,8 +108,12 @@ namespace XMAT.Tests.Operations.Export
                 Assert.IsType<string>(request);
                 Assert.IsType<string>(response);
                 var model = new ProxyConnectionModel(rows[index]);
-                Assert.Equal(expected[index].RequestBody ?? Array.Empty<byte>(), model.RequestBody);
-                Assert.Equal(expected[index].ResponseBody ?? Array.Empty<byte>(), model.ResponseBody);
+                Assert.Equal(
+                    expected[index].RequestBody ?? Array.Empty<byte>(),
+                    model.RequestBody ?? Array.Empty<byte>());
+                Assert.Equal(
+                    expected[index].ResponseBody ?? Array.Empty<byte>(),
+                    model.ResponseBody ?? Array.Empty<byte>());
             }
             OperationResult<AnalysisResult> analysis = await new AnalyzeCaptureOperation().ExecuteAsync(
                 new AnalyzeCaptureRequest(AnalysisInput.FromFile(output), new AnalysisOptions()),

@@ -139,19 +139,34 @@ namespace XMAT.Operations.Export
                 IReadOnlyList<CaptureRowKey> keys,
                 CancellationToken cancellationToken)
             {
-                var result = new List<RawExportRow>(keys.Count);
+                var consumed = new List<CaptureRowKey>();
+                var result = new List<RawExportRow>();
+                long bytes = 0;
                 foreach (CaptureRowKey key in keys)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (rows.TryGetValue(key, out LoadedExportRow row))
+                    if (!rows.TryGetValue(key, out LoadedExportRow row))
                     {
-                        Dictionary<string, object> values =
-                            CaptureRawValues.Read(row.Record, captureFields);
-                        CaptureRawValues.OverlayProcess(values, row.Process);
-                        result.Add(new RawExportRow(key, row.Record.RowId, 0, values));
+                        consumed.Add(key);
+                        continue;
+                    }
+                    Dictionary<string, object> values =
+                        CaptureRawValues.Read(row.Record, captureFields);
+                    CaptureRawValues.OverlayProcess(values, row.Process);
+                    long rowBytes = CaptureRawValues.Measure(values);
+                    if (result.Count != 0 && bytes + rowBytes > 8 * 1024 * 1024)
+                    {
+                        break;
+                    }
+                    consumed.Add(key);
+                    result.Add(new RawExportRow(key, row.Record.RowId, 0, values));
+                    bytes += rowBytes;
+                    if (result.Count == 64 || rowBytes > 8 * 1024 * 1024)
+                    {
+                        break;
                     }
                 }
-                return new CaptureExportChunk(keys.ToArray(), result);
+                return new CaptureExportChunk(consumed.ToArray(), result);
             }
 
             void ValidateDestination(string destination)
@@ -262,6 +277,7 @@ namespace XMAT.Operations.Export
             {
                 "export.output.exists" => "The export destination already exists.",
                 "export.output.is-source" => "The export destination is the capture input.",
+                "export.output.locked" => "The export destination is locked.",
                 _ => "The export destination conflicts with an open capture.",
             })
         {

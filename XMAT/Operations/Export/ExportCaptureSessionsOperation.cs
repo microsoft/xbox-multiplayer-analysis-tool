@@ -173,7 +173,8 @@ namespace XMAT.Operations.Export
                             stagedPath,
                             snapshot,
                             selected.Counts.Eligible);
-                        for (var offset = 0; offset < selected.Keys.Count; offset += 64)
+                        var offset = 0;
+                        while (offset < selected.Keys.Count)
                         {
                             token.ThrowIfCancellationRequested();
                             CaptureRowKey[] requested = selected.Keys.Skip(offset).Take(64).ToArray();
@@ -186,12 +187,21 @@ namespace XMAT.Operations.Export
                             {
                                 throw new CaptureSnapshotChangedException(exception);
                             }
-                            IReadOnlyList<RawExportRow> rows = chunk.Rows;
-                            var requestedSet = requested.ToHashSet();
-                            if (rows == null ||
+                            IReadOnlyList<CaptureRowKey> consumed = chunk?.ConsumedKeys;
+                            IReadOnlyList<RawExportRow> rows = chunk?.Rows;
+                            if (consumed == null ||
+                                consumed.Count == 0 ||
+                                consumed.Count > requested.Length ||
+                                !consumed.SequenceEqual(requested.Take(consumed.Count)) ||
+                                rows == null)
+                            {
+                                throw new CaptureSnapshotChangedException();
+                            }
+                            var consumedSet = consumed.ToHashSet();
+                            if (
                                 rows.Any(row =>
                                     row == null ||
-                                    !requestedSet.Contains(row.Key) ||
+                                    !consumedSet.Contains(row.Key) ||
                                     row.RowId != row.Key.RowId ||
                                     row.PayloadVersion != sessionByKey[row.Key].PayloadVersion) ||
                                 rows.Select(row => row.Key).Distinct().Count() != rows.Count)
@@ -199,16 +209,17 @@ namespace XMAT.Operations.Export
                                 throw new CaptureSnapshotChangedException();
                             }
                             var returned = rows.Select(row => row.Key).ToHashSet();
-                            foreach (CaptureRowKey missing in requested.Where(key => !returned.Contains(key)))
+                            foreach (CaptureRowKey missing in consumed.Where(key => !returned.Contains(key)))
                             {
                                 unavailable++;
                                 string device = sessionByKey[missing].DeviceId;
                                 unavailableByDevice[device] =
                                     unavailableByDevice.TryGetValue(device, out long count) ? count + 1 : 1;
                             }
+                            offset += consumed.Count;
                             context.Progress.Report(new OperationProgress(
                                 ReadPhase,
-                                Math.Min(1d, (offset + requested.Length) / (double)selected.Keys.Count)));
+                                Math.Min(1d, offset / (double)selected.Keys.Count)));
                             foreach (RawExportRow row in rows)
                             {
                                 writer.Write(row, token);
@@ -324,7 +335,7 @@ namespace XMAT.Operations.Export
                 return (
                     OperationOutcome.InvalidInput,
                     limit ? CaptureExportErrorCodes.InputLimit : input.Code,
-                    limit ? "The capture exceeds an export input limit." : input.DiagnosticMessage);
+                    limit ? "The capture exceeds an export safety limit." : input.DiagnosticMessage);
             }
             return exception switch
             {
@@ -340,9 +351,17 @@ namespace XMAT.Operations.Export
                     OperationOutcome.Conflict,
                     destination.Code,
                     destination.Message),
-                CaptureSaveException save => (
+                CaptureSaveException { Failure: CaptureSaveFailure.Refused } save => (
                     OperationOutcome.Conflict,
                     "export.output.open-capture",
+                    save.Message),
+                CaptureSaveException { Failure: CaptureSaveFailure.DestinationLocked } save => (
+                    OperationOutcome.Conflict,
+                    "export.output.locked",
+                    save.Message),
+                CaptureSaveException save => (
+                    OperationOutcome.Failed,
+                    CaptureExportErrorCodes.WriteFailed,
                     save.Message),
                 CaptureSnapshotChangedException => (
                     OperationOutcome.Failed,
@@ -370,7 +389,8 @@ namespace XMAT.Operations.Export
             {
                 throw new CaptureExportDestinationException("export.output.is-source");
             }
-            if (!request.ReplaceExisting && File.Exists(output))
+            if (Path.Exists(output) &&
+                (Directory.Exists(output) || !request.ReplaceExisting))
             {
                 throw new CaptureExportDestinationException("export.output.exists");
             }

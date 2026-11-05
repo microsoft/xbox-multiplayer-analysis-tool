@@ -887,8 +887,20 @@ namespace XMAT.Operations.Analysis
                 return false;
             }
 
-            public bool TryReadRaw(string name, out object value) =>
-                _values.TryGetValue(name, out value);
+            public bool TryReadRaw(string name, out object value)
+            {
+                if (!_values.TryGetValue(name, out value))
+                {
+                    return false;
+                }
+                if (name is
+                    WebServiceCaptureMethod.FieldKey_RequestBody or
+                    WebServiceCaptureMethod.FieldKey_ResponseBody)
+                {
+                    value = EncodeBody(value as byte[]);
+                }
+                return true;
+            }
 
             // The session's fields as XMAT stores them, so SAZ and capture-file inputs read the same way. The process
             // fields use the shared projection of the capture files.

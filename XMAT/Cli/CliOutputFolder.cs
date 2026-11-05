@@ -68,11 +68,6 @@ namespace XMAT.Cli
         internal static CliOutputFolder Reserve(string target, string runId)
         {
             string stagingPath = Path.Combine(Path.GetDirectoryName(target), StagingPrefix + runId);
-            if (Directory.Exists(stagingPath) || File.Exists(stagingPath))
-            {
-                throw new IOException("The staging folder already exists.");
-            }
-
             PrivateFolder.Create(stagingPath);
             return new CliOutputFolder(target, stagingPath);
         }

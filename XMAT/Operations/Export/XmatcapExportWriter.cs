@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using Microsoft.Data.Sqlite;
+using SQLitePCL;
 using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
@@ -66,7 +67,15 @@ namespace XMAT.Operations.Export
                     }
                 }
             }
-            catch (Exception exception) when (IsWriteFailure(exception))
+            catch (SqliteException exception) when (exception.SqliteErrorCode == raw.SQLITE_TOOBIG)
+            {
+                Dispose();
+                throw new CaptureExportException(
+                    CaptureExportErrorCodes.InputLimit,
+                    OperationOutcome.InvalidInput,
+                    exception);
+            }
+            catch (Exception exception) when (IsStorageFailure(exception))
             {
                 Dispose();
                 throw new CaptureExportException(
@@ -100,7 +109,14 @@ namespace XMAT.Operations.Export
                 }
                 _rowsWritten++;
             }
-            catch (Exception exception) when (IsWriteFailure(exception))
+            catch (SqliteException exception) when (exception.SqliteErrorCode == raw.SQLITE_TOOBIG)
+            {
+                throw new CaptureExportException(
+                    CaptureExportErrorCodes.InputLimit,
+                    OperationOutcome.InvalidInput,
+                    exception);
+            }
+            catch (Exception exception) when (IsStorageFailure(exception))
             {
                 throw new CaptureExportException(
                     CaptureExportErrorCodes.WriteFailed,
@@ -145,7 +161,14 @@ namespace XMAT.Operations.Export
                 _completed = true;
                 return new ExportWriteSummary(_rowsWritten, null);
             }
-            catch (Exception exception) when (IsWriteFailure(exception))
+            catch (SqliteException exception) when (exception.SqliteErrorCode == raw.SQLITE_TOOBIG)
+            {
+                throw new CaptureExportException(
+                    CaptureExportErrorCodes.InputLimit,
+                    OperationOutcome.InvalidInput,
+                    exception);
+            }
+            catch (Exception exception) when (IsStorageFailure(exception))
             {
                 throw new CaptureExportException(
                     CaptureExportErrorCodes.WriteFailed,
@@ -219,7 +242,21 @@ namespace XMAT.Operations.Export
 
         private static string Quote(string identifier) => $"\"{identifier.Replace("\"", "\"\"")}\"";
 
-        private static bool IsWriteFailure(Exception exception) =>
-            exception is SqliteException or IOException or UnauthorizedAccessException;
+        private static bool IsStorageFailure(Exception exception)
+        {
+            if (exception is IOException or UnauthorizedAccessException)
+            {
+                return true;
+            }
+            return exception is SqliteException sqlite &&
+                sqlite.SqliteErrorCode is
+                    raw.SQLITE_IOERR or
+                    raw.SQLITE_FULL or
+                    raw.SQLITE_CANTOPEN or
+                    raw.SQLITE_READONLY or
+                    raw.SQLITE_PERM or
+                    raw.SQLITE_BUSY or
+                    raw.SQLITE_LOCKED;
+        }
     }
 }

@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Immutable;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -67,8 +66,7 @@ namespace XMAT
         internal static CaptureExportWorkflow For(ICaptureExportDialogService dialogs) =>
             new(
                 dialogs,
-                tab => ((WebServiceDeviceCaptureController)tab.CaptureController).CreateExportSnapshot(
-                    "d1", AnalysisLimits.Default),
+                tab => ((WebServiceDeviceCaptureController)tab.CaptureController).CreateExportSnapshot("d1"),
                 new ExportCaptureSessionsOperation());
 
         internal async Task RunAsync(
@@ -106,7 +104,8 @@ namespace XMAT
                 }
 
                 CaptureExportDestination destination = await _dialogs.ChooseDestinationAsync(sanitizedOnly);
-                while (destination != null && !HasFormatExtension(destination))
+                while (destination != null &&
+                    !CaptureExportFormats.HasExpectedExtension(destination.Format, destination.Path))
                 {
                     await ShowFailureAsync(OperationOutcome.InvalidInput, CaptureExportErrorCodes.FormatMismatch);
                     destination = await _dialogs.ChooseDestinationAsync(sanitizedOnly);
@@ -180,13 +179,6 @@ namespace XMAT
                     null,
                     false),
                 sanitizedOnly);
-
-        // A file is named for its format: .xmatcap for a capture, .saz for a Fiddler archive, sanitized or not.
-        private static bool HasFormatExtension(CaptureExportDestination destination) =>
-            string.Equals(
-                Path.GetExtension(destination.Path),
-                destination.Format == CaptureExportFormat.Xmatcap ? ".xmatcap" : ".saz",
-                StringComparison.OrdinalIgnoreCase);
 
         // A failure that the GUI finds itself; like every failure, the user sees it described by its code.
         private Task ShowFailureAsync(OperationOutcome outcome, string code) =>

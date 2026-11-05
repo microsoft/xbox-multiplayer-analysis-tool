@@ -9,7 +9,6 @@ using System.Net;
 using System.Reflection;
 using System.Text.Json;
 using XMAT.DataAbstractionLayer;
-using XMAT.Operations.Analysis;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
@@ -1221,7 +1220,7 @@ namespace XMAT.Tests
             var loadedRecord = Assert.Single(controller.GetCaptureRecords());
             dataset.RejectFilteredReads = true;
             using ICaptureExportSnapshot snapshot =
-                controller.CreateExportSnapshot("d1", AnalysisLimits.Default);
+                controller.CreateExportSnapshot("d1");
 
             Assert.Same(record, loadedRecord);
             Assert.Equal(2, dataset.FilteredReadCount);
