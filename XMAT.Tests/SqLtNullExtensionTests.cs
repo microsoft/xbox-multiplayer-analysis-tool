@@ -160,6 +160,34 @@ namespace XMAT.Tests
             Assert.Null(record.Str("Mismatch"));
         }
 
+        [Fact]
+        public void CoreFields_PreserveSqliteCoercionForMismatchedStorage()
+        {
+            using SqliteConnection connection = OpenMemoryDatabase();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "SELECT 1, '12abc', 1.5, 42, X'74657874'";
+            using SqliteDataReader reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            var fields = new Dictionary<string, IFieldDefinition>
+            {
+                ["TextToInteger"] =
+                    FieldDefinition.CreateFromSchema("TextToInteger", typeof(long), 1),
+                ["RealToInteger"] =
+                    FieldDefinition.CreateFromSchema("RealToInteger", typeof(long), 2),
+                ["IntegerToText"] =
+                    FieldDefinition.CreateFromSchema("IntegerToText", typeof(string), 3),
+                ["BlobToText"] =
+                    FieldDefinition.CreateFromSchema("BlobToText", typeof(string), 4),
+            };
+
+            var record = new SqLtDataRecord(reader, fields);
+
+            Assert.Equal(12L, record.Int("TextToInteger"));
+            Assert.Equal(1L, record.Int("RealToInteger"));
+            Assert.Equal("42", record.Str("IntegerToText"));
+            Assert.Equal("text", record.Str("BlobToText"));
+        }
+
         private static SqliteConnection OpenMemoryDatabase()
         {
             var connection =

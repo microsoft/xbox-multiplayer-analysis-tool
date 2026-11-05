@@ -106,7 +106,7 @@ namespace XMAT.DataAbstractionLayer
                 _rawValues[fieldDef.Key] = rawValue;
                 _fieldValues[fieldDef.Value.ColumnIndex] = untypedColumns?.Contains(fieldDef.Key) == true
                     ? rawValue as string
-                    : FieldValue.GetFieldValue(rawValue, fieldDef.Value);
+                    : FieldValue.GetFieldValue(recordReader, rawValue, fieldDef.Value);
             }
         }
 
