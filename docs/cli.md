@@ -21,10 +21,15 @@ xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--paralle
             [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods]
             [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N]
             [--max-records N]
-xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]...
-             [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS]
-             [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods]
+xmat compose --url URL | --request-file FILE --out DIR [--sequence START-END] [--method METHOD]
+             [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body]
+             [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
+             [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change]
              [--allow-connect-to]
+xmat save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] [--method METHOD]
+                  [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE]
+                  [--empty-body] [--unconditional] [--http-version auto|1.1|2] [--include-sensitive]
+                  [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]
 xmat doctor --for analyze
 xmat help [COMMAND]
 xmat --version
@@ -148,8 +153,9 @@ xmat --version
   the HTTP stack cannot send, fails with `replay.request.invalid`. Unless you allow it, xmat
   refuses to send a method other than GET, HEAD and OPTIONS, which can change data on the server
   (`replay.policy.unsafe-method`; `--allow-unsafe-methods` allows it), or captured headers, such as credentials, to
-  another origin than the one they were captured for (`replay.policy.origin-change`; `--allow-origin-change`, which
-  only `replay` takes, allows the origins that `--url` or `--origin` name). Redirects are returned, not followed,
+  another origin than the one they were captured or saved for (`replay.policy.origin-change`; `--allow-origin-change`
+  allows the origins that `--url` or `--origin` name: `replay` takes it, `compose` only with `--request-file`, and
+  `save-request` only with `--include-sensitive`). Redirects are returned, not followed,
   unless `--follow-redirects N` follows up to `N` of them (0 by default, at most 10), and only within the origin that
   was sent to: a 303 continues as GET (a HEAD stays a HEAD) and a 301 or 302 to a POST continues as GET, both without
   the body, as browsers do, while a 307 or 308 keeps the method and the body. A redirect to another origin is never
@@ -228,6 +234,30 @@ xmat --version
   characters, for example 10,000 URLs of up to about 1,600 characters. The requests are planned in ascending order,
   round after round; with `--parallel` they can reach the server in another order. Each send's `sequence` in the
   JSON output is its number.
+- `xmat save-request` saves requests as request files (`xmat-request/1`) and sends nothing: the requests that
+  `INPUT --request SPEC` selects, the request of a `--request-file`, or a new request with `--url`, after the same edits
+  as `replay`. It publishes `DIR/summary.json` (schema `xmat-save-request/1`) and `DIR/requests/NNNNN.json`, one file
+  per request, at most 10,000 of them (`replay.plan.too-large`, exit code 3, checked before any request is built).
+- A request file is a template by default. It keeps the HTTP version, the method when it is `GET`, `HEAD`, `OPTIONS`,
+  `POST`, `PUT`, `PATCH`, `DELETE` or `TRACE`, and an empty header block or body only when there is none. It leaves out
+  the URL, every header name and value, any other method and the body, and its `omitted` member lists what it left out.
+  `--include-sensitive` saves everything instead, captured credentials and cookies included: such a file is as private
+  as the capture. A request whose origin an edit changed is then saved only with `--allow-origin-change`
+  (`replay.policy.origin-change`, exit code 3), since its file's URL becomes the origin that a later change needs consent
+  for. The JSON output and `summary.json` give, for each file, its profile, what it leaves out, and how many header and
+  query parameter names the sanitized export would treat as secret: never a name or a value. A body is never inspected,
+  only counted (`bodyBytesNotInspected`).
+- `xmat compose --request-file FILE` sends a request file's request. A request file is data: it never grants consent
+  and carries no transport option but its HTTP version, which `--http-version` overrides. xmat reads it as untrusted: at
+  most 96 MiB, a body of at most 64 MiB, at most 256 headers of at most 256 KiB together, and nothing but the members of
+  `xmat-request/1` (`replay.request-file.invalid`, `.unsupported`, `.not-found`, `.too-large` or `.unreadable`, exit code
+  3). With a file, `--url`, `--method`, `--header`, `--remove-header` and `--body-file` edit its request, and these
+  supply what the file left out: `--url` the URL, `--method` the method, `--clear-headers` an empty header block, which
+  `--header` and `--remove-header` then edit, and `--body-file` or `--empty-body` the body. Adding a header never
+  supplies a header block that the file left out. A request that still leaves anything out is never sent
+  (`replay.request.incomplete`, exit code 3). The file's URL is the request's origin: changing it needs
+  `--allow-origin-change`, which compose takes only with `--request-file`. The JSON output's `input` gives only the
+  file's kind (`request-file`) and SHA-256.
 - `xmat doctor --for analyze` checks what `xmat analyze` needs and writes nothing: the analysis rules (`data.rules`),
   the API map (`data.apimap`) and the English strings (`localization.en-us`) installed next to `xmat.exe`, and a 64-bit
   process (`runtime.64-bit`). A missing or damaged file fails its check with a code such as `analysis.assets.rules` and
@@ -385,8 +415,9 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
-| Compose and send a new request (`request.compose`) | `xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-connect-to]` | Supported (S9) |
+| Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to]` | Supported (S9) |
 | Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
+| Save requests as request files, without sending them (`request.save`) | `xmat save-request INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--unconditional] [--http-version auto\|1.1\|2] [--include-sensitive] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Report navigation and analysis tabs (`view.analysis-navigation`) | (none) | GUI only. Presentation: moves between report views and tabs |

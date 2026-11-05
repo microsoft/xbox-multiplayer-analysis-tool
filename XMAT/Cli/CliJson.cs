@@ -25,6 +25,9 @@ namespace XMAT.Cli
         // summary.json of a published replay or compose run.
         internal const string ReplaySummarySchema = "xmat-replay/1";
 
+        // summary.json of a published save-request run.
+        internal const string SaveRequestSummarySchema = "xmat-save-request/1";
+
         // The only error of the fallback document (SerializeFallback).
         internal static readonly OperationDiagnostic OutputFailure = new(
             "cli.internal.output",
@@ -59,6 +62,11 @@ namespace XMAT.Cli
                 if (report.Replay != null)
                 {
                     WriteReplay(writer, report.Replay, includeFiles: report.Artifacts.Count != 0);
+                }
+
+                if (report.SaveRequest != null)
+                {
+                    WriteSaveRequest(writer, report.SaveRequest, includeFiles: report.Artifacts.Count != 0);
                 }
 
                 if (report.Doctor != null)
@@ -181,16 +189,96 @@ namespace XMAT.Cli
             writer.WriteEndObject();
         }
 
+        // summary.json of save-request: what each saved request file holds, without its status (a published folder always
+        // succeeded).
+        internal static byte[] SerializeSaveRequestSummary(CliReport report)
+        {
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream, Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("schema", SaveRequestSummarySchema);
+                writer.WriteString("command", report.Command);
+                writer.WriteString("runId", report.RunId);
+                writer.WriteString("version", CliReport.ToolVersion);
+                WriteSaveRequest(writer, report.SaveRequest ?? new CliSaveRequestReport(null, null), includeFiles: true);
+                WriteDiagnostics(writer, "warnings", report.Warnings);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+
+        // Only kinds, hashes, numbers, ordinal ids, profiles, omitted kinds and counts: never a URL, method, header name or
+        // value, or body, which are in the request files.
+        private static void WriteSaveRequest(Utf8JsonWriter writer, CliSaveRequestReport save, bool includeFiles)
+        {
+            if (save.InputKind != null)
+            {
+                writer.WriteStartObject("input");
+                writer.WriteString("kind", save.InputKind);
+                writer.WriteString("sha256", save.InputSha256);
+                writer.WriteEndObject();
+            }
+
+            if (save.Limits != null)
+            {
+                WriteLimits(writer, save.Limits);
+            }
+
+            CliReplay options = save.Options;
+            writer.WriteStartObject("options");
+            writer.WriteBoolean("includeSensitive", options.IncludeSensitive);
+            writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+            writer.WriteBoolean("unconditional", options.Unconditional);
+            writer.WriteString(
+                "httpVersion", options.HttpVersionSet ? ReplayTransportOptions.VersionName(options.HttpVersion) : null);
+            writer.WriteEndObject();
+
+            writer.WriteStartArray("requests");
+            foreach (CliSavedRequest saved in save.Requests)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("id", saved.Id);
+                writer.WriteString("device", saved.DeviceId);
+                if (saved.RequestNumber is long request)
+                {
+                    writer.WriteNumber("request", request);
+                }
+                else
+                {
+                    writer.WriteNull("request");
+                }
+
+                writer.WriteString("profile", saved.Profile);
+                WriteStrings(writer, "omitted", saved.Omitted);
+                writer.WriteStartObject("recognized");
+                writer.WriteNumber("headers", saved.Recognized.HeaderNames.Count);
+                writer.WriteNumber("queryParameters", saved.Recognized.QueryParameterNames.Count);
+                writer.WriteNumber("bodyBytesNotInspected", saved.Recognized.BodyBytesNotInspected);
+                writer.WriteEndObject();
+                writer.WriteString("file", includeFiles ? CliSaveRequestCommand.FileOf(saved.Id) : null);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
         // Only numbers, ordinal ids, outcome names, codes and the artifact paths of each send: never the URL, method,
         // headers or bodies, which are in the request and response files.
         private static void WriteReplay(Utf8JsonWriter writer, CliReplayReport replay, bool includeFiles)
         {
-            if (replay.Limits != null)
+            // A capture file's kind and hash with its limits, or a request file's kind and hash (compose --request-file).
+            if (replay.Limits != null || replay.InputKind == CliReplayCommand.RequestFileInputKind)
             {
                 writer.WriteStartObject("input");
                 writer.WriteString("kind", replay.InputKind);
                 writer.WriteString("sha256", replay.InputSha256);
                 writer.WriteEndObject();
+            }
+
+            if (replay.Limits != null)
+            {
                 WriteLimits(writer, replay.Limits);
             }
 

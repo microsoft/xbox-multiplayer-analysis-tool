@@ -86,9 +86,24 @@ namespace XMAT.Tests.Cli
         [InlineData("compose --url http://a.test/ --out results --verify", "cli.usage.unknown-option")]
         [InlineData("compose --url http://a.test/ --out results --unconditional", "cli.usage.unknown-option")]
         [InlineData("compose --url http://a.test/ --out results --request 1", "cli.usage.unknown-option")]
-        [InlineData("compose --url http://a.test/ --out results --remove-header X", "cli.usage.unknown-option")]
+        [InlineData("compose --url http://a.test/ --out results --remove-header X", "cli.usage.missing-option")]
         [InlineData("compose --url http://a.test/ --out results --origin http://b.test", "cli.usage.unknown-option")]
-        [InlineData("compose --url http://a.test/ --out results --allow-origin-change", "cli.usage.unknown-option")]
+        [InlineData("compose --url http://a.test/ --out results --allow-origin-change", "cli.usage.missing-option")]
+        [InlineData("compose --url http://a.test/ --out results --clear-headers", "cli.usage.missing-option")]
+        [InlineData("compose --url http://a.test/ --out results --empty-body", "cli.usage.missing-option")]
+        [InlineData("compose --request-file r.json --out results --body-file b --empty-body", "cli.usage.conflicting-options")]
+        [InlineData("compose --request-file r.json --out results --include-sensitive", "cli.usage.unknown-option")]
+        [InlineData("save-request --out results", "cli.usage.missing-argument")]
+        [InlineData("save-request a.saz --out results", "cli.usage.missing-option")]
+        [InlineData("save-request a.saz --request 1 --request-file r.json --out results", "cli.usage.conflicting-options")]
+        [InlineData("save-request --request 1 --url http://a.test/ --out results", "cli.usage.missing-argument")]
+        [InlineData("save-request --url http://a.test/ --out results --clear-headers", "cli.usage.missing-option")]
+        [InlineData("save-request --url http://a.test/ --out results --allow-origin-change", "cli.usage.missing-option")]
+        [InlineData("save-request --url http://a.test/ --out results --timeout 5", "cli.usage.unknown-option")]
+        [InlineData("save-request --url http://a.test/ --out results --verify", "cli.usage.unknown-option")]
+        [InlineData("save-request --url http://a.test:#/ --out results", "cli.usage.invalid-value")]
+        [InlineData("save-request --url http://a.test/", "cli.usage.missing-option")]
+        [InlineData("save-request a.saz b.saz --request 1 --out results", "cli.usage.unexpected-argument")]
         [InlineData("replay a.saz --request 1 --out results --parallel 3 --max-response-mib 512", "cli.usage.invalid-value")]
         [InlineData("compose --url http://a.test/ --out results --parallel 16 --max-response-mib 65", "cli.usage.invalid-value")]
         [InlineData("compose --url http://a.test/item/ --out results --sequence 1-3", "cli.usage.invalid-value")]
@@ -227,6 +242,39 @@ namespace XMAT.Tests.Cli
                 new[] { "compose", "--url", "https://a.test/", "--out", "r", "--parallel", "16", "--max-response-mib", "64" }).Succeeded);
         }
 
+        // compose starts from --url or a request file; save-request from a capture, a request file or --url. Only a file's
+        // request takes the completions, and a template's URL may stay a sequence template.
+        [Fact]
+        public void Parse_ReadsRequestFileAndSaveRequestOptions()
+        {
+            CliRequest compose = CliCommandLine.Parse(Split(
+                "compose --request-file r.json --out o --clear-headers --empty-body --remove-header X --allow-origin-change " +
+                "--sequence 1-3")).Request;
+            CliRequest save = CliCommandLine.Parse(Split(
+                "save-request a.saz --request 1-2 --out o --include-sensitive --allow-origin-change --http-version 1.1")).Request;
+            CliRequest fromUrl = CliCommandLine.Parse(Split("save-request --url https://a.test/#?p=# --out o")).Request;
+
+            // A request file holds any valid header line, so save-request takes Unicode values and headers such as Host.
+            CliRequest stored = CliCommandLine.Parse(new[]
+            {
+                "save-request", "--url", "https://a.test/", "--out", "o", "--header", "Host: h.test", "--header", "X-N: caf\u00e9",
+            }).Request;
+            Assert.Equal(
+                new KeyValuePair<string, string>[] { new("Host", "h.test"), new("X-N", "caf\u00e9") }, stored.Replay.Headers);
+
+            Assert.Equal(
+                ("r.json", true, true, true, false),
+                (compose.Replay.RequestFile, compose.Replay.ClearHeaders, compose.Replay.EmptyBody,
+                    compose.Replay.AllowOriginChange, compose.Replay.HttpVersionSet));
+            Assert.Equal(new[] { "X" }, compose.Replay.RemoveHeaders);
+            Assert.Equal(
+                ("a.saz", "1-2", true, true, true),
+                (save.Input, save.Replay.Selection, save.Replay.IncludeSensitive, save.Replay.AllowOriginChange,
+                    save.Replay.HttpVersionSet));
+            Assert.Equal(CliLimits.Default, save.Limits);
+            Assert.Equal(("https://a.test/#?p=#", null, false), (fromUrl.Replay.Url, fromUrl.Limits, fromUrl.Replay.IncludeSensitive));
+        }
+
         // --sequence turns --url into a template; a '#' without it is refused with a pointer to --sequence.
         [Fact]
         public void Parse_ReadsComposeSequences_AndPointsAFragmentAtThem()
@@ -318,7 +366,7 @@ namespace XMAT.Tests.Cli
             CliReport report = CliHelp.Create("run", topic: null);
 
             Assert.Equal(
-                new[] { CliCommands.Analyze, CliCommands.Compose, CliCommands.Doctor, CliCommands.Replay },
+                new[] { CliCommands.Analyze, CliCommands.Compose, CliCommands.Doctor, CliCommands.Replay, CliCommands.SaveRequest },
                 report.Commands.Select(command => command.Name));
             foreach (Capability capability in CapabilityRegistry.All.Where(item => item.Status == CapabilityStatus.Supported))
             {
@@ -326,17 +374,21 @@ namespace XMAT.Tests.Cli
             }
         }
 
-        // The command lines of replay and compose in the capability registry, which help and docs/cli.md show, name
-        // exactly the options and switches that the parser accepts.
+        // The command lines of replay, compose and save-request in the capability registry, which help and docs/cli.md show,
+        // name exactly the options and switches that the parser accepts.
         [Theory]
         [InlineData("request.replay", CliCommands.Replay)]
         [InlineData("request.compose", CliCommands.Compose)]
+        [InlineData("request.save", CliCommands.SaveRequest)]
         public void ReplayCommandLines_NameExactlyTheOptionsThatTheParserAccepts(string capabilityId, string command)
         {
             Capability capability = CapabilityRegistry.All.Single(item => item.Id == capabilityId);
-            IReadOnlySet<string> accepted = command == CliCommands.Replay
-                ? CliCommandLine.ReplayOptionNames
-                : CliCommandLine.ComposeOptionNames;
+            IReadOnlySet<string> accepted = command switch
+            {
+                CliCommands.Replay => CliCommandLine.ReplayOptionNames,
+                CliCommands.Compose => CliCommandLine.ComposeOptionNames,
+                _ => CliCommandLine.SaveRequestOptionNames,
+            };
 
             IEnumerable<string> named = capability.CliRoute
                 .Split(new[] { ' ', '[', ']' }, StringSplitOptions.RemoveEmptyEntries)

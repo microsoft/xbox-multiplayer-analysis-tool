@@ -177,7 +177,70 @@ namespace XMAT.Operations.Replay
             }
         }
 
-        private Prepared Prepare(
+        // The requests of a run, prepared to be saved or exported, never sent: loaded, selected, built and edited as
+        // ExecuteAsync does, at most MaxSends of them, counted before any draft is built, then checked as data
+        // (RequestReplayDraft.ValidateStructure). None of the checks that only sending needs apply, consent included, and
+        // nothing on this path makes a sender. A pending omission is kept, for the caller to save or refuse.
+        internal OperationResult<ReplayExport> PrepareForExport(ReplayRequest request, CancellationToken cancellationToken)
+        {
+            var diagnostics = new List<OperationDiagnostic>();
+            try
+            {
+                if (request?.Source == null)
+                {
+                    throw new ReplayInputException("replay.request.missing", "A replay source is required.");
+                }
+
+                Prepared gathered = Gather(request, ReplayOptions.Default, diagnostics, cancellationToken);
+                if (gathered.Failure != null)
+                {
+                    return OperationResult<ReplayExport>.Failure(
+                        gathered.Failure.Outcome, gathered.Failure.Diagnostics.ToArray());
+                }
+
+                var items = new List<ReplayExportItem>(gathered.Items.Count);
+                foreach (ReplayItem item in gathered.Items)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        item.Draft.ValidateStructure();
+                    }
+                    catch (FormatException ex)
+                    {
+                        throw Invalid(ex);
+                    }
+
+                    items.Add(new ReplayExportItem(item.DeviceId, item.RequestNumber, item.Draft));
+                }
+
+                return OperationResult<ReplayExport>.Success(
+                    new ReplayExport(gathered.InputKind, gathered.InputSha256, items.AsReadOnly()), diagnostics);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return OperationResult<ReplayExport>.Failure(
+                    OperationOutcome.Cancelled,
+                    new OperationDiagnostic("replay.cancelled", OperationDiagnosticSeverity.Info, "Replay was cancelled."));
+            }
+            catch (ReplayInputException ex)
+            {
+                return OperationResult<ReplayExport>.Failure(
+                    OperationOutcome.InvalidInput,
+                    new OperationDiagnostic(ex.Code, OperationDiagnosticSeverity.Error, ex.DiagnosticMessage));
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                return OperationResult<ReplayExport>.Failure(
+                    OperationOutcome.InternalError,
+                    new OperationDiagnostic(
+                        "replay.internal",
+                        OperationDiagnosticSeverity.Error,
+                        "The requests could not be prepared because of an internal failure."));
+            }
+        }
+
+        private Prepared Gather(
             ReplayRequest request,
             ReplayOptions options,
             List<OperationDiagnostic> diagnostics,
@@ -244,6 +307,24 @@ namespace XMAT.Operations.Replay
                 ApplyEdits(items, request.Edits ?? ReplayEdits.None, cancellationToken);
             }
 
+            return new Prepared(items, inputKind, inputSha256, null);
+        }
+
+        // The requests of a run, gathered (Gather), then checked as sending needs them checked: valid, complete, allowed
+        // and reachable as the options say.
+        private Prepared Prepare(
+            ReplayRequest request,
+            ReplayOptions options,
+            List<OperationDiagnostic> diagnostics,
+            CancellationToken cancellationToken)
+        {
+            Prepared prepared = Gather(request, options, diagnostics, cancellationToken);
+            if (prepared.Failure != null)
+            {
+                return prepared;
+            }
+
+            IReadOnlyList<ReplayItem> items = prepared.Items;
             Check(items, options, cancellationToken);
             if (options.Verify)
             {
@@ -263,7 +344,7 @@ namespace XMAT.Operations.Replay
                 }
             }
 
-            return new Prepared(items, inputKind, inputSha256, null);
+            return prepared;
         }
 
         private static void CheckPlanSize(int requests, ReplayOptions options)
@@ -502,19 +583,26 @@ namespace XMAT.Operations.Replay
                 RequestReplayDraft draft = item.Draft;
                 try
                 {
+                    // An edit that supplies a part completes it, as a request file left it out or not; adding or removing a
+                    // header never completes a header block that a file left out: only clearing the block does.
                     if (edits.Method != null)
                     {
-                        draft.Method = edits.Method;
+                        draft.CompleteMethod(edits.Method);
                     }
 
                     if (edits.Url != null)
                     {
-                        draft.Url = edits.Url;
+                        draft.CompleteUrl(edits.Url);
                     }
 
                     if (origin != null)
                     {
                         draft.Url = origin + new Uri(draft.Url, UriKind.Absolute).PathAndQuery;
+                    }
+
+                    if (edits.ClearHeaders)
+                    {
+                        draft.ReplaceHeaders("");
                     }
 
                     foreach (string name in edits.RemoveHeaders ?? Array.Empty<string>())
@@ -535,7 +623,7 @@ namespace XMAT.Operations.Replay
 
                     if (edits.Body != null)
                     {
-                        draft.SetBodyBytes(edits.Body);
+                        draft.CompleteBody(edits.Body);
                     }
                 }
                 catch (Exception ex) when (ex is FormatException or ArgumentException)
@@ -644,6 +732,14 @@ namespace XMAT.Operations.Replay
         // is in the headers, also when Connection nominates it, which building the request drops without sending it.
         private static void Validate(RequestReplayDraft draft)
         {
+            if (draft.Omissions.Any)
+            {
+                throw new ReplayInputException(
+                    RequestFileCodes.RequestIncomplete,
+                    "A request loaded from a request file still has parts that the file left out (its method, URL, headers " +
+                        "or body); supply them before sending. Nothing was sent.");
+            }
+
             try
             {
                 using (draft.CreateRequestToSend())
