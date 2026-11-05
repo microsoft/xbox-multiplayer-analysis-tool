@@ -137,6 +137,38 @@ namespace XMAT.Tests.Operations.Export
         }
 
         [Fact]
+        public async Task Publish_NativeAlreadyExistsAfterTheCommitCheckIsAConflict()
+        {
+            using var directory = new ExportTestDirectory();
+            string destination = directory.PathOf("raced.xmatcap");
+            var moves = 0;
+            var publisher = new CaptureExportPublisher
+            {
+                MoveFile = (source, target, overwrite) =>
+                {
+                    moves++;
+                    File.WriteAllText(target, "racer");
+                    File.Move(source, target, overwrite);
+                },
+            };
+
+            CaptureExportDestinationException failure =
+                await Assert.ThrowsAsync<CaptureExportDestinationException>(
+                    () => publisher.PublishAsync(
+                        destination,
+                        replaceExisting: false,
+                        allowUnprotected: false,
+                        _ => { },
+                        (staged, cancellationToken) =>
+                            File.WriteAllTextAsync(staged, "complete", cancellationToken),
+                        CancellationToken.None));
+
+            Assert.Equal("export.output.exists", failure.Code);
+            Assert.Equal(1, moves);
+            Assert.Equal("racer", File.ReadAllText(destination));
+        }
+
+        [Fact]
         public async Task Publish_RefusesALoadedCaptureAndItsHardLinkAliasBeforeWriting()
         {
             using var directory = new ExportTestDirectory();

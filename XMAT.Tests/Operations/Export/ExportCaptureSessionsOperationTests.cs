@@ -403,6 +403,45 @@ namespace XMAT.Tests.Operations.Export
             Assert.Equal("locked", reader.ReadToEnd());
         }
 
+        [Theory]
+        [InlineData("sharing", nameof(OperationOutcome.Conflict), "export.output.locked")]
+        [InlineData("lock", nameof(OperationOutcome.Conflict), "export.output.locked")]
+        [InlineData("denied", nameof(OperationOutcome.Failed), CaptureExportErrorCodes.WriteFailed)]
+        [InlineData("wrapped-denied", nameof(OperationOutcome.Failed), CaptureExportErrorCodes.WriteFailed)]
+        [InlineData("wrapped-sharing", nameof(OperationOutcome.Conflict), "export.output.locked")]
+        public async Task Execute_ClassifiesLockingSeparatelyFromAccessDenied(
+            string failureKind,
+            string outcomeName,
+            string code)
+        {
+            Exception failure = failureKind switch
+            {
+                "sharing" => new Win32IOException(32),
+                "lock" => new Win32IOException(33),
+                "denied" => new UnauthorizedAccessException("denied"),
+                "wrapped-denied" => new CaptureSaveException(
+                    CaptureSaveFailure.DestinationLocked,
+                    new UnauthorizedAccessException("denied")),
+                _ => new CaptureSaveException(
+                    CaptureSaveFailure.DestinationLocked,
+                    new Win32IOException(32)),
+            };
+            var snapshot = new FakeExportSnapshot([Session(1)], [Row(1)]);
+            var operation = new ExportCaptureSessionsOperation
+            {
+                Publisher = new FailurePublisher(failure),
+                WriterFactory = (_, _, _, _) => new RecordingExportWriter(),
+            };
+
+            OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
+                Request(snapshot, Selection()),
+                OperationContext.None,
+                CancellationToken.None);
+
+            Assert.Equal(Enum.Parse<OperationOutcome>(outcomeName), result.Outcome);
+            Assert.Equal(code, Assert.Single(result.Diagnostics).Code);
+        }
+
         private static ExportCaptureSessionsOperation Operation(
             FakeExportSnapshot snapshot,
             RecordingExportWriter writer) =>
@@ -469,6 +508,27 @@ namespace XMAT.Tests.Operations.Export
                     _committed ? publication : null,
                     null,
                     new IOException("injected cleanup failure"));
+            }
+        }
+
+        private sealed class FailurePublisher(Exception failure) : ICaptureExportPublisher
+        {
+            public Task<PublishedCapture> PublishAsync(
+                string destination,
+                bool replaceExisting,
+                bool allowUnprotected,
+                Action<string> validateDestination,
+                Func<string, CancellationToken, Task> writeStaged,
+                CancellationToken cancellationToken) =>
+                Task.FromException<PublishedCapture>(failure);
+        }
+
+        private sealed class Win32IOException : IOException
+        {
+            internal Win32IOException(int code)
+                : base("injected Win32 failure " + code)
+            {
+                HResult = unchecked((int)0x80070000) | code;
             }
         }
 

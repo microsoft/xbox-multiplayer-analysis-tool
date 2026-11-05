@@ -18,6 +18,7 @@ namespace XMAT.Operations.Export
         private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(100);
 
         internal Func<string, bool> StagingIsPrivate { get; set; } = PrivateFolder.IsPrivate;
+        internal Action<string, string, bool> MoveFile { get; set; } = File.Move;
 
         public async Task<PublishedCapture> PublishAsync(
             string destination,
@@ -164,7 +165,7 @@ namespace XMAT.Operations.Export
             }
         }
 
-        private static async Task<bool> CommitAsync(
+        private async Task<bool> CommitAsync(
             string staged,
             string destination,
             bool replaceExisting,
@@ -183,7 +184,7 @@ namespace XMAT.Operations.Export
                     {
                         throw new CaptureExportDestinationException("export.output.exists");
                     }
-                    File.Move(staged, destination, replaceExisting);
+                    MoveFile(staged, destination, replaceExisting);
                     return exists;
                 }
                 catch (Exception exception) when (IsLocking(exception) && attempt < FileSystemAttempts)
