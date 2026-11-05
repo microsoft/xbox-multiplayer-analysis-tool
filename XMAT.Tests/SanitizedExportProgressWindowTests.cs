@@ -39,7 +39,7 @@ namespace XMAT.Tests
                 };
                 try
                 {
-                    var progress = (IProgress<OperationProgress>)(object)dialog;
+                    IProgress<OperationProgress> progress = dialog;
                     progress.Report(new OperationProgress(ExportCaptureSessionsOperation.ReadPhase, 0.5));
                     progress.Report(new OperationProgress(ExportCaptureSessionsOperation.PublishPhase, 0));
                     dialog.Show();

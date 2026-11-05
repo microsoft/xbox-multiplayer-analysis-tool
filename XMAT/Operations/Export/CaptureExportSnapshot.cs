@@ -19,6 +19,13 @@ namespace XMAT.Operations.Export
 {
     internal sealed class CaptureExportSnapshot : ICaptureExportSnapshot
     {
+        internal static IReadOnlyList<SqLtSchemaColumn> StandardDeviceFields { get; } =
+        [
+            new("DeviceType", SqLtDeclaredType.Integer),
+            new("DeviceName", SqLtDeclaredType.Text),
+            new("CaptureType", SqLtDeclaredType.Integer),
+        ];
+
         private readonly Func<IReadOnlyList<CaptureRowKey>, CancellationToken, IReadOnlyList<RawExportRow>> _readChunk;
         private readonly Action<string> _validateDestination;
         private readonly Action _dispose;
@@ -74,9 +81,7 @@ namespace XMAT.Operations.Export
             _validateDestination(path);
         }
 
-        internal static CaptureExportSnapshot FromLoadedInput(
-            LoadedInput input,
-            string selectedDeviceId = null)
+        internal static CaptureExportSnapshot FromLoadedInput(LoadedInput input)
         {
             ArgumentNullException.ThrowIfNull(input);
             IReadOnlyList<SqLtSchemaColumn> captureFields = input.CaptureFields ??
@@ -85,13 +90,7 @@ namespace XMAT.Operations.Export
                     field.ValueType == typeof(long)
                         ? SqLtDeclaredType.Integer
                         : SqLtDeclaredType.Text)).ToList();
-            IReadOnlyList<SqLtSchemaColumn> deviceFields = input.DeviceFields ??
-                new[]
-                {
-                    new SqLtSchemaColumn("DeviceType", SqLtDeclaredType.Integer),
-                    new SqLtSchemaColumn("DeviceName", SqLtDeclaredType.Text),
-                    new SqLtSchemaColumn("CaptureType", SqLtDeclaredType.Integer),
-                };
+            IReadOnlyList<SqLtSchemaColumn> deviceFields = input.DeviceFields ?? StandardDeviceFields;
             var sourceId = Guid.NewGuid();
             var sessions = new List<CaptureExportSession>();
             var rows = new Dictionary<CaptureRowKey, LoadedExportRow>();
@@ -105,9 +104,7 @@ namespace XMAT.Operations.Export
             {
                 LoadedDevice device = input.Devices[deviceIndex];
                 string deviceId = $"d{deviceIndex + 1}";
-                if ((string.IsNullOrEmpty(selectedDeviceId) ||
-                    string.Equals(selectedDeviceId, deviceId, StringComparison.Ordinal)) &&
-                    descriptorByName.TryGetValue(device.Name, out IDataRecord descriptor))
+                if (descriptorByName.TryGetValue(device.Name, out IDataRecord descriptor))
                 {
                     devices.Add(
                         deviceId,
@@ -158,23 +155,7 @@ namespace XMAT.Operations.Export
             }
 
             void ValidateDestination(string destination)
-            {
-                string normalized = Path.GetFullPath(destination);
-                if (!string.IsNullOrEmpty(input.InputPath) &&
-                    string.Equals(
-                        normalized,
-                        Path.GetFullPath(input.InputPath),
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new CaptureExportDestinationException("export.output.is-source");
-                }
-                if (input.InputIdentity.HasValue &&
-                    File.Exists(normalized) &&
-                    SqLtFileIdentity.FromPath(normalized) == input.InputIdentity.Value)
-                {
-                    throw new CaptureExportDestinationException("export.output.is-source");
-                }
-            }
+                => RejectSourceDestination(destination, input.InputPath, input.InputIdentity);
 
             return new CaptureExportSnapshot(
                 captureFields,
@@ -201,6 +182,22 @@ namespace XMAT.Operations.Export
         private sealed record LoadedExportRow(
             IDataRecord Record,
             ClientProcessInfo Process);
+
+        internal static void RejectSourceDestination(
+            string destination,
+            string inputPath,
+            SqLtFileIdentity? inputIdentity)
+        {
+            string normalized = Path.GetFullPath(destination);
+            if ((!string.IsNullOrEmpty(inputPath) &&
+                    string.Equals(normalized, Path.GetFullPath(inputPath), StringComparison.OrdinalIgnoreCase)) ||
+                (inputIdentity.HasValue &&
+                    File.Exists(normalized) &&
+                    SqLtFileIdentity.FromPath(normalized) == inputIdentity.Value))
+            {
+                throw new CaptureExportDestinationException("export.output.is-source");
+            }
+        }
     }
 
     internal static class CaptureRawValues

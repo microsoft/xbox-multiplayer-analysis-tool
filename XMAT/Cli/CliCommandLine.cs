@@ -412,7 +412,6 @@ namespace XMAT.Cli
         private static ImmutableArray<string>? Given(CliArguments arguments, string option) =>
             arguments.RepeatedOptions.TryGetValue(option, out List<string> values) ? values.ToImmutableArray() : null;
 
-        // The input limits of analyze and export, with the usage error of an invalid one.
         private static CliLimits ReadLimits(CliArguments arguments, string command, out CliParseResult error)
         {
             CliLimits limits = CliLimits.Read(arguments.Options, out CliLimitOption invalid);

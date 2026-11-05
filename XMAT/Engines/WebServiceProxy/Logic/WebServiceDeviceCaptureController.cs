@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -96,7 +95,6 @@ namespace XMAT.WebServiceCapture
                     return;
                 }
 
-                _captureWasStopped = !value && _isRunning;
                 _isRunning = value;
                 RaisePropertyChange();
                 RaisePropertyChange(nameof(CaptureStatusText));
@@ -216,27 +214,17 @@ namespace XMAT.WebServiceCapture
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(ordinalDeviceId);
             return ProxyConnections
-                .Select(
-                    model =>
-                    {
-                        if (model.RowKey.SourceId == Guid.Empty)
-                        {
-                            CaptureRowKey key = new CaptureRowKey(
-                                _sourceId,
-                                -1,
-                                model.RecordRowId,
-                                checked(++_loadedIncarnation));
-                            ProxyConnections.AssignRowKey(model, key);
-                        }
-                        return new CaptureSessionRef(model.RowKey, ordinalDeviceId, model.ClientProcess);
-                    }).ToList();
+                .Select(model => new CaptureSessionRef(
+                    EnsureRowKey(model),
+                    ordinalDeviceId,
+                    model.ClientProcess))
+                .ToList();
         }
 
         internal ICaptureExportSnapshot CreateExportSnapshot(string ordinalDeviceId, AnalysisLimits limits)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(ordinalDeviceId);
             ArgumentNullException.ThrowIfNull(limits);
-            CaptureInputReader.ValidateLimits(limits);
             bool ownsDataset = _captureDataSource == CaptureDataSource.ActiveTable;
             IDataset dataset = _captureDataSource == CaptureDataSource.LoadedDataset
                 ? _loadedCaptureDataset
@@ -245,9 +233,8 @@ namespace XMAT.WebServiceCapture
             {
                 throw new InvalidOperationException("The capture has no data source.");
             }
-            IReadOnlyList<SqLtSchemaColumn> captureFields = dataset is IRawCaptureDataset rawDataset
-                ? rawDataset.Columns
-                : dataset.FieldDefs.Select(FieldColumn).ToList();
+            IReadOnlyList<SqLtSchemaColumn> captureFields =
+                ((IRawCaptureDataset)dataset).Columns;
             SqLtFileIdentity? inputIdentity =
                 LoadedCaptureDatabaseRegistry.DatabaseFor(this)?.Identity;
             IVersionedCaptureTable versioned = _captureDataSource == CaptureDataSource.ActiveTable
@@ -275,16 +262,7 @@ namespace XMAT.WebServiceCapture
                         .ToDictionary(record => (long)record.RowId);
                     foreach (ProxyConnectionModel model in ProxyConnections)
                     {
-                        if (model.RowKey.SourceId == Guid.Empty)
-                        {
-                            ProxyConnections.AssignRowKey(
-                                model,
-                                new CaptureRowKey(
-                                    _sourceId,
-                                    -1,
-                                    model.RecordRowId,
-                                    checked(++_loadedIncarnation)));
-                        }
+                        CaptureRowKey key = EnsureRowKey(model);
                         IDataRecord record = null;
                         if (records != null &&
                             !records.TryGetValue(model.RecordRowId, out record))
@@ -302,7 +280,7 @@ namespace XMAT.WebServiceCapture
                             : !string.IsNullOrEmpty(
                                 record.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp));
                         var session = new CaptureExportSession(
-                            model.RowKey,
+                            key,
                             ordinalDeviceId,
                             model.Host ?? string.Empty,
                             model.Path ?? string.Empty,
@@ -314,7 +292,7 @@ namespace XMAT.WebServiceCapture
                             version);
                         sessions.Add(session);
                         frozen.Add(
-                            model.RowKey,
+                            key,
                             new FrozenExportRow(model.RecordRowId, version, process, model));
                     }
                 }
@@ -324,12 +302,8 @@ namespace XMAT.WebServiceCapture
                 (freezeDataset as IDisposable)?.Dispose();
             }
 
-            var deviceFields = new[]
-            {
-                new SqLtSchemaColumn("DeviceType", SqLtDeclaredType.Integer),
-                new SqLtSchemaColumn("DeviceName", SqLtDeclaredType.Text),
-                new SqLtSchemaColumn("CaptureType", SqLtDeclaredType.Integer),
-            };
+            IReadOnlyList<SqLtSchemaColumn> deviceFields =
+                CaptureExportSnapshot.StandardDeviceFields;
             IReadOnlyDictionary<string, RawExportRow> devices = new Dictionary<string, RawExportRow>
             {
                 [ordinalDeviceId] = new RawExportRow(
@@ -408,20 +382,15 @@ namespace XMAT.WebServiceCapture
                 deviceFields,
                 devices,
                 sessions.AsReadOnly(),
-                _captureDataSource == CaptureDataSource.ActiveTable && !_readOnly && !_captureWasStopped,
+                IsRunning,
                 "records",
                 inputIdentity,
                 null,
                 ReadRows,
-                destination =>
-                {
-                    if (inputIdentity.HasValue &&
-                        File.Exists(destination) &&
-                        SqLtFileIdentity.FromPath(destination) == inputIdentity.Value)
-                    {
-                        throw new CaptureExportDestinationException("export.output.is-source");
-                    }
-                },
+                destination => CaptureExportSnapshot.RejectSourceDestination(
+                    destination,
+                    null,
+                    inputIdentity),
                 () =>
                 {
                     if (ownsDataset)
@@ -431,21 +400,26 @@ namespace XMAT.WebServiceCapture
                 });
         }
 
-        private static SqLtSchemaColumn FieldColumn(IFieldDefinition field) =>
-            new(
-                field.Name,
-                field.ValueType == FieldValueType.Integer
-                    ? SqLtDeclaredType.Integer
-                    : SqLtDeclaredType.Text);
+        private CaptureRowKey EnsureRowKey(ProxyConnectionModel model)
+        {
+            if (model.RowKey.SourceId == Guid.Empty)
+            {
+                ProxyConnections.AssignRowKey(
+                    model,
+                    new CaptureRowKey(
+                        _sourceId,
+                        -1,
+                        model.RecordRowId,
+                        checked(++_loadedIncarnation)));
+            }
+            return model.RowKey;
+        }
 
         private sealed record FrozenExportRow(
             long RowId,
             long PayloadVersion,
             ClientProcessInfo Process,
             ProxyConnectionModel Model);
-
-        internal bool IsCurrent(CaptureRowKey key) => key.SourceId != Guid.Empty &&
-            (_captureRows.IsCurrent(key) || ProxyConnections.ByKey(key) != null);
 
         private const int LoadedCapturesPageBreakSize = 100;
         private const int UiUpdateBatchSize = 50;
@@ -2442,7 +2416,6 @@ namespace XMAT.WebServiceCapture
 
         private ManualResetEvent _importResetEvent = new ManualResetEvent(true);
         private CancellationTokenSource _fiddlerAsyncImportCancelTokenSource;
-        private bool _captureWasStopped;
         private bool _isRunning;
         private ControllerParameters _parameters;
 

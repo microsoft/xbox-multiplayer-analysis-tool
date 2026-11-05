@@ -35,8 +35,7 @@ namespace XMAT.Operations.Export
                             path,
                             snapshot.CaptureFields,
                             snapshot.DeviceFields,
-                            snapshot.DeviceDescriptors,
-                            includeOnlyCapturedDevices: true),
+                            snapshot.DeviceDescriptors),
                         CaptureExportFormat.Saz => FiddlerSazHandler.CreateExportWriter(
                             path,
                             sanitized: false,
@@ -114,8 +113,7 @@ namespace XMAT.Operations.Export
                     try
                     {
                         snapshot = CaptureExportSnapshot.FromLoadedInput(
-                            loaded,
-                            request.DeviceId);
+                            loaded);
                         ownsSnapshot = true;
                     }
                     catch
@@ -130,7 +128,7 @@ namespace XMAT.Operations.Export
                     InputSha256 = snapshot.InputSha256,
                 };
                 context.Progress.Report(new OperationProgress(SelectPhase, 0));
-                OperationResult<CaptureSessionSelection> selection = CaptureSessionSelector.Select(
+                OperationResult<CaptureSessionSelection> selection = CaptureSessionSelector.SelectValidated(
                     snapshot.Sessions,
                     validated.Value,
                     request.DeviceId,
@@ -260,72 +258,6 @@ namespace XMAT.Operations.Export
                     "export.no-eligible-rows",
                     "No selected capture rows remained available.");
             }
-            catch (OperationCanceledException)
-            {
-                result = FailedResult(result, selected, unavailable, unavailableByDevice);
-                return Failure(
-                    OperationOutcome.Cancelled,
-                    result,
-                    diagnostics,
-                    "export.cancelled",
-                    "Export was cancelled.",
-                    OperationDiagnosticSeverity.Info);
-            }
-            catch (CaptureInputException exception)
-            {
-                string code = exception.Code is "analysis.input.too-large" or "analysis.input.limit"
-                    ? CaptureExportErrorCodes.InputLimit
-                    : exception.Code;
-                string message = code == CaptureExportErrorCodes.InputLimit
-                    ? "The capture exceeds an export input limit."
-                    : exception.DiagnosticMessage;
-                return Failure(
-                    OperationOutcome.InvalidInput,
-                    result,
-                    diagnostics,
-                    code,
-                    message);
-            }
-            catch (CaptureExportException exception)
-            {
-                result = FailedResult(result, selected, unavailable, unavailableByDevice);
-                return Failure(
-                    exception.Outcome,
-                    result,
-                    diagnostics,
-                    exception.Code,
-                    exception.Message);
-            }
-            catch (CaptureExportDestinationException exception)
-            {
-                result = FailedResult(result, selected, unavailable, unavailableByDevice);
-                return Failure(
-                    OperationOutcome.Conflict,
-                    result,
-                    diagnostics,
-                    exception.Code,
-                    exception.Message);
-            }
-            catch (CaptureSaveException exception)
-            {
-                result = FailedResult(result, selected, unavailable, unavailableByDevice);
-                return Failure(
-                    OperationOutcome.Conflict,
-                    result,
-                    diagnostics,
-                    "export.output.open-capture",
-                    exception.Message);
-            }
-            catch (CaptureSnapshotChangedException)
-            {
-                result = FailedResult(result, selected, unavailable, unavailableByDevice);
-                return Failure(
-                    OperationOutcome.Failed,
-                    result,
-                    diagnostics,
-                    "export.snapshot.changed",
-                    "A selected capture row changed during export.");
-            }
             catch (CaptureExportCleanupException exception)
             {
                 AddUnavailableDiagnostic(diagnostics, unavailable);
@@ -357,35 +289,19 @@ namespace XMAT.Operations.Export
                     "export.cleanup.failed",
                     exception.Message);
             }
-            catch (IOException)
-            {
-                result = FailedResult(result, selected, unavailable, unavailableByDevice);
-                return Failure(
-                    OperationOutcome.Failed,
-                    result,
-                    diagnostics,
-                    CaptureExportErrorCodes.WriteFailed,
-                    "The export could not be written.");
-            }
-            catch (UnauthorizedAccessException)
-            {
-                result = FailedResult(result, selected, unavailable, unavailableByDevice);
-                return Failure(
-                    OperationOutcome.Failed,
-                    result,
-                    diagnostics,
-                    CaptureExportErrorCodes.WriteFailed,
-                    "The export could not be written.");
-            }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
                 result = FailedResult(result, selected, unavailable, unavailableByDevice);
+                var failure = ClassifyFailure(exception);
                 return Failure(
-                    OperationOutcome.InternalError,
+                    failure.Outcome,
                     result,
                     diagnostics,
-                    "export.internal",
-                    "Export could not be completed because of an internal failure.");
+                    failure.Code,
+                    failure.Message,
+                    failure.Outcome == OperationOutcome.Cancelled
+                        ? OperationDiagnosticSeverity.Info
+                        : OperationDiagnosticSeverity.Error);
             }
             finally
             {
@@ -394,6 +310,52 @@ namespace XMAT.Operations.Export
                     snapshot?.Dispose();
                 }
             }
+        }
+
+        private static (
+            OperationOutcome Outcome,
+            string Code,
+            string Message) ClassifyFailure(Exception exception)
+        {
+            if (exception is CaptureInputException input)
+            {
+                bool limit = input.Code is "analysis.input.too-large" or "analysis.input.limit";
+                return (
+                    OperationOutcome.InvalidInput,
+                    limit ? CaptureExportErrorCodes.InputLimit : input.Code,
+                    limit ? "The capture exceeds an export input limit." : input.DiagnosticMessage);
+            }
+            return exception switch
+            {
+                OperationCanceledException => (
+                    OperationOutcome.Cancelled,
+                    "export.cancelled",
+                    "Export was cancelled."),
+                CaptureExportException export => (
+                    export.Outcome,
+                    export.Code,
+                    export.Message),
+                CaptureExportDestinationException destination => (
+                    OperationOutcome.Conflict,
+                    destination.Code,
+                    destination.Message),
+                CaptureSaveException save => (
+                    OperationOutcome.Conflict,
+                    "export.output.open-capture",
+                    save.Message),
+                CaptureSnapshotChangedException => (
+                    OperationOutcome.Failed,
+                    "export.snapshot.changed",
+                    "A selected capture row changed during export."),
+                IOException or UnauthorizedAccessException => (
+                    OperationOutcome.Failed,
+                    CaptureExportErrorCodes.WriteFailed,
+                    "The export could not be written."),
+                _ => (
+                    OperationOutcome.InternalError,
+                    "export.internal",
+                    "Export could not be completed because of an internal failure."),
+            };
         }
 
         private static bool FormatMatches(CaptureExportFormat format, string path)

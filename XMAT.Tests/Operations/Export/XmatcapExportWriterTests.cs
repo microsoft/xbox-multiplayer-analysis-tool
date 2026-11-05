@@ -59,9 +59,6 @@ namespace XMAT.Tests.Operations.Export
                 Assert.True(device.Read());
                 Assert.Equal(77L, device.GetInt64(0));
                 Assert.Equal("Imported PC", device.GetString(1));
-                Assert.True(device.Read());
-                Assert.Equal(88L, device.GetInt64(0));
-                Assert.Equal("Second PC", device.GetString(1));
                 Assert.False(device.Read());
             }
 

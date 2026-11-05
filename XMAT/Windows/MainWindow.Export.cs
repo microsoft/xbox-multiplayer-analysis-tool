@@ -23,29 +23,21 @@ namespace XMAT
     {
         private const string SanitizedFilter = "Sanitized Fiddler SAZ files (*.saz)|*.saz";
 
-        // A running capture can be exported: its sessions without a complete response are skipped and counted.
         private void Export_CanExecute(object sender, CanExecuteRoutedEventArgs e) =>
             e.CanExecute = CaptureAppModel.AppModel.CanExportSelectedCapture;
 
-        private void ExportSanitized_CanExecute(object sender, CanExecuteRoutedEventArgs e) =>
-            e.CanExecute = CaptureAppModel.AppModel.CanExportSelectedCapture;
-
         private async void Export_Executed(object sender, ExecutedRoutedEventArgs e) =>
-            await CaptureExportWorkflow.For(this).RunForSelectedTabAsync(CaptureAppModel.AppModel, sanitizedOnly: false);
+            await CaptureExportWorkflow.For(this).RunForSelectedTabAsync(
+                CaptureAppModel.AppModel, sanitizedOnly: e.Command == AppCommands.ExportSanitized);
 
-        private async void ExportSanitized_Executed(object sender, ExecutedRoutedEventArgs e) =>
-            await CaptureExportWorkflow.For(this).RunForSelectedTabAsync(CaptureAppModel.AppModel, sanitizedOnly: true);
-
-        Task ICaptureExportDialogService.ShowBusyAsync(object owner) =>
+        Task ICaptureExportDialogService.ShowBusyAsync() =>
             ShowExportMessage(Localization.GetLocalizedString("PROXY_OPERATION_BUSY"), MessageBoxImage.Information);
 
-        Task ICaptureExportDialogService.ShowNothingToExportAsync(
-            object owner, CaptureExportScope scope, CaptureExportCounts counts) =>
+        Task ICaptureExportDialogService.ShowNothingToExportAsync(CaptureExportCounts counts) =>
             ShowExportMessage(
                 Localization.GetLocalizedString("EXPORT_NOTHING") + SkippedLiveSessions(counts), MessageBoxImage.Information);
 
-        Task<bool> ICaptureExportDialogService.ConfirmAsync(
-            object owner, CaptureExportScope scope, string tabName, CaptureExportCounts counts) =>
+        Task<bool> ICaptureExportDialogService.ConfirmAsync(string tabName, CaptureExportCounts counts) =>
             Task.FromResult(MessageBox.Show(
                 this,
                 Localization.GetLocalizedString("EXPORT_CONFIRM", counts.Eligible, counts.Total, tabName) +
@@ -55,7 +47,7 @@ namespace XMAT
                 MessageBoxImage.Question) == MessageBoxResult.OK);
 
         // The filter chooses the format; the dialog asks before an existing file is replaced.
-        Task<CaptureExportDestination> ICaptureExportDialogService.ChooseDestinationAsync(object owner, bool sanitizedOnly)
+        Task<CaptureExportDestination> ICaptureExportDialogService.ChooseDestinationAsync(bool sanitizedOnly)
         {
             var dialog = new SaveFileDialog
             {
@@ -73,7 +65,7 @@ namespace XMAT
             return Task.FromResult(new CaptureExportDestination(dialog.FileName, format, File.Exists(dialog.FileName)));
         }
 
-        Task<bool> ICaptureExportDialogService.ConfirmSanitizedAsync(object owner) =>
+        Task<bool> ICaptureExportDialogService.ConfirmSanitizedAsync() =>
             Task.FromResult(MessageBox.Show(
                 this,
                 Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM"),
@@ -81,7 +73,7 @@ namespace XMAT
                 MessageBoxButton.OKCancel,
                 MessageBoxImage.Warning) == MessageBoxResult.OK);
 
-        Task<bool> ICaptureExportDialogService.ConfirmUnprotectedAsync(object owner, string path) =>
+        Task<bool> ICaptureExportDialogService.ConfirmUnprotectedAsync(string path) =>
             Task.FromResult(MessageBox.Show(
                 this,
                 Localization.GetLocalizedString("EXPORT_UNPROTECTED_CONFIRM", path),
@@ -93,7 +85,6 @@ namespace XMAT
         // The export runs on a worker and reports its phases to a progress window, which appears after a short delay with
         // the latest phase and Cancel; an export that ends sooner closes it unseen.
         async Task<OperationResult<ExportCaptureResult>> ICaptureExportDialogService.RunWithProgressAsync(
-            object owner,
             Func<IProgress<OperationProgress>, CancellationToken, Task<OperationResult<ExportCaptureResult>>> export)
         {
             using var cancellation = new CancellationTokenSource();
@@ -118,17 +109,15 @@ namespace XMAT
             }
         }
 
-        Task ICaptureExportDialogService.ShowResultAsync(
-            object owner, CaptureExportScope scope, OperationResult<ExportCaptureResult> result) =>
+        Task ICaptureExportDialogService.ShowResultAsync(OperationResult<ExportCaptureResult> result) =>
             ShowExportMessage(
                 ExportResultMessage(result),
                 result.Outcome == OperationOutcome.Cancelled || (result.Succeeded && result.Value?.OutputProtected != false)
                     ? MessageBoxImage.Information
                     : result.Value?.Published == true ? MessageBoxImage.Warning : MessageBoxImage.Error);
 
-        // The text of an export's last message box, from the result's facts and codes and never the operation's own
-        // English text. A published file is reported as N of the capture's M sessions, with a warning when Windows could
-        // not restrict access to it; otherwise the destination is unchanged, unless the GUI itself stopped unexpectedly.
+        // An export's last message, from the result's facts and codes and never the operation's English text: a published
+        // file as N of the capture's M sessions, otherwise the reason and, unless the GUI itself failed, an unchanged file.
         internal static string ExportResultMessage(OperationResult<ExportCaptureResult> result)
         {
             if (result.Outcome == OperationOutcome.Cancelled)
@@ -182,7 +171,6 @@ namespace XMAT
             return string.Join(Environment.NewLine + Environment.NewLine, lines);
         }
 
-        // The localized reason for a failure code; a code that the GUI does not know gets the generic text.
         private static string ExportErrorKey(string code) => code switch
         {
             "export.cleanup.failed" => "EXPORT_ERROR_CLEANUP",
@@ -195,7 +183,6 @@ namespace XMAT
             _ => "EXPORT_ERROR_UNKNOWN",
         };
 
-        // A live capture's sessions without a complete response are skipped; stopping the capture includes them.
         private static string SkippedLiveSessions(CaptureExportCounts counts) =>
             counts.SkippedIncomplete == 0
                 ? string.Empty

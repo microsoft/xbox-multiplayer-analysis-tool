@@ -87,10 +87,10 @@ namespace XMAT.Tests
                     WpfTestHost.Pump();
                 }
 
-                CaptureSelectionSpec selected = view.ExportSelection(CaptureExportScope.Selected);
+                CaptureSelectionSpec selected = view.ExportSelection(selectedOnly: true);
                 Assert.Equal(Items(controller.ProcessFilter.Include), Items(selected.Process.Include));
                 Assert.True(selected.Keys.SetEquals(chosen.Select(row => row.RowKey)));
-                Assert.Null(view.ExportSelection(CaptureExportScope.Visible).Keys);
+                Assert.Null(view.ExportSelection(selectedOnly: false).Keys);
                 window.Content = null;
                 WpfTestHost.Pump();
             });
@@ -156,7 +156,7 @@ namespace XMAT.Tests
                         .Select(row => row.RequestNumber)
                         .OrderBy(number => number)
                         .ToArray();
-                    visible = view.ExportSelection(CaptureExportScope.Visible);
+                    visible = view.ExportSelection(selectedOnly: false);
                     snapshot = controller.CreateExportSnapshot("d1", AnalysisLimits.Default);
                     window.Content = null;
                     WpfTestHost.Pump();

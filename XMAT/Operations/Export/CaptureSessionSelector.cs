@@ -43,19 +43,19 @@ namespace XMAT.Operations.Export
                 return Failure("export.selection.invalid-host");
             }
             if (!TryNormalizeHosts(host.Include, host.Mode, out ImmutableArray<string>? include, out string hostCode) ||
-                !TryNormalizeHosts(host.Exclude, host.Mode, out ImmutableArray<string> exclude, out hostCode))
+                !TryNormalizeHosts(host.Exclude, host.Mode, out ImmutableArray<string>? exclude, out hostCode))
             {
                 return Failure(hostCode);
             }
-            if (!TryNormalizeExact(selection.Statuses, "status", out ImmutableArray<string>? statuses, out string code) ||
-                !TryNormalizeExact(selection.Methods, "method", out ImmutableArray<string>? methods, out code))
+            if (!TryPreserveExact(selection.Statuses, "status", out ImmutableArray<string>? statuses, out string code) ||
+                !TryPreserveExact(selection.Methods, "method", out ImmutableArray<string>? methods, out code))
             {
                 return Failure(code);
             }
 
             return OperationResult<CaptureSelectionSpec>.Success(new CaptureSelectionSpec(
                 process,
-                new HostSelection(host.Mode, include, exclude),
+                new HostSelection(host.Mode, include, exclude ?? ImmutableArray<string>.Empty),
                 statuses,
                 methods,
                 selection.Keys,
@@ -68,13 +68,17 @@ namespace XMAT.Operations.Export
             out ImmutableArray<string>? normalized,
             out string code)
         {
+            if (mode == HostMatchMode.Exact)
+            {
+                return TryPreserveExact(values, "host", out normalized, out code);
+            }
             if (!values.HasValue)
             {
                 normalized = null;
                 code = null;
                 return true;
             }
-            if (!TryNormalizeHosts(values.Value, mode, out ImmutableArray<string> concrete, out code))
+            if (!TryNormalizeGlob(values.Value, out ImmutableArray<string> concrete, out code))
             {
                 normalized = null;
                 return false;
@@ -83,9 +87,8 @@ namespace XMAT.Operations.Export
             return true;
         }
 
-        private static bool TryNormalizeHosts(
+        private static bool TryNormalizeGlob(
             ImmutableArray<string> values,
-            HostMatchMode mode,
             out ImmutableArray<string> normalized,
             out string code)
         {
@@ -93,16 +96,6 @@ namespace XMAT.Operations.Export
             if (values.IsDefault)
             {
                 normalized = ImmutableArray<string>.Empty;
-                return true;
-            }
-            if (mode == HostMatchMode.Exact)
-            {
-                if (values.Any(value => value == null))
-                {
-                    normalized = default;
-                    return false;
-                }
-                normalized = values;
                 return true;
             }
             if (values.Length > MaximumValues)
@@ -143,7 +136,7 @@ namespace XMAT.Operations.Export
             return true;
         }
 
-        private static bool TryNormalizeExact(
+        private static bool TryPreserveExact(
             ImmutableArray<string>? values,
             string field,
             out ImmutableArray<string>? normalized,
@@ -155,22 +148,14 @@ namespace XMAT.Operations.Export
                 code = null;
                 return true;
             }
-            ImmutableArray<string> source = values.Value;
-            if (source.IsDefault)
+            ImmutableArray<string> source = values.Value.IsDefault
+                ? ImmutableArray<string>.Empty
+                : values.Value;
+            if (source.Any(value => value == null))
             {
-                normalized = ImmutableArray<string>.Empty;
-                code = null;
-                return true;
-            }
-
-            foreach (string value in source)
-            {
-                if (value == null)
-                {
-                    normalized = null;
-                    code = $"export.selection.invalid-{field}";
-                    return false;
-                }
+                normalized = null;
+                code = $"export.selection.invalid-{field}";
+                return false;
             }
             normalized = source;
             code = null;
@@ -208,7 +193,15 @@ namespace XMAT.Operations.Export
                     null,
                     validated.Diagnostics);
             }
-            CaptureSelectionSpec canonical = validated.Value;
+            return SelectValidated(sessions, validated.Value, deviceId, isLive);
+        }
+
+        internal static OperationResult<CaptureSessionSelection> SelectValidated(
+            IReadOnlyList<CaptureExportSession> sessions,
+            CaptureSelectionSpec canonical,
+            string deviceId,
+            bool isLive)
+        {
             if (sessions.Any(session => session == null))
             {
                 return Failure(
@@ -342,16 +335,19 @@ namespace XMAT.Operations.Export
                     return exactIncluded && !_excludeExact.Contains(value);
                 }
 
+                var candidates = HostListEntry.MatchCandidates(host, path);
                 bool globIncluded = _includePatterns == null ||
-                    MatchesAny(_includePatterns, host, path);
-                return globIncluded && !MatchesAny(_excludePatterns, host, path);
+                    MatchesAny(_includePatterns, candidates);
+                return globIncluded && !MatchesAny(_excludePatterns, candidates);
             }
 
             private static Regex[] Compile(ImmutableArray<string>? patterns) =>
                 patterns.HasValue ? patterns.Value.Select(HostListEntry.CreatePattern).ToArray() : null;
 
-            private static bool MatchesAny(Regex[] patterns, string host, string path) =>
-                patterns != null && patterns.Any(pattern => HostListEntry.Matches(pattern, host, path));
+            private static bool MatchesAny(
+                Regex[] patterns,
+                (string Host, string HostAndPath) candidates) =>
+                patterns != null && patterns.Any(pattern => HostListEntry.Matches(pattern, candidates));
         }
 
         private sealed class MutableCounts

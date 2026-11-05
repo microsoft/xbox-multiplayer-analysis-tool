@@ -352,7 +352,6 @@ namespace XMAT.Operations.Capabilities
                 "Presentation: filters, timeline and the request, response, WebSocket and packet views"),
         };
 
-        // The file menu's command, the capture list's row commands and the progress window that every export shows.
         private static string[] ExportEntryPoints(string fileCommand) => new[]
         {
             Command(AppCommandsPrefix + fileCommand),

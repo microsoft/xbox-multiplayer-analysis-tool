@@ -163,6 +163,7 @@ namespace XMAT.Tests.Operations.Export
             typeof(WebServiceDeviceCaptureController)
                 .GetField("_dataTable", BindingFlags.Instance | BindingFlags.NonPublic)
                 .SetValue(controller, table);
+            controller.IsRunning = true;
             return controller;
         }
 
