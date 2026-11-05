@@ -115,7 +115,9 @@ namespace XMAT.Operations.Inspection
             {
                 ReadOnlyMemory<byte> stored = _request.Body;
                 string hex = Wants(BodyPreviewParts.Hex) ? HexPart(stored.Span) : null;
-                if (_request.NotRetained)
+
+                // Stored bytes are always shown: whatever a caller or a forged marker says, only an empty body was not kept.
+                if (_request.NotRetained && stored.IsEmpty)
                 {
                     return Result(BodyPreviewState.NotRetained, BodyPreviewTextKind.None, string.Empty, hex);
                 }

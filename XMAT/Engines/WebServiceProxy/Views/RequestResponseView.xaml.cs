@@ -118,6 +118,22 @@ namespace XMAT.WebServiceCapture
                 typeof(RequestResponseView),
                 new PropertyMetadata(false, OnPreviewInputChanged));
 
+        // Whether the body is a request's rather than a response's. Only that side's own body-not-kept marker says that
+        // XMAT did not keep an empty body: a stored head can come from the peer, so the other side's marker says
+        // nothing.
+        public bool IsRequestBody
+        {
+            get => (bool)GetValue(IsRequestBodyProperty);
+            set => SetValue(IsRequestBodyProperty, value);
+        }
+
+        public static readonly DependencyProperty IsRequestBodyProperty =
+            DependencyProperty.Register(
+                nameof(IsRequestBody),
+                typeof(bool),
+                typeof(RequestResponseView),
+                new PropertyMetadata(false, OnPreviewInputChanged));
+
         public RequestResponseView()
         {
             _preview = new BodyPreviewPipeline(this);
@@ -163,14 +179,17 @@ namespace XMAT.WebServiceCapture
         private static void OnPreviewInputChanged(DependencyObject view, DependencyPropertyChangedEventArgs e) =>
             ((RequestResponseView)view)._preview.InputChanged();
 
-        // The same dictionary, body array and framing are the same input.
+        // The same dictionary, body array, framing and side are the same input.
         object IBodyPreviewTarget.InputIdentity =>
-            HeaderDictionary == null && BodyBytes == null ? null : (object)(HeaderDictionary, BodyBytes, BodyIsDecoded);
+            HeaderDictionary == null && BodyBytes == null
+                ? null
+                : (object)(HeaderDictionary, BodyBytes, BodyIsDecoded, IsRequestBody);
 
         BodyPreviewRequest IBodyPreviewTarget.CreateRequest() =>
             BodyPreviewRequest.FromHeaders(
                 HeaderDictionary,
                 BodyBytes ?? Array.Empty<byte>(),
+                IsRequestBody ? BodyPreviewSide.Request : BodyPreviewSide.Response,
                 BodyIsDecoded ? BodyFraming.Decoded : BodyFraming.Advisory);
 
         void IBodyPreviewTarget.ShowNothing() => Show(null, null, null, null);

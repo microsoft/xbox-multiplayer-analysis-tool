@@ -267,6 +267,55 @@ namespace XMAT.Tests
             }
         });
 
+        // A body-not-kept marker says only that its own side's empty body was not kept, and never hides a body that is
+        // there: a peer can send either marker. A captured response whose head carries the response marker over a body
+        // shows the body; the response marker on a request says nothing about its empty body, which is empty; the
+        // request's own marker on its empty body says that XMAT did not keep it.
+        [Fact]
+        public Task BodyNotKeptMarkers_ApplyOnlyToAnEmptyBodyOfTheirOwnSide() => _application.RunAsync(async () =>
+        {
+            var controller = new WebServiceDeviceCaptureController("Test device", DeviceType.Unknown, true);
+            ProxyConnectionModel forged = Row(
+                1,
+                "Content-Type: text/plain\r\n" + RequestReplayDraft.ResponseBodyNotKeptHeader + ": 5",
+                "hello"u8.ToArray(),
+                requestHeaders: RequestReplayDraft.ResponseBodyNotKeptHeader + ": 12");
+            ProxyConnectionModel notKept = Row(
+                2,
+                "Content-Type: text/plain",
+                "reply"u8.ToArray(),
+                requestHeaders: RequestReplayDraft.RequestBodyNotKeptHeader + ": 2048");
+            controller.ProxyConnections.Add(forged);
+            controller.ProxyConnections.Add(notKept);
+            var view = new CaptureConnectionView { AutoScroll = false };
+            var grid = Find<DataGrid>(view, "ConnectionList");
+            grid.IsSynchronizedWithCurrentItem = false;
+            var request = Find<RequestResponseView>(view, "RequestViewControl");
+            var response = Find<RequestResponseView>(view, "ResponseViewControl");
+            view.DataContext = new TestCaptureDeviceContext(controller);
+            Window host = await ShowAsync(view);
+            try
+            {
+                string notKeptText = Localization.GetLocalizedString("BODY_PREVIEW_NOT_RETAINED");
+                string emptyText = Localization.GetLocalizedString("BODY_PREVIEW_EMPTY");
+                Assert.Equal((true, false), (request.IsRequestBody, response.IsRequestBody));
+
+                grid.SelectedItem = forged;
+                await WaitUntilAsync(
+                    () => BodyText(response) == "hello" && Message(request, "BodyMessage") == emptyText);
+                Assert.DoesNotContain(notKeptText, Message(response, "BodyMessage") ?? string.Empty);
+
+                grid.SelectedItem = notKept;
+                await WaitUntilAsync(
+                    () => Message(request, "BodyMessage") == notKeptText && BodyText(response) == "reply");
+                Assert.Equal(string.Empty, BodyText(request));
+            }
+            finally
+            {
+                host.Close();
+            }
+        });
+
         // An empty body, and a body that XMAT did not keep, say so instead of showing an empty body. Notices are shown
         // in the message bars of both tabs, never in the body.
         [Fact]
@@ -604,9 +653,13 @@ namespace XMAT.Tests
             return headers;
         }
 
-        private static ProxyConnectionModel Row(int number, string responseHeaders, byte[] responseBody) =>
+        // A captured exchange with an empty request body; requestHeaders are more request header lines.
+        private static ProxyConnectionModel Row(
+            int number, string responseHeaders, byte[] responseBody, string requestHeaders = null) =>
             new(number, "200", DateTime.UtcNow, TimeSpan.Zero, "https", "example.test:443", "GET", "/item",
-                "GET /item HTTP/1.1\r\nHost: example.test", Array.Empty<byte>(),
+                "GET /item HTTP/1.1\r\nHost: example.test" +
+                    (requestHeaders == null ? string.Empty : "\r\n" + requestHeaders),
+                Array.Empty<byte>(),
                 "HTTP/1.1 200 OK\r\n" + responseHeaders, responseBody, "127.0.0.1");
 
         private static WebSocketMessageModel Frame(WebSocketMessageType type, byte[] payload, bool truncated = false) =>

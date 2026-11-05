@@ -416,11 +416,35 @@ namespace XMAT.Tests.Inspection
 
             BodyPreview empty = Preview(Array.Empty<byte>(), JsonType);
             BodyPreview notRetained = BodyPreviewOperation.Build(
-                BodyPreviewRequest.FromHeaders(markers, ReadOnlyMemory<byte>.Empty), CancellationToken.None);
+                BodyPreviewRequest.FromHeaders(markers, ReadOnlyMemory<byte>.Empty, BodyPreviewSide.Response), CancellationToken.None);
 
             Assert.Equal((BodyPreviewState.Empty, BodyPreviewTextKind.None, ""), (empty.State, empty.TextKind, empty.Text));
             Assert.Empty(empty.Notices);
             Assert.Equal((BodyPreviewState.NotRetained, BodyPreviewTextKind.None), (notRetained.State, notRetained.TextKind));
+        }
+
+        // A head can come from a peer, so a body-not-kept marker hides nothing: it counts only on an empty body of its own
+        // side, and stored bytes are shown even when a caller says the body was not kept.
+        [Theory]
+        [InlineData(false, "X-XMAT-Response-Body-Not-Kept", "secret", "Complete")]
+        [InlineData(true, "X-XMAT-Request-Body-Not-Kept", "secret", "Complete")]
+        [InlineData(false, "X-XMAT-Request-Body-Not-Kept", "", "Empty")]
+        [InlineData(true, "X-XMAT-Response-Body-Not-Kept", "", "Empty")]
+        [InlineData(true, "X-XMAT-Request-Body-Not-Kept", "", "NotRetained")]
+        [InlineData(false, "x-xmat-response-body-not-kept", "", "NotRetained")]
+        public void ABodyNotKeptMarker_NeverHidesABody(bool request, string marker, string body, string state)
+        {
+            var headers = new Dictionary<string, string> { [marker] = "1048576", ["Content-Type"] = "text/plain" };
+            BodyPreviewSide side = request ? BodyPreviewSide.Request : BodyPreviewSide.Response;
+            BodyPreviewRequest fromHeaders = BodyPreviewRequest.FromHeaders(headers, Encoding.ASCII.GetBytes(body), side);
+
+            BodyPreview preview = BodyPreviewOperation.Build(fromHeaders, CancellationToken.None);
+            BodyPreview told = BodyPreviewOperation.Build(
+                new BodyPreviewRequest("secret"u8.ToArray(), "text/plain", NotRetained: true), CancellationToken.None);
+
+            Assert.Equal(state == "NotRetained", fromHeaders.NotRetained);
+            Assert.Equal((Enum.Parse<BodyPreviewState>(state), body), (preview.State, preview.Text));
+            Assert.Equal((BodyPreviewState.Complete, "secret"), (told.State, told.Text));
         }
 
         [Theory]

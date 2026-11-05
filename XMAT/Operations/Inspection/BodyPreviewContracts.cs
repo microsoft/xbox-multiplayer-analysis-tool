@@ -168,7 +168,8 @@ namespace XMAT.Operations.Inspection
     }
 
     // One body to preview. Body is borrowed, never changed or kept; the header values are the message's own, unparsed.
-    // NotRetained says that XMAT did not keep the body; StoredPrefix that the stored body is only the start of the message.
+    // NotRetained says that XMAT did not keep the body, and applies to an empty body only: stored bytes are always shown.
+    // StoredPrefix says that the stored body is only the start of the message.
     internal sealed record BodyPreviewRequest(
         ReadOnlyMemory<byte> Body,
         string ContentType = null,
@@ -181,13 +182,19 @@ namespace XMAT.Operations.Inspection
         BodyPreviewLimits Limits = null)
     {
         // A message as the capture and composer views hold it: Content-Type, Content-Encoding and Transfer-Encoding by name in
-        // any case, and NotRetained when one of XMAT's body-not-kept markers is among the headers.
+        // any case. NotRetained only when the body is empty and the head has this side's own body-not-kept marker: a stored
+        // head can come from a peer, which could send a marker to hide a body, and the other side's marker says nothing
+        // about this body.
         internal static BodyPreviewRequest FromHeaders(
             IEnumerable<KeyValuePair<string, string>> headers,
             ReadOnlyMemory<byte> body,
+            BodyPreviewSide side,
             BodyFraming framing = BodyFraming.Advisory,
             BodyPreviewParts parts = BodyPreviewParts.Text | BodyPreviewParts.Json)
         {
+            string marker = side == BodyPreviewSide.Request
+                ? RequestReplayDraft.RequestBodyNotKeptHeader
+                : RequestReplayDraft.ResponseBodyNotKeptHeader;
             string contentType = null;
             string contentEncoding = null;
             string transferEncoding = null;
@@ -211,16 +218,22 @@ namespace XMAT.Operations.Inspection
                 {
                     transferEncoding ??= header.Value;
                 }
-                else if (header.Key.Equals(RequestReplayDraft.RequestBodyNotKeptHeader, StringComparison.OrdinalIgnoreCase) ||
-                    header.Key.Equals(RequestReplayDraft.ResponseBodyNotKeptHeader, StringComparison.OrdinalIgnoreCase))
+                else if (header.Key.Equals(marker, StringComparison.OrdinalIgnoreCase))
                 {
-                    notRetained = true;
+                    notRetained = body.IsEmpty;
                 }
             }
 
             return new BodyPreviewRequest(
                 body, contentType, contentEncoding, transferEncoding, framing, notRetained, Parts: parts);
         }
+    }
+
+    // Which message of an exchange a body is: only that side's body-not-kept marker can say that XMAT did not keep it.
+    internal enum BodyPreviewSide
+    {
+        Request,
+        Response,
     }
 
     // One node of a JSON tree, as the JSON tab shows it: "[root]" for a document, a member name or an array index for an
