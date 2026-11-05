@@ -2149,7 +2149,7 @@ namespace XMAT.Tests
             }
         }
 
-        private static void CreateHardLink(
+        internal static void CreateHardLink(
             string linkPath,
             string existingPath)
         {

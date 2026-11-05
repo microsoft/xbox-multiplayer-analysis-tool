@@ -171,7 +171,7 @@ namespace XMAT.Tests.Operations.Export
         public bool IsLive { get; init; }
         public string InputKind { get; init; } = "records";
         public SqLtFileIdentity? InputIdentity => null;
-        public string InputSha256 { get; init; }
+        public string InputSha256 => null;
         internal List<IReadOnlyList<CaptureRowKey>> ReadRequests { get; } = new();
         internal HashSet<CaptureRowKey> Missing { get; } = new();
         internal HashSet<CaptureRowKey> Mutated { get; } = new();
@@ -232,20 +232,21 @@ namespace XMAT.Tests.Operations.Export
 
     internal sealed class RecordingExportPublisher : ICaptureExportPublisher
     {
-        internal string StagedPath { get; set; } = "staged-output";
         internal int Calls { get; private set; }
 
         public async Task<PublishedCapture> PublishAsync(
             string destination,
             bool replaceExisting,
+            bool allowUnprotected,
             Action<string> validateDestination,
             Func<string, CancellationToken, Task> writeStaged,
             CancellationToken cancellationToken)
         {
             Calls++;
+            _ = allowUnprotected;
             validateDestination(destination);
-            await writeStaged(StagedPath, cancellationToken);
-            return new PublishedCapture(123, "output-sha256", replaceExisting);
+            await writeStaged("staged-output", cancellationToken);
+            return new PublishedCapture(123, "output-sha256", replaceExisting, Protected: true);
         }
     }
 

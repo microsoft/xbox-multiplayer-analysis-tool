@@ -55,7 +55,8 @@ namespace XMAT.Operations.Export
         CaptureExportFormat Format,
         string OutputPath,
         bool ReplaceExisting,
-        AnalysisLimits Limits);
+        AnalysisLimits Limits,
+        bool AllowUnprotectedOutput = false);
 
     // Key is the exact ProxyConnectionModel.RowKey for live, loaded, and imported tabs. Host, Path, Status, and Method
     // are frozen stored/display values: NULL becomes "", with no other normalization.
@@ -134,6 +135,7 @@ namespace XMAT.Operations.Export
         Task<PublishedCapture> PublishAsync(
             string destination,
             bool replaceExisting,
+            bool allowUnprotected,
             Action<string> validateDestination,
             Func<string, CancellationToken, Task> writeStaged,
             CancellationToken cancellationToken);
@@ -142,10 +144,12 @@ namespace XMAT.Operations.Export
     internal sealed record PublishedCapture(
         long Bytes,
         string Sha256,
-        bool ReplacedExisting);
+        bool ReplacedExisting,
+        bool Protected);
 
     // Counts, Devices, ProcessScope, and Sanitization remain null until selection or writing evaluates them. OutputBytes
-    // and OutputSha256 remain null until meaningful publication data exists. A non-published result has Exported=0.
+    // OutputSha256 and OutputProtected remain null until meaningful publication data exists. A non-published result has
+    // Exported=0.
     internal sealed record ExportCaptureResult(
         CaptureExportFormat Format,
         CaptureSelectionSpec Selection,
@@ -157,12 +161,16 @@ namespace XMAT.Operations.Export
         string InputSha256,
         long? OutputBytes,
         string OutputSha256,
-        bool Published);
+        bool Published,
+        bool? OutputProtected);
 
     internal static class CaptureExportErrorCodes
     {
         internal const string InvalidHttp = "export.input.invalid-http";
         internal const string InvalidBody = "export.input.invalid-body";
+        internal const string InputLimit = "export.input.limit";
+        internal const string OutputUnprotected = "export.output.unprotected";
+        internal const string FormatMismatch = "export.output.format-mismatch";
         internal const string SanitizerFailed = "export.sanitize.failed";
         internal const string WriteFailed = "export.write.failed";
     }
@@ -192,6 +200,12 @@ namespace XMAT.Operations.Export
                     (OperationOutcome.InvalidInput, "The capture contains invalid HTTP data."),
                 CaptureExportErrorCodes.InvalidBody =>
                     (OperationOutcome.InvalidInput, "The capture contains invalid body data."),
+                CaptureExportErrorCodes.InputLimit =>
+                    (OperationOutcome.InvalidInput, "The capture exceeds an export input limit."),
+                CaptureExportErrorCodes.OutputUnprotected =>
+                    (OperationOutcome.Failed, "The export destination cannot protect the output."),
+                CaptureExportErrorCodes.FormatMismatch =>
+                    (OperationOutcome.InvalidInput, "The export format does not match the output file name."),
                 CaptureExportErrorCodes.SanitizerFailed =>
                     (OperationOutcome.Failed, "The sanitized export could not be produced."),
                 CaptureExportErrorCodes.WriteFailed =>
@@ -360,6 +374,7 @@ namespace XMAT.Operations.Export
                 PublishedCapture published = await Publisher.PublishAsync(
                     request.OutputPath,
                     request.ReplaceExisting,
+                    request.AllowUnprotectedOutput,
                     snapshot.ValidateDestination,
                     (stagedPath, token) =>
                     {
@@ -436,6 +451,7 @@ namespace XMAT.Operations.Export
                     OutputBytes = published.Bytes,
                     OutputSha256 = published.Sha256,
                     Published = true,
+                    OutputProtected = published.Protected,
                 };
                 context.Progress.Report(new OperationProgress(PublishPhase, 1));
                 return OperationResult<ExportCaptureResult>.Success(result, diagnostics);
@@ -528,6 +544,7 @@ namespace XMAT.Operations.Export
                         OutputBytes = exception.Publication.Bytes,
                         OutputSha256 = exception.Publication.Sha256,
                         Published = true,
+                        OutputProtected = exception.Publication.Protected,
                     };
                 }
                 else
@@ -592,7 +609,8 @@ namespace XMAT.Operations.Export
                 request?.Snapshot?.InputSha256,
                 null,
                 null,
-                Published: false);
+                Published: false,
+                OutputProtected: null);
 
         private static CaptureExportCounts CompletedCounts(
             CaptureExportCounts counts,
@@ -634,6 +652,7 @@ namespace XMAT.Operations.Export
                     OutputBytes = null,
                     OutputSha256 = null,
                     Published = false,
+                    OutputProtected = null,
                 };
             }
             IReadOnlyDictionary<string, CaptureExportCounts> devices = selected.Devices.ToDictionary(
@@ -651,6 +670,7 @@ namespace XMAT.Operations.Export
                 OutputBytes = null,
                 OutputSha256 = null,
                 Published = false,
+                OutputProtected = null,
             };
         }
 

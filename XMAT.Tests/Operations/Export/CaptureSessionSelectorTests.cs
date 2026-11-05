@@ -195,21 +195,18 @@ namespace XMAT.Tests.Operations.Export
         [Theory]
         [InlineData("process")]
         [InlineData("host")]
-        [InlineData("status")]
-        [InlineData("method")]
-        public void Validate_RejectsInvalidOrOverlongSelectorsWithCodedDataFreeDiagnostics(string field)
+        public void Validate_RejectsInvalidOrOverlongBoundedSelectorsWithCodedDataFreeDiagnostics(string field)
         {
             const string canary = "selector-canary";
             string value = new string('x', 261) + canary;
-            CaptureSelectionSpec selection = field switch
-            {
-                "process" => Selection(process: new ProcessFilterSpec(ImmutableArray.Create(value),
-                    ImmutableArray<string>.Empty)),
-                "host" => Selection(host: new HostSelection(HostMatchMode.Glob, ImmutableArray.Create(value),
-                    ImmutableArray<string>.Empty)),
-                "status" => Selection(statuses: ImmutableArray.Create(value)),
-                _ => Selection(methods: ImmutableArray.Create(value)),
-            };
+            CaptureSelectionSpec selection = field == "process"
+                ? Selection(process: new ProcessFilterSpec(
+                    ImmutableArray.Create(value),
+                    ImmutableArray<string>.Empty))
+                : Selection(host: new HostSelection(
+                    HostMatchMode.Glob,
+                    ImmutableArray.Create(value),
+                    ImmutableArray<string>.Empty));
 
             OperationResult<CaptureSelectionSpec> result = CaptureSelectionValidator.Validate(selection);
 
@@ -220,17 +217,29 @@ namespace XMAT.Tests.Operations.Export
         }
 
         [Fact]
-        public void Validate_RejectsMoreThanSixtyFourExactChoices()
+        public void Validate_AcceptsUnlimitedLiteralExactValues()
         {
-            ImmutableArray<string> statuses = Enumerable.Range(1, 65)
-                .Select(index => index.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            string longValue = new('x', 300);
+            const string controlValue = "value\u0001";
+            ImmutableArray<string> hosts = Enumerable.Range(1, 65)
+                .Select(index => $"host-{index}.example")
+                .Append(longValue)
+                .Append(string.Empty)
+                .Append(controlValue)
                 .ToImmutableArray();
+            var selection = Selection(
+                host: new HostSelection(HostMatchMode.Exact, hosts, hosts),
+                statuses: ImmutableArray.Create(longValue, string.Empty, controlValue),
+                methods: ImmutableArray.Create(controlValue, longValue, string.Empty));
 
             OperationResult<CaptureSelectionSpec> result =
-                CaptureSelectionValidator.Validate(Selection(statuses: statuses));
+                CaptureSelectionValidator.Validate(selection);
 
-            Assert.Equal(OperationOutcome.InvalidInput, result.Outcome);
-            Assert.Equal("export.selection.limit", Assert.Single(result.Diagnostics).Code);
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            Assert.Equal(hosts, result.Value.Host.Include.Value);
+            Assert.Equal(hosts, result.Value.Host.Exclude);
+            Assert.Equal(selection.Statuses, result.Value.Statuses);
+            Assert.Equal(selection.Methods, result.Value.Methods);
         }
 
         private static ProcessFilterSpec Spec(IEnumerable<string> include, IEnumerable<string> exclude = null) =>

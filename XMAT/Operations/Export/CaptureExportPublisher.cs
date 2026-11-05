@@ -14,14 +14,18 @@ namespace XMAT.Operations.Export
 {
     internal sealed class CaptureExportPublisher : ICaptureExportPublisher
     {
+        internal Func<string, bool> StagingIsPrivate { get; set; } = PrivateFolder.IsPrivate;
+
         public async Task<PublishedCapture> PublishAsync(
             string destination,
             bool replaceExisting,
+            bool allowUnprotected,
             Action<string> validateDestination,
             Func<string, CancellationToken, Task> writeStaged,
             CancellationToken cancellationToken)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(destination);
+            _ = allowUnprotected;
             ArgumentNullException.ThrowIfNull(validateDestination);
             ArgumentNullException.ThrowIfNull(writeStaged);
             string normalized = Path.GetFullPath(destination);
@@ -82,7 +86,7 @@ namespace XMAT.Operations.Export
                     File.Move(staged, normalized, replaceExisting);
                     committed = true;
                 }
-                publication = new PublishedCapture(bytes, hash, replaced);
+                publication = new PublishedCapture(bytes, hash, replaced, Protected: true);
             }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {

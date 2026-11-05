@@ -2,11 +2,14 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Text;
 using System.Text.Json;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Processes;
 using XMAT.Tests.Operations.Analysis;
 using XMAT.Tests.Proxy;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Models;
 using static XMAT.Tests.Cli.CliExportCommandLineTests;
 
 namespace XMAT.Tests.Cli
@@ -17,32 +20,39 @@ namespace XMAT.Tests.Cli
     [Collection(IsolatedProxyTests.Name)]
     public class XmatExportTests
     {
+        // A SAZ export keeps each selected session whole (its own response and XMAT's metadata, as the import reads them),
+        // leaves the input byte for byte, and reports its publication without naming a path or a captured value.
         [Fact]
-        public async Task Export_PublishesOnlyTheSelectedSessions()
+        public async Task Export_PublishesOnlyTheSelectedSessionsWithTheirOwnResponsesAndMetadata()
         {
             using var directory = new CliTestDirectory();
-            string input = ProcessCaptures.WriteXmatcap(directory.Root, "capture.xmatcap", ProcessCaptures.MixedSessions);
+            ProxyConnectionModel[] sessions = Enumerable.Range(1, 3).Select(PairedSession).ToArray();
+            string input = Path.Join(directory.Root, "capture.saz");
+            SazArchive.Write(input, sessions);
             string inputHash = CliAssert.Sha256(input);
             GuiStorageProbe gui = GuiStorageProbe.Capture();
 
             XmatRun run = await XmatProcess.RunAsync(
-                directory.Root, "export", input, "--out", "subset.xmatcap", "--process", "game*.exe");
+                directory.Root, "export", input, "--out", "subset.saz", "--process", "gam?.exe");
 
             CliAssert.ExitCode(0, run);
-            string output = Path.Join(directory.Root, "subset.xmatcap");
+            string output = Path.Join(directory.Root, "subset.saz");
             JsonElement json = run.Json();
             JsonElement block = json.GetProperty("export");
-            Assert.Equal(new long[] { 8, 4, 4, 4, 4, 0, 0, 0 }, Counts(block.GetProperty("counts")));
+            Assert.Equal(new long[] { 3, 2, 2, 2, 2, 0, 0, 0 }, Counts(block.GetProperty("counts")));
             Assert.Equal(
                 (true, new FileInfo(output).Length, CliAssert.Sha256(output)),
                 (block.GetProperty("output").GetProperty("published").GetBoolean(),
                     block.GetProperty("output").GetProperty("bytes").GetInt64(),
                     block.GetProperty("output").GetProperty("sha256").GetString()));
             Assert.Empty(json.GetProperty("artifacts").EnumerateArray());
-            Assert.Equal(ProcessCaptures.MixedGameRowIds, RequestNumbers(output));
+            ProxyConnectionModel[] exported = FiddlerSazHandler.ImportSazFile(output, CancellationToken.None)
+                .OrderBy(session => session.RequestNumber).ToArray();
+            Assert.Equal(new long[] { 1, 3 }, exported.Select(session => session.RequestNumber));
+            Assert.All(exported, session => Assert.Equal(Facts(sessions[session.RequestNumber - 1]), Facts(session)));
             Assert.Equal(inputHash, CliAssert.Sha256(input));
             Assert.DoesNotContain("Game.exe", run.Stdout + run.Stderr, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(ProcessCaptures.Device, run.Stdout + run.Stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("pair.test", run.Stdout + run.Stderr, StringComparison.OrdinalIgnoreCase);
             CliAssert.NoLeaks(run, directory);
             gui.AssertUnchanged();
         }
@@ -82,5 +92,31 @@ namespace XMAT.Tests.Cli
                 .OrderBy(number => number)
                 .ToArray();
         }
+
+        // A session whose request and response both carry its number; the second one is svchost.exe's, the others
+        // Game.exe's. Only XMAT's flags restore its http scheme and its query (its request line says https, and a plain
+        // import drops the query), its IPv6 client address and its times finer than a Fiddler timer.
+        private static ProxyConnectionModel PairedSession(int number)
+        {
+            byte[] response = Encoding.UTF8.GetBytes($"{{\"session\":{number}}}");
+            var session = new ProxyConnectionModel(
+                number, "200", new DateTime(2026, 11, 4, 1, 2, 3, DateTimeKind.Utc).AddTicks(number * 1_234_567L),
+                TimeSpan.FromTicks(number * 7_654_321L), "http", "pair.test:443", "GET", $"/pair/{number}?q={number}",
+                $"GET https://pair.test/pair/{number}?q={number} HTTP/1.1\r\nHost: pair.test\r\n\r\n", Array.Empty<byte>(),
+                $"HTTP/1.1 200 OK\r\nContent-Length: {response.Length}\r\n\r\n", response, $"fe80::{number}")
+            {
+                RecordRowId = number,
+            };
+            session.SetImportedIdentity(number, 100 + number);
+            session.SetClientProcess(new ClientProcessInfo(
+                number == 2 ? "svchost.exe" : "Game.exe", number == 2 ? 900 : 4100, null, ClientProcessStatus.Local));
+            return session;
+        }
+
+        // What a round trip keeps: the identities, timing, target, client, response and process.
+        private static object Facts(ProxyConnectionModel session) => (
+            session.RequestNumber, session.Id, session.RequestTime.ToUniversalTime(), session.Duration, session.Scheme,
+            session.Path, session.ClientIP, Encoding.UTF8.GetString(session.ResponseBody), session.ClientProcess.Name,
+            session.ClientProcess.ProcessId);
     }
 }

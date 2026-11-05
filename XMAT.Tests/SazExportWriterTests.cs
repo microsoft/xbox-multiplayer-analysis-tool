@@ -54,10 +54,10 @@ namespace XMAT.Tests
                 FiddlerSazHandler.ImportSazFile(path, CancellationToken.None).Select(model => model.RequestNumber));
         }
 
-        // An ordinary archive keeps XMAT's values exactly and an import restores them. A sanitized archive keeps the
-        // identities, timestamps and scheme, and drops the client address, the process and the raw path.
+        // An ordinary archive keeps XMAT's values exactly (xmat export's SAZ round trip reads them back). A sanitized archive
+        // keeps the identities, timestamps and scheme, and drops the client address, the process and the raw path.
         [Fact]
-        public void Write_RecordsExactXmatFlagsThatImportRestores_AndSanitizingDropsTheIdentifyingOnes()
+        public void Write_RecordsExactXmatFlags_AndSanitizingDropsTheIdentifyingOnes()
         {
             RawExportRow row = Row(5, 41, ProcessCaptures.Device, Local("Game.exe", 4100), values =>
             {
@@ -69,9 +69,7 @@ namespace XMAT.Tests
                 values[WebServiceCaptureMethod.FieldKey_RequestPath] = "/presence?access_token=" + Secret;
             });
 
-            string ordinaryPath = Write(false, row).Path;
-            Dictionary<string, string> ordinary = Flags(ordinaryPath);
-            ProxyConnectionModel imported = Assert.Single(FiddlerSazHandler.ImportSazFile(ordinaryPath, CancellationToken.None));
+            Dictionary<string, string> ordinary = Flags(Write(false, row).Path);
             (string sanitizedPath, ExportWriteSummary summary) = Write(true, row);
             Dictionary<string, string> sanitized = Flags(sanitizedPath);
 
@@ -80,11 +78,6 @@ namespace XMAT.Tests
             Assert.Equal("/presence?access_token=" + Secret, ordinary[PathFlag]);
             Assert.Equal(("fe80::1", "fe80::1"), (ordinary["x-clientip"], ordinary[ClientIpFlag]));
             Assert.Equal("Game.exe:4100", ordinary["x-ProcessInfo"]);
-            Assert.Equal(
-                (41L, 9L, Requested, Responded, "http", "/presence?access_token=" + Secret, "fe80::1"),
-                (imported.RequestNumber, imported.Id, ProxyConnectionModel.ToDateTimeString(imported.RequestTime),
-                    ProxyConnectionModel.ToDateTimeString(imported.RequestTime + imported.Duration), imported.Scheme,
-                    imported.Path, imported.ClientIP));
             Assert.Equal(new[] { "41", "9", Requested, Responded, "http" }, identity.Select(flag => sanitized[flag]));
             Assert.Equal("0.0.0.0", sanitized["x-clientip"]);
             Assert.False(sanitized.ContainsKey(ClientIpFlag));

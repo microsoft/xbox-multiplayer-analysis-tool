@@ -7,6 +7,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using XMAT.Cli;
+using XMAT.Operations;
 
 namespace XMAT.Tests.Cli
 {
@@ -277,6 +278,30 @@ namespace XMAT.Tests.Cli
             Assert.Empty(report.Artifacts);
             Assert.Equal(CliCleanupStates.Completed, report.CleanupState);
             Assert.Empty(directory.Entries());
+        }
+
+        [Fact]
+        public void PrivateFolder_IsPrivateUnderABroadParentAndNeverClaimsAnExistingFolder()
+        {
+            using var directory = new CliTestDirectory();
+            string parentPath = Path.Join(directory.Root, "broad");
+            Directory.CreateDirectory(parentPath);
+            var parent = new DirectoryInfo(parentPath);
+            DirectorySecurity security = parent.GetAccessControl();
+            security.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                FileSystemRights.ReadAndExecute,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            parent.SetAccessControl(security);
+            string privatePath = Path.Join(parentPath, "private");
+
+            PrivateFolder.Create(privatePath);
+
+            Assert.True(PrivateFolder.IsPrivate(privatePath));
+            Assert.Throws<IOException>(() => PrivateFolder.Create(privatePath));
+            Assert.True(Directory.Exists(privatePath));
         }
 
         // A report that cannot be serialized (here a null warning, which also breaks the text on standard error) is replaced

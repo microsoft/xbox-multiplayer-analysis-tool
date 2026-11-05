@@ -5,9 +5,8 @@
 using System;
 using System.IO;
 using System.Security;
-using System.Security.AccessControl;
-using System.Security.Principal;
 using System.Threading;
+using XMAT.Operations;
 
 namespace XMAT.Cli
 {
@@ -74,7 +73,7 @@ namespace XMAT.Cli
                 throw new IOException("The staging folder already exists.");
             }
 
-            new DirectoryInfo(stagingPath).Create(CurrentUserOnly());
+            PrivateFolder.Create(stagingPath);
             return new CliOutputFolder(target, stagingPath);
         }
 
@@ -82,47 +81,7 @@ namespace XMAT.Cli
         // current user, and they pass on to everything created in it (container and object inherit, with no propagation
         // limit), since a new file would otherwise get its creator's default access. False in every other case, including
         // when the access control cannot be read.
-        internal bool IsPrivate()
-        {
-            try
-            {
-                DirectorySecurity security = new DirectoryInfo(StagingPath).GetAccessControl(AccessControlSections.Access);
-                if (!security.AreAccessRulesProtected)
-                {
-                    return false;
-                }
-
-                using WindowsIdentity identity = WindowsIdentity.GetCurrent();
-                AuthorizationRuleCollection rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
-                if (identity.User == null || rules.Count == 0)
-                {
-                    return false;
-                }
-
-                // The entries may come back split, for example one per inheritance flag; together they must cover both.
-                InheritanceFlags inherited = InheritanceFlags.None;
-                foreach (FileSystemAccessRule rule in rules)
-                {
-                    if (rule.IsInherited ||
-                        rule.AccessControlType != AccessControlType.Allow ||
-                        !identity.User.Equals(rule.IdentityReference))
-                    {
-                        return false;
-                    }
-
-                    if (rule.PropagationFlags == PropagationFlags.None)
-                    {
-                        inherited |= rule.InheritanceFlags;
-                    }
-                }
-
-                return inherited == (InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit);
-            }
-            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
-            {
-                return false;
-            }
-        }
+        internal bool IsPrivate() => PrivateFolder.IsPrivate(StagingPath);
 
         internal static bool IsFileSystemFailure(Exception exception) =>
             exception is IOException or UnauthorizedAccessException or SecurityException;
@@ -214,18 +173,5 @@ namespace XMAT.Cli
             }
         }
 
-        private static DirectorySecurity CurrentUserOnly()
-        {
-            using WindowsIdentity identity = WindowsIdentity.GetCurrent();
-            var security = new DirectorySecurity();
-            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            security.AddAccessRule(new FileSystemAccessRule(
-                identity.User,
-                FileSystemRights.FullControl,
-                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                PropagationFlags.None,
-                AccessControlType.Allow));
-            return security;
-        }
     }
 }

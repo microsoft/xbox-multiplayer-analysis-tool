@@ -132,7 +132,8 @@ namespace XMAT.Tests.Cli
                 "ab12",
                 2048,
                 "cd34",
-                true);
+                true,
+                OutputProtected: true);
             JsonElement root = Root(report);
 
             JsonElement block = root.GetProperty("export");

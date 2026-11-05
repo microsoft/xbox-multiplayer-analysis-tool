@@ -23,7 +23,8 @@ namespace XMAT.Tests.Operations.Analysis
         bool Analyzable = true,
         string Device = ProcessCaptures.Device,
         string StartTimeUtc = "",
-        string HttpStatus = "200");
+        string HttpStatus = "200",
+        string PairMarker = null);
 
     // One frame of a process-aware synthetic SAZ. The process flags are written exactly as given (a null value writes
     // no flag), so tests can vary the flag spelling.
@@ -87,6 +88,16 @@ namespace XMAT.Tests.Operations.Analysis
                 ProcessSession session = sessions[index];
                 long number = index + 1;
                 Message message = CreateMessage(number, session.Analyzable);
+                if (session.PairMarker is string marker)
+                {
+                    message = message with
+                    {
+                        RequestHeaders = message.RequestHeaders + $"X-Marker: request-{marker}\r\n",
+                        RequestBody = Encoding.UTF8.GetBytes($"request-body-{marker}"),
+                        ResponseHeaders = message.ResponseHeaders + $"X-Marker: response-{marker}\r\n",
+                        ResponseBody = Encoding.UTF8.GetBytes($"response-body-{marker}"),
+                    };
+                }
                 DateTime started = StartUtc.AddSeconds(number);
                 bool responded = session.HttpStatus.Length != 0;
                 captures.AddRow(
