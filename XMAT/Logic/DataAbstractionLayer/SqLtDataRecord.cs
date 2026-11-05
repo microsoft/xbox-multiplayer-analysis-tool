@@ -42,7 +42,9 @@ namespace XMAT.DataAbstractionLayer
         // Only an extension column can hold NULL; reading one yields null text or a zero integer.
         public bool IsNull(string fieldName)
         {
-            return _rawValues.TryGetValue(fieldName, out object value) && value == null;
+            return _rawValues != null &&
+                _rawValues.TryGetValue(fieldName, out object value) &&
+                value == null;
         }
 
         public string Str(string fieldName)
@@ -87,7 +89,7 @@ namespace XMAT.DataAbstractionLayer
 
         public bool TryReadRaw(string name, out object value)
         {
-            if (_rawValues.TryGetValue(name, out value))
+            if (_rawValues != null && _rawValues.TryGetValue(name, out value))
             {
                 return true;
             }
@@ -109,7 +111,6 @@ namespace XMAT.DataAbstractionLayer
 
             _fieldDefs = fieldDefs;
             _fieldValues = new Dictionary<int, object>();
-            _rawValues = new Dictionary<string, object>(StringComparer.Ordinal);
 
             foreach (var fieldDef in _fieldDefs)
             {
@@ -121,13 +122,13 @@ namespace XMAT.DataAbstractionLayer
                 _fieldValues[fieldDef.Value.ColumnIndex] = typedValue;
                 if (rawValue == null || !ReferenceEquals(rawValue, typedValue))
                 {
-                    _rawValues[fieldDef.Key] = rawValue;
+                    (_rawValues ??= new Dictionary<string, object>(StringComparer.Ordinal))[fieldDef.Key] = rawValue;
                 }
             }
         }
 
         private IDictionary<string, IFieldDefinition> _fieldDefs;
         private IDictionary<int, object> _fieldValues;
-        private readonly IDictionary<string, object> _rawValues;
+        private IDictionary<string, object> _rawValues;
     }
 }
