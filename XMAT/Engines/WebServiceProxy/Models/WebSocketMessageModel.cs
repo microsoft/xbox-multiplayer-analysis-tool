@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Net.WebSockets;
 using System.Text;
@@ -87,6 +88,10 @@ namespace XMAT.WebServiceCapture.Models
         {
             Add(message);
         }
+
+        internal int RemoveByRowKeys(
+            IReadOnlySet<CaptureRowKey> keys) =>
+            throw new NotSupportedException();
 
         protected override void InsertItem(int index, WebSocketMessageModel item)
         {

@@ -123,6 +123,10 @@ namespace XMAT.WebServiceCapture.Models
             Clear();
         }
 
+        internal int RemoveByRowKeys(
+            IReadOnlySet<CaptureRowKey> keys) =>
+            throw new NotSupportedException();
+
         protected override void InsertItem(int index, ProxyConnectionModel item)
         {
             ArgumentNullException.ThrowIfNull(item);

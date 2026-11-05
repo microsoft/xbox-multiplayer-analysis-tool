@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections.Specialized;
 using System.Runtime.CompilerServices;
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations.Captures;
@@ -164,6 +165,69 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void BatchRemove_PublishesOneResetAndKeepsSurvivorObjects()
+        {
+            var connections = new ProxyConnectionsCollection();
+            Guid source = Guid.NewGuid();
+            var firstKey = new CaptureRowKey(source, 1, 21, 21);
+            var deletedKey = new CaptureRowKey(source, 1, 22, 22);
+            var lastKey = new CaptureRowKey(source, 1, 23, 23);
+            ProxyConnectionModel first = connections.AddFromDataRecord(
+                new Record(21, 21, 1000),
+                false,
+                firstKey);
+            _ = connections.AddFromDataRecord(
+                new Record(22, 22, 1001),
+                false,
+                deletedKey);
+            ProxyConnectionModel last = connections.AddFromDataRecord(
+                new Record(23, 23, 1002),
+                false,
+                lastKey);
+            var changes = new List<NotifyCollectionChangedAction>();
+            connections.CollectionChanged += (_, args) => changes.Add(args.Action);
+
+            int removed = connections.RemoveByRowKeys(
+                new HashSet<CaptureRowKey> { deletedKey });
+
+            Assert.Equal(1, removed);
+            Assert.Equal(
+                new[] { NotifyCollectionChangedAction.Reset },
+                changes);
+            Assert.Collection(
+                connections,
+                item => Assert.Same(first, item),
+                item => Assert.Same(last, item));
+            Assert.Null(connections.ByKey(deletedKey));
+            Assert.Same(first, connections.ByKey(firstKey));
+            Assert.Same(last, connections.ByKey(lastKey));
+
+            Assert.Equal(
+                0,
+                connections.RemoveByRowKeys(
+                    new HashSet<CaptureRowKey>
+                    {
+                        new(source, 1, 99, 99),
+                    }));
+            Assert.Single(changes);
+        }
+
+        [Fact]
+        public void BatchRemove_ReleasesDeletedModelAndBodies()
+        {
+            var connections = new ProxyConnectionsCollection();
+            (
+                WeakReference<ProxyConnectionModel> Model,
+                WeakReference<byte[]> Body) references =
+                AddAndBatchRemoveBody(connections);
+
+            ForceCollection();
+
+            Assert.False(references.Model.TryGetTarget(out _));
+            Assert.False(references.Body.TryGetTarget(out _));
+        }
+
+        [Fact]
         public void InheritedRemoveReleasesTheRemovedModel()
         {
             var connections = new ProxyConnectionsCollection();
@@ -175,7 +239,7 @@ namespace XMAT.Tests
         }
 
         private sealed class Record(int rowId, long requestNumber, long connectionId, string status = "200",
-            ClientProcessInfo process = null) : IDataRecord,
+            ClientProcessInfo process = null, string requestBody = null) : IDataRecord,
             IOptionalTypedDataRecord
         {
             public int RowId { get; } = rowId;
@@ -201,7 +265,7 @@ namespace XMAT.Tests
                     WebServiceCaptureMethod.FieldKey_RequestPath => "/",
                     WebServiceCaptureMethod.FieldKey_RequestStatus => status,
                     WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders => "GET / HTTP/1.1",
-                    WebServiceCaptureMethod.FieldKey_RequestBody => string.Empty,
+                    WebServiceCaptureMethod.FieldKey_RequestBody => requestBody ?? string.Empty,
                     WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders => "HTTP/1.1 200 OK",
                     WebServiceCaptureMethod.FieldKey_ResponseBody => string.Empty,
                     WebServiceCaptureMethod.FieldKey_ClientIP => "device",
@@ -252,6 +316,32 @@ namespace XMAT.Tests
             var reference = new WeakReference<ProxyConnectionModel>(model);
             _ = connections.Remove(model);
             return reference;
+        }
+
+        [MethodImpl(
+            MethodImplOptions.NoInlining)]
+        private static (
+            WeakReference<ProxyConnectionModel> Model,
+            WeakReference<byte[]> Body) AddAndBatchRemoveBody(
+                ProxyConnectionsCollection connections)
+        {
+            var key = new CaptureRowKey(Guid.NewGuid(), 1, 17, 17);
+            ProxyConnectionModel model = connections.AddFromDataRecord(
+                new Record(
+                    rowId: 17,
+                    requestNumber: 17,
+                    connectionId: 1000,
+                    requestBody: Convert.ToBase64String(new byte[64 * 1024])),
+                false,
+                key);
+            var references = (
+                new WeakReference<ProxyConnectionModel>(model),
+                new WeakReference<byte[]>(model.RequestBody));
+            Assert.Equal(
+                1,
+                connections.RemoveByRowKeys(
+                    new HashSet<CaptureRowKey> { key }));
+            return references;
         }
 
         private static void ForceCollection()

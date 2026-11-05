@@ -13,7 +13,7 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtDataTable : IDataTable, IImportedCaptureTable, IVersionedCaptureTable
+    internal class SqLtDataTable : IDataTable, IImportedCaptureTable, IVersionedCaptureTable, IExactCaptureRowDelete
     {
         public event Action<IDataTable, Int64> RowAdded;
         public event Action<IDataTable, Int64> RowUpdated;
@@ -153,6 +153,11 @@ namespace XMAT.DataAbstractionLayer
                 }
             }
         }
+
+        public IReadOnlyList<long> DeleteRows(
+            string deviceName,
+            IReadOnlyList<long> rowIds) =>
+            throw new NotSupportedException();
 
         public IDisposable EnterRead()
         {

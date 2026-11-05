@@ -111,6 +111,78 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void Retire_IsAuthoritativeAcrossReusedRowIdsAndLateResolution()
+        {
+            var applied = new List<(CaptureRowKey Key, ClientProcessInfo Process)>();
+            var registry = Registry(applied);
+            Guid run = Guid.NewGuid();
+            ClientProcessContext connection = Connection(run, 1009);
+            registry.StartRun(run);
+            CaptureRowKey deleted = Register(
+                registry,
+                connection,
+                requestToken: 15,
+                rowId: 1);
+            Assert.True(
+                registry.TryGetOrCreateStream(
+                    connection,
+                    requestToken: 15,
+                    out CaptureRowKey stream));
+            Assert.Equal(deleted, stream);
+            var olderTwin = new CaptureRowKey(
+                deleted.SourceId,
+                deleted.Generation - 1,
+                deleted.RowId,
+                deleted.Incarnation);
+            var foreignTwin = new CaptureRowKey(
+                Guid.NewGuid(),
+                deleted.Generation,
+                deleted.RowId,
+                deleted.Incarnation);
+
+            registry.Retire([deleted, olderTwin, foreignTwin]);
+            CaptureRowKey survivor = Register(
+                registry,
+                connection,
+                requestToken: 16,
+                rowId: 1);
+            registry.Resolve(
+                connection,
+                Local("late.exe", 109));
+            var deletedWrite = false;
+            var survivorWrite = false;
+
+            Assert.Equal(CaptureRowLookup.Retired, registry.Lookup(deleted));
+            Assert.Equal(CaptureRowLookup.Current, registry.Lookup(survivor));
+            Assert.Equal(CaptureRowLookup.Missing, registry.Lookup(olderTwin));
+            Assert.Equal(CaptureRowLookup.Missing, registry.Lookup(foreignTwin));
+            Assert.Equal(
+                CaptureRowLookup.Retired,
+                registry.Lookup(
+                    connection,
+                    15,
+                    out CaptureRowKey retiredRequest));
+            Assert.Equal(deleted, retiredRequest);
+            Assert.False(registry.TryGet(connection, 15, out _));
+            Assert.False(registry.TryGetOrCreateStream(connection, 15, out _));
+            Assert.False(registry.TryUpdate(run, deleted, () => deletedWrite = true));
+            Assert.True(registry.TryUpdate(run, survivor, () => survivorWrite = true));
+            Assert.False(deletedWrite);
+            Assert.True(survivorWrite);
+            Assert.DoesNotContain(applied, item => item.Key == deleted);
+            Assert.Contains(applied, item => item.Key == survivor);
+
+            registry.CloseStream(connection, 15);
+            Assert.False(registry.TryGetOrCreateStream(connection, 15, out _));
+            Assert.True(registry.TryGetOrCreateStream(connection, 16, out CaptureRowKey survivingStream));
+            Assert.Equal(survivor, survivingStream);
+            registry.CloseConnection(connection);
+            registry.FinishRun(run);
+
+            Assert.Equal(CaptureRowLookup.Missing, registry.Lookup(deleted));
+        }
+
+        [Fact]
         public void Register_SeededIdentityDoesNotReapplyTheValueAlreadyInserted()
         {
             var applied = new List<(CaptureRowKey Key, ClientProcessInfo Process)>();

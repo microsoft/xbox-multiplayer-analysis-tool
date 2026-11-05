@@ -53,6 +53,7 @@ namespace XMAT.DataAbstractionLayer
 
             _connection = new SqliteConnection("Data Source=:memory:");
             _connection.Open();
+            WritableConnectionOpened?.Invoke(_connection);
 
             _command = new SqliteCommand();
             _command.Connection = _connection;
@@ -317,6 +318,8 @@ namespace XMAT.DataAbstractionLayer
                     true);
 
         internal Action<string> TemporaryReserved { get; set; }
+
+        internal Action<SqliteConnection> WritableConnectionOpened { get; set; }
 
         private SqliteConnection _connection;
         private SqliteCommand _command;
