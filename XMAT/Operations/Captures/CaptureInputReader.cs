@@ -15,6 +15,7 @@ using XMAT.DataAbstractionLayer;
 using XMAT.Operations.Analysis;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
+using XMAT.XboxLiveCaptureAnalysis;
 
 namespace XMAT.Operations.Captures
 {
@@ -520,6 +521,15 @@ namespace XMAT.Operations.Captures
             Add(sizeof(long));
             foreach (IFieldDefinition field in fields)
             {
+                if (record is IRawBodyDataRecord rawBody &&
+                    field.Name is
+                        WebServiceCaptureMethod.FieldKey_RequestBody or
+                        WebServiceCaptureMethod.FieldKey_ResponseBody)
+                {
+                    long length = rawBody.RawBody(field.Name).Length;
+                    Add(checked(((length + 2) / 3) * 4));
+                    continue;
+                }
                 if (record is IRawDataRecord raw &&
                     raw.TryReadRaw(field.Name, out object rawValue))
                 {

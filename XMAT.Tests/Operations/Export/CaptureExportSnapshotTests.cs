@@ -30,7 +30,7 @@ namespace XMAT.Tests.Operations.Export
             ProxyConnectionModel original = Add(controller, table, 1, complete: true);
 
             using ICaptureExportSnapshot snapshot =
-                controller.CreateExportSnapshot("d1", AnalysisLimits.Default);
+                controller.CreateExportSnapshot("d1");
             CaptureExportSession frozen = Assert.Single(snapshot.Sessions);
 
             _ = Add(controller, table, 2, complete: true);
@@ -62,7 +62,7 @@ namespace XMAT.Tests.Operations.Export
             _ = Add(controller, table, 1, complete: true);
             _ = Add(controller, table, 2, complete: true);
             using ICaptureExportSnapshot snapshot =
-                controller.CreateExportSnapshot("d1", AnalysisLimits.Default);
+                controller.CreateExportSnapshot("d1");
 
             table.UpdateRow(
                 1,
@@ -88,7 +88,7 @@ namespace XMAT.Tests.Operations.Export
             _ = Add(controller, table, 2, complete: false);
 
             using ICaptureExportSnapshot snapshot =
-                controller.CreateExportSnapshot("d1", AnalysisLimits.Default);
+                controller.CreateExportSnapshot("d1");
 
             Assert.Collection(
                 snapshot.Sessions.OrderBy(session => session.Key.RowId),
@@ -121,7 +121,7 @@ namespace XMAT.Tests.Operations.Export
                 _ = Add(controller, table, index, complete: true, responseBodyBytes: 256 * 1024);
             }
             using ICaptureExportSnapshot snapshot = new RelabeledSnapshot(
-                controller.CreateExportSnapshot("d1", AnalysisLimits.Default),
+                controller.CreateExportSnapshot("d1"),
                 "xmatcap");
             CaptureExportChunk first = snapshot.ReadChunk(
                 snapshot.Sessions.Select(session => session.Key).ToArray(),

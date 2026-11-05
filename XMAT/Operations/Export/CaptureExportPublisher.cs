@@ -14,6 +14,9 @@ namespace XMAT.Operations.Export
 {
     internal sealed class CaptureExportPublisher : ICaptureExportPublisher
     {
+        private const int FileSystemAttempts = 10;
+        private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(100);
+
         internal Func<string, bool> StagingIsPrivate { get; set; } = PrivateFolder.IsPrivate;
 
         public async Task<PublishedCapture> PublishAsync(
@@ -35,11 +38,9 @@ namespace XMAT.Operations.Export
                 throw new DirectoryNotFoundException("The export destination directory does not exist.");
             }
             validateDestination(normalized);
-            if (LoadedCaptureDatabaseRegistry.IsLoadedPath(normalized))
-            {
-                throw new CaptureSaveException(CaptureSaveFailure.Refused);
-            }
-            if (!replaceExisting && File.Exists(normalized))
+            await ValidateOpenCaptureAsync(normalized, cancellationToken).ConfigureAwait(false);
+            if (Path.Exists(normalized) &&
+                (Directory.Exists(normalized) || !replaceExisting))
             {
                 throw new CaptureExportDestinationException("export.output.exists");
             }
@@ -79,19 +80,13 @@ namespace XMAT.Operations.Export
                     hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
                 }
 
-                bool replaced;
-                using (LoadedCaptureDatabaseRegistry.AcquireSaveDestination(normalized))
-                {
-                    validateDestination(normalized);
-                    replaced = File.Exists(normalized);
-                    if (replaced && !replaceExisting)
-                    {
-                        throw new CaptureExportDestinationException("export.output.exists");
-                    }
-                    cancellationToken.ThrowIfCancellationRequested();
-                    File.Move(staged, normalized, replaceExisting);
-                    committed = true;
-                }
+                bool replaced = await CommitAsync(
+                    staged,
+                    normalized,
+                    replaceExisting,
+                    validateDestination,
+                    cancellationToken).ConfigureAwait(false);
+                committed = true;
                 publication = new PublishedCapture(bytes, hash, replaced, protectedOutput);
             }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
@@ -102,17 +97,7 @@ namespace XMAT.Operations.Export
             {
                 try
                 {
-                    if (!committed && File.Exists(staged))
-                    {
-                        File.Delete(staged);
-                    }
-                    DeleteIfPresent(staged + "-journal");
-                    DeleteIfPresent(staged + "-wal");
-                    DeleteIfPresent(staged + "-shm");
-                    if (Directory.Exists(stagingDirectory))
-                    {
-                        Directory.Delete(stagingDirectory);
-                    }
+                    Cleanup(staged, stagingDirectory, committed);
                 }
                 catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
                 {
@@ -135,7 +120,7 @@ namespace XMAT.Operations.Export
 
         private static string CreateStagingDirectory(string directory, string destinationName)
         {
-            for (var attempt = 0; attempt < 10; attempt++)
+            for (var attempt = 0; attempt < FileSystemAttempts; attempt++)
             {
                 string candidate = Path.Join(
                     directory,
@@ -153,12 +138,117 @@ namespace XMAT.Operations.Export
             throw new IOException("A unique export staging directory could not be created.");
         }
 
-        private static void DeleteIfPresent(string path)
+        private static async Task ValidateOpenCaptureAsync(
+            string destination,
+            CancellationToken cancellationToken)
         {
-            if (File.Exists(path))
+            for (var attempt = 1; ; attempt++)
             {
-                File.Delete(path);
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    if (LoadedCaptureDatabaseRegistry.IsLoadedPath(destination))
+                    {
+                        throw new CaptureSaveException(CaptureSaveFailure.Refused);
+                    }
+                    return;
+                }
+                catch (IOException exception) when (IsLocking(exception) && attempt < FileSystemAttempts)
+                {
+                    await Task.Delay(RetryDelay, cancellationToken).ConfigureAwait(false);
+                }
+                catch (IOException exception) when (IsLocking(exception))
+                {
+                    throw new CaptureExportDestinationException("export.output.locked");
+                }
             }
+        }
+
+        private static async Task<bool> CommitAsync(
+            string staged,
+            string destination,
+            bool replaceExisting,
+            Action<string> validateDestination,
+            CancellationToken cancellationToken)
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    using IDisposable lease = LoadedCaptureDatabaseRegistry.AcquireSaveDestination(destination);
+                    validateDestination(destination);
+                    bool exists = Path.Exists(destination);
+                    if (exists && (Directory.Exists(destination) || !replaceExisting))
+                    {
+                        throw new CaptureExportDestinationException("export.output.exists");
+                    }
+                    File.Move(staged, destination, replaceExisting);
+                    return exists;
+                }
+                catch (Exception exception) when (IsLocking(exception) && attempt < FileSystemAttempts)
+                {
+                    await Task.Delay(RetryDelay, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (IsLocking(exception))
+                {
+                    throw new CaptureExportDestinationException("export.output.locked");
+                }
+            }
+        }
+
+        private static void Cleanup(string staged, string stagingDirectory, bool committed)
+        {
+            if (!committed)
+            {
+                DeleteWithRetry(staged);
+            }
+            DeleteWithRetry(staged + "-journal");
+            DeleteWithRetry(staged + "-wal");
+            DeleteWithRetry(staged + "-shm");
+            RetryFileSystem(() =>
+            {
+                if (Directory.Exists(stagingDirectory))
+                {
+                    Directory.Delete(stagingDirectory);
+                }
+            });
+        }
+
+        private static void DeleteWithRetry(string path) =>
+            RetryFileSystem(() =>
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            });
+
+        private static void RetryFileSystem(Action action)
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    action();
+                    return;
+                }
+                catch (Exception exception) when (
+                    (exception is IOException or UnauthorizedAccessException) &&
+                    attempt < FileSystemAttempts)
+                {
+                    Thread.Sleep(RetryDelay);
+                }
+            }
+        }
+
+        private static bool IsLocking(Exception exception)
+        {
+            if (exception is CaptureSaveException { Failure: CaptureSaveFailure.DestinationLocked })
+            {
+                return true;
+            }
+            return exception is IOException io && (io.HResult & 0xFFFF) is 32 or 33;
         }
     }
 

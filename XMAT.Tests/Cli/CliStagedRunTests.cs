@@ -326,6 +326,17 @@ namespace XMAT.Tests.Cli
             Assert.True(PrivateFolder.IsPrivate(concurrentPath));
         }
 
+        [Fact]
+        public void PrivateFolder_UsesExtendedLengthNativePaths()
+        {
+            Assert.Equal(@"\\?\C:\a\b", PrivateFolder.NativePath(@"C:\a\b"));
+            Assert.Equal(@"\\?\UNC\server\share\x", PrivateFolder.NativePath(@"\\server\share\x"));
+            Assert.Equal(@"\\?\C:\x", PrivateFolder.NativePath(@"\\?\C:\x"));
+            Assert.Equal(@"\\.\x", PrivateFolder.NativePath(@"\\.\x"));
+            string relative = Path.Join("relative", "x");
+            Assert.Equal(@"\\?\" + Path.GetFullPath(relative), PrivateFolder.NativePath(relative));
+        }
+
         // A report that cannot be serialized (here a null warning, which also breaks the text on standard error) is replaced
         // by the fixed fallback document. Exit code 7 stays, and a published run keeps its result and lists its artifacts;
         // only a run whose document was its result, such as --version, becomes an internal error.

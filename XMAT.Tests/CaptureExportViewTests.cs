@@ -157,7 +157,7 @@ namespace XMAT.Tests
                         .OrderBy(number => number)
                         .ToArray();
                     visible = view.ExportSelection(selectedOnly: false);
-                    snapshot = controller.CreateExportSnapshot("d1", AnalysisLimits.Default);
+                    snapshot = controller.CreateExportSnapshot("d1");
                     window.Content = null;
                     WpfTestHost.Pump();
                 });

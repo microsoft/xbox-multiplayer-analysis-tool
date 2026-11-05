@@ -104,7 +104,7 @@ namespace XMAT.Operations.Export
         IReadOnlyList<CaptureExportSession> Sessions { get; }
         bool IsLive { get; }
 
-        // File inputs use "xmatcap" or "saz"; GUI snapshots use "records". GUI snapshots use AnalysisLimits.Default.
+        // File inputs use "xmatcap" or "saz"; GUI snapshots use "records".
         string InputKind { get; }
 
         // Identity and hash may be null for snapshots without an applicable source file. Destination validation still
@@ -214,7 +214,7 @@ namespace XMAT.Operations.Export
                 CaptureExportErrorCodes.InvalidBody =>
                     (OperationOutcome.InvalidInput, "The capture contains invalid body data."),
                 CaptureExportErrorCodes.InputLimit =>
-                    (OperationOutcome.InvalidInput, "The capture exceeds an export input limit."),
+                    (OperationOutcome.InvalidInput, "The capture exceeds an export safety limit."),
                 CaptureExportErrorCodes.OutputUnprotected =>
                     (OperationOutcome.Failed, "The export destination cannot protect the output."),
                 CaptureExportErrorCodes.FormatMismatch =>

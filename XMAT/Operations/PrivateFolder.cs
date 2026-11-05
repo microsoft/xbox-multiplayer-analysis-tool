@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 
@@ -14,11 +16,29 @@ namespace XMAT.Operations
         internal static void Create(string path)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
-            if (Path.Exists(path))
+            string nativePath = NativePath(path);
+            byte[] descriptor = CurrentUserOnly().GetSecurityDescriptorBinaryForm();
+            IntPtr descriptorPointer = Marshal.AllocHGlobal(descriptor.Length);
+            try
             {
-                throw new IOException("The private folder already exists.");
+                Marshal.Copy(descriptor, 0, descriptorPointer, descriptor.Length);
+                var attributes = new SecurityAttributes
+                {
+                    Length = Marshal.SizeOf<SecurityAttributes>(),
+                    SecurityDescriptor = descriptorPointer,
+                };
+                if (!CreateDirectory(nativePath, ref attributes))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    throw error is 80 or 183
+                        ? new IOException("The private folder already exists.")
+                        : new IOException("The private folder could not be created.", new Win32Exception(error));
+                }
             }
-            new DirectoryInfo(path).Create(CurrentUserOnly());
+            finally
+            {
+                Marshal.FreeHGlobal(descriptorPointer);
+            }
         }
 
         internal static bool IsPrivate(string path)
@@ -75,5 +95,33 @@ namespace XMAT.Operations
                 AccessControlType.Allow));
             return security;
         }
+
+        internal static string NativePath(string path)
+        {
+            path = Path.GetFullPath(path);
+            if (path.StartsWith(@"\\?\", StringComparison.Ordinal) ||
+                path.StartsWith(@"\\.\", StringComparison.Ordinal))
+            {
+                return path;
+            }
+            return path.StartsWith(@"\\", StringComparison.Ordinal)
+                ? @"\\?\UNC\" + path[2..]
+                : @"\\?\" + path;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SecurityAttributes
+        {
+            internal int Length;
+            internal IntPtr SecurityDescriptor;
+            [MarshalAs(UnmanagedType.Bool)]
+            internal bool InheritHandle;
+        }
+
+        [DllImport("kernel32.dll", EntryPoint = "CreateDirectoryW", CharSet = CharSet.Unicode, ExactSpelling = true,
+            SetLastError = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateDirectory(string path, ref SecurityAttributes securityAttributes);
     }
 }

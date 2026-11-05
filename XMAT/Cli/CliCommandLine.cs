@@ -5,7 +5,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.IO;
 using XMAT.Operations;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
@@ -390,22 +389,11 @@ namespace XMAT.Cli
         // does not agree with the extension is null, so a file never gets a misleading name.
         private static CaptureExportFormat? ExportFormat(string output, string format)
         {
-            CaptureExportFormat? fromExtension = Path.GetExtension(output).ToUpperInvariant() switch
-            {
-                ".XMATCAP" => CaptureExportFormat.Xmatcap,
-                ".SAZ" => CaptureExportFormat.Saz,
-                _ => null,
-            };
-            if (format == null)
-            {
-                return fromExtension;
-            }
-
+            format ??= CaptureExportFormats.HasExpectedExtension(CaptureExportFormat.Xmatcap, output) ? "xmatcap" : "saz";
             int index = Array.IndexOf(FormatNames, format);
-            CaptureExportFormat? chosen = index < 0 ? null : (CaptureExportFormat)index;
-            bool agrees = chosen == fromExtension ||
-                (chosen == CaptureExportFormat.SanitizedSaz && fromExtension == CaptureExportFormat.Saz);
-            return agrees ? chosen : null;
+            return index >= 0 && CaptureExportFormats.HasExpectedExtension((CaptureExportFormat)index, output)
+                ? (CaptureExportFormat)index
+                : null;
         }
 
         // A repeatable option that was given selects its values; one that was not leaves its filter off (null).

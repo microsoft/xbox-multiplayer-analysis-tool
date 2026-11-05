@@ -32,15 +32,16 @@ namespace XMAT
             CancelExport.Content = Localization.GetLocalizedString("CANCEL");
         }
 
-        // Shows the export's current phase, also one reported before the window appeared. Only a change of phase reaches
-        // the dispatcher, and once Cancel is asked for the window keeps saying so.
+        // Shows the export's current phase, also one reported before the window appeared. Reading and writing alternate for
+        // every batch of sessions, so both show one text. Only a change of text reaches the dispatcher, and once Cancel is
+        // asked for the window keeps saying so.
         void IProgress<OperationProgress>.Report(OperationProgress value)
         {
             string key = value?.Phase switch
             {
                 ExportCaptureSessionsOperation.SelectPhase => "EXPORT_PHASE_SELECT",
-                ExportCaptureSessionsOperation.ReadPhase => "EXPORT_PHASE_READ",
-                ExportCaptureSessionsOperation.WritePhase => "EXPORT_PHASE_WRITE",
+                ExportCaptureSessionsOperation.ReadPhase or ExportCaptureSessionsOperation.WritePhase =>
+                    "SANITIZED_EXPORT_SCANNING",
                 ExportCaptureSessionsOperation.PublishPhase => "EXPORT_PHASE_PUBLISH",
                 _ => null,
             };

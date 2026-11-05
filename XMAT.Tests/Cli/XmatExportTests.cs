@@ -83,6 +83,24 @@ namespace XMAT.Tests.Cli
             }
         }
 
+        // xmat.exe is not long-path aware, yet an --out folder past the classic 260-character limit (three 100-character
+        // folders) is staged and published like any other, and its staging folder is removed.
+        [Fact]
+        public async Task Export_PublishesIntoAFolderLongerThanMaxPath()
+        {
+            using var directory = new CliTestDirectory();
+            string input = Path.Join(directory.Root, "capture.saz");
+            SazArchive.Write(input, new[] { PairedSession(1) });
+            string folder = Path.Join(directory.Root, new string('d', 100), new string('e', 100), new string('f', 100));
+            Directory.CreateDirectory(folder);
+            string output = Path.Join(folder, "x.saz");
+
+            XmatRun run = await XmatProcess.RunAsync(directory.Root, "export", input, "--out", output);
+
+            CliAssert.ExitCode(0, run);
+            Assert.Equal(new[] { output }, Directory.GetFileSystemEntries(folder));
+        }
+
         // The request numbers in an exported capture, in order.
         internal static long[] RequestNumbers(string capture)
         {
