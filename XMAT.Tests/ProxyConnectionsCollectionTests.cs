@@ -164,38 +164,78 @@ namespace XMAT.Tests
             Assert.Same(replacement, connections.ById(15));
         }
 
-        [Fact]
-        public void BatchRemove_PublishesOneResetAndKeepsSurvivorObjects()
+        [Theory]
+        [InlineData(1)]
+        [InlineData(16)]
+        public void SmallRemove_PublishesDescendingPreciseRemoves(int removeCount)
         {
-            var connections = new ProxyConnectionsCollection();
-            Guid source = Guid.NewGuid();
-            var firstKey = new CaptureRowKey(source, 1, 21, 21);
-            var deletedKey = new CaptureRowKey(source, 1, 22, 22);
-            var lastKey = new CaptureRowKey(source, 1, 23, 23);
-            ProxyConnectionModel first = connections.AddFromDataRecord(
-                new Record(21, 21, 1000), false, firstKey);
-            _ = connections.AddFromDataRecord(new Record(22, 22, 1001), false, deletedKey);
-            ProxyConnectionModel last = connections.AddFromDataRecord(
-                new Record(23, 23, 1002), false, lastKey);
+            (ProxyConnectionsCollection connections, ProxyConnectionModel[] models) = Connections(20);
+            int[] removedIndices = Enumerable.Range(1, removeCount).ToArray();
+            var changes = new List<(NotifyCollectionChangedAction Action, ProxyConnectionModel Item, int Index)>();
+            connections.CollectionChanged += (_, args) => changes.Add(
+                (args.Action, args.OldItems?[0] as ProxyConnectionModel, args.OldStartingIndex));
+
+            int removed = connections.RemoveByRowKeys(
+                removedIndices.Select(index => models[index].RowKey).ToHashSet());
+
+            Assert.Equal(removeCount, removed);
+            AssertState(connections, models, removedIndices);
+            Assert.Equal(removeCount, changes.Count);
+            Assert.All(changes, change => Assert.Equal(NotifyCollectionChangedAction.Remove, change.Action));
+            Assert.Equal(removedIndices.OrderByDescending(index => index), changes.Select(change => change.Index));
+            Assert.All(changes, change => Assert.Same(models[change.Index], change.Item));
+        }
+
+        [Fact]
+        public void BulkRemove_PublishesOneReset()
+        {
+            (ProxyConnectionsCollection connections, ProxyConnectionModel[] models) = Connections(20);
+            int[] removedIndices = Enumerable.Range(0, 17).ToArray();
             var changes = new List<NotifyCollectionChangedAction>();
             connections.CollectionChanged += (_, args) => changes.Add(args.Action);
 
-            int removed = connections.RemoveByRowKeys(new HashSet<CaptureRowKey> { deletedKey });
+            int removed = connections.RemoveByRowKeys(
+                removedIndices.Select(index => models[index].RowKey).ToHashSet());
 
-            Assert.Equal(1, removed);
+            Assert.Equal(17, removed);
+            AssertState(connections, models, removedIndices);
             Assert.Equal(new[] { NotifyCollectionChangedAction.Reset }, changes);
-            Assert.Collection(
-                connections,
-                item => Assert.Same(first, item),
-                item => Assert.Same(last, item));
-            Assert.Null(connections.ByKey(deletedKey));
-            Assert.Same(first, connections.ByKey(firstKey));
-            Assert.Same(last, connections.ByKey(lastKey));
+        }
 
-            Assert.Equal(
-                0,
-                connections.RemoveByRowKeys(new HashSet<CaptureRowKey> { new(source, 1, 99, 99), }));
-            Assert.Single(changes);
+        [Fact]
+        public void RemovingNoMatchesPublishesNothing()
+        {
+            (ProxyConnectionsCollection connections, ProxyConnectionModel[] models) = Connections(5);
+            var changes = new List<NotifyCollectionChangedAction>();
+            connections.CollectionChanged += (_, args) => changes.Add(args.Action);
+
+            int removed = connections.RemoveByRowKeys(
+                new HashSet<CaptureRowKey> { new(Guid.NewGuid(), 1, 99, 99), });
+
+            Assert.Equal(0, removed);
+            AssertState(connections, models, Array.Empty<int>());
+            Assert.Empty(changes);
+        }
+
+        [Fact]
+        public void ThrowingRemoveObserver_StillRetiresEveryVictimAndPropagates()
+        {
+            (ProxyConnectionsCollection connections, ProxyConnectionModel[] models) = Connections(6);
+            int[] removedIndices = [1, 3, 4];
+            var injected = new InvalidOperationException("Injected Remove observer failure.");
+            connections.CollectionChanged += (_, args) =>
+            {
+                if (args.Action == NotifyCollectionChangedAction.Remove)
+                {
+                    throw injected;
+                }
+            };
+
+            InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() =>
+                connections.RemoveByRowKeys(removedIndices.Select(index => models[index].RowKey).ToHashSet()));
+
+            Assert.Same(injected, failure);
+            AssertState(connections, models, removedIndices);
         }
 
         [Fact]
@@ -320,6 +360,44 @@ namespace XMAT.Tests
                 new WeakReference<byte[]>(model.RequestBody));
             Assert.Equal(1, connections.RemoveByRowKeys(new HashSet<CaptureRowKey> { key }));
             return references;
+        }
+
+        private static (ProxyConnectionsCollection Connections, ProxyConnectionModel[] Models) Connections(int count)
+        {
+            var connections = new ProxyConnectionsCollection();
+            Guid source = Guid.NewGuid();
+            ProxyConnectionModel[] models = Enumerable.Range(0, count)
+                .Select(index => connections.AddFromDataRecord(
+                    new Record(index + 1, index + 1, 1000 + index),
+                    false,
+                    new CaptureRowKey(source, 1, index + 1, index + 1)))
+                .ToArray();
+            return (connections, models);
+        }
+
+        private static void AssertState(
+            ProxyConnectionsCollection connections,
+            ProxyConnectionModel[] models,
+            IReadOnlyCollection<int> removedIndices)
+        {
+            ProxyConnectionModel[] survivors = models
+                .Where((_, index) => !removedIndices.Contains(index))
+                .ToArray();
+            Assert.Equal(survivors, connections);
+            for (var index = 0; index < models.Length; index++)
+            {
+                ProxyConnectionModel model = models[index];
+                if (removedIndices.Contains(index))
+                {
+                    Assert.Null(connections.ByKey(model.RowKey));
+                    Assert.Null(connections.ById((int)model.RequestNumber));
+                }
+                else
+                {
+                    Assert.Same(model, connections.ByKey(model.RowKey));
+                    Assert.Same(model, connections.ById((int)model.RequestNumber));
+                }
+            }
         }
 
         private static void ForceCollection()

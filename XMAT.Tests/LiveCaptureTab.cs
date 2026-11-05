@@ -24,6 +24,8 @@ namespace XMAT.Tests
         private readonly CaptureAppModel _app;
         private readonly Guid _run = Guid.NewGuid();
         private readonly Dictionary<int, (ClientProcessContext Client, ClientRequest Request)> _sessions = new();
+        private readonly AsyncOperationTracker _callbacks;
+        private readonly BatchedDispatcherQueue _uiUpdates;
 
         internal LiveCaptureTab(CaptureAppModel app = null, string name = "Delete test", bool readOnly = false)
         {
@@ -34,8 +36,10 @@ namespace XMAT.Tests
             Controller = new WebServiceDeviceCaptureController(name, DeviceType.LocalPC, readOnly);
             Field("_dataTable").SetValue(
                 Controller, _database.CreateTable(WebServiceCaptureMethod.TableName, WebProxyCaptureSchema.CreateFields()));
-            ((AsyncOperationTracker)Field("_captureCallbacks").GetValue(Controller)).StartAccepting();
-            ((BatchedDispatcherQueue)Field("_uiUpdateQueue").GetValue(Controller)).StartAccepting();
+            _callbacks = (AsyncOperationTracker)Field("_captureCallbacks").GetValue(Controller);
+            _uiUpdates = (BatchedDispatcherQueue)Field("_uiUpdateQueue").GetValue(Controller);
+            _callbacks.StartAccepting();
+            _uiUpdates.StartAccepting();
             _app.CaptureDeviceContexts.Add(this);
         }
 
@@ -89,10 +93,36 @@ namespace XMAT.Tests
             typeof(WebServiceDeviceCaptureController).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)
                 .CreateDelegate<TDelegate>(Controller);
 
+        // Stops the capture callbacks and drains the UI updates they queued before the database closes. The shared
+        // dispatcher is pumped for a bounded time and never blocked on work that needs it.
         public void Dispose()
         {
-            _app.CaptureDeviceContexts.Remove(this);
-            _database.Dispose();
+            try
+            {
+                Complete(_callbacks.StopAcceptingAndWaitAsync());
+                Complete(_uiUpdates.CompleteAndDrainAsync());
+            }
+            finally
+            {
+                _app.CaptureDeviceContexts.Remove(this);
+                _database.Dispose();
+            }
+        }
+
+        private static void Complete(Task task)
+        {
+            var clock = Stopwatch.StartNew();
+            while (!task.IsCompleted && clock.Elapsed < TimeSpan.FromSeconds(10))
+            {
+                WpfTestHost.Pump();
+            }
+
+            if (!task.IsCompleted)
+            {
+                throw new TimeoutException("The capture tab's callbacks or UI updates did not finish.");
+            }
+
+            task.GetAwaiter().GetResult();
         }
 
         // Runs a capture policy handler to completion, then the UI updates it queued.

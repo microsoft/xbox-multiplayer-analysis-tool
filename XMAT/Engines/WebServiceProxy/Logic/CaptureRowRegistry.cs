@@ -364,7 +364,10 @@ namespace XMAT.WebServiceCapture
                     {
                         requests.RemoveWhere(
                             request =>
-                                _requests.TryGetValue(request, out CaptureRowKey mapped) && mapped == key);
+                            {
+                                VisitObserver?.Invoke("requests", 1);
+                                return _requests.TryGetValue(request, out CaptureRowKey mapped) && mapped == key;
+                            });
                         if (requests.Count == 0)
                         {
                             _connectionRequests.Remove(connection);

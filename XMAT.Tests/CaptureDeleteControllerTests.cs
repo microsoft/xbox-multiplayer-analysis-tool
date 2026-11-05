@@ -86,6 +86,29 @@ namespace XMAT.Tests
                 }
             });
 
+        [Fact]
+        public void Clear_DoesNotReviveAnExplicitlyRetiredWebSocket() =>
+            WpfTestHost.Run(_ =>
+            {
+                using var capture = new RaceHarness();
+                ClientProcessContext client = capture.Client(1015);
+                Captured sibling = capture.Add(1, 1015, client: client);
+                Captured deleted = capture.Add(2, 1015, client: client);
+                Assert.True(capture.Frame(sibling, "sibling before delete"));
+                Assert.True(capture.Frame(deleted, "deleted before delete"));
+                capture.Delete(deleted, sibling);
+
+                capture.Controller.ClearAllCaptures();
+                Assert.True(capture.Frame(deleted, "deleted after clear"));
+                Assert.True(capture.Frame(sibling, "sibling after clear"));
+
+                WebSocketMessageModel message = Assert.Single(capture.Controller.WebSocketMessages);
+                Assert.Equal("sibling after clear", message.PayloadText);
+                Assert.Equal(sibling.Key.SourceId, message.RowKey.SourceId);
+                Assert.True(message.RowKey.Generation > sibling.Key.Generation);
+                Assert.NotEqual(sibling.Key, message.RowKey);
+            });
+
         private static void AssertHttpResponseRace(RaceHarness capture)
         {
             ClientProcessContext client = capture.Client(1010);
@@ -310,7 +333,7 @@ namespace XMAT.Tests
                 Pump();
             }
 
-            internal void Frame(Captured row, string text)
+            internal bool Frame(Captured row, string text)
             {
                 Invoke(
                     "WebProxy_WebSocketMessage",
@@ -321,6 +344,7 @@ namespace XMAT.Tests
                         Message = Encoding.UTF8.GetBytes(text),
                     });
                 Pump();
+                return true;
             }
 
             internal string Status(Captured row) =>
