@@ -126,7 +126,9 @@ xmat --version
   user can open, and published whole with that access, or not at all when the run fails or is cancelled. Where Windows
   cannot restrict access to that folder (storage without Windows permissions, such as FAT drives or some network
   shares), xmat publishes nothing (`export.output.unprotected`, exit code 6). A selection with no session to write
-  publishes nothing (`export.no-eligible-rows`, exit code 3).
+  publishes nothing (`export.no-eligible-rows`, exit code 3). An `.xmatcap` export also publishes nothing
+  (`export.write.failed`, exit code 6) when its staged file, in the folder next to `FILE`, would have a path longer
+  than Windows' 260-character limit; choose a shorter folder. `.saz` outputs are not affected.
 - Exact rule evaluation has one work and live-memory budget shared across all selected devices, consoles, endpoints
   and rules, and never samples, truncates or publishes partial findings. Analysis uses safety budgets, not a fixed
   duration limit. In testing, one regular 1 Hz polling key completed at 75 minutes but exceeded the budget at

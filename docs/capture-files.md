@@ -192,7 +192,10 @@ Longer exports show a progress window with the current step and Cancel. Cancel,
 Escape, or closing that window requests cancellation and waits for the worker and
 cleanup before releasing the operation guard. An existing destination is replaced only
 after a complete export, not on cancellation or failure; one that another program has
-open is reported and left as it is.
+open is reported and left as it is. An `.XMATCAP` export fails with an error and
+leaves nothing behind when its temporary file, in a folder next to the destination,
+would have a path longer than Windows' 260-character limit; choose a shorter folder.
+`.SAZ` exports are not affected.
 
 ### Review before sharing
 

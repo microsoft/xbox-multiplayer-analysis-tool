@@ -49,6 +49,8 @@ namespace XMAT.Tests
 
             Assert.True(
                 record.IsNull("Extension"));
+            Assert.True(((IRawDataRecord)record).TryReadRaw("Extension", out object raw));
+            Assert.Null(raw);
             if (type == typeof(string))
             {
                 Assert.Null(
@@ -107,7 +109,7 @@ namespace XMAT.Tests
             using SqliteCommand command =
                 connection.CreateCommand();
             command.CommandText =
-                "SELECT 1, $text, 7, 7";
+                "SELECT 1, $text, 7, 7, X'0001FF'";
             command.Parameters.AddWithValue("$text", text);
             using SqliteDataReader reader =
                 command.ExecuteReader();
@@ -135,12 +137,19 @@ namespace XMAT.Tests
                             typeof(string),
                             3,
                             isExtension: true),
+                    ["Untyped"] =
+                        FieldDefinition.CreateFromSchema(
+                            "Untyped",
+                            typeof(string),
+                            4,
+                            isExtension: true),
                 };
 
             var record =
                 new SqLtDataRecord(
                     reader,
-                    fields);
+                    fields,
+                    new HashSet<string>(StringComparer.Ordinal) { "Untyped" });
 
             Assert.False(
                 record.IsNull("TextExtension"));
@@ -159,10 +168,26 @@ namespace XMAT.Tests
             Assert.True(((IRawDataRecord)record).TryReadRaw("Mismatch", out object mismatch));
             Assert.Equal(7L, mismatch);
             Assert.Null(record.Str("Mismatch"));
+            Assert.False(record.IsNull("Mismatch"));
+            Assert.True(((IRawDataRecord)record).TryReadRaw("Untyped", out object untyped));
+            Assert.Equal(new byte[] { 0, 1, 255 }, (byte[])untyped);
+            Assert.Null(record.Str("Untyped"));
+            Assert.False(record.IsNull("Untyped"));
             var rawOverrides = (IReadOnlyDictionary<string, object>)typeof(SqLtDataRecord)
                 .GetField("_rawValues", BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(record);
-            Assert.Equal(new[] { "Mismatch" }, rawOverrides.Keys);
+            Assert.Equal(new[] { "Mismatch", "Untyped" }, rawOverrides.Keys);
+
+            var ordinaryFields = fields
+                .Where(field => field.Key is "TextExtension" or "IntegerExtension")
+                .ToDictionary(field => field.Key, field => field.Value, StringComparer.Ordinal);
+            var ordinary = new SqLtDataRecord(reader, ordinaryFields);
+            object ordinaryOverrides = typeof(SqLtDataRecord)
+                .GetField("_rawValues", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(ordinary);
+            Assert.Null(ordinaryOverrides);
+            Assert.True(((IRawDataRecord)ordinary).TryReadRaw("TextExtension", out object ordinaryRaw));
+            Assert.Same(ordinaryRaw, ordinary.Str("TextExtension"));
         }
 
         [Fact]

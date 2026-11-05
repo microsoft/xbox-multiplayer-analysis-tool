@@ -83,10 +83,11 @@ namespace XMAT.Tests.Cli
             }
         }
 
-        // xmat.exe is not long-path aware, yet an --out folder past the classic 260-character limit (three 100-character
-        // folders) is staged and published like any other, and its staging folder is removed.
+        // xmat.exe is not long-path aware, yet a SAZ export into a folder past the classic 260-character limit (three
+        // 100-character folders) is staged and published like any other. SQLite cannot open a staged path that long, so an
+        // XMATCAP export there fails cleanly: exit 6, nothing published and no staging folder left behind.
         [Fact]
-        public async Task Export_PublishesIntoAFolderLongerThanMaxPath()
+        public async Task Export_PublishesSazButNotXmatcapIntoAFolderLongerThanMaxPath()
         {
             using var directory = new CliTestDirectory();
             string input = Path.Join(directory.Root, "capture.saz");
@@ -95,9 +96,12 @@ namespace XMAT.Tests.Cli
             Directory.CreateDirectory(folder);
             string output = Path.Join(folder, "x.saz");
 
-            XmatRun run = await XmatProcess.RunAsync(directory.Root, "export", input, "--out", output);
+            XmatRun saz = await XmatProcess.RunAsync(directory.Root, "export", input, "--out", output);
+            XmatRun xmatcap = await XmatProcess.RunAsync(
+                directory.Root, "export", input, "--out", Path.Join(folder, "x.xmatcap"));
 
-            CliAssert.ExitCode(0, run);
+            CliAssert.ExitCode(0, saz);
+            CliAssert.ExitCode(6, xmatcap);
             Assert.Equal(new[] { output }, Directory.GetFileSystemEntries(folder));
         }
 
