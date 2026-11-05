@@ -49,7 +49,7 @@ namespace XMAT.Tests
                 Assert.True(queue.TryEnqueue(
                     () => Assert.False(
                         registry.TryUpdate(run, key, () => throw new InvalidOperationException()))));
-                Complete(queue.CompleteAndDrainAsync());
+                WpfTestHost.Complete(queue.CompleteAndDrainAsync(), TimeSpan.FromSeconds(5));
 
                 Assert.Empty(handled);
             });
@@ -82,8 +82,8 @@ namespace XMAT.Tests
                 handler(null, Message("old", context));
                 controller.ClearAllCaptures();
                 handler(null, Message("new", context));
-                Complete(callbacks.StopAcceptingAndWaitAsync());
-                Complete(queue.CompleteAndDrainAsync());
+                WpfTestHost.Complete(callbacks.StopAcceptingAndWaitAsync(), TimeSpan.FromSeconds(5));
+                WpfTestHost.Complete(queue.CompleteAndDrainAsync(), TimeSpan.FromSeconds(5));
 
                 WebSocketMessageModel message = Assert.Single(controller.WebSocketMessages);
                 Assert.Equal("new", message.PayloadText);
@@ -132,25 +132,32 @@ namespace XMAT.Tests
                     Path = "/pending",
                 };
 
-                bool accepted = Complete(InvokeRequestPolicy(controller, request, process));
+                bool accepted = WpfTestHost.Complete(
+                    InvokeRequestPolicy(controller, request, process),
+                    TimeSpan.FromSeconds(5));
                 WpfTestHost.Pump();
                 ProxyConnectionModel model = Assert.Single(controller.ProxyConnections);
                 Assert.True(accepted);
                 Assert.True(model.IsProcessResolving);
 
-                Complete(controller.StopProxyAsync());
+                WpfTestHost.Complete(controller.StopProxyAsync(), TimeSpan.FromSeconds(5));
 
                 Assert.False(model.IsProcessResolving);
                 Assert.Equal(ClientProcessStatus.Unresolved, model.ClientProcess.Status);
-                long version = controller.DataVersion;
                 process.Publish(new ClientProcessInfo(
                     "late.exe",
                     7001,
                     DateTimeOffset.UtcNow.AddMinutes(-1),
                     ClientProcessStatus.Local));
                 WpfTestHost.Pump();
-                Assert.Equal(version, controller.DataVersion);
                 Assert.Equal(ClientProcessStatus.Unresolved, model.ClientProcess.Status);
+                IDataset freshDataset = table.Dataset;
+                using (freshDataset as IDisposable)
+                {
+                    Assert.Equal(
+                        ClientProcessStatus.Unresolved,
+                        ClientProcessRecordCodec.Read(Assert.Single(freshDataset.DataRecords)).Status);
+                }
             });
         }
 
@@ -192,26 +199,6 @@ namespace XMAT.Tests
                     ProcessContext = process,
                 },
                 CancellationToken.None);
-        }
-
-        private static T Complete<T>(Task<T> task)
-        {
-            Complete((Task)task);
-            return task.GetAwaiter().GetResult();
-        }
-
-        private static void Complete(Task task)
-        {
-            var timeout = Stopwatch.StartNew();
-            while (!task.IsCompleted && timeout.Elapsed < TimeSpan.FromSeconds(5))
-            {
-                WpfTestHost.Pump();
-            }
-            if (!task.IsCompleted)
-            {
-                throw new TimeoutException("The dispatcher operation did not complete.");
-            }
-            task.GetAwaiter().GetResult();
         }
 
         private static T Field<T>(object target, string name) =>

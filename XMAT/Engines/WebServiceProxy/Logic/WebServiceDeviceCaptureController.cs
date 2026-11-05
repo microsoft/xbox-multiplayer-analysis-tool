@@ -158,7 +158,6 @@ namespace XMAT.WebServiceCapture
         public ProcessFilterSpec ProcessFilter { get; private set; }
         internal ClientProcessResolver ProcessResolverOverride { get; set; }
         internal TimeSpan? CaptureCallbackDrainTimeoutOverride { get; set; }
-        internal long DataVersion => Interlocked.Read(ref _dataVersion);
         public ProxyConnectionModel SelectedConnectionModel
         {
             get => _selectedConnectionModel;
@@ -261,7 +260,6 @@ namespace XMAT.WebServiceCapture
         private readonly CaptureRowRegistry _captureRows;
         private CancellationTokenSource _captureCallbackCancellationTokenSource;
         private Guid _activeRun;
-        private long _dataVersion;
         private long _loadedIncarnation;
         private bool _isTransitioning;
         private bool _initialized;
@@ -752,7 +750,6 @@ namespace XMAT.WebServiceCapture
                     .Select(connection => connection.Method)
                     .Distinct()
                     .ToList());
-            IncrementDataVersion();
             NotifyPropertyChangesSafely(
                 nameof(StatusFilterList),
                 nameof(HostFilterList),
@@ -773,7 +770,6 @@ namespace XMAT.WebServiceCapture
             ProcessFilter = source.ProcessFilter;
             _selectedConnectionModel = null;
             _selectedWebSocketMessage = null;
-            IncrementDataVersion();
             NotifyPropertyChangesSafely(
                 nameof(ProxyConnections),
                 nameof(StatusFilterList),
@@ -1564,7 +1560,6 @@ namespace XMAT.WebServiceCapture
                         }
                     }
                 }
-                IncrementDataVersion();
                 IDataRecord addedRecord = DataRecordFromRow(rowId);
                 bool resolving = processContext != null && process.Status == ClientProcessStatus.NotRecorded;
                 _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord, key, resolving));
@@ -1612,7 +1607,6 @@ namespace XMAT.WebServiceCapture
                         IDataRecord record = DataRecordFromRow(key.RowId);
                         if (record != null)
                         {
-                            IncrementDataVersion();
                             applied = _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(record, key));
                         }
                     });
@@ -1624,8 +1618,6 @@ namespace XMAT.WebServiceCapture
                 return false;
             }
         }
-
-        private void IncrementDataVersion() => Interlocked.Increment(ref _dataVersion);
 
         private bool IsRequestBlocked(ClientRequest request)
         {
@@ -1906,7 +1898,6 @@ namespace XMAT.WebServiceCapture
             IDataRecord updatedRecord = DataRecordFromRow(record.RowId);
             if (updatedRecord != null)
             {
-                IncrementDataVersion();
                 _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord, key));
             }
         }
@@ -2083,7 +2074,6 @@ namespace XMAT.WebServiceCapture
                             IDataRecord updatedRecord = DataRecordFromRow(record.RowId);
                             if (updatedRecord != null)
                             {
-                                IncrementDataVersion();
                                 _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord, key));
                             }
                         }
@@ -2155,7 +2145,6 @@ namespace XMAT.WebServiceCapture
                         new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName));
                 }
                 _loadedCaptureDataset = null;
-                IncrementDataVersion();
             }
         }
 
@@ -2164,7 +2153,6 @@ namespace XMAT.WebServiceCapture
             _captureRows.AdvanceGeneration();
             _captureDataSource = CaptureDataSource.ActiveTable;
             _loadedCaptureDataset = null;
-            IncrementDataVersion();
         }
 
         private void ClearCaptureViewModels()

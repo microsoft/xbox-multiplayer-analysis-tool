@@ -411,7 +411,8 @@ namespace XMAT.Tests
                 Assert.Equal(49_999, grid.Items.Count);
                 List<NotifyCollectionChangedAction> changes = RecordChanges(grid);
 
-                pending.SetClientProcess(game);
+                ProxyConnectionModel resolved = Assert.IsType<ProxyConnectionModel>(pending);
+                resolved.SetClientProcess(game);
                 WpfTestHost.Pump();
 
                 Assert.Equal(new[] { NotifyCollectionChangedAction.Add }, changes);
@@ -436,7 +437,7 @@ namespace XMAT.Tests
                 Add(controller, game, tool, unknown, service, imported);
                 var selection = new RecordingProcessSelection();
                 CaptureConnectionView view = View(controller);
-                view.ProcessSelection = selection;
+                view.ProcessSelection = selection.Select;
                 ShowCaptureView(window, view);
                 DataGrid grid = ConnectionList(view);
                 int before = selection.Requests.Count;
@@ -477,7 +478,7 @@ namespace XMAT.Tests
                 CaptureRowKey dropped = otherGame.RowKey;
                 var selection = new RecordingProcessSelection(result => Without(result, dropped));
                 CaptureConnectionView view = View(controller);
-                view.ProcessSelection = selection;
+                view.ProcessSelection = selection.Select;
                 ShowCaptureView(window, view);
                 DataGrid grid = ConnectionList(view);
 
@@ -511,7 +512,7 @@ namespace XMAT.Tests
                 Add(controller, game, tool);
                 var selection = new RecordingProcessSelection();
                 CaptureConnectionView view = View(controller);
-                view.ProcessSelection = selection;
+                view.ProcessSelection = selection.Select;
                 ShowCaptureView(window, view);
                 DataGrid grid = ConnectionList(view);
                 controller.SetProcessFilter(Spec(new[] { "Game.exe" }));
@@ -997,8 +998,7 @@ namespace XMAT.Tests
             Assert.Equal(grid.Columns.Count, headers.Length);
             DataGridColumnHeaderItemAutomationPeer header = headers[grid.Columns.IndexOf(column)];
             Assert.Same(column.Header, header.Item);
-            var click = header.GetPattern(PatternInterface.Invoke) as IInvokeProvider;
-            Assert.NotNull(click);
+            IInvokeProvider click = Assert.IsAssignableFrom<IInvokeProvider>(header.GetPattern(PatternInterface.Invoke));
             click.Invoke();
             WpfTestHost.Pump();
         }

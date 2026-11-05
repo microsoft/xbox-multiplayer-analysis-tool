@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using XMAT.Cli;
+using XMAT.Operations;
 using XMAT.Operations.Capabilities;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Processes;
@@ -115,7 +116,8 @@ namespace XMAT.Tests.Cli
             Assert.Equal(64, atLimits.Request.ProcessFilter.Exclude.Length);
             Assert.Equal("cli.usage.invalid-value", tooMany.Error?.Code);
             Assert.Equal("cli.usage.invalid-value", tooLong.Error?.Code);
-            Assert.DoesNotContain("gggggggg", tooLong.Error.Message, StringComparison.Ordinal);
+            OperationDiagnostic error = Assert.IsType<OperationDiagnostic>(tooLong.Error);
+            Assert.DoesNotContain("gggggggg", error.Message, StringComparison.Ordinal);
         }
 
         [Fact]

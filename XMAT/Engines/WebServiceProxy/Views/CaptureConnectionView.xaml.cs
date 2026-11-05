@@ -8,6 +8,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -87,8 +88,8 @@ namespace XMAT.WebServiceCapture
         }
 
         // The shared selection that picks and counts the rows a new process filter shows; tests substitute it.
-        internal IOperation<FilterCaptureSessionsRequest, FilterCaptureSessionsResult> ProcessSelection { get; set; } =
-            new FilterCaptureSessionsOperation();
+        internal Func<FilterCaptureSessionsRequest, CancellationToken, OperationResult<FilterCaptureSessionsResult>>
+            ProcessSelection { get; set; } = FilterCaptureSessionsOperation.Select;
 
         public CaptureConnectionView()
         {
@@ -610,13 +611,9 @@ namespace XMAT.WebServiceCapture
             WebServiceDeviceCaptureController controller,
             ProcessFilterSpec spec)
         {
-            OperationResult<FilterCaptureSessionsResult> selected = ProcessSelection
-                .ExecuteAsync(
-                    new FilterCaptureSessionsRequest(controller.SnapshotProcessSessions(ProcessSessionsDeviceId), spec),
-                    OperationContext.None,
-                    default)
-                .GetAwaiter()
-                .GetResult();
+            OperationResult<FilterCaptureSessionsResult> selected = ProcessSelection(
+                new FilterCaptureSessionsRequest(controller.SnapshotProcessSessions(ProcessSessionsDeviceId), spec),
+                default);
             return selected.Succeeded &&
                 selected.Value?.IncludedKeys != null &&
                 selected.Value.Scope?.Counts != null

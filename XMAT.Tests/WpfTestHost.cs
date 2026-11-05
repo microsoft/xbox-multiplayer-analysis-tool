@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -60,6 +61,28 @@ namespace XMAT.Tests
             Dispatcher.CurrentDispatcher.BeginInvoke(
                 DispatcherPriority.ContextIdle, new Action(() => frame.Continue = false));
             Dispatcher.PushFrame(frame);
+        }
+
+        // Pumps the shared application's dispatcher until TASK completes or TIMEOUT passes, then rethrows any failure.
+        internal static void Complete(Task task, TimeSpan timeout)
+        {
+            Application.Current.Dispatcher.VerifyAccess();
+            var clock = Stopwatch.StartNew();
+            while (!task.IsCompleted && clock.Elapsed < timeout)
+            {
+                Pump();
+            }
+            if (!task.IsCompleted)
+            {
+                throw new TimeoutException("The dispatcher operation did not complete.");
+            }
+            task.GetAwaiter().GetResult();
+        }
+
+        internal static T Complete<T>(Task<T> task, TimeSpan timeout)
+        {
+            Complete((Task)task, timeout);
+            return task.GetAwaiter().GetResult();
         }
     }
 }

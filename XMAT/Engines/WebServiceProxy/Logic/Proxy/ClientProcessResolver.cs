@@ -237,10 +237,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 _signal.Dispose();
                 _applicationSignal.Dispose();
                 _stopping.Dispose();
-                if (_localAddresses is IDisposable disposable)
-                {
-                    disposable.Dispose();
-                }
+                (_localAddresses as IDisposable)?.Dispose();
             }
         }
 

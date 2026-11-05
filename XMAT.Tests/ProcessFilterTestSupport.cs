@@ -50,8 +50,7 @@ namespace XMAT.Tests
     }
 
     // The shared selection, recorded: each request and the result it returned. A rewrite models a faulty selection.
-    // It completes synchronously, as the shared operation does, so a caller on the UI thread never waits for it.
-    internal sealed class RecordingProcessSelection : IOperation<FilterCaptureSessionsRequest, FilterCaptureSessionsResult>
+    internal sealed class RecordingProcessSelection
     {
         private readonly Func<FilterCaptureSessionsResult, FilterCaptureSessionsResult> _rewrite;
 
@@ -64,24 +63,21 @@ namespace XMAT.Tests
 
         internal List<FilterCaptureSessionsResult> Results { get; } = new();
 
-        public Task<OperationResult<FilterCaptureSessionsResult>> ExecuteAsync(
+        internal OperationResult<FilterCaptureSessionsResult> Select(
             FilterCaptureSessionsRequest request,
-            OperationContext context,
             CancellationToken cancellationToken)
         {
             Requests.Add(request);
-            OperationResult<FilterCaptureSessionsResult> shared = new FilterCaptureSessionsOperation()
-                .ExecuteAsync(request, context, cancellationToken)
-                .GetAwaiter()
-                .GetResult();
+            OperationResult<FilterCaptureSessionsResult> shared =
+                FilterCaptureSessionsOperation.Select(request, cancellationToken);
             if (!shared.Succeeded)
             {
-                return Task.FromResult(shared);
+                return shared;
             }
 
             FilterCaptureSessionsResult value = _rewrite == null ? shared.Value : _rewrite(shared.Value);
             Results.Add(value);
-            return Task.FromResult(OperationResult<FilterCaptureSessionsResult>.Success(value));
+            return OperationResult<FilterCaptureSessionsResult>.Success(value);
         }
     }
 }

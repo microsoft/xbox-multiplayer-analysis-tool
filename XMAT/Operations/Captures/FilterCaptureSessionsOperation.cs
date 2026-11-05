@@ -20,15 +20,21 @@ namespace XMAT.Operations.Captures
             CancellationToken cancellationToken)
         {
             _ = context;
+            return Task.FromResult(Select(request, cancellationToken));
+        }
+
+        internal static OperationResult<FilterCaptureSessionsResult> Select(
+            FilterCaptureSessionsRequest request,
+            CancellationToken cancellationToken)
+        {
             if (request?.Sessions == null)
             {
-                return Task.FromResult(
-                    OperationResult<FilterCaptureSessionsResult>.Failure(
-                        OperationOutcome.InvalidInput,
-                        new OperationDiagnostic(
-                            "process-filter.sessions-missing",
-                            OperationDiagnosticSeverity.Error,
-                            "Capture sessions are required.")));
+                return OperationResult<FilterCaptureSessionsResult>.Failure(
+                    OperationOutcome.InvalidInput,
+                    new OperationDiagnostic(
+                        "process-filter.sessions-missing",
+                        OperationDiagnosticSeverity.Error,
+                        "Capture sessions are required."));
             }
             ProcessFilter filter;
             try
@@ -37,13 +43,12 @@ namespace XMAT.Operations.Captures
             }
             catch (ArgumentException)
             {
-                return Task.FromResult(
-                    OperationResult<FilterCaptureSessionsResult>.Failure(
-                        OperationOutcome.InvalidInput,
-                        new OperationDiagnostic(
-                            "process-filter.invalid-selector",
-                            OperationDiagnosticSeverity.Error,
-                            "A process selector is invalid.")));
+                return OperationResult<FilterCaptureSessionsResult>.Failure(
+                    OperationOutcome.InvalidInput,
+                    new OperationDiagnostic(
+                        "process-filter.invalid-selector",
+                        OperationDiagnosticSeverity.Error,
+                        "A process selector is invalid."));
             }
 
             var included = new List<CaptureRowKey>(request.Sessions.Count);
@@ -54,13 +59,12 @@ namespace XMAT.Operations.Captures
                 cancellationToken.ThrowIfCancellationRequested();
                 if (session == null || string.IsNullOrEmpty(session.DeviceId))
                 {
-                    return Task.FromResult(
-                        OperationResult<FilterCaptureSessionsResult>.Failure(
-                            OperationOutcome.InvalidInput,
-                            new OperationDiagnostic(
-                                "process-filter.session-invalid",
-                                OperationDiagnosticSeverity.Error,
-                                "A capture session is invalid.")));
+                    return OperationResult<FilterCaptureSessionsResult>.Failure(
+                        OperationOutcome.InvalidInput,
+                        new OperationDiagnostic(
+                            "process-filter.session-invalid",
+                            OperationDiagnosticSeverity.Error,
+                            "A capture session is invalid."));
                 }
                 if (!deviceTotals.TryGetValue(session.DeviceId, out MutableCounts device))
                 {
@@ -81,9 +85,8 @@ namespace XMAT.Operations.Captures
                 item => item.Value.ToRecord(),
                 StringComparer.Ordinal);
             var scope = new ProcessFilterScope(filter.Specification, total.ToRecord(), devices);
-            return Task.FromResult(
-                OperationResult<FilterCaptureSessionsResult>.Success(
-                    new FilterCaptureSessionsResult(included.AsReadOnly(), scope)));
+            return OperationResult<FilterCaptureSessionsResult>.Success(
+                new FilterCaptureSessionsResult(included.AsReadOnly(), scope));
         }
 
         private sealed class MutableCounts

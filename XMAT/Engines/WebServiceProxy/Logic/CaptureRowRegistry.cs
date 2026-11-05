@@ -196,12 +196,12 @@ namespace XMAT.WebServiceCapture
                     }
                     return;
                 }
-                foreach (CaptureRowKey key in rows.ToArray())
+                foreach (var item in rows.ToArray()
+                    .Select(key => (Key: key, Binding: key.Generation == _generation
+                        ? _bindings.GetValueOrDefault(key) : null))
+                    .Where(item => item.Binding != null))
                 {
-                    if (key.Generation == _generation && _bindings.TryGetValue(key, out Binding binding))
-                    {
-                        ApplyProcess(key, binding, identity);
-                    }
+                    ApplyProcess(item.Key, item.Binding, identity);
                 }
                 if (identity.Status != ClientProcessStatus.NotRecorded && ConnectionApplied(connection, identity))
                 {
@@ -474,12 +474,11 @@ namespace XMAT.WebServiceCapture
                 return;
             }
             VisitObserver?.Invoke("bindings", rows.Count);
-            foreach (CaptureRowKey key in rows)
+            foreach (Binding binding in rows
+                .Select(key => _bindings.GetValueOrDefault(key))
+                .Where(binding => binding != null))
             {
-                if (_bindings.TryGetValue(key, out Binding binding))
-                {
-                    binding.Connection = null;
-                }
+                binding.Connection = null;
             }
         }
 

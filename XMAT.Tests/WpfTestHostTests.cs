@@ -50,5 +50,11 @@ namespace XMAT.Tests
             Assert.Equal(outer, inner);
             Assert.Same(Application.Current.Dispatcher, window);
         }
+
+        // A task that never finishes fails Complete once its bound passes, instead of hanging the test run.
+        [Fact]
+        public void Complete_ReportsATaskThatDoesNotFinishInTime() =>
+            WpfTestHost.Run(_ => Assert.Throws<TimeoutException>(
+                () => WpfTestHost.Complete(new TaskCompletionSource().Task, TimeSpan.FromMilliseconds(50))));
     }
 }

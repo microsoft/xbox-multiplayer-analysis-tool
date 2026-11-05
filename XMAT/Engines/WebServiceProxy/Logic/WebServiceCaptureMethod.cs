@@ -146,7 +146,7 @@ namespace XMAT.WebServiceCapture
                     connections.Select(connection => connection.Method).Distinct().ToList());
                 IDataset dataset = dataTable.Dataset;
                 IReadOnlyList<long> rowIds;
-                try
+                using (dataset as IDisposable)
                 {
                     IFieldDefinition[] fields = dataset.FieldDefs.ToArray();
                     var rows = connections.Select(
@@ -154,10 +154,6 @@ namespace XMAT.WebServiceCapture
                     rowIds = importTable.ReplaceImportedRows(
                         new FieldValue<string>(FieldKey_DeviceName, captureController.DeviceName),
                         rows);
-                }
-                finally
-                {
-                    (dataset as IDisposable)?.Dispose();
                 }
                 for (int index = 0; index < connections.Count; index++)
                 {

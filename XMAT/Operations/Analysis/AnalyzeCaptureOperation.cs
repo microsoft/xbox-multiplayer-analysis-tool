@@ -1538,14 +1538,9 @@ namespace XMAT.Operations.Analysis
 
             internal FilterCaptureSessionsResult Complete(CancellationToken cancellationToken)
             {
-                // The operation completes synchronously over references already in memory.
-                OperationResult<FilterCaptureSessionsResult> result = new FilterCaptureSessionsOperation()
-                    .ExecuteAsync(
-                        new FilterCaptureSessionsRequest(_sessions, Specification),
-                        OperationContext.None,
-                        cancellationToken)
-                    .GetAwaiter()
-                    .GetResult();
+                OperationResult<FilterCaptureSessionsResult> result = FilterCaptureSessionsOperation.Select(
+                    new FilterCaptureSessionsRequest(_sessions, Specification),
+                    cancellationToken);
                 if (!result.Succeeded ||
                     result.Value?.Scope == null ||
                     !IsExactSelection(result.Value.IncludedKeys, _included))
