@@ -615,10 +615,10 @@ namespace XMAT.Tests
                         return;
                     }
                     rebound = true;
-                    view.DataContext = new Context(second);
+                    view.DataContext = Context(second);
                     view.DataContext = null;
-                    view.DataContext = new Context(first);
-                    view.DataContext = new Context(second);
+                    view.DataContext = Context(first);
+                    view.DataContext = Context(second);
                     shownDuringTheNotification = (grid.ItemsSource as CollectionView)?.SourceCollection;
                 };
                 ShowCaptureView(window, view);
@@ -689,7 +689,7 @@ namespace XMAT.Tests
                 DataGrid grid = ConnectionList(view);
                 Assert.Equal(1, ObservingViews(first.ProxyConnections));
 
-                view.DataContext = new Context(second);
+                view.DataContext = Context(second);
                 WpfTestHost.Pump();
                 Assert.Equal(0, ObservingViews(first.ProxyConnections));
                 Assert.Equal(1, ObservingViews(second.ProxyConnections));
@@ -923,7 +923,7 @@ namespace XMAT.Tests
         {
             var view = new CaptureConnectionView { AutoScroll = false };
             ConnectionList(view).IsSynchronizedWithCurrentItem = false;
-            view.DataContext = new Context(controller);
+            view.DataContext = Context(controller);
             return view;
         }
 
@@ -1178,15 +1178,7 @@ namespace XMAT.Tests
             }
         }
 
-        private sealed class Context(IDeviceCaptureController controller) : ICaptureDeviceContext
-        {
-            public DeviceType DeviceType => DeviceType.Unknown;
-            public CaptureType CaptureType => CaptureType.WebProxy;
-            public string DeviceName => "Test device";
-            public bool IsSelected { get; set; }
-            public bool IsReadOnly { get; set; } = true;
-            public System.Drawing.Color DeviceColor { get; set; }
-            public IDeviceCaptureController CaptureController { get; } = controller;
-        }
+        private static TestCaptureContext Context(IDeviceCaptureController controller) =>
+            new(controller, "Test device", readOnly: true, DeviceType.Unknown);
     }
 }

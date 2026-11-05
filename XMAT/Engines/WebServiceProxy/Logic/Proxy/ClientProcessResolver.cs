@@ -157,14 +157,6 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
-        internal bool IsRunSealed(Guid runId)
-        {
-            lock (_syncRoot)
-            {
-                return _sealedRuns.Contains(runId);
-            }
-        }
-
         internal void ReleaseRun(Guid runId)
         {
             lock (_syncRoot)

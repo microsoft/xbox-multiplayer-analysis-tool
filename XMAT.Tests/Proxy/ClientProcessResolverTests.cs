@@ -429,6 +429,13 @@ namespace XMAT.Tests.Proxy
                 50192,
                 IPAddress.Loopback,
                 8080);
+            ClientProcessContext lateSecond = Context(
+                clock,
+                secondRun,
+                IPAddress.Loopback,
+                50193,
+                IPAddress.Loopback,
+                8080);
             tcp.Rows =
             [
                 new TcpOwnerRow(
@@ -439,10 +446,15 @@ namespace XMAT.Tests.Proxy
                     second.ClientEndPoint,
                     second.ProxyEndPoint,
                     7200),
+                new TcpOwnerRow(
+                    lateSecond.ClientEndPoint,
+                    lateSecond.ProxyEndPoint,
+                    7300),
             ];
             var processes = new FakeProcessIdentityProvider();
             processes.AddFound(7100, clock.UtcNow.AddMinutes(-2), "first.exe");
             processes.AddFound(7200, clock.UtcNow.AddMinutes(-2), "second.exe");
+            processes.AddFound(7300, clock.UtcNow.AddMinutes(-2), "late-second.exe");
             await using var resolver = Resolver(tcp, processes, clock);
 
             try
@@ -456,12 +468,14 @@ namespace XMAT.Tests.Proxy
                 await Assert.ThrowsAsync<TimeoutException>(() => resolver.DrainAsync(firstRun));
 
                 Assert.True(
-                    !lateAccepted && resolver.PendingCount == 1 && !resolver.IsRunSealed(secondRun),
+                    !lateAccepted && resolver.PendingCount == 1,
                     $"Late first accepted={lateAccepted}; pending={resolver.PendingCount}.");
+                Assert.True(resolver.TryEnqueue(lateSecond));
                 clock.DrainTimeoutsImmediately = false;
                 tcp.Release();
                 await resolver.DrainAsync(secondRun);
                 Assert.Equal("second.exe", second.Identity.Name);
+                Assert.Equal("late-second.exe", lateSecond.Identity.Name);
             }
             finally
             {

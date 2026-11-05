@@ -837,14 +837,14 @@ namespace XMAT.Tests
         }
 
         [Theory]
-        [InlineData(StopAttempt.AsyncFailure, false, false, typeof(InvalidOperationException))]
-        [InlineData(StopAttempt.AsyncFailure, true, false, typeof(TimeoutException))]
-        [InlineData(StopAttempt.SyncFailure, false, false, typeof(InvalidOperationException))]
-        [InlineData(StopAttempt.Success, true, true, typeof(TimeoutException))]
+        [InlineData(StopAttempt.AsyncFailure, false, true, typeof(InvalidOperationException))]
+        [InlineData(StopAttempt.AsyncFailure, true, true, typeof(TimeoutException))]
+        [InlineData(StopAttempt.SyncFailure, false, true, typeof(InvalidOperationException))]
+        [InlineData(StopAttempt.Success, true, false, typeof(TimeoutException))]
         public async Task StopFailureLifecycle_IsRetryableAndIsolatesOtherRuns(
             StopAttempt attempt,
             bool callbackTimeout,
-            bool expectedSealed,
+            bool expectRunAdmissionAfterFailure,
             Type expectedException)
         {
             var controller = CreateController(new PreferencesModel());
@@ -887,8 +887,8 @@ namespace XMAT.Tests
 
             Assert.NotNull(failure);
             Assert.Equal(expectedException, failure.GetType());
-            Assert.Equal(expectedSealed, resolver.IsRunSealed(run));
-            Assert.True(resolver.IsRunSealed(otherRun));
+            Assert.Equal(expectRunAdmissionAfterFailure, await AdmitsAttributionAsync(resolver, run, 50310));
+            Assert.False(await AdmitsAttributionAsync(resolver, otherRun, 50311));
             Assert.True(controller.IsRunning);
             Assert.Equal(run, ActiveRunOf(controller));
 
@@ -896,8 +896,8 @@ namespace XMAT.Tests
 
             Assert.False(controller.IsRunning);
             Assert.Equal(Guid.Empty, ActiveRunOf(controller));
-            Assert.False(resolver.IsRunSealed(run));
-            Assert.True(resolver.IsRunSealed(otherRun));
+            Assert.True(await AdmitsAttributionAsync(resolver, run, 50312));
+            Assert.False(await AdmitsAttributionAsync(resolver, otherRun, 50313));
             Assert.Equal(2, proxy.StopCount);
         }
 
@@ -910,15 +910,29 @@ namespace XMAT.Tests
 
         private static ClientProcessResolver CreateStopResolver() =>
             new(
-                new EmptyOwnerProvider(),
+                new ProbeOwnerProvider(),
                 new MissingIdentityProvider(),
                 new AlwaysLocalAddressProvider(),
                 new SystemClientProcessResolverClock(),
                 ClientProcessResolverOptions
                     .Default with
                     {
-                        DrainBudget = TimeSpan.FromMilliseconds(100),
+                        DrainBudget = TimeSpan.FromSeconds(5),
                     });
+
+        // Whether RUN admits attribution from a valid local connection; an admitted probe is drained before returning.
+        private static async Task<bool> AdmitsAttributionAsync(ClientProcessResolver resolver, Guid run, int clientPort)
+        {
+            bool admitted = resolver.TryEnqueue(new ClientProcessContext(
+                run,
+                clientPort,
+                new IPEndPoint(IPAddress.Loopback, clientPort),
+                new IPEndPoint(IPAddress.Loopback, 8080),
+                DateTimeOffset.UtcNow,
+                Stopwatch.GetTimestamp()));
+            await resolver.DrainAsync(run);
+            return admitted;
+        }
 
         private static CaptureRowRegistry RegistryOf(WebServiceDeviceCaptureController controller) =>
             (CaptureRowRegistry) typeof(WebServiceDeviceCaptureController).GetField("_captureRows",
@@ -939,12 +953,18 @@ namespace XMAT.Tests
                 .SetValue(controller, proxy);
         }
 
-        private sealed class EmptyOwnerProvider : ITcpOwnerTableProvider
+        // Owns the four AdmitsAttributionAsync probe ports, so probes never take the retry path.
+        private sealed class ProbeOwnerProvider : ITcpOwnerTableProvider
         {
             public IReadOnlyList<TcpOwnerRow> Snapshot(System.Net.Sockets.AddressFamily addressFamily)
             {
                 _ = addressFamily;
-                return Array.Empty<TcpOwnerRow>();
+                return Enumerable.Range(50310, 4)
+                    .Select(clientPort => new TcpOwnerRow(
+                        new IPEndPoint(IPAddress.Loopback, clientPort),
+                        new IPEndPoint(IPAddress.Loopback, 8080),
+                        clientPort))
+                    .ToArray();
             }
         }
 

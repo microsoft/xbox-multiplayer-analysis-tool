@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: MIT
 
 using System.ComponentModel;
-using System.Drawing;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
 
@@ -99,20 +98,9 @@ namespace XMAT.Tests
 
         private static void Select(CaptureAppModel model, IDeviceCaptureController controller)
         {
-            var context = new ProbeContext(controller);
+            var context = new TestCaptureContext(controller, "Clear probe", readOnly: false, DeviceType.LocalPC);
             model.CaptureDeviceContexts.Add(context);
             model.SelectedDeviceContext = context;
-        }
-
-        private sealed class ProbeContext(IDeviceCaptureController controller) : ICaptureDeviceContext
-        {
-            public DeviceType DeviceType => DeviceType.LocalPC;
-            public CaptureType CaptureType => CaptureType.WebProxy;
-            public string DeviceName => "Clear probe";
-            public bool IsSelected { get; set; }
-            public bool IsReadOnly { get; set; }
-            public Color DeviceColor { get; set; }
-            public IDeviceCaptureController CaptureController { get; } = controller;
         }
 
         // A stopped capture whose clear runs the given probe.

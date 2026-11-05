@@ -79,7 +79,8 @@ namespace XMAT.Tests
                 var view = new CaptureConnectionView { AutoScroll = false };
                 var grid = (DataGrid)view.FindName("ConnectionList");
                 grid.IsSynchronizedWithCurrentItem = false;
-                view.DataContext = new Context(controller);
+                view.DataContext = new TestCaptureContext(
+                    controller, ProcessCaptures.Device, readOnly: true, DeviceType.LocalPC);
                 window.Width = 1280;
                 window.Height = 720;
                 WpfTestHost.Show(window, view);
@@ -93,17 +94,6 @@ namespace XMAT.Tests
                 WpfTestHost.Pump();
             });
             return rows;
-        }
-
-        private sealed class Context(IDeviceCaptureController controller) : ICaptureDeviceContext
-        {
-            public DeviceType DeviceType => DeviceType.LocalPC;
-            public CaptureType CaptureType => CaptureType.WebProxy;
-            public string DeviceName => ProcessCaptures.Device;
-            public bool IsSelected { get; set; }
-            public bool IsReadOnly { get; set; } = true;
-            public System.Drawing.Color DeviceColor { get; set; }
-            public IDeviceCaptureController CaptureController { get; } = controller;
         }
     }
 }
