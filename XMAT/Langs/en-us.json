@@ -363,6 +363,7 @@
 	"BODY_PREVIEW_NOTICE_HEADER_LIMIT": "A Content-Type, Content-Encoding or Transfer-Encoding value longer than {0:N0} characters was not used.",
 	"BODY_PREVIEW_NOTICE_RAW_DEFLATE": "The deflate content was decoded as raw deflate data.",
 	"BODY_PREVIEW_NOTICE_INCOMPLETE": "The compressed content ends early: only the start that decoded is shown.",
+	"BODY_PREVIEW_NOTICE_UNVERIFIED_END": "More bytes follow the first part of the compressed content, such as another gzip member or other data: everything that decoded is shown, but the preview cannot confirm that it is all of the content.",
 	"BODY_PREVIEW_NOTICE_FRAMING_IGNORED": "Transfer-Encoding says chunked, but the chunk framing does not parse, so the content is shown as stored.",
 	"BODY_PREVIEW_NOTICE_UNSUPPORTED_CODING": "The content uses a coding that the preview does not decode, or more than one, so it is shown as bytes.",
 	"BODY_PREVIEW_NOTICE_UNSUPPORTED_CHARSET": "The content's charset is not supported, so it is shown as bytes.",

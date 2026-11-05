@@ -80,6 +80,7 @@ namespace XMAT.WebServiceCapture
                 "BODY_PREVIEW_NOTICE_HEADER_LIMIT", Limits.MaxHeaderChars),
             BodyPreviewNotice.RawDeflate => Localization.GetLocalizedString("BODY_PREVIEW_NOTICE_RAW_DEFLATE"),
             BodyPreviewNotice.Incomplete => Localization.GetLocalizedString("BODY_PREVIEW_NOTICE_INCOMPLETE"),
+            BodyPreviewNotice.UnverifiedEnd => Localization.GetLocalizedString("BODY_PREVIEW_NOTICE_UNVERIFIED_END"),
             BodyPreviewNotice.FramingIgnored => Localization.GetLocalizedString("BODY_PREVIEW_NOTICE_FRAMING_IGNORED"),
             BodyPreviewNotice.UnsupportedCoding =>
                 Localization.GetLocalizedString("BODY_PREVIEW_NOTICE_UNSUPPORTED_CODING"),
