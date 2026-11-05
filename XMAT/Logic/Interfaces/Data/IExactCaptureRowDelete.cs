@@ -8,8 +8,6 @@ namespace XMAT.SharedInterfaces
 {
     internal interface IExactCaptureRowDelete
     {
-        IReadOnlyList<long> DeleteRows(
-            string deviceName,
-            IReadOnlyList<long> rowIds);
+        IReadOnlyList<long> DeleteRows(string deviceName, IReadOnlyList<long> rowIds);
     }
 }

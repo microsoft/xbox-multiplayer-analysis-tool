@@ -92,18 +92,11 @@ namespace XMAT.WebServiceCapture.Models
             Add(message);
         }
 
-        internal int RemoveByRowKeys(
-            IReadOnlySet<CaptureRowKey> keys)
+        internal int RemoveByRowKeys(IReadOnlySet<CaptureRowKey> keys)
         {
             ArgumentNullException.ThrowIfNull(keys);
-            WebSocketMessageModel[] survivors =
-                this.Where(
-                    message =>
-                        !keys.Contains(
-                            message.RowKey))
-                .ToArray();
-            int removed =
-                Count - survivors.Length;
+            WebSocketMessageModel[] survivors = this.Where(message => !keys.Contains(message.RowKey)).ToArray();
+            int removed = Count - survivors.Length;
             if (removed == 0)
             {
                 return 0;
@@ -111,24 +104,14 @@ namespace XMAT.WebServiceCapture.Models
             CheckReentrancy();
             Items.Clear();
             CapturedPayloadBytes = 0;
-            foreach (
-                WebSocketMessageModel survivor in
-                survivors)
+            foreach (WebSocketMessageModel survivor in survivors)
             {
                 Items.Add(survivor);
-                CapturedPayloadBytes +=
-                    survivor.PayloadLength;
+                CapturedPayloadBytes += survivor.PayloadLength;
             }
-            OnPropertyChanged(
-                new PropertyChangedEventArgs(
-                    nameof(Count)));
-            OnPropertyChanged(
-                new PropertyChangedEventArgs(
-                    "Item[]"));
-            OnCollectionChanged(
-                new NotifyCollectionChangedEventArgs(
-                    NotifyCollectionChangedAction
-                        .Reset));
+            OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+            OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
             return removed;
         }
 

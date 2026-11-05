@@ -41,11 +41,7 @@ namespace XMAT.DataAbstractionLayer
                 _command.CommandText = _commandBuilder.ToString();
                 _command.ExecuteNonQuery();
 
-                var newTable = new SqLtDataTable(
-                    _connection,
-                    _connectionGate,
-                    name,
-                    fields);
+                var newTable = new SqLtDataTable(_connection, _connectionGate, name, fields);
                 _dataTables[name] = newTable;
                 return newTable;
             }
@@ -68,8 +64,7 @@ namespace XMAT.DataAbstractionLayer
                 secureDelete.CommandText = "PRAGMA secure_delete";
                 if (Convert.ToInt64(secureDelete.ExecuteScalar()) != 1)
                 {
-                    throw new InvalidOperationException(
-                        "SQLite did not enable secure deletion.");
+                    throw new InvalidOperationException("SQLite did not enable secure deletion.");
                 }
             }
 
@@ -139,8 +134,7 @@ namespace XMAT.DataAbstractionLayer
                         temporaryPath);
                     lock (_connectionGate)
                     {
-                        _connection.BackupDatabase(
-                            saveDbConnection);
+                        _connection.BackupDatabase(saveDbConnection);
                     }
                 }
 

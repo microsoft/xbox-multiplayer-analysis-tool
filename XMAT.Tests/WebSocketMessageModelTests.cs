@@ -124,28 +124,18 @@ namespace XMAT.Tests
             var deletedKey = new CaptureRowKey(source, 1, 1, 1);
             var survivorKey = new CaptureRowKey(source, 1, 2, 2);
             var collection = new WebSocketMessagesCollection();
-            (
-                WeakReference<WebSocketMessageModel> Model,
-                WeakReference<byte[]> Payload) deleted =
-                AddDeletedMessage(
-                    collection,
-                    deletedKey);
-            WebSocketMessageModel survivor = CreateModel(
-                2,
-                10,
-                survivorKey);
+            (WeakReference<WebSocketMessageModel> Model, WeakReference<byte[]> Payload) deleted =
+                AddDeletedMessage(collection, deletedKey);
+            WebSocketMessageModel survivor = CreateModel(2, 10, survivorKey);
             collection.AddMessage(survivor);
             var changes = new List<NotifyCollectionChangedAction>();
             collection.CollectionChanged += (_, args) => changes.Add(args.Action);
 
-            int removed = collection.RemoveByRowKeys(
-                new HashSet<CaptureRowKey> { deletedKey });
+            int removed = collection.RemoveByRowKeys(new HashSet<CaptureRowKey> { deletedKey });
             ForceCollection();
 
             Assert.Equal(1, removed);
-            Assert.Equal(
-                new[] { NotifyCollectionChangedAction.Reset },
-                changes);
+            Assert.Equal(new[] { NotifyCollectionChangedAction.Reset }, changes);
             Assert.Same(survivor, Assert.Single(collection));
             Assert.Equal(survivor.PayloadLength, collection.CapturedPayloadBytes);
             Assert.False(deleted.Model.TryGetTarget(out _));
@@ -153,9 +143,7 @@ namespace XMAT.Tests
         }
 
         private static WebSocketMessageModel CreateModel(
-            int requestNumber,
-            int payloadLength,
-            CaptureRowKey rowKey = default)
+            int requestNumber, int payloadLength, CaptureRowKey rowKey = default)
         {
             return new WebSocketMessageModel(new WebSocketMessageEventArgs
             {
@@ -167,16 +155,10 @@ namespace XMAT.Tests
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static (
-            WeakReference<WebSocketMessageModel> Model,
-            WeakReference<byte[]> Payload) AddDeletedMessage(
-                WebSocketMessagesCollection collection,
-                CaptureRowKey key)
+        private static (WeakReference<WebSocketMessageModel> Model, WeakReference<byte[]> Payload)
+            AddDeletedMessage(WebSocketMessagesCollection collection, CaptureRowKey key)
         {
-            WebSocketMessageModel model = CreateModel(
-                1,
-                64 * 1024,
-                key);
+            WebSocketMessageModel model = CreateModel(1, 64 * 1024, key);
             collection.AddMessage(model);
             return (
                 new WeakReference<WebSocketMessageModel>(model),
