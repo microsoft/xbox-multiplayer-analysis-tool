@@ -99,6 +99,7 @@ namespace XMAT.Cli
                 yield return "--host, --status and --method select as in the capture list; each is repeatable and exclusions win.";
                 yield return "An empty --status=, --method= or (with --host-mode exact) --host= selects sessions without one.";
                 yield return "--match-none selects nothing, so the JSON shows the counts without writing FILE.";
+                yield return "Only your Windows account can open FILE; where that cannot be ensured, nothing is written (exit 6).";
             }
         }
     }

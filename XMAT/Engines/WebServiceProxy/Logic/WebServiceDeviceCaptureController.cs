@@ -21,7 +21,6 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
-using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
@@ -261,13 +260,15 @@ namespace XMAT.WebServiceCapture
                     WebServiceCaptureMethod.FieldKey_DeviceName,
                     WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
                     WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders)
-                : dataset;
+                : null;
             try
             {
                 using (_captureRows.EnterMutation())
                 using (versioned?.EnterRead())
                 {
-                    Dictionary<long, IDataRecord> records = freezeDataset.DataRecordsWhen(
+                    Dictionary<long, IDataRecord> records = freezeDataset == null
+                        ? null
+                        : freezeDataset.DataRecordsWhen(
                             new FieldValue<string>(
                                 WebServiceCaptureMethod.FieldKey_DeviceName,
                                 DeviceName))
@@ -284,16 +285,22 @@ namespace XMAT.WebServiceCapture
                                     model.RecordRowId,
                                     checked(++_loadedIncarnation)));
                         }
-                        if (!records.TryGetValue(model.RecordRowId, out IDataRecord record))
+                        IDataRecord record = null;
+                        if (records != null &&
+                            !records.TryGetValue(model.RecordRowId, out record))
                         {
                             continue;
                         }
                         long version = versioned?.VersionOf(model.RecordRowId) ?? 0;
                         ClientProcessInfo process = model.ClientProcess;
-                        bool responseHeaders = !string.IsNullOrEmpty(
-                            record.Str(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders));
-                        bool responseTimestamp = !string.IsNullOrEmpty(
-                            record.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp));
+                        bool responseHeaders = records == null
+                            ? !string.IsNullOrEmpty(model.ResponseLineAndHeaders)
+                            : !string.IsNullOrEmpty(
+                                record.Str(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders));
+                        bool responseTimestamp = records == null
+                            ? model.HasRecordedResponseTimestamp
+                            : !string.IsNullOrEmpty(
+                                record.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp));
                         var session = new CaptureExportSession(
                             model.RowKey,
                             ordinalDeviceId,
@@ -314,10 +321,7 @@ namespace XMAT.WebServiceCapture
             }
             finally
             {
-                if (!ReferenceEquals(freezeDataset, dataset))
-                {
-                    (freezeDataset as IDisposable)?.Dispose();
-                }
+                (freezeDataset as IDisposable)?.Dispose();
             }
 
             var deviceFields = new[]
@@ -377,12 +381,6 @@ namespace XMAT.WebServiceCapture
                             Dictionary<string, object> values = CaptureRawValues.Read(record, captureFields);
                             CaptureRawValues.OverlayProcess(values, expected.Process);
                             long rowBytes = CaptureRawValues.Measure(values);
-                            if (rowBytes > limits.MaxEntryBytes)
-                            {
-                                throw new CaptureExportException(
-                                    CaptureExportErrorCodes.InvalidBody,
-                                    OperationOutcome.InvalidInput);
-                            }
                             if (batchCount != 0 && batchBytes + rowBytes > 8 * 1024 * 1024)
                             {
                                 break;

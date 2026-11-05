@@ -9,6 +9,7 @@ using XMAT.Cli;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
+using XMAT.Tests.Operations.Analysis;
 using XMAT.WebServiceCapture;
 using static XMAT.Tests.ProcessFilterTestSupport;
 
@@ -97,6 +98,28 @@ namespace XMAT.Tests.Cli
 
             Assert.Equal(code, parsed.Error?.Code);
             Assert.DoesNotContain("pfcanary", parsed.Error.Message + json, StringComparison.Ordinal);
+        }
+
+        // xmat export never publishes where it cannot restrict access to the file: exit 6, export.output.unprotected, and
+        // nothing written next to the input.
+        [Fact]
+        public async Task Export_RefusesADestinationWhereAccessCannotBeRestricted()
+        {
+            using var directory = new CliTestDirectory();
+            string input = ProcessCaptures.WriteXmatcap(directory.Root, "capture.xmatcap", ProcessCaptures.MixedSessions);
+            CliParseResult parsed = CliCommandLine.Parse(
+                new[] { "export", input, "--out", Path.Join(directory.Root, "subset.saz") });
+            var operation = new ExportCaptureSessionsOperation
+            {
+                Publisher = new CaptureExportPublisher { StagingIsPrivate = _ => false },
+            };
+
+            CliReport report = await CliExportCommand.RunAsync(parsed.Request, "unprotected", CancellationToken.None, operation);
+
+            Assert.Equal(CliExitCodes.Failed, report.ExitCode);
+            Assert.Contains(report.Errors, error => error.Code == CaptureExportErrorCodes.OutputUnprotected);
+            Assert.False(report.Export.Result.Published);
+            Assert.Equal(new[] { input }, Directory.GetFileSystemEntries(directory.Root));
         }
 
         // Until selection completes (for example when the input cannot be read) nothing is counted or published.

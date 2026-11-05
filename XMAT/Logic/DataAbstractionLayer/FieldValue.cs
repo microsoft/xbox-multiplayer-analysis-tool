@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
-using Microsoft.Data.Sqlite;
+using System.Globalization;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
@@ -15,14 +15,11 @@ namespace XMAT.DataAbstractionLayer
         // those other primitive members here.
 
         internal static object GetFieldValue(
-            SqliteDataReader reader,
+            object stored,
             IFieldDefinition fieldDefinition)
         {
-            ArgumentNullException.ThrowIfNull(reader);
             ArgumentNullException.ThrowIfNull(fieldDefinition);
-            int columnIndex =
-                fieldDefinition.ColumnIndex;
-            if (reader.IsDBNull(columnIndex))
+            if (stored == null)
             {
                 if (!fieldDefinition.IsExtension)
                 {
@@ -33,7 +30,6 @@ namespace XMAT.DataAbstractionLayer
             }
             if (fieldDefinition.IsExtension)
             {
-                object stored = reader.GetValue(columnIndex);
                 return fieldDefinition.ValueType switch
                 {
                     FieldValueType.Integer when stored is long => stored,
@@ -45,10 +41,10 @@ namespace XMAT.DataAbstractionLayer
             switch (fieldDefinition.ValueType)
             {
                 case FieldValueType.Integer:
-                    return reader.GetInt64(columnIndex);
+                    return stored is long ? stored : Convert.ToInt64(stored, CultureInfo.InvariantCulture);
 
                 case FieldValueType.String:
-                    return reader.GetString(columnIndex);
+                    return stored is string ? stored : Convert.ToString(stored, CultureInfo.InvariantCulture);
 
                 default:
                     throw new InvalidOperationException("need value type method for unsupported type.");

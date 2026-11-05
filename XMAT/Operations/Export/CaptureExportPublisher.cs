@@ -47,12 +47,19 @@ namespace XMAT.Operations.Export
 
             string stagingDirectory = CreateStagingDirectory(directory, Path.GetFileName(normalized));
             string staged = Path.Join(stagingDirectory, Path.GetFileName(normalized));
+            bool protectedOutput = StagingIsPrivate(stagingDirectory);
             var committed = false;
             PublishedCapture publication = null;
             ExceptionDispatchInfo operationFailure = null;
             Exception cleanupFailure = null;
             try
             {
+                if (!protectedOutput && !allowUnprotected)
+                {
+                    throw new CaptureExportException(
+                        CaptureExportErrorCodes.OutputUnprotected,
+                        OperationOutcome.Failed);
+                }
                 cancellationToken.ThrowIfCancellationRequested();
                 await writeStaged(staged, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
@@ -86,7 +93,7 @@ namespace XMAT.Operations.Export
                     File.Move(staged, normalized, replaceExisting);
                     committed = true;
                 }
-                publication = new PublishedCapture(bytes, hash, replaced, Protected: true);
+                publication = new PublishedCapture(bytes, hash, replaced, protectedOutput);
             }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
@@ -134,13 +141,10 @@ namespace XMAT.Operations.Export
                 string candidate = Path.Join(
                     directory,
                     $".{destinationName}.export-{Guid.NewGuid():N}");
-                if (Path.Exists(candidate))
-                {
-                    continue;
-                }
                 try
                 {
-                    return Directory.CreateDirectory(candidate).FullName;
+                    PrivateFolder.Create(candidate);
+                    return candidate;
                 }
                 catch (IOException) when (Path.Exists(candidate))
                 {

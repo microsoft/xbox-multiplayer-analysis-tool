@@ -4,16 +4,20 @@
 
 using System;
 using System.ComponentModel;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using XMAT.Operations;
+using XMAT.Operations.Export;
 
 namespace XMAT
 {
-    public partial class SanitizedExportProgressWindow : Window
+    public partial class SanitizedExportProgressWindow : Window, IProgress<OperationProgress>
     {
         private readonly Task _operation;
         private readonly Action _cancel;
+        private string _phase;
         private bool _cancellationRequested;
         private bool _canClose;
 
@@ -26,6 +30,30 @@ namespace XMAT
             StatusText.Text = Localization.GetLocalizedString("SANITIZED_EXPORT_SCANNING");
             DetailsText.Text = Localization.GetLocalizedString("SANITIZED_EXPORT_PROGRESS_DETAILS");
             CancelExport.Content = Localization.GetLocalizedString("CANCEL");
+        }
+
+        // Shows the export's current phase, also one reported before the window appeared. Only a change of phase reaches
+        // the dispatcher, and once Cancel is asked for the window keeps saying so.
+        void IProgress<OperationProgress>.Report(OperationProgress value)
+        {
+            string key = value?.Phase switch
+            {
+                ExportCaptureSessionsOperation.SelectPhase => "EXPORT_PHASE_SELECT",
+                ExportCaptureSessionsOperation.ReadPhase => "EXPORT_PHASE_READ",
+                ExportCaptureSessionsOperation.WritePhase => "EXPORT_PHASE_WRITE",
+                ExportCaptureSessionsOperation.PublishPhase => "EXPORT_PHASE_PUBLISH",
+                _ => null,
+            };
+            if (key != null && Interlocked.Exchange(ref _phase, key) != key)
+            {
+                Dispatcher.InvokeAsync(() =>
+                {
+                    if (!_cancellationRequested)
+                    {
+                        StatusText.Text = Localization.GetLocalizedString(key);
+                    }
+                });
+            }
         }
 
         private async void Window_ContentRendered(object sender, EventArgs e)
@@ -61,7 +89,7 @@ namespace XMAT
 
         private void Window_Closing(object sender, CancelEventArgs e)
         {
-            if (!_canClose)
+            if (!_canClose && !_operation.IsCompleted)
             {
                 e.Cancel = true;
                 RequestCancellation();
