@@ -245,7 +245,7 @@ namespace XMAT.WebServiceCapture
                     WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
                     WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders)
                 : null;
-            try
+            using (freezeDataset as IDisposable)
             {
                 using (_captureRows.EnterMutation())
                 using (versioned?.EnterRead())
@@ -293,10 +293,6 @@ namespace XMAT.WebServiceCapture
                             new FrozenExportRow(model.RecordRowId, version, process, model));
                     }
                 }
-            }
-            finally
-            {
-                (freezeDataset as IDisposable)?.Dispose();
             }
 
             IReadOnlyList<SqLtSchemaColumn> deviceFields =
