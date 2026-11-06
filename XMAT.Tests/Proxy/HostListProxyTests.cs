@@ -238,6 +238,72 @@ namespace XMAT.Tests.Proxy
             Assert.False(string.IsNullOrEmpty(requests[^1].Str(WebServiceCaptureMethod.FieldKey_RequestStatus)));
         }
 
+        [Theory]
+        [InlineData("ws", "origin", "/public/socket", "decoy", "127.0.0.1", true)]
+        [InlineData("ws", "origin", "/private/socket", "decoy", "127.0.0.1/private/*", true)]
+        [InlineData("http", "idn", "/private/idn", "decoy", "127.0.0.1/private/*", false)]
+        [InlineData("http", "idn", "/private/no-host", "none", "127.0.0.1/private/*", false)]
+        [InlineData(null, "origin", "/private/numeric", "numeric", "127.0.0.1/private/*", false)]
+        [InlineData("ftp", "origin", "/unsupported", "origin", null, true)]
+        public async Task RawDestinationIdentityBlocksBeforeOriginOrUnsupportedDispatch(
+            string scheme,
+            string destinationKind,
+            string path,
+            string hostKind,
+            string block,
+            bool upgrade)
+        {
+            await using var origin = await LoopbackOrigin.StartAsync();
+            string authority = $"127.0.0.1:{origin.Port}";
+            string destination = destinationKind == "idn"
+                ? $"127\u30020\u30020\u30021:{origin.Port}"
+                : authority;
+            string target = scheme == null ? path : $"{scheme}://{destination}{path}";
+            string host = hostKind switch
+            {
+                "decoy" => $"decoy.example:{origin.Port}",
+                "none" => null,
+                "numeric" => $"0177.0.0.1:{origin.Port}",
+                _ => authority,
+            };
+
+            var policy = new HostListPolicy();
+            if (block != null)
+            {
+                Assert.True(policy.BlockList.Add(block));
+            }
+            await using var capture = await PolicyCapture.StartAsync(
+                policy,
+                $"destination-{scheme}-{destinationKind}-{hostKind}");
+            string hostHeader = host == null ? string.Empty : $"Host: {host}\r\n";
+            string upgradeHeaders = upgrade
+                ? "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                : "Connection: close\r\n";
+            string blocked = await SendRawAsync(
+                capture.ProxyPort,
+                $"GET {target} HTTP/1.1\r\n{hostHeader}{upgradeHeaders}\r\n");
+            const string allowedTarget = "/public/allowed";
+            string allowedHost = block == "127.0.0.1" ? $"localhost:{origin.Port}" : authority;
+            string allowed = await SendRawAsync(
+                capture.ProxyPort,
+                $"GET {allowedTarget} HTTP/1.1\r\nHost: {allowedHost}\r\nConnection: close\r\n\r\n");
+            await capture.DrainCallbacksAsync();
+
+            Assert.Matches(@"^HTTP/\d(\.\d)? 200\b", allowed);
+            Assert.Equal(new[] { allowedTarget }, origin.Requests.Select(request => request.Path));
+            Assert.Equal(string.Empty, blocked);
+            IReadOnlyList<IDataRecord> requests = capture.Records("GET");
+            IDataRecord blockedRecord = Assert.Single(
+                requests,
+                row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath) == target);
+            Assert.True(string.IsNullOrEmpty(blockedRecord.Str(WebServiceCaptureMethod.FieldKey_RequestStatus)));
+            Assert.Contains(
+                requests,
+                row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath) == allowedTarget &&
+                    !string.IsNullOrEmpty(row.Str(WebServiceCaptureMethod.FieldKey_RequestStatus)));
+        }
+
         [Fact]
         public async Task RequestAwaitingAScript_IsBlockedByAnEditMadeDuringTheAwait()
         {

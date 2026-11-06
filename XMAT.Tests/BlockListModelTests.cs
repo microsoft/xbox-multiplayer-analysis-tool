@@ -129,6 +129,50 @@ namespace XMAT.Tests
             Assert.False(destination.IsBlocked("claimed.example", "http://other.example/private/item"));
         }
 
+        [Theory]
+        [InlineData("ws", "destination.example", "/public")]
+        [InlineData("wss", "destination.example", "/public")]
+        [InlineData("ws", "destination.example/private/*", "/private/item")]
+        [InlineData("wss", "destination.example/private/*", "/private/item")]
+        public void IsBlocked_WebSocketAbsoluteTargetMatchesDestinationHostOrPath(
+            string scheme,
+            string pattern,
+            string path)
+        {
+            var list = new BlockListModel();
+            list.Add(pattern);
+
+            Assert.True(list.IsBlocked("decoy.example", $"{scheme}://destination.example{path}"));
+        }
+
+        [Theory]
+        [InlineData("api\u3002example.com", "api.example.com")]
+        [InlineData("\uFF45\uFF58\uFF41\uFF4D\uFF50\uFF4C\uFF45.com", "example.com")]
+        [InlineData("exam\u00ADple.com", "example.com")]
+        public void IsBlocked_AbsoluteTargetUsesIdnDestinationSpelling(string destination, string canonical)
+        {
+            var list = new BlockListModel();
+            list.Add(canonical + "/private/*");
+
+            Assert.True(list.IsBlocked("decoy.example", $"http://{destination}/private/item"));
+        }
+
+        [Theory]
+        [InlineData("0177.0.0.1")]
+        [InlineData("127.1")]
+        [InlineData("2130706433")]
+        [InlineData("0x7f.0.0.1")]
+        public void IsBlocked_PathlessNumericHostUsesAliasWithoutInventingPath(string host)
+        {
+            var hostOnly = new BlockListModel();
+            hostOnly.Add("127.0.0.1");
+            var pathOnly = new BlockListModel();
+            pathOnly.Add("127.0.0.1/*");
+
+            Assert.False(pathOnly.IsBlocked(host));
+            Assert.True(hostOnly.IsBlocked(host));
+        }
+
         [Fact]
         public void IsBlocked_EmptyHostReturnsFalse()
         {

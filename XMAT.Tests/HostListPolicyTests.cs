@@ -146,6 +146,25 @@ namespace XMAT.Tests
             Assert.False(list.IsBypassed("::1"));
         }
 
+        [Theory]
+        [InlineData("127.0.0.1", "0177.0.0.1")]
+        [InlineData("127.0.0.1", "127.1")]
+        [InlineData("127.0.0.1", "2130706433")]
+        [InlineData("127.0.0.1", "0x7f.0.0.1")]
+        [InlineData("api.example.com", "api\u3002example.com")]
+        [InlineData("example.com", "\uFF45\uFF58\uFF41\uFF4D\uFF50\uFF4C\uFF45.com")]
+        [InlineData("example.com", "exam\u00ADple.com")]
+        public void BypassList_RemainsLiteralForDestinationAliases(string entry, string alias)
+        {
+            var list = new BypassListModel();
+
+            Assert.True(list.Add(entry));
+            Assert.False(list.IsBypassed(alias));
+            Assert.False(list.Contains(alias));
+            Assert.False(list.Remove(alias));
+            Assert.True(list.Contains(entry));
+        }
+
         // A port attempt is rejected by its shape, whether or not the port itself is valid.
         [Theory]
         [InlineData("example.com:443")]
