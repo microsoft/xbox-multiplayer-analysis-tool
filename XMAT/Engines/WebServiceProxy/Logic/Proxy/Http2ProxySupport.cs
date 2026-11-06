@@ -22,6 +22,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -301,6 +302,12 @@ namespace XMAT.WebServiceCapture.Proxy
             }
 
             Uri uri = ProxyUriFactory.Create(clientRequest);
+            if (!HostListEntry.IsSupportedTargetScheme(uri.Scheme))
+            {
+                Log(tunnel.ConnectionId, LogLevel.WARN, "Client request used an unsupported target scheme.");
+                context.Abort();
+                return;
+            }
             if (context.WebSockets.IsWebSocketRequest)
             {
                 await ProxyWebSocketAsync(

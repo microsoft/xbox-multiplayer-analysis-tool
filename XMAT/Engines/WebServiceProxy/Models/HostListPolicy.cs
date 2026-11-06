@@ -100,8 +100,8 @@ namespace XMAT.WebServiceCapture.Models
         internal static bool IsSupportedTargetScheme(string scheme) =>
             string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(scheme, "ws", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(scheme, "wss", StringComparison.OrdinalIgnoreCase);
+            string.Equals(scheme, Uri.UriSchemeWs, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(scheme, Uri.UriSchemeWss, StringComparison.OrdinalIgnoreCase);
 
         internal static string DestinationHost(Uri uri)
         {
@@ -139,6 +139,10 @@ namespace XMAT.WebServiceCapture.Models
                 {
                     matchingPath = absolute.PathAndQuery;
                     alternateHost = DestinationHost(absolute);
+                }
+                else if (TryCreateCanonicalUri(candidate, null, out Uri claimed))
+                {
+                    alternateHost = DestinationHost(claimed);
                 }
             }
             else
