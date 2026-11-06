@@ -63,7 +63,8 @@ namespace XMAT.WebServiceCapture
         private string _fileName;
         private bool _fileBodyFromRequestFile;
 
-        // The editors as the request was loaded, to tell whether the user has edited it since.
+        // The request as it was loaded, with the transport options as the window or the last request file set them
+        // (EditorState), to tell whether the user has edited them since.
         private EditorState _loaded;
 
         // What the window is doing; it starts nothing else meanwhile. Preparing covers checking a send and asking the user
@@ -893,13 +894,14 @@ namespace XMAT.WebServiceCapture
         }
 
         // Open request: loads a request file in place of the request in the editors, after asking when the user has edited
-        // that one. The file is read and made into a request off the UI thread, and the read stops when the window closes or
-        // the user cancels it; a file that cannot be read changes nothing, nor does a file read by the time of the cancel.
-        // What the file left out stays to be supplied (ShowOmissions). A body larger than the editor shows is kept as its
-        // exact bytes and shown by its size (HeldBody). A file carries no transport but its HTTP version and grants no
-        // permission: Connect to another endpoint and Follow same-origin redirects go back to off, and a send asks for every
-        // permission that it needs, as always. Only the file's name is shown or kept, never its path. Nothing is sent, and
-        // the previous response is cleared, so it cannot pass for the new request's.
+        // that one or the transport options, which opening resets (EditorState); the answer is not a permission to send, and
+        // declining changes nothing. The file is read and made into a request off the UI thread, and the read stops when the
+        // window closes or the user cancels it; a file that cannot be read changes nothing, nor does a file read by the time
+        // of the cancel. What the file left out stays to be supplied (ShowOmissions). A body larger than the editor shows is
+        // kept as its exact bytes and shown by its size (HeldBody). A file carries no transport but its HTTP version and
+        // grants no permission: Connect to another endpoint and Follow same-origin redirects go back to off, and a send asks
+        // for every permission that it needs, as always. Only the file's name is shown or kept, never its path. Nothing is
+        // sent, and the previous response is cleared, so it cannot pass for the new request's.
         internal async Task OpenRequestAsync()
         {
             if (_state != ComposerState.Idle || _closed)
@@ -1490,7 +1492,10 @@ namespace XMAT.WebServiceCapture
                 return false;
             }
 
-            if (CurrentEditors() != _loaded)
+            // A drop keeps the transport options as they are, so changing them is not an edit that it loses. Nor does it set
+            // them: they stay compared with those that the window or the last request file set, which Open request resets.
+            TransportState loadedTransport = _loaded.Transport;
+            if (CurrentEditors() with { Transport = loadedTransport } != _loaded)
             {
                 bool replace;
                 _state = ComposerState.Preparing;
@@ -1509,6 +1514,7 @@ namespace XMAT.WebServiceCapture
             }
 
             LoadDraft(draft, provenance);
+            _loaded = _loaded with { Transport = loadedTransport };
             ClearResponse();
             StatusText.Text = Localization.GetLocalizedString(
                 "COMPOSER_DROPPED", provenance.SourceName, provenance.RequestNumber);
@@ -1530,7 +1536,14 @@ namespace XMAT.WebServiceCapture
         }
 
         private EditorState CurrentEditors() =>
-            new(MethodBox.Text, UrlBox.Text, HeadersBox.Text, BodyBox.Text, Base64Box.IsChecked == true, _fileBody);
+            new(MethodBox.Text, UrlBox.Text, HeadersBox.Text, BodyBox.Text, Base64Box.IsChecked == true, _fileBody,
+                _draft.Omissions,
+                new TransportState(
+                    HttpVersion: SelectedHttpVersion,
+                    ConnectTo: ConnectToBox.IsChecked == true,
+                    Endpoint: ConnectToText.Text,
+                    FollowRedirects: FollowRedirectsBox.IsChecked == true,
+                    RedirectLimit: RedirectLimitBox.SelectedItem as int?));
 
         // Copy as cURL: the command that sends the request as the editors hold it, to the clipboard. A request that still
         // leaves out a part of its request file is never copied (RequestIncompleteException).
@@ -1579,10 +1592,20 @@ namespace XMAT.WebServiceCapture
         private static bool IsInputError(Exception exception) =>
             exception is ArgumentException or FormatException or InvalidOperationException or NotSupportedException;
 
-        // What the editors hold, to tell whether the user has edited the request since it was loaded. A body that the window
-        // holds as bytes, an uploaded file's or a large one from a request file, is compared by reference: it is the same
-        // bytes until another upload or Clear body.
+        // What Open request would discard, to tell whether the user has edited it: what the editors hold and the parts that a
+        // request file left out and that are not supplied yet, edited since the request was loaded; and the transport
+        // options, changed from those that the window or the last request file set, also before a drop, which keeps them.
+        // Supplying a part is an edit, even as the empty part that the editor already showed. A body that the window holds
+        // as bytes, an uploaded file's or a large one from a request file, is compared by reference: it is the same bytes
+        // until another upload or Clear body.
         private sealed record EditorState(
-            string Method, string Url, string Headers, string Body, bool Base64, byte[] FileBody);
+            string Method, string Url, string Headers, string Body, bool Base64, byte[] FileBody,
+            RequestOmissions Omissions, TransportState Transport);
+
+        // The transport options as the user left them, which Open request resets (ResetTransport) and a drop keeps: the HTTP
+        // version, which a request file keeps too, and Connect to another endpoint and Follow same-origin redirects, each
+        // with what it holds also while it is off: the endpoint as typed and the most redirects.
+        private sealed record TransportState(
+            ReplayHttpVersion HttpVersion, bool ConnectTo, string Endpoint, bool FollowRedirects, int? RedirectLimit);
     }
 }

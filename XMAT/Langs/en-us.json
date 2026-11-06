@@ -228,7 +228,7 @@
 	"COMPOSER_OPEN_INVALID": "Not opened: the file is not a valid XMAT request file. The request is unchanged.",
 	"COMPOSER_OPEN_UNSUPPORTED": "Not opened: the file is a kind of request file that this version of XMAT does not read. The request is unchanged.",
 	"COMPOSER_OPEN_FAILED": "Not opened: the file could not be opened. The request is unchanged.",
-	"COMPOSER_REPLACE_EDITED_FILE": "Replace the request that you edited with the request in {0}? Your edits are lost.",
+	"COMPOSER_REPLACE_EDITED_FILE": "Replace the current request with {0}? Edits to the request and its transport options will be lost.",
 	"COMPOSER_BODY_REQUEST_FILE": "The body is the {1:N0} bytes from {0}, not shown here: the composer shows a body of at most 64 KiB from a request file. Exactly these bytes are sent and saved. Upload File replaces them and Clear body removes them.",
 	"COMPOSER_OMITTED": "The request file left out {0}. Nothing is sent, copied as cURL or saved with its content until you supply each part: enter it in its editor, then select its button below. Typing alone does not supply a part.",
 	"COMPOSER_PART_METHOD": "the method",

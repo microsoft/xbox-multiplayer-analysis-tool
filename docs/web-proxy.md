@@ -278,9 +278,12 @@ Drag a request from a connections list onto an open composer to edit and send it
 One request is dragged at a time; CONNECT tunnels, protocol upgrades, and requests
 recorded without their body cannot be dragged. The composer loads a copy of the request
 as it was when the drag began, clears the previous response, and sends nothing. If you
-have edited the request in the composer, it asks before replacing it. Only requests
-dragged from XMAT can be dropped; text, links, and files are refused, and nothing can be
-dropped while the composer sends or reads a file.
+have edited the request in the composer, it asks before replacing it. A drop keeps the
+**HTTP version**, **Connect to another endpoint**, and **Follow same-origin redirects**
+as they are, so changing only those asks nothing here; opening a request file still asks
+about them, since it resets them. Only requests dragged from XMAT can be dropped; text,
+links, and files are refused, and nothing can be dropped while the composer sends or
+reads a file.
 
 ### Open and save request files
 
@@ -321,16 +324,20 @@ any permission.
 - **Opening a file.** The file is read and checked as untrusted data before anything
   changes: a file that cannot be read, is larger than 96 MiB, or is not a valid request
   file leaves the request as it was. So does **Cancel request**, even if the file was
-  read by then, and nothing is asked. If you have edited the request in the composer,
-  XMAT asks before replacing it. Opening sets the **HTTP version** from the file, turns
-  off **Connect to another endpoint**, clearing its endpoint, and **Follow same-origin
-  redirects**, clears the previous response, and sends nothing. Text in the file, such
-  as Fiddler's `<@INCLUDE@>`, is used as it is, and no other file is read. The composer
-  shows only the file's name, never its folder, with any character that could hide or
-  reorder text shown as `\uXXXX`, and the **XMAT Replays** tab records each send as
-  coming from that file name. A file never grants a permission: sending still asks for
-  every confirmation that it needs, and the file's URL is the origin that a changed URL
-  is checked against.
+  read by then, and nothing is asked. Opening sets the **HTTP version** from the file,
+  turns off **Connect to another endpoint**, clearing its endpoint, and **Follow
+  same-origin redirects**, with *N* back to 10, clears the previous response, and sends
+  nothing. Before it discards your edits, XMAT asks whether to replace the current
+  request: edits to the request since it was loaded, even only supplying a part that
+  its file left out, and changes to these transport options from what the composer
+  started with or the last opened file set, including changes made before you dragged
+  in a request. Declining keeps everything as it was, and no answer is a permission to
+  send. Text in the file, such as Fiddler's `<@INCLUDE@>`, is used as it is, and no
+  other file is read. The composer shows only the file's name, never its folder, with
+  any character that could hide or reorder text shown as `\uXXXX`, and the **XMAT
+  Replays** tab records each send as coming from that file name. A file never grants a
+  permission: sending still asks for every confirmation that it needs, and the file's
+  URL is the origin that a changed URL is checked against.
 - **A large body is not shown.** The editor shows a body of at most 64 KiB from a
   request file. A larger body is kept as its exact bytes, which the composer sends and
   saves as they are, and shown only by the file's name and the body's size, never as

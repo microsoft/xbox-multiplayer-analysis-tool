@@ -347,8 +347,10 @@ namespace XMAT.Tests.Replay
 
                 await window.OpenRequestAsync();
 
+                // The question's English wording is pinned here, once; elsewhere it is read from en-us.
                 Assert.Equal(
-                    Localization.GetLocalizedString("COMPOSER_REPLACE_EDITED_FILE", "saved.xmat-request.json"),
+                    "Replace the current request with saved.xmat-request.json? Edits to the request and its transport " +
+                        "options will be lost.",
                     Assert.Single(questions));
                 Assert.Equal(Localization.GetLocalizedString("COMPOSER_OPEN_CANCELLED"), Status(window));
                 Assert.Equal(("GET", "http://127.0.0.1:9/edited", "", ""), Editors(window));
@@ -388,6 +390,240 @@ namespace XMAT.Tests.Replay
                 window.Close();
                 await RemoveAllAsync(model);
                 Directory.Delete(directory, recursive: true);
+            }
+        });
+
+        // Supplying a part that a request file left out is an edit, even as the empty part that the editors already showed,
+        // and so is changing a transport option, which opening a file resets: choosing any other HTTP version, turning on
+        // Connect to another endpoint or Follow same-origin redirects, or changing the endpoint or the most redirects, also
+        // while the option is off. Opening another file asks first, and declining keeps everything as it was; accepting
+        // resets the transport options. A file just opened is not edited: opening one again asks nothing.
+        [Theory]
+        [InlineData("1.1", "1.1", "headers")]
+        [InlineData("1.1", "1.1", "body")]
+        [InlineData("auto", "1.1", null)]
+        [InlineData("auto", "2", null)]
+        [InlineData("1.1", "auto", null)]
+        [InlineData("1.1", "2", null)]
+        [InlineData("2", "auto", null)]
+        [InlineData("2", "1.1", null)]
+        [InlineData("1.1", "1.1", "connect")]
+        [InlineData("1.1", "1.1", "endpoint")]
+        [InlineData("1.1", "1.1", "follow")]
+        [InlineData("1.1", "1.1", "limit")]
+        public Task SupplyingAPartOrChangingATransportOption_IsAnEdit_ThatOpeningAFileAsksAbout(
+            string opened, string chosen, string edit) => _application.RunAsync(async () =>
+        {
+            string directory = FixtureDirectory();
+            using var client = new RequestReplayClient();
+            var questions = new List<string>();
+            bool replace = false;
+            var window = RequestComposerWindow.ForNewRequest(
+                client,
+                message =>
+                {
+                    questions.Add(message);
+                    return replace;
+                });
+            try
+            {
+                // The other file has another HTTP version than either, so that opening it changes the version too.
+                string third = new[] { "auto", "1.1", "2" }.First(version => version != opened && version != chosen);
+                string template = Path.Join(directory, "template.xmat-request.json");
+                string other = Path.Join(directory, "other.xmat-request.json");
+                File.WriteAllText(template, RequestFileJson("template", "POST", null, opened, null, null));
+                File.WriteAllText(other, RequestFileJson("content", "GET", "http://127.0.0.1:9/other", third, "[]", ""));
+                window.ChooseRequestFile = () => template;
+                await window.OpenRequestAsync();
+                Assert.Equal((VersionOf(opened), false, "", false, ReplayOptions.MaxRedirectLimit), Transport(window));
+                ChooseVersion(window, chosen);
+                switch (edit)
+                {
+                    case "headers":
+                        Click(window, "CompleteNoHeadersButton");
+                        break;
+                    case "body":
+                        await ClickAsync(window, "CompleteEmptyBodyButton");
+                        break;
+                    case not null:
+                        ChangeTransport(window, edit);
+                        break;
+                }
+
+                // Only this edit differs from the file just opened; the editors show what they showed.
+                var edited = (VersionOf(chosen), edit == "connect", edit == "endpoint" ? "127.0.0.2:9443" : "",
+                    edit == "follow", edit == "limit" ? 3 : ReplayOptions.MaxRedirectLimit);
+                string omitted = Localization.GetLocalizedString("COMPOSER_OMITTED", edit switch
+                {
+                    "headers" => Parts("COMPOSER_PART_URL", "COMPOSER_PART_BODY"),
+                    "body" => Parts("COMPOSER_PART_URL", "COMPOSER_PART_HEADERS"),
+                    _ => Parts("COMPOSER_PART_URL", "COMPOSER_PART_HEADERS", "COMPOSER_PART_BODY"),
+                });
+                Assert.Equal(edited, Transport(window));
+                Assert.Equal(("POST", "", "", ""), Editors(window));
+                Assert.False(Find<CheckBox>(window, "Base64Box").IsChecked == true);
+                Assert.Equal(omitted, Find<TextBlock>(window, "OmissionsText").Text);
+                window.ChooseRequestFile = () => other;
+
+                await window.OpenRequestAsync();
+
+                Assert.Equal(
+                    Localization.GetLocalizedString("COMPOSER_REPLACE_EDITED_FILE", "other.xmat-request.json"),
+                    Assert.Single(questions));
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_OPEN_CANCELLED"), Status(window));
+                Assert.Equal(("POST", "", "", ""), Editors(window));
+                Assert.Equal(omitted, Find<TextBlock>(window, "OmissionsText").Text);
+                Assert.Equal(edited, Transport(window));
+
+                replace = true;
+                await window.OpenRequestAsync();
+
+                Assert.Equal(2, questions.Count);
+                Assert.Equal(("GET", "http://127.0.0.1:9/other", "", ""), Editors(window));
+                Assert.Equal(Visibility.Collapsed, Find<Border>(window, "OmissionsPanel").Visibility);
+                Assert.Equal((VersionOf(third), false, "", false, ReplayOptions.MaxRedirectLimit), Transport(window));
+
+                await window.OpenRequestAsync();
+
+                Assert.Equal(2, questions.Count);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_OPENED", "other.xmat-request.json"), Status(window));
+            }
+            finally
+            {
+                window.Close();
+                Directory.Delete(directory, recursive: true);
+            }
+        });
+
+        // A drop keeps the transport options as they are, so changing them asks nothing there, and they stay as chosen. They
+        // stay edits that opening a file asks about, since it resets them: declining keeps them, and the answer is not a
+        // permission to send, which the send still asks for. A part that a request file left out and that was supplied, even
+        // as the empty part that the editors already showed, is an edit that a drop loses: dropping asks first, and declining
+        // keeps it supplied.
+        [Fact]
+        public Task DroppingARequest_KeepsTheTransportWithoutAsking_ButAsksBeforeReplacingASuppliedPart() => _application.RunAsync(async () =>
+        {
+            string directory = FixtureDirectory();
+            using var client = new RequestReplayClient();
+            var questions = new List<string>();
+            bool replace = false;
+            var window = RequestComposerWindow.ForNewRequest(
+                client,
+                message =>
+                {
+                    questions.Add(message);
+                    return replace;
+                });
+            var capture = new ProxyConnectionModel(12, "200", DateTime.UtcNow, TimeSpan.Zero, "https", "127.0.0.1:9", "GET",
+                "/dropped", "GET /dropped HTTP/1.1\r\nHost: 127.0.0.1:9\r\n", [], "HTTP/1.1 200 OK\r\n", [], "127.0.0.1");
+            try
+            {
+                string path = Path.Join(directory, "template.xmat-request.json");
+                File.WriteAllText(path, Template("POST"));
+                window.ChooseRequestFile = () => path;
+                ChooseVersion(window, "1.1");
+                Find<CheckBox>(window, "ConnectToBox").IsChecked = true;
+                Find<TextBox>(window, "ConnectToText").Text = "127.0.0.2:9443";
+                Find<CheckBox>(window, "FollowRedirectsBox").IsChecked = true;
+                Find<ComboBox>(window, "RedirectLimitBox").SelectedItem = 3;
+                var chosen = (ReplayHttpVersion.Http11, true, "127.0.0.2:9443", true, 3);
+                using (ComposerSessionDragToken drag = ComposerSessionDrag.Begin(capture, "Source tab"))
+                {
+                    Assert.True(window.DropSession(drag.Data));
+                }
+
+                Assert.Empty(questions);
+                Assert.Equal("https://127.0.0.1:9/dropped", Find<TextBox>(window, "UrlBox").Text);
+                Assert.Equal(chosen, Transport(window));
+
+                await window.OpenRequestAsync();
+
+                Assert.Equal(
+                    Localization.GetLocalizedString("COMPOSER_REPLACE_EDITED_FILE", "template.xmat-request.json"),
+                    Assert.Single(questions));
+                Assert.Equal("https://127.0.0.1:9/dropped", Find<TextBox>(window, "UrlBox").Text);
+                Assert.Equal(chosen, Transport(window));
+
+                await window.SendAsync();
+
+                Assert.Equal(2, questions.Count);
+                Assert.Contains(
+                    Localization.GetLocalizedString("COMPOSER_CONFIRM_CONNECT_TO", "127.0.0.2:9443", "https://127.0.0.1:9"),
+                    questions[1]);
+
+                replace = true;
+                await window.OpenRequestAsync();
+
+                Assert.Equal(3, questions.Count);
+                Assert.Equal((ReplayHttpVersion.Auto, false, "", false, ReplayOptions.MaxRedirectLimit), Transport(window));
+
+                replace = false;
+                Click(window, "CompleteNoHeadersButton");
+                using (ComposerSessionDragToken drag = ComposerSessionDrag.Begin(capture, "Source tab"))
+                {
+                    Assert.False(window.DropSession(drag.Data));
+                }
+
+                Assert.Equal(4, questions.Count);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_REPLACE_EDITED", "Source tab", 12L), questions[3]);
+                Assert.Equal(("POST", "", "", ""), Editors(window));
+                Assert.Equal(
+                    Localization.GetLocalizedString("COMPOSER_OMITTED", Parts("COMPOSER_PART_URL", "COMPOSER_PART_BODY")),
+                    Find<TextBlock>(window, "OmissionsText").Text);
+            }
+            finally
+            {
+                window.Close();
+                Directory.Delete(directory, recursive: true);
+            }
+        });
+
+        // A drop keeps each transport option as it is: changing any one of them alone asks nothing there, and it stays as
+        // chosen. It stays an edit that opening a file asks about, since opening resets it, and declining keeps it.
+        [Theory]
+        [InlineData("version")]
+        [InlineData("connect")]
+        [InlineData("endpoint")]
+        [InlineData("follow")]
+        [InlineData("limit")]
+        public Task DroppingARequest_KeepsEachTransportOption_AsAnEditThatOpeningAFileAsksAbout(string option) => _application.RunAsync(async () =>
+        {
+            using var client = new RequestReplayClient();
+            var questions = new List<string>();
+            var window = RequestComposerWindow.ForNewRequest(client, Answer(questions, false));
+            var capture = new ProxyConnectionModel(12, "200", DateTime.UtcNow, TimeSpan.Zero, "http", "127.0.0.1:9", "GET",
+                "/dropped", "GET /dropped HTTP/1.1\r\nHost: 127.0.0.1:9\r\n", [], "HTTP/1.1 200 OK\r\n", [], "127.0.0.1");
+            window.ChooseRequestFile = () => Path.Join(AppContext.BaseDirectory, "other.xmat-request.json");
+            window.ReadRequestFile = (_, _) =>
+                Task.FromResult(RequestFileReader.Read(Encoding.UTF8.GetBytes(Template("GET"))));
+            try
+            {
+                ChangeTransport(window, option);
+                var changed = (option == "version" ? ReplayHttpVersion.Http11 : ReplayHttpVersion.Auto, option == "connect",
+                    option == "endpoint" ? "127.0.0.2:9443" : "", option == "follow",
+                    option == "limit" ? 3 : ReplayOptions.MaxRedirectLimit);
+                Assert.Equal(changed, Transport(window));
+                using (ComposerSessionDragToken drag = ComposerSessionDrag.Begin(capture, "Source tab"))
+                {
+                    Assert.True(window.DropSession(drag.Data));
+                }
+
+                Assert.Empty(questions);
+                Assert.Equal("http://127.0.0.1:9/dropped", Find<TextBox>(window, "UrlBox").Text);
+                Assert.Equal(changed, Transport(window));
+
+                await window.OpenRequestAsync();
+
+                Assert.Equal(
+                    Localization.GetLocalizedString("COMPOSER_REPLACE_EDITED_FILE", "other.xmat-request.json"),
+                    Assert.Single(questions));
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_OPEN_CANCELLED"), Status(window));
+                Assert.Equal("http://127.0.0.1:9/dropped", Find<TextBox>(window, "UrlBox").Text);
+                Assert.Equal(changed, Transport(window));
+            }
+            finally
+            {
+                window.Close();
             }
         });
 
@@ -1275,6 +1511,65 @@ namespace XMAT.Tests.Replay
             Find<TextBox>(window, "UrlBox").Text,
             Find<TextBox>(window, "HeadersBox").Text,
             Find<TextBox>(window, "BodyBox").Text);
+
+        // The transport options as the composer shows them: the HTTP version, Connect to another endpoint and its endpoint,
+        // and Follow same-origin redirects and the most redirects.
+        private static (ReplayHttpVersion, bool, string, bool, int) Transport(Window window) => (
+            Assert.IsType<ReplayHttpVersion>(
+                Assert.IsType<ComboBoxItem>(Find<ComboBox>(window, "HttpVersionBox").SelectedItem).Tag),
+            Find<CheckBox>(window, "ConnectToBox").IsChecked == true,
+            Find<TextBox>(window, "ConnectToText").Text,
+            Find<CheckBox>(window, "FollowRedirectsBox").IsChecked == true,
+            Assert.IsType<int>(Find<ComboBox>(window, "RedirectLimitBox").SelectedItem));
+
+        // Chooses an HTTP version, as a request file spells it.
+        private static void ChooseVersion(Window window, string spelled)
+        {
+            var box = Find<ComboBox>(window, "HttpVersionBox");
+            box.SelectedItem = box.Items.Cast<ComboBoxItem>().Single(item => VersionOf(spelled).Equals(item.Tag));
+        }
+
+        // Changes one transport option alone, as the user does: chooses HTTP/1.1 only, turns on Connect to another endpoint
+        // or Follow same-origin redirects, or changes the endpoint or the most redirects, turning the option on to do so and
+        // off again.
+        private static void ChangeTransport(Window window, string option)
+        {
+            var connectTo = Find<CheckBox>(window, "ConnectToBox");
+            var follow = Find<CheckBox>(window, "FollowRedirectsBox");
+            switch (option)
+            {
+                case "version":
+                    ChooseVersion(window, "1.1");
+                    break;
+                case "connect":
+                    connectTo.IsChecked = true;
+                    break;
+                case "endpoint":
+                    connectTo.IsChecked = true;
+                    Find<TextBox>(window, "ConnectToText").Text = "127.0.0.2:9443";
+                    connectTo.IsChecked = false;
+                    break;
+                case "follow":
+                    follow.IsChecked = true;
+                    break;
+                case "limit":
+                    follow.IsChecked = true;
+                    Find<ComboBox>(window, "RedirectLimitBox").SelectedItem = 3;
+                    follow.IsChecked = false;
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(option));
+            }
+        }
+
+        // An HTTP version as a request file spells it.
+        private static ReplayHttpVersion VersionOf(string spelled) => spelled switch
+        {
+            "auto" => ReplayHttpVersion.Auto,
+            "1.1" => ReplayHttpVersion.Http11,
+            "2" => ReplayHttpVersion.Http2,
+            _ => throw new ArgumentOutOfRangeException(nameof(spelled)),
+        };
 
         // Records into the model's Replays tab, on this test's UI thread.
         private static ReplayRecordingTarget Recording(CaptureAppModel model)
