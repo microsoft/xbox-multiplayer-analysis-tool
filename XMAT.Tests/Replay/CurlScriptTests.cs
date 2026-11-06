@@ -294,21 +294,13 @@ namespace XMAT.Tests.Replay
         [CurlScriptFact]
         public async Task AFailingScript_StopsItsOwnChildOnly()
         {
-            string decoyFolder = Path.Join(_folder, "decoy");
-            Directory.CreateDirectory(decoyFolder);
-            CurlScripts.ConfigureEcho(decoyFolder, mode: "hold");
-            using Process decoy = Process.Start(new ProcessStartInfo(CurlScripts.EchoHelper, "decoy")
-            {
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                WorkingDirectory = decoyFolder,
-            });
+            using Process decoy = StartDecoy(Path.Join(_folder, "decoy"));
+            string record = CurlScripts.ConfigureEcho(_folder, mode: "hold");
             try
             {
                 var draft = new RequestReplayDraft { Method = "PUT", Url = "http://127.0.0.1:9/" };
                 draft.SetBodyBytes(RandomNumberGenerator.GetBytes(8 * 1024 * 1024));
                 CurlRequest request = RequestCurlExporter.Prepare(draft, new ReplayTransportOptions(), 0, CancellationToken.None);
-                string record = CurlScripts.ConfigureEcho(_folder, mode: "hold");
 
                 ScriptRun run = await CurlScripts.RunAsync(
                     CurlScripts.WriteFile(_folder, "hold.ps1", request, CurlScriptForm.File, null, new CurlScriptTestHooks(CurlScripts.EchoHelper)),
@@ -321,12 +313,82 @@ namespace XMAT.Tests.Replay
             }
             finally
             {
-                if (!decoy.HasExited)
-                {
-                    decoy.Kill();
-                    decoy.WaitForExit();
-                }
+                CurlScripts.StopRecorded(record);
+                Stop(decoy);
             }
+        }
+
+        // T6: a run that is interrupted while its own curl.exe still runs (as Ctrl+C stops it: the pipeline stops, its host
+        // keeps running) leaves a failure, never an earlier result such as 0, and stops and reaps that curl.exe only. The
+        // pipeline runs in a runspace of its own, which is queried afterwards; for a pasteable command and a script file.
+        [CurlScriptTheory]
+        [InlineData("pasteable")]
+        [InlineData("file")]
+        public async Task AnInterruptedRun_LeavesAFailure_AndStopsItsOwnChildOnly(string form)
+        {
+            using Process decoy = StartDecoy(Path.Join(_folder, "decoy"));
+            string record = CurlScripts.ConfigureEcho(_folder, mode: "hold");
+            try
+            {
+                CurlRequest request = RequestCurlExporter.Prepare(
+                    new RequestReplayDraft { Method = "GET", Url = "http://127.0.0.1:9/" }, new ReplayTransportOptions(), 0, CancellationToken.None);
+                var hooks = new CurlScriptTestHooks(CurlScripts.EchoHelper);
+                string command;
+                if (form == "pasteable")
+                {
+                    string text = Path.Join(_folder, "interrupted.txt");
+                    File.WriteAllText(text, CurlScripts.Text(request, CurlScriptForm.Pasteable, null, hooks), new UTF8Encoding(false));
+                    command = "[System.IO.File]::ReadAllText(" + RequestCurlExporter.Literal(text) + ")";
+                }
+                else
+                {
+                    string file = CurlScripts.WriteFile(_folder, "interrupted.ps1", request, CurlScriptForm.File, null, hooks);
+                    command = RequestCurlExporter.Literal("& " + RequestCurlExporter.Literal(file));
+                }
+
+                string driver = Path.Join(_folder, "interrupt-" + form + ".ps1");
+                File.WriteAllText(driver, InterruptingDriver(record, command), new UTF8Encoding(true));
+                ScriptRun run = await CurlScripts.RunAsync(driver, _folder);
+                EchoRun send = Assert.Single(CurlScripts.ReadEcho(record), echo => echo.Kind == "send");
+
+                Assert.True(run.ExitCode == 0, run.ToString());
+                Assert.True(run.Output.Contains("xmat-interrupted Stopped 1", StringComparison.Ordinal), run.ToString());
+                Assert.False(IsRunning(send.ProcessId), "The script's own child is still running.");
+                Assert.False(decoy.HasExited, "An unrelated process was stopped.");
+            }
+            finally
+            {
+                CurlScripts.StopRecorded(record);
+                Stop(decoy);
+            }
+        }
+
+        // The echo helper records which variables a child got but not what they held, apart from the system folders: a
+        // secret in the environment of whoever runs the tests never reaches a record, while the names that
+        // Children_GetOnlyTheAllowlistedEnvironment checks still do.
+        [Fact]
+        public async Task TheEchoHelper_RecordsNoSecretFromItsEnvironment()
+        {
+            const string Canary = "xmat-secret-canary-58e1";
+            string record = CurlScripts.ConfigureEcho(_folder);
+            var start = new ProcessStartInfo(CurlScripts.EchoHelper, "send")
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                WorkingDirectory = _folder,
+            };
+            start.Environment["XMAT_SECRET_CANARY"] = Canary;
+            using (Process helper = Process.Start(start))
+            {
+                helper.StandardInput.Close();
+                await helper.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+            }
+
+            EchoRun run = Assert.Single(CurlScripts.ReadEcho(record));
+            Assert.DoesNotContain(Canary, File.ReadAllText(record), StringComparison.Ordinal);
+            Assert.True(run.Environment.ContainsKey("XMAT_SECRET_CANARY"));
+            Assert.Null(run.Environment["XMAT_SECRET_CANARY"]);
+            Assert.Equal(Environment.GetEnvironmentVariable("SystemRoot"), run.Environment["SystemRoot"]);
         }
 
         // T6: a server that closes the connection at once is curl's own failure: the script's result is curl's nonzero
@@ -548,6 +610,82 @@ namespace XMAT.Tests.Replay
             listener.Stop();
             return port;
         }
+
+        // An unrelated process that a script must never stop: an xmat-echo.exe that holds, started with only the system
+        // variables that a script's own children get, so nothing of the test's environment reaches its record.
+        private static Process StartDecoy(string folder)
+        {
+            Directory.CreateDirectory(folder);
+            CurlScripts.ConfigureEcho(folder, mode: "hold");
+            var start = new ProcessStartInfo(CurlScripts.EchoHelper, "decoy")
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                WorkingDirectory = folder,
+            };
+            start.Environment.Clear();
+            foreach (string name in RequestCurlExporter.ChildEnvironment)
+            {
+                if (Environment.GetEnvironmentVariable(name) is string value)
+                {
+                    start.Environment[name] = value;
+                }
+            }
+
+            return Process.Start(start);
+        }
+
+        private static void Stop(Process process)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+                process.WaitForExit();
+            }
+        }
+
+        // A PowerShell script that runs command in a runspace of its own with $global:LASTEXITCODE set to 0, waits until
+        // xmat-echo.exe records the send, stops that pipeline as Ctrl+C would, and writes the pipeline's state and the
+        // runspace's $global:LASTEXITCODE afterwards.
+        private static string InterruptingDriver(string record, string command) =>
+            string.Join(
+                "\r\n",
+                "$ErrorActionPreference = 'Stop'",
+                "$xmatRecord = " + RequestCurlExporter.Literal(record),
+                "$xmatRunspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()",
+                "$xmatRunspace.Open()",
+                "try {",
+                "    $xmatSeed = [System.Management.Automation.PowerShell]::Create()",
+                "    $xmatSeed.Runspace = $xmatRunspace",
+                "    $null = $xmatSeed.AddScript('$global:LASTEXITCODE = 0').Invoke()",
+                "    $xmatSeed.Dispose()",
+                "    $xmatRun = [System.Management.Automation.PowerShell]::Create()",
+                "    $xmatRun.Runspace = $xmatRunspace",
+                "    $null = $xmatRun.AddScript(" + command + ")",
+                "    $xmatAsync = $xmatRun.BeginInvoke()",
+                "    $xmatDeadline = [DateTime]::UtcNow.AddSeconds(60)",
+                "    while ($true) {",
+                "        $xmatText = ''",
+                "        try { $xmatText = [System.IO.File]::ReadAllText($xmatRecord) } catch { }",
+                "        if ($xmatText.Contains('\"kind\":\"send\"')) { break }",
+                "        if ($xmatAsync.IsCompleted) { throw 'The run ended before its curl.exe started.' }",
+                "        if ([DateTime]::UtcNow -gt $xmatDeadline) { throw 'The run did not start its curl.exe.' }",
+                "        Start-Sleep -Milliseconds 20",
+                "    }",
+                "    Start-Sleep -Milliseconds 300",
+                "    $xmatRun.Stop()",
+                "    $xmatState = $xmatRun.InvocationStateInfo.State",
+                "    $xmatRun.Dispose()",
+                "    $xmatQuery = [System.Management.Automation.PowerShell]::Create()",
+                "    $xmatQuery.Runspace = $xmatRunspace",
+                "    $xmatCode = $xmatQuery.AddScript('$global:LASTEXITCODE').Invoke()",
+                "    $xmatQuery.Dispose()",
+                "    [Console]::Out.WriteLine('xmat-interrupted ' + $xmatState + ' ' + $xmatCode[0])",
+                "}",
+                "finally {",
+                "    $xmatRunspace.Dispose()",
+                "}",
+                string.Empty);
 
         private static bool IsRunning(int processId)
         {

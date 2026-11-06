@@ -21,11 +21,19 @@ namespace XMAT.Tests.Echo
     //   mode     - "read" (the default) reads stdin to its end and exits 0; "hold" closes its stdin without reading and
     //              keeps running until it is stopped.
     // A record holds its kind (probe or send), process id, arguments as .NET read them, arguments as the Windows
-    // command-line parser reads them, the raw command line, its environment, and for a send, the stdin bytes' length and
-    // SHA-256.
+    // command-line parser reads them, the raw command line, the names of its environment variables with the values of
+    // the system folders only (RecordedValues), and for a send, the stdin bytes' length and SHA-256.
     internal static class Program
     {
         private const int StdInputHandle = -10;
+
+        // The only environment values that a record keeps, which tests compare. Any other value, such as a secret in the
+        // environment of whoever runs the tests, is recorded as null: tests check which variables a child got, not what
+        // they held.
+        private static readonly HashSet<string> RecordedValues = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "SystemRoot", "windir", "SystemDrive",
+        };
 
         private static int Main(string[] args)
         {
@@ -46,7 +54,10 @@ namespace XMAT.Tests.Echo
                 ["commandLine"] = Marshal.PtrToStringUni(NativeMethods.GetCommandLineW()),
                 ["environment"] = Environment.GetEnvironmentVariables()
                     .Cast<DictionaryEntry>()
-                    .ToDictionary(variable => (string)variable.Key, variable => (string)variable.Value, StringComparer.OrdinalIgnoreCase),
+                    .ToDictionary(
+                        variable => (string)variable.Key,
+                        variable => RecordedValues.Contains((string)variable.Key) ? (string)variable.Value : null,
+                        StringComparer.OrdinalIgnoreCase),
             };
 
             if (probe)

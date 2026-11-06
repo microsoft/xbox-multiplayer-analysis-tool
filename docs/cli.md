@@ -265,7 +265,9 @@ xmat --version
 - `xmat curl` exports requests as cURL scripts and sends nothing: the requests that `INPUT --request SPEC` selects,
   the request of a `--request-file`, or a new request with `--url`, after the same edits and completions as
   `save-request`. Each script is a PowerShell 7 file that runs the `curl.exe` of Windows (in `System32`) with arguments
-  that make curl send what xmat sends: the same request line, `Host`, header lines in the same order and body bytes.
+  that make curl send what xmat sends over HTTP/1.1: the same request line, `Host`, header lines in the same order and
+  body bytes. Two things differ: a header value that is not ASCII, which xmat does not send, goes out as its UTF-8
+  bytes, and an empty value as `Name:` rather than `Name: `.
   A script holds its request as captured, credentials, cookies and body included, so `curl` needs
   `--include-sensitive`: without it, xmat refuses before it reads any input or creates anything
   (`replay.curl.consent-required`, exit code 3). A request whose origin an edit changed also needs
@@ -292,7 +294,14 @@ xmat --version
   a body file that changed apart from its script: whoever can change the script can also change its URL, headers, body
   file, length and hash, so keep scripts and body files as private as the capture. Its exit code is
   curl's, or 1 when the script refused or failed before curl finished; when it fails or is interrupted, it stops the
-  curl that it started.
+  curl that it started, and an interrupted script leaves `$LASTEXITCODE` at 1 in the PowerShell session that ran it.
+- A script asks curl for exactly HTTP/1.1 when the request is exported with `--http-version 1.1`, or from a request
+  file that asks for `1.1`. With `auto`, curl chooses the version itself, which need not be the one that xmat would use
+  (xmat sends HTTP/2 to an HTTPS server that offers it). The rest is curl's own behavior, not xmat's: curl trusts the
+  certificates that Windows trusts and also checks that the server's certificate was not revoked, which xmat does not,
+  so a certificate whose revocation Windows cannot check fails in the script; it follows no redirect; it has no overall
+  time limit and no limit on the size of a response, unlike `xmat replay` with `--timeout` and `--max-response-mib`;
+  and it writes the response body, and any error, to the console.
 - `xmat doctor --for analyze` checks what `xmat analyze` needs and writes nothing: the analysis rules (`data.rules`),
   the API map (`data.apimap`) and the English strings (`localization.en-us`) installed next to `xmat.exe`, and a 64-bit
   process (`runtime.64-bit`). A missing or damaged file fails its check with a code such as `analysis.assets.rules` and

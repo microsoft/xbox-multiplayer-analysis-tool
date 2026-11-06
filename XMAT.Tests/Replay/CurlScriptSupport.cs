@@ -106,7 +106,41 @@ namespace XMAT.Tests.Replay
                 throw new TimeoutException($"The script did not finish in {timeoutSeconds} seconds.");
             }
 
+            // A process that the script started and left running holds the script's output open after the script ended:
+            // a failure, never a wait without end.
+            try
+            {
+                await Task.WhenAll(output, error).WaitAsync(timeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException(
+                    $"The script ended, but a process that it started still held its output after {timeoutSeconds} seconds.");
+            }
+
             return new ScriptRun(process.ExitCode, await output, await error);
+        }
+
+        // Stops each xmat-echo.exe that the record lists and that still runs, so that a test that fails never leaves one
+        // behind, held or orphaned.
+        internal static void StopRecorded(string record)
+        {
+            foreach (EchoRun run in ReadEcho(record))
+            {
+                try
+                {
+                    using Process process = Process.GetProcessById(run.ProcessId);
+                    if (process.ProcessName.Equals("xmat-echo", StringComparison.OrdinalIgnoreCase) && !process.HasExited)
+                    {
+                        process.Kill();
+                        process.WaitForExit();
+                    }
+                }
+                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+                {
+                    // It is gone already.
+                }
+            }
         }
 
         // Writes xmat-echo.json in folder, for xmat-echo.exe started there, and returns the record file's path.

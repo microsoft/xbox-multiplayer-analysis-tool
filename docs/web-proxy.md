@@ -254,10 +254,17 @@ script can use them.
   The command and the script check all of this first, and refuse, sending nothing, when
   something is missing or when the command line would be longer than Windows allows. A
   refusal or failure gives a nonzero result: the script's exit code, or `$LASTEXITCODE`
-  for the pasted command, which never closes PowerShell.
+  for the pasted command, which never closes PowerShell. When either fails or is
+  interrupted, for example with Ctrl+C, it stops the curl that it started, and an
+  interrupted command or script leaves `$LASTEXITCODE` at 1 in the PowerShell session
+  that ran it.
 - **How curl runs.** Without a proxy or a curl configuration file, and with none of the
-  proxy, curl or TLS settings of your environment. It never follows redirects and always
-  checks certificates. It writes the response body, and any error, to the console.
+  proxy, curl or TLS settings of your environment. It never follows redirects. It
+  trusts the certificates that Windows trusts and also checks that the server's
+  certificate was not revoked, which **Send** does not: a certificate whose revocation
+  Windows cannot check fails in the command or script. Unlike **Send**, it has no
+  overall time limit and no limit on the size of a response. It writes the response
+  body, and any error, to the console.
 - **What is sent.** One request, with the method, URL, headers and body as XMAT sends
   them over HTTP/1.1; `Host` and `Content-Length` come from the URL and the body. A
   header value with non-ASCII characters, which XMAT does not send, is sent as its UTF-8

@@ -384,6 +384,29 @@ namespace XMAT.Tests.Replay
             Assert.DoesNotMatch("(?i)ReadAll|Get-Content|OpenRead|CopyTo|FileStream", script);
         }
 
+        // G18: a script owns each curl.exe from the moment it starts it, the version probe included, in one expression that
+        // an interruption cannot split (a run stopped between a start and its assignment would otherwise leave curl running),
+        // and its one finally stops and reaps every owned curl.exe that still runs. Interruption itself is
+        // CurlScriptTests.AnInterruptedRun_LeavesAFailure_AndStopsItsOwnChildOnly.
+        [Theory]
+        [InlineData("File")]
+        [InlineData("Pasteable")]
+        public void EveryCurl_IsOwnedFromItsStart_AndStoppedInTheFinally(string form)
+        {
+            string script = CurlScripts.Text(
+                Prepare(new RequestReplayDraft { Method = "GET", Url = "http://127.0.0.1:9/" }), Enum.Parse<CurlScriptForm>(form));
+            string cleanup = script[script.LastIndexOf("finally {", StringComparison.Ordinal)..];
+
+            Assert.Equal(
+                new[] { "$xmatOwned.Add([System.Diagnostics.Process]::Start($xmatStart))" },
+                Regex.Matches(script, @"^.*\[System\.Diagnostics\.Process\]::Start\(.*$", RegexOptions.Multiline)
+                    .Select(match => match.Value.Trim()));
+            Assert.Equal(2, Regex.Matches(script, Regex.Escape("= Start-XmatCurl ")).Count);
+            Assert.Contains("foreach ($xmatOwnedProcess in $xmatOwned) {", cleanup, StringComparison.Ordinal);
+            Assert.Contains("try { $xmatOwnedProcess.Kill() } catch { }", cleanup, StringComparison.Ordinal);
+            Assert.Contains("$xmatOwnedProcess.WaitForExit()", cleanup, StringComparison.Ordinal);
+        }
+
         // G14: writing stops between lines once cancelled: a script of many lines ends at the next line after the token is
         // cancelled, long before all of it is written.
         [Fact]

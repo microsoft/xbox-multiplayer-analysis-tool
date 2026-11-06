@@ -371,6 +371,10 @@ namespace XMAT.Operations.Replay
             script.Line("# when it is no longer needed. It needs Windows, PowerShell " + MinimumPowerShellVersion +
                 " or later and curl.exe " + MinimumCurlVersion + " or");
             script.Line("# later; otherwise it sends nothing.");
+
+            // Until curl's result is known, the result is a failure: a run that is interrupted (Ctrl+C stops it after its
+            // finally blocks) leaves 1, never an earlier result.
+            script.Line("$global:LASTEXITCODE = 1");
             script.Line("Set-StrictMode -Version 3.0");
             script.Line("$ErrorActionPreference = 'Stop'");
             WriteRun(script, request, bodySidecar, hooks, indent: string.Empty);
@@ -386,12 +390,14 @@ namespace XMAT.Operations.Replay
                 MinimumPowerShellVersion);
             script.Line(Indent + "# or later and curl.exe " + MinimumCurlVersion +
                 " or later; otherwise it sends nothing. Its result is in $LASTEXITCODE.");
+
+            // As in a script file, the result is a failure until curl's is known, so an interrupted command leaves 1.
+            script.Line(Indent + "$global:LASTEXITCODE = 1");
             script.Line(Indent + "$xmatVersion = $PSVersionTable.PSVersion");
             script.Line(Indent + "if ([version]('{0}.{1}' -f $xmatVersion.Major, $xmatVersion.Minor) -lt [version]'" +
                 MinimumPowerShellVersion + "') {");
             script.Line(Indent + "    [Console]::Error.WriteLine('xmat: this command needs PowerShell " + MinimumPowerShellVersion +
                 " or later; nothing was sent.')");
-            script.Line(Indent + "    $global:LASTEXITCODE = 1");
             script.Line(Indent + "    return");
             script.Line(Indent + "}");
             script.Line(Indent + "Set-StrictMode -Version 3.0");
@@ -402,7 +408,7 @@ namespace XMAT.Operations.Replay
         }
 
         // The part that both forms share: checks, the body, the version probe and the send, in a try whose finally stops
-        // and reaps a curl.exe of the script's own that is still running. $xmatExit is curl's exit code, or 1 when the
+        // and reaps every curl.exe of the script's own that is still running. $xmatExit is curl's exit code, or 1 when the
         // script refused or failed.
         private static void WriteRun(
             ScriptWriter script, CurlRequest request, string bodySidecar, CurlScriptTestHooks hooks, string indent)
@@ -411,7 +417,7 @@ namespace XMAT.Operations.Replay
             string i2 = i1 + "    ";
             string i3 = i2 + "    ";
             script.Line(indent + "$xmatExit = 1");
-            script.Line(indent + "$xmatProcess = $null");
+            script.Line(indent + "$xmatOwned = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()");
             script.Line(indent + "try {");
             script.Line(i1 + "if (-not $IsWindows) { throw 'This script runs only on Windows; nothing was sent.' }");
             script.Line(i1 + "$xmatCurl = " + (hooks?.CurlPath is string path
@@ -442,7 +448,11 @@ namespace XMAT.Operations.Replay
             script.Line(i2 + "$xmatStart.RedirectStandardInput = $XmatInput");
             script.Line(i2 + "$xmatStart.RedirectStandardOutput = $XmatCapture");
             script.Line(i2 + "$xmatStart.RedirectStandardError = $XmatCapture");
-            script.Line(i2 + "[System.Diagnostics.Process]::Start($xmatStart)");
+
+            // Started and owned in one expression, which an interruption cannot split: the finally finds every curl.exe
+            // that has started.
+            script.Line(i2 + "$xmatOwned.Add([System.Diagnostics.Process]::Start($xmatStart))");
+            script.Line(i2 + "$xmatOwned[$xmatOwned.Count - 1]");
             script.Line(i1 + "}");
 
             WriteBody(script, request, bodySidecar, i1);
@@ -468,12 +478,12 @@ namespace XMAT.Operations.Replay
             script.Line(i1 + "$xmatExit = 1");
             script.Line(indent + "}");
             script.Line(indent + "finally {");
-            script.Line(i1 + "if ($null -ne $xmatProcess) {");
-            script.Line(i2 + "if (-not $xmatProcess.HasExited) {");
-            script.Line(i3 + "try { $xmatProcess.Kill() } catch { }");
-            script.Line(i3 + "$xmatProcess.WaitForExit()");
+            script.Line(i1 + "foreach ($xmatOwnedProcess in $xmatOwned) {");
+            script.Line(i2 + "if (-not $xmatOwnedProcess.HasExited) {");
+            script.Line(i3 + "try { $xmatOwnedProcess.Kill() } catch { }");
+            script.Line(i3 + "$xmatOwnedProcess.WaitForExit()");
             script.Line(i2 + "}");
-            script.Line(i2 + "$xmatProcess.Dispose()");
+            script.Line(i2 + "$xmatOwnedProcess.Dispose()");
             script.Line(i1 + "}");
             script.Line(indent + "}");
         }
@@ -536,21 +546,16 @@ namespace XMAT.Operations.Replay
         }
 
         // Runs the curl.exe of the script by itself first, without showing what it prints: its version must be at least
-        // MinimumCurlVersion, and when an argument is not ASCII, its Features must list Unicode.
+        // MinimumCurlVersion, and when an argument is not ASCII, its Features must list Unicode. The run's finally stops it
+        // if the script fails or is interrupted meanwhile.
         private static void WriteProbe(ScriptWriter script, CurlRequest request, string indent)
         {
             string i1 = indent + "    ";
             script.Line(indent + "$xmatProbe = Start-XmatCurl @('-q', '--version') $false $true");
-            script.Line(indent + "try {");
-            script.Line(i1 + "$xmatProbeErrors = $xmatProbe.StandardError.ReadToEndAsync()");
-            script.Line(i1 + "$xmatVersionText = $xmatProbe.StandardOutput.ReadToEnd()");
-            script.Line(i1 + "$xmatProbe.WaitForExit()");
-            script.Line(i1 + "$null = $xmatProbeErrors.GetAwaiter().GetResult()");
-            script.Line(indent + "}");
-            script.Line(indent + "finally {");
-            script.Line(i1 + "if (-not $xmatProbe.HasExited) { try { $xmatProbe.Kill() } catch { }; $xmatProbe.WaitForExit() }");
-            script.Line(i1 + "$xmatProbe.Dispose()");
-            script.Line(indent + "}");
+            script.Line(indent + "$xmatProbeErrors = $xmatProbe.StandardError.ReadToEndAsync()");
+            script.Line(indent + "$xmatVersionText = $xmatProbe.StandardOutput.ReadToEnd()");
+            script.Line(indent + "$xmatProbe.WaitForExit()");
+            script.Line(indent + "$null = $xmatProbeErrors.GetAwaiter().GetResult()");
             script.Line(indent + "$xmatLines = @($xmatVersionText -split \"`r?`n\")");
             script.Line(indent + "if ($xmatLines[0] -notmatch '^curl (\\d+)\\.(\\d+)\\.(\\d+)') {");
             script.Line(i1 + "throw 'curl.exe did not tell its version; nothing was sent.'");
