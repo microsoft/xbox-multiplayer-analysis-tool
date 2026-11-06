@@ -270,7 +270,8 @@ namespace XMAT.WebServiceCapture
         // (TooLarge). The note also says how a send with the composer's transport options went (TransportNote), from what
         // the operation recorded for it (sent), never from the composer's current controls, and, for a verified send, its
         // verdict and whether the tab kept its verification differences (VerifyNote), which the row keeps with it
-        // (verification). The row's host and port are the URL's authority as it was sent (ReplayAuthority).
+        // (verification). The row's host and port are the URL's authority as it was sent (ReplayAuthority), and its request
+        // time is when the send began, as this PC's local time like every capture's, though the exchange keeps it in UTC.
         internal static ProxyConnectionModel ToRow(
             long number,
             ReplayProvenance provenance,
@@ -317,7 +318,7 @@ namespace XMAT.WebServiceCapture
             return new ProxyConnectionModel(
                 number,
                 exchange.StatusCode == 0 ? string.Empty : exchange.StatusCode.ToString(CultureInfo.InvariantCulture),
-                exchange.Started,
+                exchange.Started.ToLocalTime(),
                 exchange.Duration,
                 uri?.Scheme ?? string.Empty,
                 uri == null ? string.Empty : ReplayAuthority.Ascii(uri),

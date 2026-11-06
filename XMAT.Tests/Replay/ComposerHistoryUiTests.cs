@@ -30,7 +30,7 @@ namespace XMAT.Tests.Replay
     {
         private static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
-        // When the recorded sends started, which the history shows.
+        // When the recorded sends started, in UTC as each exchange keeps it; the history shows it as this PC's local time.
         private static readonly DateTime SentAt = new(2026, 1, 1, 9, 30, 15, DateTimeKind.Utc);
 
         private static readonly Func<string, bool> NoQuestion =
@@ -850,8 +850,8 @@ namespace XMAT.Tests.Replay
                 Assert.Equal(
                     new[]
                     {
-                        $"XMAT Replays #2, {SentAt:HH:mm:ss}: GET http://127.0.0.1:9/items?page=2, HTTP 200",
-                        $"XMAT Replays #1, {SentAt:HH:mm:ss}: POST http://127.0.0.1:9/upload, no response",
+                        $"XMAT Replays #2, {SentAt.ToLocalTime():HH:mm:ss}: GET http://127.0.0.1:9/items?page=2, HTTP 200",
+                        $"XMAT Replays #1, {SentAt.ToLocalTime():HH:mm:ss}: POST http://127.0.0.1:9/upload, no response",
                     },
                     entries.Select(AutomationProperties.GetName));
                 Assert.All(entries, entry => Assert.Equal(AutomationProperties.GetName(entry), entry.ToolTip));
