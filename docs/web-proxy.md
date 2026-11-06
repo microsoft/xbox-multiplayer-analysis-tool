@@ -234,6 +234,10 @@ The menu key acts on the focused row, not the selected row.
   rejected with an explanation.
 - Entries containing `*` or `/` are glob patterns, such as `example.com/api/*`.
   A colon in a pattern is literal, not a port filter.
+- Path patterns compare the path and query as the proxy forwards them, after its URL
+  normalization (`/public/../private/x` becomes `/private/x`). When a request names its
+  target (`GET http://host/path`), a Block entry matches either that host or the Host
+  header. Captured requests are still shown and exported as received.
 - Write IPv6 patterns without brackets, such as `2001:db8::*` or `::1/api/*`.
   A bracketed IPv6 pattern is accepted but never matches, including one that matched
   HTTP/2 traffic in earlier versions.

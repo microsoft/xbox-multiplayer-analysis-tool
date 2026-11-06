@@ -7,6 +7,12 @@ using System.Text.RegularExpressions;
 
 namespace XMAT.WebServiceCapture.Models
 {
+    internal readonly record struct HostMatchCandidates(
+        string Host,
+        string HostAndPath,
+        string AlternateHost,
+        string AlternateHostAndPath);
+
     /// <summary>
     /// The one validator and normalizer behind the Block and Bypass lists and their editors,
     /// used for adding, exact membership, removal and matching. DNS hosts keep their trimmed
@@ -95,30 +101,74 @@ namespace XMAT.WebServiceCapture.Models
             new("^" + Regex.Escape(entry).Replace("\\*", ".*") + "$",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
-        internal static (string Host, string HostAndPath) MatchCandidates(
+        internal static HostMatchCandidates MatchCandidates(
             string host,
             string path = null)
         {
             string candidate = MatchCandidate(host) ?? string.Empty;
             string matchingPath = path;
-            if (!string.IsNullOrEmpty(path) &&
-                (path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) &&
-                Uri.TryCreate(path, UriKind.Absolute, out Uri absolute))
+            string alternateHost = null;
+            if (!string.IsNullOrEmpty(path))
             {
-                matchingPath = absolute.PathAndQuery;
+                if (Uri.TryCreate(path, UriKind.Absolute, out Uri absolute))
+                {
+                    if (absolute.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+                        absolute.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matchingPath = absolute.PathAndQuery;
+                        string absoluteHost = MatchCandidate(absolute.Host);
+                        if (!string.Equals(candidate, absoluteHost, StringComparison.OrdinalIgnoreCase))
+                        {
+                            alternateHost = absoluteHost;
+                        }
+                    }
+                }
+                else
+                {
+                    try
+                    {
+                        string localPath = path;
+                        string extra = string.Empty;
+                        if (localPath.Contains('?'))
+                        {
+                            string[] parts = localPath.Split('?', 2);
+                            localPath = parts[0];
+                            extra = "?" + parts[1];
+                        }
+                        else if (localPath.Contains('#'))
+                        {
+                            string[] parts = localPath.Split('#', 2);
+                            localPath = parts[0];
+                            extra = "#" + parts[1];
+                        }
+                        matchingPath = new UriBuilder(
+                            Uri.UriSchemeHttp,
+                            "xmat.invalid",
+                            -1,
+                            localPath,
+                            extra).Uri.PathAndQuery;
+                    }
+                    catch (UriFormatException)
+                    {
+                        // Keep the legacy literal candidate when a canonical URI cannot be constructed.
+                    }
+                }
             }
             string normalizedPath = string.IsNullOrEmpty(matchingPath)
                 ? null
                 : matchingPath.StartsWith('/') ? matchingPath : "/" + matchingPath;
-            return (candidate, normalizedPath == null ? null : candidate + normalizedPath);
+            return new HostMatchCandidates(
+                candidate,
+                normalizedPath == null ? null : candidate + normalizedPath,
+                alternateHost,
+                alternateHost == null || normalizedPath == null ? null : alternateHost + normalizedPath);
         }
 
-        internal static bool Matches(
-            Regex pattern,
-            (string Host, string HostAndPath) candidates) =>
+        internal static bool Matches(Regex pattern, HostMatchCandidates candidates) =>
             pattern.IsMatch(candidates.Host) ||
-            (candidates.HostAndPath != null && pattern.IsMatch(candidates.HostAndPath));
+            (candidates.HostAndPath != null && pattern.IsMatch(candidates.HostAndPath)) ||
+            (candidates.AlternateHost != null && pattern.IsMatch(candidates.AlternateHost)) ||
+            (candidates.AlternateHostAndPath != null && pattern.IsMatch(candidates.AlternateHostAndPath));
     }
 
     /// <summary>
