@@ -890,7 +890,7 @@ namespace XMAT.Tests
                     Assert.Single(RowsForDevice(table, deviceName)).RowId;
 
                 model.SelectedDeviceContext = originalContext;
-                File.Delete(path);
+                DeleteFileWithRetry(path);
                 await File.WriteAllTextAsync(path, "not a ZIP archive");
 
                 await Assert.ThrowsAsync<InvalidDataException>(
@@ -933,8 +933,8 @@ namespace XMAT.Tests
                 {
                     await model.RemoveDeviceContextAsync(importedContext);
                 }
-                File.Delete(path);
-                File.Delete(alias);
+                DeleteFileWithRetry(path);
+                DeleteFileWithRetry(alias);
             }
         }
 
@@ -968,7 +968,7 @@ namespace XMAT.Tests
                 var changedProperties = new List<string>();
                 controller.PropertyChanged += (_, args) =>
                     changedProperties.Add(args.PropertyName);
-                File.Delete(path);
+                DeleteFileWithRetry(path);
                 WriteSaz(path, "replacement.example", "/replacement", "replacement body");
 
                 await model.ImportDataCapturesAsync(
@@ -1010,8 +1010,8 @@ namespace XMAT.Tests
             finally
             {
                 await RemoveReadOnlyContextsAsync(model);
-                File.Delete(path);
-                File.Delete(oldAlias);
+                DeleteFileWithRetry(path);
+                DeleteFileWithRetry(oldAlias);
             }
         }
 
@@ -1055,8 +1055,8 @@ namespace XMAT.Tests
             finally
             {
                 await RemoveReadOnlyContextsAsync(model);
-                File.Delete(path);
-                File.Delete(alias);
+                DeleteFileWithRetry(path);
+                DeleteFileWithRetry(alias);
             }
         }
 
@@ -2207,6 +2207,24 @@ namespace XMAT.Tests
                 "CaptureAppModelFixtures");
             Directory.CreateDirectory(directory);
             return Path.Combine(directory, $"{Guid.NewGuid():N}.saz");
+        }
+
+        private static void DeleteFileWithRetry(string path)
+        {
+            const int Attempts = 6;
+            for (var attempt = 1; attempt <= Attempts; attempt++)
+            {
+                try
+                {
+                    File.Delete(path);
+                    return;
+                }
+                catch (IOException) when (attempt < Attempts)
+                {
+                    // Allow a bounded delay only for transient external scanners touching a newly created fixture.
+                    Thread.Sleep(25);
+                }
+            }
         }
 
         private static void DeleteDirectoryWithRetry(
