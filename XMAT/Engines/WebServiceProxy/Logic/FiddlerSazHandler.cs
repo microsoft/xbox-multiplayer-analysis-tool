@@ -24,7 +24,8 @@ namespace XMAT.WebServiceCapture
     internal sealed record FiddlerSazImportResult(
         ProxyConnectionsCollection Records,
         int SkippedIncompleteFrames,
-        int SkippedMalformedHeaderLines);
+        int SkippedMalformedHeaderLines,
+        ImportedCaptureSource Source);
 
     internal sealed class FiddlerSazHeaderLimitException : Exception
     {
@@ -446,17 +447,20 @@ namespace XMAT.WebServiceCapture
             string filename,
             CancellationToken cancelToken)
         {
+            string sourcePath = Path.GetFullPath(filename);
             var list = new ProxyConnectionsCollection();
             var skippedIncompleteFrames = 0;
             var skippedMalformedHeaderLines = 0;
+            SqLtFileIdentity sourceIdentity;
 
             // Open the SAZ, checking its directory before ZipArchive reads it
             using (var input = new FileStream(
-                filename,
+                sourcePath,
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read))
             {
+                sourceIdentity = SqLtFileIdentity.FromHandle(input.SafeFileHandle);
                 SazArchivePreflight.Validate(
                     input,
                     cancelToken);
@@ -522,7 +526,8 @@ namespace XMAT.WebServiceCapture
             return new FiddlerSazImportResult(
                 list,
                 skippedIncompleteFrames,
-                skippedMalformedHeaderLines);
+                skippedMalformedHeaderLines,
+                new ImportedCaptureSource(sourcePath, sourceIdentity));
         }
 
         private static WebHeaderCollection ReadHeaders(

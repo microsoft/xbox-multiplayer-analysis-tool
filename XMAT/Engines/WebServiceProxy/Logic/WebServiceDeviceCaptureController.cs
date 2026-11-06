@@ -230,10 +230,32 @@ namespace XMAT.WebServiceCapture
             {
                 throw new InvalidOperationException("The capture has no data source.");
             }
+            try
+            {
+                return CreateExportSnapshotCore(ordinalDeviceId, dataset, ownsDataset);
+            }
+            catch
+            {
+                if (ownsDataset)
+                {
+                    (dataset as IDisposable)?.Dispose();
+                }
+                throw;
+            }
+        }
+
+        private ICaptureExportSnapshot CreateExportSnapshotCore(
+            string ordinalDeviceId,
+            IDataset dataset,
+            bool ownsDataset)
+        {
             IReadOnlyList<SqLtSchemaColumn> captureFields =
                 ((IRawCaptureDataset)dataset).Columns;
-            SqLtFileIdentity? inputIdentity =
+            ImportedCaptureSource? importedSource =
+                LoadedCaptureDatabaseRegistry.ImportedSourceFor(this);
+            SqLtFileIdentity? inputIdentity = importedSource?.Identity ??
                 LoadedCaptureDatabaseRegistry.DatabaseFor(this)?.Identity;
+            string inputPath = importedSource?.SourcePath;
             IVersionedCaptureTable versioned = _captureDataSource == CaptureDataSource.ActiveTable
                 ? _dataTable as IVersionedCaptureTable
                 : null;
@@ -377,7 +399,7 @@ namespace XMAT.WebServiceCapture
                 ReadRows,
                 destination => CaptureExportSnapshot.RejectSourceDestination(
                     destination,
-                    null,
+                    inputPath,
                     inputIdentity),
                 () =>
                 {
