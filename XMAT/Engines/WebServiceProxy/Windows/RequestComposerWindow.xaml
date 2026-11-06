@@ -116,6 +116,13 @@
       <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
         <Button x:Name="OpenRequestButton" MinWidth="110" Margin="4" Padding="8,4" Click="OpenRequest_Click"/>
         <Button x:Name="SaveRequestButton" MinWidth="110" Margin="4" Padding="8,4" Click="SaveRequest_Click"/>
+        <!-- History lists the requests that the Replays tab recorded, from the history as it is when the menu opens, and
+             keeps them current only while it is open; closing it keeps nothing of them. -->
+        <Button x:Name="HistoryButton" MinWidth="90" Margin="4" Padding="8,4" Click="History_Click">
+          <Button.ContextMenu>
+            <ContextMenu x:Name="HistoryMenu" Placement="Top" Opened="HistoryMenu_Opened" Closed="HistoryMenu_Closed"/>
+          </Button.ContextMenu>
+        </Button>
       </StackPanel>
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
         <Button x:Name="SendButton" MinWidth="90" Margin="4" Padding="8,4" Click="Send_Click"/>

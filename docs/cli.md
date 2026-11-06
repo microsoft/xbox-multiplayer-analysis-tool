@@ -467,6 +467,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Report navigation and analysis tabs (`view.analysis-navigation`) | (none) | GUI only. Presentation: moves between report views and tabs |
 | Capture viewers (`view.capture-viewers`) | (none) | GUI only. Presentation: filters, timeline and the request, response, WebSocket and packet views |
+| Composer history (`view.composer-history`) | (none) | GUI only. Presentation: session-only navigation over rows already in the Replays tab; sends go through request.replay, and headless runs keep no session |
 | Control templates (`view.controls`) | (none) | GUI only. Presentation: scroll bar commands inside control templates |
 | Display language (`view.language`) | (none) | GUI only. Presentation: the command line emits stable codes and English diagnostics |
 | Main window (`view.main-window`) | (none) | GUI only. Presentation: hosts the GUI adapters of every capability |

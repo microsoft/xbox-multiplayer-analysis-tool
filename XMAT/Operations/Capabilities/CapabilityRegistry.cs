@@ -405,6 +405,11 @@ namespace XMAT.Operations.Capabilities
             Capability.GuiOnly(
                 "view.capture-viewers", "Capture viewers",
                 "Presentation: filters, timeline and the request, response, WebSocket and packet views"),
+            Capability.GuiOnly(
+                "view.composer-history", "Composer history",
+                "Presentation: session-only navigation over rows already in the Replays tab; sends go through " +
+                    "request.replay, and headless runs keep no session",
+                gui: new[] { Click(ComposerXaml, "History_Click") }),
         };
     }
 }

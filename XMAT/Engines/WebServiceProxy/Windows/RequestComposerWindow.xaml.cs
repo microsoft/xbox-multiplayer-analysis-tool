@@ -13,10 +13,12 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
 using XMAT.Operations.Storage;
+using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -25,7 +27,8 @@ namespace XMAT.WebServiceCapture
     /// Edits an isolated request draft and sends it, or one request per number when its URL has a '#', and displays the
     /// latest response separately from capture. Every send is also recorded in the Replays tab. A request can also be opened
     /// from a request file and saved as one, without sending it, and exported for curl, without sending it: copied as a
-    /// command or saved as a script.
+    /// command or saved as a script. A request that the Replays tab recorded in this session can be loaded again from the
+    /// history.
     /// </summary>
     public partial class RequestComposerWindow : Window
     {
@@ -67,22 +70,32 @@ namespace XMAT.WebServiceCapture
         // when it closes. It is compared with each run's own cancellation, so an earlier run's cancel never counts.
         private CancellationTokenSource _cancelledByUser;
 
-        // A body that the editor does not hold, as its exact bytes, and the name of its file as the window shows it: a file
-        // uploaded for the body, or the body of a request file that is larger than the editor shows, which
-        // _fileBodyFromRequestFile tells apart. Null while the editor holds the body.
+        // A body that the editor does not hold, as its exact bytes; where it comes from as the window shows it; and the key
+        // of the text that shows it (ShowBody): a file uploaded for the body, by its name, or a body that is larger than the
+        // editor shows, of a request file, by its name, or of a row of the Replays tab that Load took it from, by the tab's
+        // name and the row's number. Null while the editor holds the body.
         private byte[] _fileBody;
         private string _fileName;
-        private bool _fileBodyFromRequestFile;
+        private string _fileBodyKey;
 
-        // The request as it was loaded, with the transport options as the window or the last request file set them
-        // (EditorState), to tell whether the user has edited them since.
+        // The request as it was loaded, with the transport options as the window, the last request file or the last Load
+        // set them (EditorState), to tell whether the user has edited them since.
         private EditorState _loaded;
+
+        // The history view while its menu is open (OpenHistoryView): its one subscription to the history, the rebuild that a
+        // change queued, if any, and the number of the opening, which closing advances, so that work queued for an earlier
+        // opening does nothing.
+        private IDisposable _historyObservation;
+        private DispatcherOperation _historyRebuild;
+        private int _historyGeneration;
+        private bool _historyOpen;
 
         // What the window is doing; it starts nothing else meanwhile. Preparing covers checking a send and asking the user
         // about it, or asking which file to upload or open, whether to replace an edited request, or where and how to save
-        // it or a cURL script, and whether to export it. ReadingFile covers reading a body or request file, Checking making
-        // the editor's body into bytes for Use this body, checking a request before saving it, or preparing a cURL command
-        // or script, and WritingFile saving a request file or a cURL script.
+        // it or a cURL script, and whether to export it. ReadingFile covers reading a body or request file, or preparing a
+        // request that Load takes from the history, Checking making the editor's body into bytes for Use this body,
+        // checking a request before saving it, or preparing a cURL command or script, and WritingFile saving a request file
+        // or a cURL script.
         private enum ComposerState
         {
             Idle,
@@ -188,6 +201,11 @@ namespace XMAT.WebServiceCapture
             CompleteBodyButton.ToolTip = Localization.GetLocalizedString("COMPOSER_USE_BODY_HINT");
             CompleteEmptyBodyButton.Content = Localization.GetLocalizedString("COMPOSER_EMPTY_BODY");
             CompleteEmptyBodyButton.ToolTip = Localization.GetLocalizedString("COMPOSER_EMPTY_BODY_HINT");
+            HistoryButton.Content = Localization.GetLocalizedString("COMPOSER_HISTORY");
+            HistoryButton.ToolTip = Localization.GetLocalizedString("COMPOSER_HISTORY_HINT");
+            AutomationProperties.SetName(HistoryMenu, Localization.GetLocalizedString("COMPOSER_HISTORY_MENU"));
+            // The history is of what the Replays tab recorded: a window that records nothing, which only tests make, has none.
+            HistoryButton.Visibility = _recording == null ? Visibility.Collapsed : Visibility.Visible;
             StatusText.Text = Localization.GetLocalizedString("COMPOSER_READY");
 
             // Follow same-origin redirects is off; when selected, it follows at most 10 by default.
@@ -341,6 +359,10 @@ namespace XMAT.WebServiceCapture
         // Test seam: how the window shows a question when it was given no confirm, by default in a message box that it
         // owns (ShowMessageBox), with the buttons, the icon and the answer that Enter gives: Yes or No, a warning, and No.
         internal Func<string, MessageBoxButton, MessageBoxImage, MessageBoxResult, MessageBoxResult> ShowQuestion { get; set; }
+
+        // Test seam: how Load makes a row of the Replays tab into a request, off the UI thread, by default
+        // RequestReplayDraft.FromCapture, which keeps a body larger than the editor shows as its exact bytes.
+        internal Func<ProxyConnectionModel, int, CancellationToken, RequestReplayDraft> PrepareHistoryDraft { get; set; }
 
         // The client that sends. The window disposes the client that it created once it is closed and no run uses it.
         internal RequestReplayClient Client => _client;
@@ -639,6 +661,9 @@ namespace XMAT.WebServiceCapture
         {
             _closed = true;
             StopWork();
+            // The history view ends with the window: its subscription, its queued rebuild and its items do not outlive it.
+            HistoryMenu.IsOpen = false;
+            CloseHistoryView();
             // The response's preview stops now, not when the view is unloaded later: a closed window shows nothing.
             ResponseView.StopPreview();
             // A run or read in progress releases the client once it has ended (EndState): it may still be using it.
@@ -682,11 +707,16 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // Shows a request in the editors as loaded: the one that the window opened with, or one dropped on it or opened from
-        // a request file, with what that file left out. heldBody is the body of a request file that is larger than the
-        // editor shows (HeldBody), which the draft keeps as these exact bytes, and source that file's name as shown.
+        // Shows a request in the editors as loaded: the one that the window opened with, or one dropped on it, opened from a
+        // request file, with what that file left out, or loaded from the history. heldBody is a body larger than the editor
+        // shows (MaxShownBodyBytes), which the draft keeps as these exact bytes; source is where it comes from as the window
+        // shows it, and heldBodyKey the key of the text that shows it (ShowBody).
         private void LoadDraft(
-            RequestReplayDraft draft, ReplayProvenance provenance, byte[] heldBody = null, string source = null)
+            RequestReplayDraft draft,
+            ReplayProvenance provenance,
+            byte[] heldBody = null,
+            string source = null,
+            string heldBodyKey = null)
         {
             if (heldBody != null)
                 draft.SetBodyBytes(heldBody);
@@ -694,7 +724,7 @@ namespace XMAT.WebServiceCapture
             _provenance = provenance;
             _fileBody = heldBody;
             _fileName = heldBody == null ? null : source;
-            _fileBodyFromRequestFile = heldBody != null;
+            _fileBodyKey = heldBody == null ? null : heldBodyKey;
             MethodBox.Text = draft.Method;
             UrlBox.Text = draft.Url;
             HeadersBox.Text = draft.HeadersText;
@@ -703,9 +733,9 @@ namespace XMAT.WebServiceCapture
             _loaded = CurrentEditors();
         }
 
-        // The body editor; or, for an uploaded file or a request file's body larger than the editor shows, the file's name
-        // and the body's size, since the editor would show the text or Base64 of a body that can be 64 MiB, made on the UI
-        // thread. Such a body is never shown otherwise.
+        // The body editor; or, for an uploaded file or a body larger than the editor shows, from a request file or the
+        // Replays tab, where it comes from and the body's size, since the editor would show the text or Base64 of a body
+        // that can be 64 MiB, made on the UI thread. Such a body is never shown otherwise.
         private void ShowBody()
         {
             bool fromFile = _fileBody != null;
@@ -724,10 +754,7 @@ namespace XMAT.WebServiceCapture
             BodyBox.Visibility = fromFile ? Visibility.Collapsed : Visibility.Visible;
             BodyFileText.Visibility = fromFile ? Visibility.Visible : Visibility.Collapsed;
             BodyFileText.Text = fromFile
-                ? Localization.GetLocalizedString(
-                    _fileBodyFromRequestFile ? "COMPOSER_BODY_REQUEST_FILE" : "COMPOSER_BODY_FILE",
-                    _fileName,
-                    _fileBody.LongLength)
+                ? Localization.GetLocalizedString(_fileBodyKey, _fileName, _fileBody.LongLength)
                 : null;
             Base64Box.IsEnabled = !fromFile;
             UpdateCurlAvailability();
@@ -926,7 +953,7 @@ namespace XMAT.WebServiceCapture
                 _draft.SetBodyBytes(read.Body);
                 _fileBody = read.Body;
                 _fileName = name;
-                _fileBodyFromRequestFile = false;
+                _fileBodyKey = "COMPOSER_BODY_FILE";
                 ShowBody();
                 StatusText.Text = Localization.GetLocalizedString("COMPOSER_UPLOADED", name, read.Body.LongLength);
             }
@@ -1057,15 +1084,17 @@ namespace XMAT.WebServiceCapture
 
             ResetTransport(opened.Content.HttpVersion);
             // A body larger than the editor shows stays the file's exact bytes, which the window shows by their size.
-            LoadDraft(draft, ReplayProvenance.FromRequestFile(name), HeldBody(opened.Content), name);
+            LoadDraft(
+                draft, ReplayProvenance.FromRequestFile(name), HeldBody(opened.Content), name, "COMPOSER_BODY_REQUEST_FILE");
             ClearResponse();
             StatusText.Text = draft.Omissions.Any
                 ? Localization.GetLocalizedString("COMPOSER_OPENED_INCOMPLETE", name, PendingParts(draft.Omissions))
                 : Localization.GetLocalizedString("COMPOSER_OPENED", name);
         }
 
-        // A request file carries the HTTP version and no other transport: Connect to another endpoint goes back to off,
-        // without an endpoint, and Follow same-origin redirects to off, with at most 10 when it is selected again.
+        // A request file carries the HTTP version and no other transport, and Load from the history none at all, which is
+        // Automatic: Connect to another endpoint goes back to off, without an endpoint, and Follow same-origin redirects to
+        // off, with at most 10 when it is selected again. Inspect session stays as it is.
         private void ResetTransport(ReplayHttpVersion httpVersion)
         {
             HttpVersionBox.SelectedItem = HttpVersionBox.Items.OfType<ComboBoxItem>()
@@ -1556,7 +1585,8 @@ namespace XMAT.WebServiceCapture
             }
 
             // A drop keeps the transport options as they are, so changing them is not an edit that it loses. Nor does it set
-            // them: they stay compared with those that the window or the last request file set, which Open request resets.
+            // them: they stay compared with those that the window, the last request file or the last Load set, which Open
+            // request and Load reset.
             TransportState loadedTransport = _loaded.Transport;
             if (CurrentEditors() with { Transport = loadedTransport } != _loaded)
             {
@@ -1596,6 +1626,294 @@ namespace XMAT.WebServiceCapture
         {
             e.Effects = DropSession(e.Data) ? DragDropEffects.Copy : DragDropEffects.None;
             e.Handled = true;
+        }
+
+        // History: the requests that the Replays tab recorded in this session (ReplayHistory), newest first, in a menu that
+        // lists them from the history as it is when the menu opens, and keeps them current while it is open. Each entry
+        // shows its tab and number, time, method, URL and status as the history bounded and escaped them
+        // (ReplayHistoryPreview), with Load, unavailable with the reason for a request that cannot be sent again, and Show
+        // in Replays, offered for every entry; then Clear history. An item's tag is its entry and nothing else, and what it
+        // shows, as its text, tooltip and automation name, is those previews or a localized reason, never the request
+        // itself. Every action finds its entry's row again when it is taken (ReplayHistory.TryResolve), whatever the menu
+        // still shows.
+        internal void OpenHistoryView()
+        {
+            ReplayHistory history = _recording?.History;
+            if (_closed || _historyOpen || history == null)
+                return;
+            _historyOpen = true;
+            // Observed before it is read, so that no change in between goes unseen.
+            _historyObservation = history.Observe(HistoryChanged);
+            ShowHistory(history.Snapshot());
+        }
+
+        // Closing the menu, or the window, ends the view: it stops observing the history, aborts the rebuild that a change
+        // queued, makes any work queued for this opening stale, and keeps none of its items, tags, tooltips or handlers.
+        internal void CloseHistoryView()
+        {
+            StopHistoryRebuild();
+            _historyObservation?.Dispose();
+            _historyObservation = null;
+            _historyOpen = false;
+            HistoryMenu.Items.Clear();
+        }
+
+        private void StopHistoryRebuild()
+        {
+            _historyGeneration++;
+            _historyRebuild?.Abort();
+            _historyRebuild = null;
+        }
+
+        // What the history calls, on the UI thread, when it changes while the view is open. It only queues a rebuild, at
+        // background priority, at most one however many changes come before it runs, and never rebuilds within the change.
+        private void HistoryChanged()
+        {
+            if (!_historyOpen || _historyRebuild != null)
+                return;
+            int generation = _historyGeneration;
+            Action rebuild = () => RebuildHistory(generation);
+            _historyRebuild = Dispatcher.BeginInvoke(DispatcherPriority.Background, rebuild);
+        }
+
+        // A queued rebuild does nothing once the view that queued it has closed, even if it has opened again since; otherwise
+        // it shows the history as it is when the rebuild runs, never as it was when the rebuild was queued.
+        private void RebuildHistory(int generation)
+        {
+            if (generation != _historyGeneration || !_historyOpen)
+                return;
+            _historyRebuild = null;
+            ShowHistory(_recording.History.Snapshot());
+        }
+
+        // The menu's items: the entries, newest first, then Clear history; or that the history is empty.
+        private void ShowHistory(IReadOnlyList<ReplayHistoryPreview> previews)
+        {
+            ItemCollection items = HistoryMenu.Items;
+            items.Clear();
+            if (previews.Count == 0)
+            {
+                items.Add(new MenuItem
+                {
+                    Name = "HistoryEmpty",
+                    Header = Localization.GetLocalizedString("COMPOSER_HISTORY_EMPTY"),
+                    IsEnabled = false,
+                });
+                return;
+            }
+
+            foreach (ReplayHistoryPreview preview in previews)
+                items.Add(HistoryItem(preview));
+            items.Add(new Separator());
+            items.Add(HistoryAction("HistoryClear", "COMPOSER_HISTORY_CLEAR", null, HistoryClear_Click));
+        }
+
+        // An entry, which shows its previews. Its Load is unavailable, and says why, for a request that cannot be sent again;
+        // its Show in Replays is offered whatever Load can do.
+        private MenuItem HistoryItem(ReplayHistoryPreview preview)
+        {
+            string shown = Localization.GetLocalizedString(
+                "COMPOSER_HISTORY_ITEM",
+                preview.TabNamePreview,
+                preview.RequestNumber,
+                preview.RequestTime,
+                preview.MethodPreview,
+                preview.UrlPreview,
+                string.IsNullOrEmpty(preview.StatusPreview)
+                    ? Localization.GetLocalizedString("COMPOSER_HISTORY_NO_RESPONSE")
+                    : Localization.GetLocalizedString("COMPOSER_HISTORY_STATUS", preview.StatusPreview));
+            // A text block as the header, not text, in which the menu would take an underscore for an access key; a long
+            // preview is cut short there, and shown whole in the tooltip.
+            var header = new TextBlock { Text = shown, MaxWidth = 640, TextTrimming = TextTrimming.CharacterEllipsis };
+            var item = new MenuItem { Header = header, ToolTip = shown, Tag = preview.Entry };
+            AutomationProperties.SetName(item, shown);
+            MenuItem load = HistoryAction("HistoryLoad", "COMPOSER_HISTORY_LOAD", preview.Entry, HistoryLoad_Click);
+            string loadHelp = Localization.GetLocalizedString(
+                preview.CanLoad ? "COMPOSER_HISTORY_LOAD_HINT" : "COMPOSER_HISTORY_CANNOT_LOAD");
+            load.IsEnabled = preview.CanLoad;
+            load.ToolTip = loadHelp;
+            ToolTipService.SetShowOnDisabled(load, true);
+            AutomationProperties.SetHelpText(load, loadHelp);
+            item.Items.Add(load);
+            item.Items.Add(HistoryAction("HistoryShow", "COMPOSER_HISTORY_SHOW", preview.Entry, HistoryShow_Click));
+            return item;
+        }
+
+        // An item that acts on an entry, or on the whole history (entry null); its tag is the entry and nothing else.
+        private static MenuItem HistoryAction(string name, string key, ReplayHistoryEntry entry, RoutedEventHandler click)
+        {
+            var item = new MenuItem { Name = name, Header = Localization.GetLocalizedString(key), Tag = entry };
+            // Handled by the item itself: the menu closes, and lets go of its items, before their Click arrives.
+            item.Click += click;
+            return item;
+        }
+
+        // Load: loads the request of a history entry in place of the request in the editors, as Edit and resend loads a
+        // captured request: from the entry's row in the Replays tab, never from what the menu shows. Refused while the window
+        // is busy, and for an entry that is no longer in the Replays tab or in the history, or a request that cannot be sent
+        // again. The request is prepared off the UI thread (RequestReplayDraft.FromCapture) while the window is busy; Cancel
+        // request or closing the window stops that, and a request prepared by then is neither asked about nor loaded. A body
+        // larger than the editor shows stays its exact bytes, shown by their size (MaxShownBodyBytes). The entry's row is
+        // found again once the request is prepared, and again just before it is loaded, after asking, when the user has
+        // edited the request or the transport options (EditorState), whether to replace them: No by default, and no
+        // permission to send. Loading resets the transport options before the request becomes the editors' baseline, keeps
+        // Inspect session, clears the previous response and sends nothing: a send or an export then asks for every
+        // permission that it needs, as always. A load that does not happen leaves the request, its transport options and the
+        // response as they were.
+        internal async Task LoadFromHistoryAsync(ReplayHistoryEntry entry)
+        {
+            if (_closed)
+                return;
+            if (_state is not ComposerState.Idle)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_BUSY");
+                return;
+            }
+
+            ReplayHistory history = _recording?.History;
+            if (history == null || !history.TryResolve(entry, out ICaptureDeviceContext tab, out ProxyConnectionModel row))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_GONE");
+                return;
+            }
+
+            if (!RequestReplayDraft.CanReplay(row))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_UNSUPPORTED");
+                return;
+            }
+
+            // The entry as the window names it: its tab's name and its request's number.
+            string source = tab.DeviceName;
+            long number = row.RequestNumber;
+            Func<ProxyConnectionModel, int, CancellationToken, RequestReplayDraft> prepare =
+                PrepareHistoryDraft ?? RequestReplayDraft.FromCapture;
+            using var loading = new CancellationTokenSource();
+            CancellationToken token = loading.Token;
+            _readingCancellation = loading;
+            _state = ComposerState.ReadingFile;
+            SetBusy(true);
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_LOADING", source, number);
+            RequestReplayDraft prepared = null;
+            byte[] held = null;
+            string failure = null;
+            bool stopped;
+            try
+            {
+                (prepared, held) = await Task.Run(() => PrepareFromHistory(prepare, row, token), token);
+            }
+            catch (OperationCanceledException) when (loading.IsCancellationRequested)
+            {
+                // Cancelled, or the window closed: the request stays as it was.
+            }
+            catch (Exception exception) when (exception is ArgumentException or FormatException or OverflowException)
+            {
+                failure = exception.Message;
+            }
+            finally
+            {
+                // A request prepared by the time that the user cancelled is not loaded either, and nothing is asked about it.
+                stopped = Stopped(loading, _readingCancellation);
+                _readingCancellation = null;
+                EndState();
+            }
+
+            if (_closed)
+                return;
+            if (stopped || prepared == null)
+            {
+                StatusText.Text = stopped || failure == null
+                    ? Localization.GetLocalizedString("COMPOSER_HISTORY_LOAD_CANCELLED")
+                    : Localization.GetLocalizedString("COMPOSER_HISTORY_LOAD_FAILED", failure);
+                return;
+            }
+
+            // The entry can have left the Replays tab or the history while its request was prepared.
+            if (!history.TryResolve(entry, out _, out _))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_GONE");
+                return;
+            }
+
+            if (CurrentEditors() != _loaded)
+            {
+                bool replace;
+                _state = ComposerState.Preparing;
+                try
+                {
+                    replace = _confirm(Localization.GetLocalizedString("COMPOSER_REPLACE_EDITED_HISTORY", source, number));
+                }
+                finally
+                {
+                    EndState();
+                }
+
+                if (_closed)
+                    return;
+                if (!replace)
+                {
+                    StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_LOAD_CANCELLED");
+                    return;
+                }
+            }
+
+            // Or while the user was asked.
+            if (!history.TryResolve(entry, out tab, out row))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_GONE");
+                return;
+            }
+
+            // The transport options are reset first, so that the request's baseline holds them as reset.
+            ResetTransport(ReplayHttpVersion.Auto);
+            LoadDraft(
+                prepared,
+                ReplayProvenance.Of(ReplaySourceKind.Edited, tab.DeviceName, row),
+                held,
+                Localization.GetLocalizedString("COMPOSER_HISTORY_ROW", source, number),
+                "COMPOSER_BODY_REPLAYS_ROW");
+            ClearResponse();
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_LOADED", source, number);
+        }
+
+        // Makes a row of the Replays tab into the request that Load loads, off the UI thread: a body larger than the editor
+        // shows comes back as its exact bytes (held), of which nothing else is made.
+        private static (RequestReplayDraft Draft, byte[] Held) PrepareFromHistory(
+            Func<ProxyConnectionModel, int, CancellationToken, RequestReplayDraft> prepare,
+            ProxyConnectionModel row,
+            CancellationToken token)
+        {
+            RequestReplayDraft draft = prepare(row, MaxShownBodyBytes, token);
+            return (draft, draft.GetBodyLength() > MaxShownBodyBytes ? draft.GetBodyBytes() : null);
+        }
+
+        // Show in Replays: selects the entry's request in its tab, by reference (ReplayRecordingTarget.TrySelect), whether or
+        // not Load can load it. Refused, and said so, for an entry that is no longer in the Replays tab or in the history,
+        // and once XMAT is shutting down.
+        internal void ShowInReplays(ReplayHistoryEntry entry)
+        {
+            ReplayHistory history = _recording?.History;
+            if (_closed || history == null)
+                return;
+            if (!history.TryResolve(entry, out ICaptureDeviceContext tab, out ProxyConnectionModel row) ||
+                !_recording.TrySelect(tab, row))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_SHOW_GONE");
+                return;
+            }
+
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_SHOWN", tab.DeviceName, row.RequestNumber);
+        }
+
+        // Clear history: forgets every entry, for every composer, whose open menus then say that the history is empty. The
+        // Replays tab keeps its requests, and a request that Load loaded stays as it is.
+        internal void ClearHistory()
+        {
+            ReplayHistory history = _recording?.History;
+            if (_closed || history == null)
+                return;
+            history.Clear();
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_CLEARED");
         }
 
         private EditorState CurrentEditors() =>
@@ -1929,6 +2247,25 @@ namespace XMAT.WebServiceCapture
         private void CancelSend_Click(object sender, RoutedEventArgs e) => CancelSend();
         private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
+        // History opens its menu above the button, listed first so that it opens at its size; a right-click on the button
+        // opens it too, and lists it as it opens (HistoryMenu_Opened).
+        private void History_Click(object sender, RoutedEventArgs e)
+        {
+            OpenHistoryView();
+            HistoryMenu.PlacementTarget = HistoryButton;
+            HistoryMenu.IsOpen = true;
+        }
+
+        private void HistoryMenu_Opened(object sender, RoutedEventArgs e) => OpenHistoryView();
+        private void HistoryMenu_Closed(object sender, RoutedEventArgs e) => CloseHistoryView();
+        private void HistoryClear_Click(object sender, RoutedEventArgs e) => ClearHistory();
+
+        private async void HistoryLoad_Click(object sender, RoutedEventArgs e) =>
+            await LoadFromHistoryAsync((ReplayHistoryEntry)((MenuItem)sender).Tag);
+
+        private void HistoryShow_Click(object sender, RoutedEventArgs e) =>
+            ShowInReplays((ReplayHistoryEntry)((MenuItem)sender).Tag);
+
         private void ShowError(Exception exception) => StatusText.Text = ErrorText(exception.Message);
 
         private static string ErrorText(string message) => Localization.GetLocalizedString("COMPOSER_ERROR", message);
@@ -1941,19 +2278,19 @@ namespace XMAT.WebServiceCapture
             string message, MessageBoxButton buttons, MessageBoxImage image, MessageBoxResult defaultResult) =>
             MessageBox.Show(this, message, Title, buttons, image, defaultResult);
 
-        // What Open request would discard, to tell whether the user has edited it: what the editors hold and the parts that a
-        // request file left out and that are not supplied yet, edited since the request was loaded; and the transport
-        // options, changed from those that the window or the last request file set, also before a drop, which keeps them.
-        // Supplying a part is an edit, even as the empty part that the editor already showed. A body that the window holds
-        // as bytes, an uploaded file's or a large one from a request file, is compared by reference: it is the same bytes
-        // until another upload or Clear body.
+        // What Open request and Load would discard, to tell whether the user has edited it: what the editors hold and the
+        // parts that a request file left out and that are not supplied yet, edited since the request was loaded; and the
+        // transport options, changed from those that the window, the last request file or the last Load set, also before a
+        // drop, which keeps them. Supplying a part is an edit, even as the empty part that the editor already showed. A body
+        // that the window holds as bytes, an uploaded file's or a large one from a request file or the Replays tab, is
+        // compared by reference: it is the same bytes until another upload or Clear body.
         private sealed record EditorState(
             string Method, string Url, string Headers, string Body, bool Base64, byte[] FileBody,
             RequestOmissions Omissions, TransportState Transport);
 
-        // The transport options as the user left them, which Open request resets (ResetTransport) and a drop keeps: the HTTP
-        // version, which a request file keeps too, and Connect to another endpoint and Follow same-origin redirects, each
-        // with what it holds also while it is off: the endpoint as typed and the most redirects.
+        // The transport options as the user left them, which Open request and Load reset (ResetTransport) and a drop keeps:
+        // the HTTP version, which a request file keeps too, and Connect to another endpoint and Follow same-origin
+        // redirects, each with what it holds also while it is off: the endpoint as typed and the most redirects.
         private sealed record TransportState(
             ReplayHttpVersion HttpVersion, bool ConnectTo, string Endpoint, bool FollowRedirects, int? RedirectLimit);
     }

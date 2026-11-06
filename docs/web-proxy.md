@@ -325,10 +325,41 @@ recorded without their body cannot be dragged. The composer loads a copy of the 
 as it was when the drag began, clears the previous response, and sends nothing. If you
 have edited the request in the composer, it asks before replacing it. A drop keeps the
 **HTTP version**, **Connect to another endpoint**, and **Follow same-origin redirects**
-as they are, so changing only those asks nothing here; opening a request file still asks
-about them, since it resets them. Only requests dragged from XMAT can be dropped; text,
-links, and files are refused, and nothing can be dropped while the composer sends or
-reads a file.
+as they are, so changing only those asks nothing here; opening a request file or loading
+a request from history still asks about them, since both reset them. Only requests
+dragged from XMAT can be dropped; text, links, and files are refused, and nothing can be
+dropped while the composer sends or reads a file.
+
+### Load a request from history
+
+**History** lists the requests that the **XMAT Replays** tab recorded in this session,
+newest first: every send from a composer and every request that **Replay** sent,
+including those that failed or were recorded without their body. It keeps the latest
+200 and is never saved: it is empty when XMAT starts, and opening a saved capture adds
+nothing to it. The list is the same in every composer. Each entry shows its tab and
+request number, its time, method, URL, and status, shortened when they are long, with
+any character that could hide or reorder text shown as `\uXXXX`.
+
+- **Load** loads the request in place of the request in the editors, as **Edit and
+  resend** would, clears the previous response, and sends nothing. It resets the
+  transport options: **HTTP version** to **Automatic**, **Connect to another endpoint**
+  off, without an endpoint, and **Follow same-origin redirects** off, with *N* back to
+  10; **Inspect session** stays as it is. If you have edited the request or changed
+  these options, XMAT asks first, No by default. The request is prepared in the
+  background: **Cancel request**, or closing the composer, stops it and loads nothing.
+  A body larger than 64 KiB is kept as its exact bytes and shown only by its size:
+  **Copy as cURL** does not copy it, and **Save as cURL script** saves it whole.
+  **Load** is not available for CONNECT tunnels, protocol upgrades, and requests
+  recorded without their body.
+- **Show in Replays** selects the request in its tab, also when it cannot be loaded.
+- **Clear history** empties the history in every composer. The requests stay in the
+  **XMAT Replays** tab, and a request that you loaded stays in its composer.
+
+A request leaves the history when it leaves its tab, for example when you close the
+tab, and once 200 newer requests have been recorded. XMAT looks for the request again
+when you select **Load** or **Show in Replays**, and again just before it loads it, so
+neither acts on a request that is gone; the status line says so instead. Loading grants
+no permission: sending the request, and exporting it for curl, ask as they always do.
 
 ### Open and save request files
 
@@ -375,14 +406,14 @@ any permission.
   nothing. Before it discards your edits, XMAT asks whether to replace the current
   request: edits to the request since it was loaded, even only supplying a part that
   its file left out, and changes to these transport options from what the composer
-  started with or the last opened file set, including changes made before you dragged
-  in a request. Declining keeps everything as it was, and no answer is a permission to
-  send. Text in the file, such as Fiddler's `<@INCLUDE@>`, is used as it is, and no
-  other file is read. The composer shows only the file's name, never its folder, with
-  any character that could hide or reorder text shown as `\uXXXX`, and the **XMAT
-  Replays** tab records each send as coming from that file name. A file never grants a
-  permission: sending still asks for every confirmation that it needs, and the file's
-  URL is the origin that a changed URL is checked against.
+  started with, the last opened file, or the last request loaded from history set,
+  including changes made before you dragged in a request. Declining keeps everything as
+  it was, and no answer is a permission to send. Text in the file, such as Fiddler's
+  `<@INCLUDE@>`, is used as it is, and no other file is read. The composer shows only
+  the file's name, never its folder, with any character that could hide or reorder text
+  shown as `\uXXXX`, and the **XMAT Replays** tab records each send as coming from that
+  file name. A file never grants a permission: sending still asks for every confirmation
+  that it needs, and the file's URL is the origin that a changed URL is checked against.
 - **A large body is not shown.** The editor shows a body of at most 64 KiB from a
   request file. A larger body is kept as its exact bytes, which the composer sends and
   saves as they are, and shown only by the file's name and the body's size, never as
