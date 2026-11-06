@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -23,19 +24,29 @@ namespace XMAT.WebServiceCapture
     /// <summary>
     /// Edits an isolated request draft and sends it, or one request per number when its URL has a '#', and displays the
     /// latest response separately from capture. Every send is also recorded in the Replays tab. A request can also be opened
-    /// from a request file and saved as one, without sending it.
+    /// from a request file and saved as one, without sending it, and exported for curl, without sending it: copied as a
+    /// command or saved as a script.
     /// </summary>
     public partial class RequestComposerWindow : Window
     {
         // The name that Save request as suggests: the extension says what the file is, and its last part what it holds.
         private const string SuggestedRequestFileName = "request.xmat-request.json";
 
+        // The name that Save as cURL script suggests.
+        private const string SuggestedCurlScriptName = "request.ps1";
+
         // The most characters of a file's name that the window shows (UntrustedText), as long as names can be.
         private const int MaxShownFileNameChars = 260;
+
+        // The most characters of an origin that a question or the status shows (UntrustedText).
+        private const int MaxShownOriginChars = 300;
 
         // The largest body of a request file that the editor shows. A larger one stays its exact bytes, shown by their size
         // (ShowBody): the editor would hold its text, or its Base64, a third larger, made on the UI thread.
         private const int MaxShownBodyBytes = 64 * 1024;
+
+        // The command that Copy as cURL renders is UTF-8 text; bytes that are not are never copied.
+        private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
         private readonly RequestReplayClient _client;
         private readonly bool _ownsClient;
@@ -69,8 +80,9 @@ namespace XMAT.WebServiceCapture
 
         // What the window is doing; it starts nothing else meanwhile. Preparing covers checking a send and asking the user
         // about it, or asking which file to upload or open, whether to replace an edited request, or where and how to save
-        // it. ReadingFile covers reading a body or request file, Checking making the editor's body into bytes for Use this
-        // body or checking a request before saving it, and WritingFile saving a request file.
+        // it or a cURL script, and whether to export it. ReadingFile covers reading a body or request file, Checking making
+        // the editor's body into bytes for Use this body, checking a request before saving it, or preparing a cURL command
+        // or script, and WritingFile saving a request file or a cURL script.
         private enum ComposerState
         {
             Idle,
@@ -84,7 +96,8 @@ namespace XMAT.WebServiceCapture
         // The draft is built before the base Window constructor registers this window with the application: a capture
         // that cannot be replayed must not leave a hidden window behind that keeps XMAT running after its last close.
         // recording is where sends are recorded, as edited replays of the capture in the tab named sourceName; without it
-        // nothing is recorded, which only tests do. confirm asks the user a question with the message, Yes or No.
+        // nothing is recorded, which only tests do. confirm asks the user a question with the message, Yes or No; without
+        // it, the window asks in a message box whose default answer is No (ShowQuestion).
         internal RequestComposerWindow(
             ProxyConnectionModel capture,
             RequestReplayClient client = null,
@@ -119,8 +132,8 @@ namespace XMAT.WebServiceCapture
             _ownsClient = client == null;
             _client = client ?? new RequestReplayClient();
             _confirm = confirm ?? (message =>
-                MessageBox.Show(this, message, Title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) ==
-                    MessageBoxResult.Yes);
+                (ShowQuestion ?? ShowMessageBox)(
+                    message, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes);
 
             Title = Localization.GetLocalizedString("COMPOSER_TITLE");
             ReplayNotice.Text = Localization.GetLocalizedString("COMPOSER_NOTICE");
@@ -151,6 +164,11 @@ namespace XMAT.WebServiceCapture
             // decodes chunked framing again.
             ResponseView.BodyIsDecoded = true;
             CopyCurlButton.Content = Localization.GetLocalizedString("COMPOSER_COPY_CURL");
+            SaveCurlButton.Content = Localization.GetLocalizedString("COMPOSER_SAVE_CURL");
+            // The warning is shown before either export is used, and is read with each button.
+            CurlWarningText.Text = Localization.GetLocalizedString("COMPOSER_CURL_WARNING");
+            AutomationProperties.SetHelpText(CopyCurlButton, CurlWarningText.Text);
+            AutomationProperties.SetHelpText(SaveCurlButton, CurlWarningText.Text);
             SendButton.Content = Localization.GetLocalizedString("COMPOSER_SEND");
             CancelSendButton.Content = Localization.GetLocalizedString("COMPOSER_CANCEL_SEND");
             CloseButton.Content = Localization.GetLocalizedString("COMPOSER_CLOSE");
@@ -308,6 +326,21 @@ namespace XMAT.WebServiceCapture
         internal Func<RequestReplayDraft, CancellationToken, RequestFileRecognized> InspectRequest { get; set; }
 
         internal Func<RequestReplayDraft, CancellationToken, byte[]> BodyBytesOf { get; set; }
+
+        // Test seams for the cURL export: how a request is prepared, by default RequestCurlExporter.Prepare, and rendered,
+        // by default RequestCurlExporter.Write, both off the UI thread; where to save a cURL script, or null for nowhere,
+        // by default asked in a save dialog; and how the script is published, by default PrivateFilePublisher.Publish.
+        internal Func<RequestReplayDraft, ReplayTransportOptions, int, CancellationToken, CurlRequest> PrepareCurl { get; set; }
+
+        internal Action<CurlRequest, CurlScriptForm, string, Stream, CancellationToken> WriteCurlScript { get; set; }
+
+        internal Func<string> ChooseCurlScriptPath { get; set; }
+
+        internal Func<string, Action<Stream>, CancellationToken, PrivateFilePublication> PublishCurlScript { get; set; }
+
+        // Test seam: how the window shows a question when it was given no confirm, by default in a message box that it
+        // owns (ShowMessageBox), with the buttons, the icon and the answer that Enter gives: Yes or No, a warning, and No.
+        internal Func<string, MessageBoxButton, MessageBoxImage, MessageBoxResult, MessageBoxResult> ShowQuestion { get; set; }
 
         // The client that sends. The window disposes the client that it created once it is closed and no run uses it.
         internal RequestReplayClient Client => _client;
@@ -711,28 +744,58 @@ namespace XMAT.WebServiceCapture
             UpdateCurlAvailability();
         }
 
-        // Copy as cURL copies one request as it is: not a URL with '#', which sends one request per number; not with
-        // redirects followed, which curl would follow its own way; and only with the default transport, since the command
-        // would not choose the same HTTP version or connect to the same endpoint. Nor a request that still leaves out a part
-        // of its request file, which the command would send as its placeholder, nor a body that the window holds as bytes,
-        // from an uploaded file or a request file, larger than 64 KiB (MaxShownBodyBytes): the command would hold all of it
-        // as Base64, up to 64 MiB, made on the UI thread. The button says why it is unavailable.
+        // Copy as cURL and Save as cURL script export one request as it is, for the inbox curl.exe, so neither is available,
+        // and each button says why, for a request that still leaves out a part of its request file, which the command would
+        // send as its placeholder, or with an option that curl would not apply as XMAT does (UnsupportedCurlOption). Copy as
+        // cURL also copies a body of at most 64 KiB: a body that the window holds as bytes, from an uploaded file or a
+        // request file, makes it unavailable by its length; any other body is measured when it is prepared, off the UI
+        // thread. Availability costs nothing here: nothing is decoded on the UI thread, and RequestCurlExporter.Prepare makes
+        // the exact checks, which give the same reasons.
         private void UpdateCurlAvailability()
         {
-            string unavailable = CurlUnavailableText();
-            CopyCurlButton.IsEnabled = _state == ComposerState.Idle && unavailable == null;
-            CopyCurlButton.ToolTip = unavailable;
+            bool idle = _state == ComposerState.Idle;
+            string notCopied = CurlUnavailableText(copying: true);
+            string notSaved = CurlUnavailableText(copying: false);
+            CopyCurlButton.IsEnabled = idle && notCopied == null;
+            CopyCurlButton.ToolTip = notCopied;
+            SaveCurlButton.IsEnabled = idle && notSaved == null;
+            SaveCurlButton.ToolTip = notSaved;
         }
 
-        private string CurlUnavailableText() =>
+        private string CurlUnavailableText(bool copying) =>
             _draft?.Omissions.Any == true
-                ? Localization.GetLocalizedString("COMPOSER_COPY_CURL_INCOMPLETE", PendingParts(_draft.Omissions))
-                : UrlBox.Text.Contains(ReplaySequence.Placeholder) || FollowRedirectsBox.IsChecked == true ||
-                    SelectedHttpVersion != ReplayHttpVersion.Auto || ConnectToBox.IsChecked == true
-                    ? Localization.GetLocalizedString("COMPOSER_COPY_CURL_UNAVAILABLE")
-                    : _fileBody?.LongLength > MaxShownBodyBytes
+                ? Localization.GetLocalizedString("COMPOSER_CURL_INCOMPLETE", PendingParts(_draft.Omissions))
+                : UnsupportedCurlOption() is CurlUnsupported unsupported
+                    ? UnsupportedCurlText(unsupported)
+                    : copying && _fileBody?.LongLength > RequestCurlExporter.MaxPasteableBodyBytes
                         ? Localization.GetLocalizedString("COMPOSER_COPY_CURL_LARGE_BODY")
                         : null;
+
+        // The option that makes a cURL export unsupported now, as RequestCurlExporter.Prepare names it: a URL with '#', which
+        // sends one request per number; redirects followed, which curl would follow its own way; HTTP/2 only, which the
+        // inbox curl.exe does not send; or Connect to another endpoint. Null when there is none: Automatic and HTTP/1.1 only
+        // are exported.
+        private CurlUnsupported? UnsupportedCurlOption()
+        {
+            if (UrlBox.Text.Contains(ReplaySequence.Placeholder))
+                return CurlUnsupported.NumberedUrl;
+            if (FollowRedirectsBox.IsChecked == true)
+                return CurlUnsupported.Redirects;
+            if (SelectedHttpVersion == ReplayHttpVersion.Http2)
+                return CurlUnsupported.Http2Exact;
+            return ConnectToBox.IsChecked == true ? CurlUnsupported.ConnectTo : null;
+        }
+
+        // Why an option makes the cURL exports unavailable: the same words before and after Prepare.
+        private static string UnsupportedCurlText(CurlUnsupported unsupported) =>
+            Localization.GetLocalizedString(unsupported switch
+            {
+                CurlUnsupported.NumberedUrl => "COMPOSER_CURL_NUMBERED_URL",
+                CurlUnsupported.Redirects => "COMPOSER_CURL_REDIRECTS",
+                CurlUnsupported.Http2Exact => "COMPOSER_CURL_HTTP2",
+                CurlUnsupported.ConnectTo => "COMPOSER_CURL_CONNECT_TO",
+                _ => "COMPOSER_CURL_UNSUPPORTED",
+            });
 
         // Automatic unless HTTP/1.1 only or HTTP/2 only is chosen.
         private ReplayHttpVersion SelectedHttpVersion =>
@@ -1545,37 +1608,318 @@ namespace XMAT.WebServiceCapture
                     FollowRedirects: FollowRedirectsBox.IsChecked == true,
                     RedirectLimit: RedirectLimitBox.SelectedItem as int?));
 
-        // Copy as cURL: the command that sends the request as the editors hold it, to the clipboard. A request that still
-        // leaves out a part of its request file is never copied (RequestIncompleteException).
-        internal void CopyAsCurl()
+        // Copy as cURL: one click copies to the clipboard a command for PowerShell 7 that sends the request as the editors
+        // hold it, with the inbox curl.exe (RequestCurlExporter, CurlScriptForm.Pasteable); the warning beside the button
+        // says beforehand that it copies the full request, credentials and body included. The request and its options are
+        // fixed first (TryFreezeForCurl). Preparing the request, holding its body to 64 KiB, beyond which Save as cURL
+        // script saves it, and rendering the command run off the UI thread while the window is busy; Cancel request or
+        // closing the window stops them, and a command made by then is not copied. Only then, for a URL that goes to another
+        // origin than the request was captured or loaded for, the user is asked whether to export it for that origin
+        // (AllowsCurlOrigin). Nothing ever clears the clipboard: a command that is not copied leaves it as it was.
+        internal async Task CopyAsCurlAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
-            string unavailable = CurlUnavailableText();
-            if (unavailable != null)
+            if (!TryFreezeForCurl(
+                copying: true, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects))
             {
-                StatusText.Text = unavailable;
                 return;
             }
 
-            UpdateDraft();
+            Func<RequestReplayDraft, ReplayTransportOptions, int, CancellationToken, CurlRequest> prepare =
+                PrepareCurl ?? RequestCurlExporter.Prepare;
+            Action<CurlRequest, CurlScriptForm, string, Stream, CancellationToken> write =
+                WriteCurlScript ?? RequestCurlExporter.Write;
+            using var rendering = new CancellationTokenSource();
+            CancellationToken token = rendering.Token;
+            // Prepared, held to what the clipboard takes and rendered off the UI thread: no command for a larger body.
+            Func<string> render = () =>
+            {
+                CurlRequest request = prepare(draft, transport, redirects, token);
+                if (request.Body.Length > RequestCurlExporter.MaxPasteableBodyBytes)
+                    return null;
+                using var rendered = new MemoryStream();
+                write(request, CurlScriptForm.Pasteable, null, rendered, token);
+                return StrictUtf8.GetString(rendered.GetBuffer(), 0, checked((int)rendered.Length));
+            };
+            _checkingCancellation = rendering;
+            _state = ComposerState.Checking;
+            SetBusy(true);
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_CURL_PREPARING");
+            string command = null;
+            string refused = null;
+            bool stopped;
             try
             {
-                (CopyText ?? Clipboard.SetText)(_draft.ToCurlCommand());
-                StatusText.Text = Localization.GetLocalizedString("COMPOSER_COPIED");
+                command = await Task.Run(render, token);
             }
-            catch (RequestIncompleteException)
+            catch (OperationCanceledException) when (rendering.IsCancellationRequested)
+            {
+                // Cancelled, or the window closed: nothing is copied.
+            }
+            catch (Exception exception) when (CurlRefusalText(exception, draft.Omissions) is string reason)
+            {
+                refused = reason;
+            }
+            finally
+            {
+                // A command made by the time that the user cancelled is not copied either, and nothing is asked about it.
+                stopped = Stopped(rendering, _checkingCancellation);
+                _checkingCancellation = null;
+                EndState();
+            }
+
+            if (_closed)
+                return;
+            if (stopped || command == null)
+            {
+                StatusText.Text = stopped
+                    ? Localization.GetLocalizedString("COMPOSER_COPY_CURL_CANCELLED")
+                    : refused ?? Localization.GetLocalizedString("COMPOSER_COPY_CURL_LARGE_BODY");
+                return;
+            }
+
+            bool allowed;
+            _state = ComposerState.Preparing;
+            try
+            {
+                allowed = AllowsCurlOrigin(draft);
+            }
+            finally
+            {
+                EndState();
+            }
+
+            if (_closed)
+                return;
+            if (!allowed)
             {
                 StatusText.Text = Localization.GetLocalizedString(
-                    "COMPOSER_COPY_CURL_INCOMPLETE", PendingParts(_draft.Omissions));
+                    "COMPOSER_COPY_CURL_ORIGIN_REFUSED", ShownOrigin(draft.Url));
+                return;
             }
-            catch (Exception exception) when (IsInputError(exception) || exception is ExternalException)
+
+            try
             {
-                ShowError(exception);
+                (CopyText ?? Clipboard.SetText)(command);
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_COPIED");
+            }
+            catch (ExternalException)
+            {
+                // Another program holds the clipboard, which keeps what it had.
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_COPY_CURL_FAILED");
             }
         }
 
-        private void CopyCurl_Click(object sender, RoutedEventArgs e) => CopyAsCurl();
+        // Save as cURL script: saves, without sending it, a PowerShell 7 script that sends the request with the inbox
+        // curl.exe, its body inline up to 64 MiB (RequestCurlExporter, CurlScriptForm.File). The request and its options are
+        // fixed first (TryFreezeForCurl) and prepared off the UI thread while the window is busy; Cancel request or closing
+        // the window stops that, and a request prepared by then is neither asked about nor saved. The window then asks
+        // where; for a URL that goes to another origin than the request was captured or loaded for, whether to export it for
+        // that origin (AllowsCurlOrigin); then whether to save the full request at all, No by default, for every script.
+        // The script is rendered straight into the file and published off the UI thread, privately and never in place of
+        // another file (PrivateFilePublisher). What the publication did is what the status says, also after Cancel request:
+        // a script published by then stays published, and closing the window never deletes it or says otherwise.
+        internal async Task SaveCurlScriptAsync()
+        {
+            if (_state != ComposerState.Idle || _closed)
+                return;
+            if (!TryFreezeForCurl(
+                copying: false, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects))
+            {
+                return;
+            }
+
+            Func<RequestReplayDraft, ReplayTransportOptions, int, CancellationToken, CurlRequest> prepare =
+                PrepareCurl ?? RequestCurlExporter.Prepare;
+            Action<CurlRequest, CurlScriptForm, string, Stream, CancellationToken> write =
+                WriteCurlScript ?? RequestCurlExporter.Write;
+            using var preparing = new CancellationTokenSource();
+            CancellationToken preparingToken = preparing.Token;
+            _checkingCancellation = preparing;
+            _state = ComposerState.Checking;
+            SetBusy(true);
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_CURL_PREPARING");
+            CurlRequest request = null;
+            string refused = null;
+            bool stopped;
+            try
+            {
+                request = await Task.Run(() => prepare(draft, transport, redirects, preparingToken), preparingToken);
+            }
+            catch (OperationCanceledException) when (preparing.IsCancellationRequested)
+            {
+                // Cancelled, or the window closed: nothing is saved.
+            }
+            catch (Exception exception) when (CurlRefusalText(exception, draft.Omissions) is string reason)
+            {
+                refused = reason;
+            }
+            finally
+            {
+                // A request prepared by the time that the user cancelled is not saved either, and nothing is asked about it.
+                stopped = Stopped(preparing, _checkingCancellation);
+                _checkingCancellation = null;
+                EndState();
+            }
+
+            if (_closed)
+                return;
+            if (stopped || request == null)
+            {
+                StatusText.Text = stopped || refused == null
+                    ? Localization.GetLocalizedString("COMPOSER_SAVE_CANCELLED")
+                    : refused;
+                return;
+            }
+
+            string path;
+            bool allowed = false;
+            bool consented = false;
+            _state = ComposerState.Preparing;
+            try
+            {
+                path = (ChooseCurlScriptPath ?? ChooseCurlScriptPathInDialog)();
+                if (!string.IsNullOrEmpty(path) && !_closed)
+                {
+                    allowed = AllowsCurlOrigin(draft);
+                    consented = allowed && !_closed &&
+                        _confirm(Localization.GetLocalizedString("COMPOSER_SAVE_CURL_CONSENT", request.Body.Length));
+                }
+            }
+            finally
+            {
+                EndState();
+            }
+
+            if (string.IsNullOrEmpty(path) || _closed)
+                return;
+            if (!allowed)
+            {
+                StatusText.Text = Localization.GetLocalizedString(
+                    "COMPOSER_SAVE_CURL_ORIGIN_REFUSED", ShownOrigin(draft.Url));
+                return;
+            }
+
+            if (!consented)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_SAVE_CANCELLED");
+                return;
+            }
+
+            string name = UntrustedText.Show(Path.GetFileName(path), MaxShownFileNameChars);
+            Func<string, Action<Stream>, CancellationToken, PrivateFilePublication> publish =
+                PublishCurlScript ?? PrivateFilePublisher.Publish;
+            using var publishing = new CancellationTokenSource();
+            CancellationToken publishingToken = publishing.Token;
+            // The script is rendered straight into the file, and published, off the UI thread.
+            Func<PrivateFilePublication> save = () => publish(
+                path, stream => write(request, CurlScriptForm.File, null, stream, publishingToken), publishingToken);
+            PrivateFilePublication published = PrivateFilePublication.Cancelled;
+            _writingCancellation = publishing;
+            _state = ComposerState.WritingFile;
+            SetBusy(true);
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_SAVING", name);
+            try
+            {
+                published = await Task.Run(save, publishingToken);
+            }
+            catch (OperationCanceledException) when (publishing.IsCancellationRequested)
+            {
+                // Stopped before the script was begun: nothing was written.
+            }
+            finally
+            {
+                _writingCancellation = null;
+                EndState();
+            }
+
+            // A closed window says nothing more; whatever the publication did stands.
+            if (_closed)
+                return;
+            StatusText.Text = CurlSaveResultText(published, name);
+        }
+
+        // Fixes what a cURL export exports, from the editors and options as they are now: a copy of the draft that later
+        // edits do not change, which shares the body's text or bytes, never changed in place, with the transport and the
+        // most redirects. False, with the reason in the status, when the export is not available (CurlUnavailableText).
+        private bool TryFreezeForCurl(
+            bool copying, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects)
+        {
+            draft = null;
+            redirects = 0;
+            string unavailable = CurlUnavailableText(copying);
+            if (unavailable != null || !TryReadTransport(out transport))
+            {
+                transport = null;
+                StatusText.Text = unavailable ?? UnsupportedCurlText(CurlUnsupported.ConnectTo);
+                return false;
+            }
+
+            UpdateDraft();
+            draft = _draft.WithUrl(_draft.Url);
+            redirects = MaxRedirects;
+            return true;
+        }
+
+        // Whether the user allows exporting the request for the origin that its URL goes to, when that is another origin
+        // than the request was captured or loaded for, naming that origin: asked for every export, No by default, before any
+        // question about the content, and never answered by another permission, to send or to save the content. True,
+        // without asking, when the origin did not change.
+        private bool AllowsCurlOrigin(RequestReplayDraft draft) =>
+            !draft.ChangesOrigin ||
+            _confirm(Localization.GetLocalizedString("COMPOSER_CURL_ORIGIN", ShownOrigin(draft.Url)));
+
+        // A URL's origin as a question or the status shows it (UntrustedText).
+        private static string ShownOrigin(string url) => UntrustedText.Show(Origin(url), MaxShownOriginChars);
+
+        // Why RequestCurlExporter.Prepare refused the request, in the words that the buttons use when they are unavailable
+        // for the same reason; null for an exception that is no refusal. pending is what the request still leaves out.
+        private static string CurlRefusalText(Exception exception, RequestOmissions pending) => exception switch
+        {
+            RequestIncompleteException =>
+                Localization.GetLocalizedString("COMPOSER_CURL_INCOMPLETE", PendingParts(pending)),
+            CurlExportException { Code: CurlExportCodes.Unsupported, Reason: CurlUnsupported unsupported } =>
+                UnsupportedCurlText(unsupported),
+            CurlExportException { Code: CurlExportCodes.HeadBody } =>
+                Localization.GetLocalizedString("COMPOSER_CURL_HEAD_BODY"),
+            CurlExportException { Code: CurlExportCodes.ArgumentsTooLarge } =>
+                Localization.GetLocalizedString("COMPOSER_CURL_TOO_LONG"),
+            CurlExportException { Code: ReplayOperation.ControlHeaderCode } =>
+                Localization.GetLocalizedString("COMPOSER_CURL_CONTROL_HEADER"),
+            CurlExportException or FormatException or ArgumentException =>
+                Localization.GetLocalizedString("COMPOSER_CURL_INVALID", exception.Message),
+            _ => null,
+        };
+
+        // Where to save a cURL script. The dialog never offers to replace a file, and the publisher never does (Exists).
+        private string ChooseCurlScriptPathInDialog()
+        {
+            var dialog = new SaveFileDialog
+            {
+                Title = Localization.GetLocalizedString("COMPOSER_SAVE_CURL_TITLE"),
+                Filter = Localization.GetLocalizedString("COMPOSER_SAVE_CURL_FILTER"),
+                FileName = SuggestedCurlScriptName,
+                DefaultExt = "ps1",
+                AddExtension = true,
+                OverwritePrompt = false,
+            };
+            return dialog.ShowDialog(this) == true ? dialog.FileName : null;
+        }
+
+        // What became of a cURL script, by its name only: only Published wrote it, and Exists replaced nothing.
+        private static string CurlSaveResultText(PrivateFilePublication published, string name) => published switch
+        {
+            PrivateFilePublication.Published => Localization.GetLocalizedString("COMPOSER_SAVED_CURL", name),
+            PrivateFilePublication.Exists => Localization.GetLocalizedString("COMPOSER_SAVE_EXISTS", name),
+            PrivateFilePublication.Unsupported => Localization.GetLocalizedString("COMPOSER_SAVE_UNSUPPORTED"),
+            PrivateFilePublication.Cancelled => Localization.GetLocalizedString("COMPOSER_SAVE_CANCELLED"),
+            PrivateFilePublication.CleanupFailed => Localization.GetLocalizedString("COMPOSER_SAVE_CLEANUP_FAILED"),
+            _ => Localization.GetLocalizedString("COMPOSER_SAVE_FAILED"),
+        };
+
+        private async void CopyCurl_Click(object sender, RoutedEventArgs e) => await CopyAsCurlAsync();
+        private async void SaveCurl_Click(object sender, RoutedEventArgs e) => await SaveCurlScriptAsync();
 
         private async void Send_Click(object sender, RoutedEventArgs e) => await SendAsync();
         private async void UploadFile_Click(object sender, RoutedEventArgs e) => await UploadBodyAsync();
@@ -1591,6 +1935,11 @@ namespace XMAT.WebServiceCapture
 
         private static bool IsInputError(Exception exception) =>
             exception is ArgumentException or FormatException or InvalidOperationException or NotSupportedException;
+
+        // A question in a message box that this window owns, titled as the window.
+        private MessageBoxResult ShowMessageBox(
+            string message, MessageBoxButton buttons, MessageBoxImage image, MessageBoxResult defaultResult) =>
+            MessageBox.Show(this, message, Title, buttons, image, defaultResult);
 
         // What Open request would discard, to tell whether the user has edited it: what the editors hold and the parts that a
         // request file left out and that are not supplied yet, edited since the request was loaded; and the transport

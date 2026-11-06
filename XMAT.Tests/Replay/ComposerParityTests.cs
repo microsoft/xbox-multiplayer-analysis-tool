@@ -915,7 +915,6 @@ namespace XMAT.Tests.Replay
                 var copy = Find<Button>(window, "CopyCurlButton");
                 var url = Find<TextBox>(window, "UrlBox");
                 var follow = Find<CheckBox>(window, "FollowRedirectsBox");
-                string why = Localization.GetLocalizedString("COMPOSER_COPY_CURL_UNAVAILABLE");
                 Assert.True(ToolTipService.GetShowOnDisabled(copy));
 
                 url.Text = "http://127.0.0.1:9/plain";
@@ -924,12 +923,12 @@ namespace XMAT.Tests.Replay
 
                 url.Text = "http://127.0.0.1:9/item/#";
                 Assert.False(copy.IsEnabled);
-                Assert.Equal(why, copy.ToolTip);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_CURL_NUMBERED_URL"), copy.ToolTip);
 
                 url.Text = "http://127.0.0.1:9/plain";
                 follow.IsChecked = true;
                 Assert.False(copy.IsEnabled);
-                Assert.Equal(why, copy.ToolTip);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_CURL_REDIRECTS"), copy.ToolTip);
 
                 follow.IsChecked = false;
                 Assert.True(copy.IsEnabled);

@@ -186,11 +186,10 @@ are regenerated, and connection-only headers are omitted. Methods other than exa
 GET, HEAD, and OPTIONS, in capitals, require confirmation, as does changing the captured
 origin. CONNECT and WebSocket handshakes cannot be resent.
 
-Use **Cancel request** to stop waiting, or **Copy as cURL (PowerShell 7)** to copy a
-command for PowerShell 7 with `curl.exe` available. **Copied commands can contain
-credentials and body data.** Sending has a 30-second timeout and a 16 MiB response
-limit for each request. Cancelling or timing out cannot undo changes already processed
-by the server.
+Use **Cancel request** to stop waiting. Sending has a 30-second timeout and a 16 MiB
+response limit for each request. Cancelling or timing out cannot undo changes already
+processed by the server. To send the request outside XMAT, use **Copy as cURL** or
+**Save as cURL script** (see below).
 
 To send a request that was never captured, select **Actions > Compose a New Request**.
 The composer opens with an empty GET request and works the same way.
@@ -241,12 +240,51 @@ and `X-OverrideGateway` are not applied, and XMAT does not send a request that h
 in the composer, delete it from the headers. Use **Connect to another endpoint** to send
 to another address.
 
-**Copy as cURL** copies one request with the default options only: it is not available
-for a numbered URL (see below), with **Follow same-origin redirects**, with an **HTTP
-version** other than **Automatic**, or with **Connect to another endpoint**, since the
-command would not send the same requests. Nor is it available for a body larger than
-64 KiB that the composer keeps as bytes, from **Upload File** or a request file, which
-the command would hold whole as Base64.
+### Copy as cURL and Save as cURL script
+
+**Copy as cURL (PowerShell 7)** copies a command, and **Save as cURL script...** saves a
+script, that sends the request in the composer with the `curl.exe` that comes with
+Windows; XMAT itself sends nothing. **Both hold the full request, credentials and body
+included**, as the warning beside the buttons says: anyone who gets the command or the
+script can use them.
+
+- **What they need to run.** Windows, PowerShell 7.2 or later, and the inbox
+  `%SystemRoot%\System32\curl.exe`, version 8.21.0 or later, never another `curl` on the
+  `PATH`. A header value with non-ASCII characters also needs curl's `Unicode` feature.
+  The command and the script check all of this first, and refuse, sending nothing, when
+  something is missing or when the command line would be longer than Windows allows. A
+  refusal or failure gives a nonzero result: the script's exit code, or `$LASTEXITCODE`
+  for the pasted command, which never closes PowerShell.
+- **How curl runs.** Without a proxy or a curl configuration file, and with none of the
+  proxy, curl or TLS settings of your environment. It never follows redirects and always
+  checks certificates. It writes the response body, and any error, to the console.
+- **What is sent.** One request, with the method, URL, headers and body as XMAT sends
+  them over HTTP/1.1; `Host` and `Content-Length` come from the URL and the body. A
+  header value with non-ASCII characters, which XMAT does not send, is sent as its UTF-8
+  bytes, and an empty value as `Name:` rather than `Name: `. **HTTP/1.1 only** is sent
+  exactly; with **Automatic**, curl chooses the version itself.
+- **When they are not available.** While a part that a request file left out is not
+  supplied, for a numbered URL (see below), and with **Follow same-origin redirects**,
+  **HTTP/2 only**, or **Connect to another endpoint**: each button says why. A request
+  with a Fiddler control header, a HEAD request with a body, or a URL and headers too
+  long for one command line are refused when you select either button, and the status
+  line says why.
+- **Another origin.** When the URL goes to another origin than the request was captured
+  or loaded for, XMAT asks whether to export the request for that origin, which it
+  names: every time, before asking about the content, and No by default. Declining
+  copies and saves nothing. Allowing it is no permission to send, and a permission to
+  send is none to export.
+- **Copy as cURL** copies a command to paste into PowerShell 7 with one click. The body
+  can be at most 64 KiB; save a larger one with **Save as cURL script**. XMAT never
+  clears the clipboard: when nothing is copied, the clipboard keeps what it had.
+- **Save as cURL script...** asks where to save the `.ps1` file, then about another
+  origin if needed, then whether to save the full request at all, No by default, for
+  every script. The body, up to 64 MiB, is inside the script. The script is saved like a
+  request file: privately, only on a local NTFS drive, and never in place of another
+  file.
+- **In the background.** XMAT prepares the command or script without holding up the
+  composer. **Cancel request**, or closing the composer, stops it before anything is
+  copied or saved. A script that was already saved by then stays saved.
 
 ### Numbered URLs
 
@@ -341,11 +379,11 @@ any permission.
 - **A large body is not shown.** The editor shows a body of at most 64 KiB from a
   request file. A larger body is kept as its exact bytes, which the composer sends and
   saves as they are, and shown only by the file's name and the body's size, never as
-  text or Base64; it is not copied as cURL either. **Upload File** replaces it and
-  **Clear body** removes it.
+  text or Base64. **Copy as cURL** does not copy it, and **Save as cURL script** saves
+  it whole. **Upload File** replaces it and **Clear body** removes it.
 - **Parts left out.** A template leaves parts out. The composer lists them above the
-  editors, and nothing is sent, copied as cURL, or saved with its content until each one
-  is supplied. Typing in an editor does not supply a part: enter it, then select its
+  editors, and nothing is sent, exported for curl, or saved with its content until each
+  one is supplied. Typing in an editor does not supply a part: enter it, then select its
   button, **Use this method**, **Use this URL**, **Use these headers** or **No
   headers**, and **Use this body** or **Empty body**. **Use this body** reads the body
   in the background, and **Cancel request** stops it without supplying anything.

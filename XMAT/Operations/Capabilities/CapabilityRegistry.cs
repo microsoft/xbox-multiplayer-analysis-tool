@@ -265,6 +265,7 @@ namespace XMAT.Operations.Capabilities
                 gui: new[]
                 {
                     Click(ComposerXaml, "CopyCurl_Click"),
+                    Click(ComposerXaml, "SaveCurl_Click"),
                 }),
 
             // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.

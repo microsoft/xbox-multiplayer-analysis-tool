@@ -96,11 +96,17 @@ namespace XMAT.Tests.Replay
                 Assert.Equal(incomplete, Status(window));
 
                 var copy = Find<Button>(window, "CopyCurlButton");
-                string notCopied = Localization.GetLocalizedString("COMPOSER_COPY_CURL_INCOMPLETE", left);
+                var script = Find<Button>(window, "SaveCurlButton");
+                string notExported = Localization.GetLocalizedString("COMPOSER_CURL_INCOMPLETE", left);
+                window.ChooseCurlScriptPath = () => throw new Xunit.Sdk.XunitException("Nothing is asked: the export is not available.");
                 Assert.False(copy.IsEnabled);
-                Assert.Equal(notCopied, copy.ToolTip);
-                window.CopyAsCurl();
-                Assert.Equal(notCopied, Status(window));
+                Assert.Equal(notExported, copy.ToolTip);
+                Assert.False(script.IsEnabled);
+                Assert.Equal(notExported, script.ToolTip);
+                await window.CopyAsCurlAsync();
+                Assert.Equal(notExported, Status(window));
+                await window.SaveCurlScriptAsync();
+                Assert.Equal(notExported, Status(window));
 
                 var questions = new List<RequestSaveQuestion>();
                 window.ChooseSavePath = () => Path.Join(directory, "content.xmat-request.json");
@@ -183,7 +189,7 @@ namespace XMAT.Tests.Replay
                 Assert.Equal(("PATCH", server.Origin + "/items/7", "X-Test: supplied", "supplied body"), Editors(window));
                 Assert.False(Find<CheckBox>(window, "Base64Box").IsChecked == true);
                 Assert.True(Find<Button>(window, "CopyCurlButton").IsEnabled);
-                window.CopyAsCurl();
+                await window.CopyAsCurlAsync();
                 Assert.Contains(server.Origin + "/items/7", Assert.Single(copied));
 
                 await window.SendAsync();
@@ -1041,7 +1047,8 @@ namespace XMAT.Tests.Replay
                 string notCopied = Localization.GetLocalizedString("COMPOSER_COPY_CURL_LARGE_BODY");
                 Assert.False(copy.IsEnabled);
                 Assert.Equal(notCopied, copy.ToolTip);
-                window.CopyAsCurl();
+                Assert.True(Find<Button>(window, "SaveCurlButton").IsEnabled);
+                await window.CopyAsCurlAsync();
                 Assert.Equal(notCopied, Status(window));
                 Assert.Empty(copied);
 

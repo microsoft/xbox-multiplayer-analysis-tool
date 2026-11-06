@@ -299,48 +299,6 @@ namespace XMAT.WebServiceCapture
             BodyIsBase64 = base64;
         }
 
-        internal string ToCurlCommand()
-        {
-            if (Omissions.Any)
-                throw new RequestIncompleteException();
-
-            using var request = CreateRequest();
-            byte[] body = GetBodyBytes();
-            if (Method == "HEAD" && body.Length > 0)
-                throw new ArgumentException("HEAD requests with a nonempty body cannot be exported to cURL.");
-
-            var command = new StringBuilder("curl.exe --globoff --noproxy '*'");
-            // --request HEAD alone does not tell curl to stop reading after the response headers.
-            if (Method == "HEAD")
-                command.Append(" --head");
-            command.Append(" --request ").Append(Quote(Method)).Append(" --url ").Append(Quote(request.RequestUri.AbsoluteUri));
-            foreach (var header in request.Headers.Concat(request.Content.Headers))
-            {
-                if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                foreach (string value in header.Value)
-                    // curl uses "Name;" to send an empty header; "Name:" removes the header instead.
-                    command.Append(" --header ").Append(Quote(
-                        string.IsNullOrEmpty(value) ? header.Key + ";" : $"{header.Key}: {value}"));
-            }
-            // curl adds these by default, whereas replay sends only explicitly supplied values.
-            foreach (string name in new[] { "Content-Type", "Accept", "User-Agent" })
-            {
-                if (!request.Headers.Concat(request.Content.Headers).Any(
-                    header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                    command.Append(" --header ").Append(Quote(name + ":"));
-            }
-
-            if (body.Length == 0)
-                return command.ToString();
-
-            // Pass body bytes through a temporary file, not shell text; finally removes sensitive payloads.
-            return "& {\r\n$xmatBodyFile = [System.IO.Path]::GetTempFileName()\r\ntry {\r\n" +
-                $"[System.IO.File]::WriteAllBytes($xmatBodyFile, [Convert]::FromBase64String('{Convert.ToBase64String(body)}'))\r\n" +
-                command + " --data-binary \"@$xmatBodyFile\"\r\n" +
-                "} finally {\r\n[System.IO.File]::Delete($xmatBodyFile)\r\n}\r\n}";
-        }
-
         // The body as it is sent. A body from SetBodyBytes is returned as the same array, which callers must not change.
         internal byte[] GetBodyBytes() =>
             _sharedBody ??
@@ -596,7 +554,7 @@ namespace XMAT.WebServiceCapture
             !string.Equals(method, "CONNECT", StringComparison.OrdinalIgnoreCase);
 
         // The request to send, refused before anything is sent when a header value is one the HTTP stack cannot send.
-        // ToCurlCommand uses CreateRequest instead: curl sends such values as they are.
+        // RequestCurlExporter uses CreateRequest instead: curl sends such values as they are.
         internal HttpRequestMessage CreateRequestToSend()
         {
             HttpRequestMessage message = CreateRequest();
@@ -649,9 +607,5 @@ namespace XMAT.WebServiceCapture
 
         private static bool IsTokenCharacter(char c) =>
             char.IsAsciiLetterOrDigit(c) || "!#$%&'*+-.^_`|~".Contains(c);
-
-        private static string Quote(string value) => "'" + value.Replace("'", "''")
-            .Replace("\u2018", "\u2018\u2018").Replace("\u2019", "\u2019\u2019")
-            .Replace("\u201a", "\u201a\u201a").Replace("\u201b", "\u201b\u201b") + "'";
     }
 }
