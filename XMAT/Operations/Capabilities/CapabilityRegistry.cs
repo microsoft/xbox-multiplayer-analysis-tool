@@ -105,6 +105,8 @@ namespace XMAT.Operations.Capabilities
                     EnumValue("XMAT.Models.ImportType", "NetTrace"),
                     EnumValue(DeviceTypeEnum, "Unknown"),
                 }),
+            // The headless SAZ writer exists (SazArchiveWriter: xmat replay and compose --save-saz); exporting captures with
+            // it, and moving the GUI's export onto it, is S2 work.
             Capability.Planned(
                 "capture-file.export-saz", "Export captures as Fiddler archives (.saz)", "S2", Owner,
                 gui: new[]
@@ -197,7 +199,7 @@ namespace XMAT.Operations.Capabilities
             // of a URL with '#' (SequenceRangeWindow).
             Capability.Supported(
                 "request.replay", "Replay captured requests, as captured or edited", "S9",
-                cli: "replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
+                cli: "replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
                     "[--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
                     "[--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] " +
@@ -231,7 +233,7 @@ namespace XMAT.Operations.Capabilities
                 }),
             Capability.Supported(
                 "request.compose", "Compose and send a new request", "S9",
-                cli: "compose --url URL | --request-file FILE --out DIR [--sequence START-END] [--method METHOD] " +
+                cli: "compose --url URL | --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD] " +
                     "[--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] " +
                     "[--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] " +

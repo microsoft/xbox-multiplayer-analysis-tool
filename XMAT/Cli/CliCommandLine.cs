@@ -46,7 +46,8 @@ namespace XMAT.Cli
     // is a request file to start from (compose and save-request); ClearHeaders and EmptyBody complete what such a file left
     // out; HttpVersionSet says whether --http-version was given, which then wins over a file's version. IncludeSensitive
     // saves captured content (save-request only). Form is the multipart form of --form, --form-string and --form-type, in
-    // command-line order, or null; its files are read when the run starts (CliRequestBody).
+    // command-line order, or null; its files are read when the run starts (CliRequestBody). SaveSaz also saves the sends as
+    // a Fiddler archive, replays.saz (replay and compose).
     internal sealed record CliReplay(
         string Selection = null,
         int Repeat = 1,
@@ -74,7 +75,8 @@ namespace XMAT.Cli
         bool EmptyBody = false,
         bool HttpVersionSet = false,
         bool IncludeSensitive = false,
-        IReadOnlyList<CliFormPart> Form = null)
+        IReadOnlyList<CliFormPart> Form = null,
+        bool SaveSaz = false)
     {
         internal static CliReplay Default { get; } = new();
     }
@@ -135,6 +137,7 @@ namespace XMAT.Cli
         internal const string FormOption = "--form";
         internal const string FormStringOption = "--form-string";
         internal const string FormTypeOption = "--form-type";
+        internal const string SaveSazSwitch = "--save-saz";
 
         internal const string HttpVersionMessage = "--http-version takes auto, 1.1 or 2.";
 
@@ -225,12 +228,13 @@ namespace XMAT.Cli
 
         // compose has no captured origin to change, and replay never follows a redirect to another origin, so only replay
         // takes --allow-origin-change, and compose only with --request-file, whose URL is the origin. Both take
-        // --allow-connect-to, the permission that --connect-to needs. Only replay has captured responses to verify against
-        // (--verify, --verify-diff).
+        // --allow-connect-to, the permission that --connect-to needs, and --save-saz, which also saves the sends as a Fiddler
+        // archive. Only replay has captured responses to verify against (--verify, --verify-diff).
         private static readonly HashSet<string> ComposeSwitches = new(StringComparer.Ordinal)
         {
             AllowUnsafeMethodsSwitch,
             AllowConnectToSwitch,
+            SaveSazSwitch,
         };
 
         // What compose takes only with --request-file: the completions of what a file left out, and consent for changing
@@ -1153,7 +1157,8 @@ namespace XMAT.Cli
                 HttpVersion: httpVersion,
                 ConnectTo: connectTo,
                 AllowConnectTo: arguments.Switches.Contains(AllowConnectToSwitch),
-                HttpVersionSet: arguments.Options.ContainsKey(HttpVersionOption));
+                HttpVersionSet: arguments.Options.ContainsKey(HttpVersionOption),
+                SaveSaz: arguments.Switches.Contains(SaveSazSwitch));
             return null;
         }
 

@@ -15,14 +15,14 @@ both. Other capabilities move over time; the [capability table](#what-runs-headl
 ```
 xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N]
              [--max-record-mib N] [--max-records N]
-xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify]
-            [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header "NAME: VALUE"]...
+xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional]
+            [--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header "NAME: VALUE"]...
             [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]...
             [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS]
             [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods]
             [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N]
             [--max-records N]
-xmat compose --url URL | --request-file FILE --out DIR [--sequence START-END] [--method METHOD]
+xmat compose --url URL | --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD]
              [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body]
              [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]...
              [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
@@ -84,7 +84,8 @@ xmat --version
   refuse, raise them, up to their maximums, or use the GUI; the GUI applies the header and schema checks too, but they
   do not bound how much memory it uses. HTTP bodies are analyzed as stored: compressed or chunked bodies are never
   decoded. A malformed HTTP header line in a Fiddler archive is skipped instead of refusing the archive, and the run
-  reports the warning `analysis.input.malformed-header` once. The header limits cover the sanitized exports that were
+  reports the warning `analysis.input.malformed-header` once. Header lines are read as Latin-1, and a header name may
+  contain an apostrophe, as HTTP allows. The header limits cover the sanitized exports that were
   tested, not every archive that can be written: XMAT can record messages whose headers exceed them and export them in a
   plain or sanitized Fiddler archive; xmat refuses such an archive (`analysis.input.limit`) and the GUI does not import
   it, rather than truncating it. A request without a usable `Host` header (missing, empty, whitespace-only or on a
@@ -249,6 +250,21 @@ xmat --version
   appears twice in one object; text that is equal except for its charset or byte order mark, and JSON whose values
   are equal except for whitespace, member order or escapes, say so. `diff.json` holds captured content, as the
   request and response files do, and is published privately with them. Only `replay` takes `--verify-diff`.
+- `--save-saz` (`replay` and `compose`) also publishes `replays.saz`, a Fiddler archive with each send as a session,
+  which the GUI's import, `xmat analyze` and `xmat replay` read. It is a transcript of what xmat sent and got, not a
+  capture of the wire. A request names its final URL in full, in ASCII (an international host name in its IDN form,
+  an IPv6 address without its zone), with the `Host` that was sent, the headers of `request.http`, one line each (a
+  reader joins repeated ones with commas), and its body. A response has the head and body of `response.http`. A
+  response larger than `--max-response-mib` keeps its head, followed by `X-XMAT-Response-Body-Not-Kept` with the size
+  that the response declared (unverified) or `unknown`, and no body, so a replay of the archive does not verify it. A
+  request without a complete response has no response. A session's number is its send's id, and sessions come in the
+  order the sends completed, which `--parallel` can change. Session flags name the send: `x-xmat-replay-id`,
+  `x-xmat-replay-of` (the request number), `x-xmat-replay-device`, `x-xmat-replay-sequence`, `x-xmat-replay-outcome`
+  (`completed`, `failed`, `timed-out` or `too-large`), `x-xmat-replay-code` and `x-xmat-replay-redirects`. The archive
+  is completed only when the run publishes `DIR`; a run that publishes nothing removes it with the staging folder. It
+  holds captured content, as the request and response files do, and is published privately with them. xmat reads it
+  back only within its input limits (`--max-input-mib`, `--max-record-mib` and the others below), refusing a larger
+  one (`analysis.input.limit`).
 - A capture that the GUI saved can include its replays as a device named `XMAT Replays`: `xmat analyze` reports it
   like any other device, and `xmat replay` can select its requests. Their numbers can repeat those of another device,
   so a selected number may need `--device` (`replay.request.ambiguous`).
@@ -390,18 +406,17 @@ whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFai
 `slice`); `help` reports `commands`, each with its `name`, `status` (`supported`), `usage` and `capabilities` (the ids
 of the capabilities that the command provides); and `--version` reports `version`. Instead of the analysis fields,
 `replay` and `compose` report `options` (`repeat`, `parallel`, `timeoutSeconds`, `maxResponseMib`, `followRedirects`,
-`unconditional`, `verify`, `verifyDiff`, `allowUnsafeMethods`, `allowOriginChange`, `httpVersion`, `connectTo`,
-which says whether `--connect-to` was given but never its endpoint, and `allowConnectTo`), `replays` (one per send, in
-order, each with its `id`, `device` and `request` (null for `compose`), `sequence` (the number that `--sequence` put in
-the URL, otherwise null), `iteration`, `outcome`, `status` (null without a response), `durationMs`, `responseBytes`,
-`redirects`, `transport` (`direct` or `connect-to`, as the send was configured), `httpVersion` (the version asked
-for: `auto`, `1.1` or `2`), `responseVersion` (the version of the response, such as `1.1` or `2`, null without
-one), `code`, `verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`, its
-`differences`, a list of `status` and `body`, and its `detail`, null without `--verify-diff`, otherwise the `state` of
-its `diff.json` and, once published, its `file`) and, once published, its `files`) and `totals` (`replays`,
-`completed`, `failed`, `matched` and `mismatched`); `replay` also reports `input` and `limits` like `analyze`.
-`summary.json` of a replay holds `schema` (`xmat-replay/1`), `command`, `runId`, `version`, the same fields and the
-run's `warnings`.
+`unconditional`, `verify`, `verifyDiff`, `allowUnsafeMethods`, `allowOriginChange`, `httpVersion`, `connectTo`, which
+says whether `--connect-to` was given but never its endpoint, `allowConnectTo` and `saveSaz`), `replays` (one per send,
+in order, each with its `id`, `device` and `request` (null for `compose`), `sequence` (the number that `--sequence` put
+in the URL, otherwise null), `iteration`, `outcome`, `status` (null without a response), `durationMs`, `responseBytes`,
+`redirects`, `transport` (`direct` or `connect-to`, as the send was configured), `httpVersion` (the version asked for:
+`auto`, `1.1` or `2`), `responseVersion` (the version of the response, such as `1.1` or `2`, null without one), `code`,
+`verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`, its `differences`, a list of `status`
+and `body`, and its `detail`, null without `--verify-diff`, otherwise the `state` of its `diff.json` and, once
+published, its `file`) and, once published, its `files`) and `totals` (`replays`, `completed`, `failed`, `matched` and
+`mismatched`); `replay` also reports `input` and `limits` like `analyze`. `summary.json` of a replay holds `schema`
+(`xmat-replay/1`), `command`, `runId`, `version`, the same fields and the run's `warnings`.
 
 If xmat cannot produce this document (an internal error), it writes a fixed fallback document instead, with only
 `schema`, `command`, `runId`, `status`, `exitCode`, `artifacts`, `cleanup`, empty `warnings` and the error
@@ -485,9 +500,9 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
-| Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to]` | Supported (S9) |
+| Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to]` | Supported (S9) |
 | Export requests as cURL scripts for PowerShell 7, without sending them (`request.curl`) | `xmat curl INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--include-sensitive] [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto\|1.1] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
-| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
+| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | Save requests as request files, without sending them (`request.save`) | `xmat save-request INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto\|1.1\|2] [--include-sensitive] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |
