@@ -13,6 +13,7 @@ using System.Xml.Linq;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.Tests
 {
@@ -156,11 +157,202 @@ namespace XMAT.Tests
         [Theory]
         [InlineData("Light")]
         [InlineData("Dark")]
+        public void ScriptEditorButtons_EnabledTextMeetsMinimumContrast(string theme)
+        {
+            _application.Run(window =>
+            {
+                window.Resources.Remove("PrimaryForegroundBrush");
+                window.Resources.Remove("SecondaryForegroundBrush");
+                window.Resources.MergedDictionaries.Add(Theme(theme));
+                var scripts = new Scripting.ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
+                foreach (var script in scripts)
+                {
+                    script.Filename = "contrast-test.cs";
+                    script.Script = "Params.Continue = true;";
+                }
+                var view = new ScriptEditorView { ScriptCollection = scripts };
+                WpfTestHost.Show(window, view);
+                var buttons = Descendants(view).OfType<Button>().Cast<ButtonBase>()
+                    .Append(view.ScriptEnabled).ToArray();
+                Assert.Equal(4, buttons.Length);
+
+                foreach (var button in buttons)
+                {
+                    Assert.True(button.IsEnabled);
+                    AssertButtonTextContrast(button);
+                }
+                view.ScriptEnabled.IsChecked = true;
+                WpfTestHost.Pump();
+                AssertButtonTextContrast(view.ScriptEnabled);
+            });
+        }
+
+        private static void AssertButtonTextContrast(ButtonBase button)
+        {
+            var background = Descendants(button).OfType<Border>().First().Background;
+            Assert.True(Contrast(button.Foreground, background) >= 4.5, "Enabled button text must meet 4.5:1 contrast.");
+            Assert.All(Descendants(button).OfType<TextBlock>(),
+                text => Assert.True(Contrast(text.Foreground, background) >= 4.5, "Button label must meet 4.5:1 contrast."));
+        }
+
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
+        public void CaptureRows_TextContrastSurvivesThemeAndStatusChanges(string theme)
+        {
+            _application.Run(window =>
+            {
+                window.Resources.Remove("PrimaryForegroundBrush");
+                window.Resources.Remove("SecondaryForegroundBrush");
+                window.Height = 650;
+                var gridStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                    .Single(style => (string)style.Attribute("TargetType") == "DataGrid");
+                window.Resources[typeof(DataGrid)] = Parse<Style>(gridStyle);
+                var controller = Proxy(9000);
+                var states = new[] { ("200", "POST"), ("200", "CONNECT"), ("", "GET"), ("503", "GET") };
+                foreach (var (status, method) in states)
+                {
+                    for (int repeat = 0; repeat < 2; repeat++)
+                    {
+                        int number = controller.ProxyConnections.Count + 1;
+                        controller.ProxyConnections.Add(new ProxyConnectionModel(
+                            number, status, CaptureTimelineTestData.Origin, TimeSpan.FromMilliseconds(20),
+                            "https", "example.test:443", method, "/contrast",
+                            "", Array.Empty<byte>(), "", Array.Empty<byte>(), "127.0.0.1"));
+                    }
+                }
+                var view = new CaptureConnectionView { DataContext = new Context(controller) };
+                var grid = (DataGrid)view.FindName("ConnectionList");
+                grid.IsSynchronizedWithCurrentItem = false;
+                grid.EnableRowVirtualization = false;
+                var dictionary = Theme(theme);
+                window.Resources.MergedDictionaries.Add(dictionary);
+                WpfTestHost.Show(window, view);
+                grid.SelectedItem = null;
+
+                foreach (var name in new[] { theme, theme == "Dark" ? "Light" : "Dark" })
+                {
+                    if (name != theme)
+                    {
+                        window.Resources.MergedDictionaries.Remove(dictionary);
+                        dictionary = Theme(name);
+                        window.Resources.MergedDictionaries.Add(dictionary);
+                    }
+                    WpfTestHost.Pump();
+                    var colors = new List<Color>();
+                    foreach (var model in controller.ProxyConnections)
+                    {
+                        grid.ScrollIntoView(model);
+                        WpfTestHost.Pump();
+                        var row = Assert.IsType<DataGridRow>(grid.ItemContainerGenerator.ContainerFromItem(model));
+                        Assert.True(Contrast(row.Foreground, row.Background) >= 4.5,
+                            $"{name}: {model.Method} {model.Status} must contrast with its row background.");
+                        Assert.All(Descendants(row).OfType<TextBlock>().Where(text => !string.IsNullOrEmpty(text.Text)),
+                            text => Assert.True(Contrast(text.Foreground, row.Background) >= 4.5,
+                                $"{name}: capture cell text must meet 4.5:1 contrast."));
+                        colors.Add(Assert.IsType<SolidColorBrush>(row.Foreground).Color);
+                    }
+                    Assert.Equal(4, colors.Distinct().Count());
+                }
+
+                var pending = controller.ProxyConnections[4];
+                grid.ScrollIntoView(pending);
+                WpfTestHost.Pump();
+                var pendingRow = Assert.IsType<DataGridRow>(grid.ItemContainerGenerator.ContainerFromItem(pending));
+                var pendingColor = Assert.IsType<SolidColorBrush>(pendingRow.Foreground).Color;
+                CaptureTimelineTestData.Update(pending, status: "200");
+                WpfTestHost.Pump();
+                Assert.NotEqual(pendingColor, Assert.IsType<SolidColorBrush>(pendingRow.Foreground).Color);
+                Assert.True(Contrast(pendingRow.Foreground, pendingRow.Background) >= 4.5);
+            });
+        }
+
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
+        public void SelectedTabs_AreLighterAndTextRemainsReadableAcrossThemeChanges(string theme)
+        {
+            _application.Run(window =>
+            {
+                var tabStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                    .Single(style => (string)style.Attribute("TargetType") == "TabItem");
+                window.Resources[typeof(TabItem)] = Parse<Style>(tabStyle);
+                var first = new TabItem { Header = "First", Content = "First capture" };
+                var second = new TabItem { Header = "Second", Content = "Second capture" };
+                var tabs = new TabControl { Items = { first, second } };
+                var dictionary = Theme(theme);
+                window.Resources.MergedDictionaries.Add(dictionary);
+                WpfTestHost.Show(window, tabs);
+
+                foreach (var name in new[] { theme, theme == "Dark" ? "Light" : "Dark" })
+                {
+                    if (name != theme)
+                    {
+                        window.Resources.MergedDictionaries.Remove(dictionary);
+                        dictionary = Theme(name);
+                        window.Resources.MergedDictionaries.Add(dictionary);
+                    }
+                    foreach (var selected in new[] { first, second })
+                    {
+                        tabs.SelectedItem = selected;
+                        WpfTestHost.Pump();
+                        var other = selected == first ? second : first;
+                        var selectedBackground = ((Border)selected.Template.FindName("Border", selected)).Background;
+                        var otherBackground = ((Border)other.Template.FindName("Border", other)).Background;
+                        Assert.True(Luminance(Assert.IsType<SolidColorBrush>(selectedBackground).Color) >
+                            Luminance(Assert.IsType<SolidColorBrush>(otherBackground).Color),
+                            $"{name}: the selected tab must be lighter than an unselected tab.");
+                        Assert.True(Contrast(selected.Foreground, selectedBackground) >= 4.5);
+                        Assert.True(Contrast(other.Foreground, otherBackground) >= 4.5);
+                    }
+                }
+            });
+        }
+
+        [Theory]
+        [InlineData("PrimaryForegroundBrush", "PanelBackgroundBrush")]
+        [InlineData("ButtonForegroundBrush", "ButtonBackgroundBrush")]
+        [InlineData("ButtonForegroundBrush", "ButtonHoverBackgroundBrush")]
+        [InlineData("ButtonForegroundBrush", "ButtonPressedBackgroundBrush")]
+        [InlineData("TextBoxForegroundBrush", "TextBoxBackgroundBrush")]
+        [InlineData("StatusBarForegroundBrush", "StatusBarBackgroundBrush")]
+        [InlineData("PrimaryForegroundBrush", "StatusBarBackgroundBrush")]
+        public void DarkTheme_TextMeetsMinimumContrast(string foreground, string background)
+        {
+            _application.Run(_ =>
+            {
+                var theme = Theme("Dark");
+                double contrast = Contrast((Brush)theme[foreground], (Brush)theme[background]);
+                Assert.True(contrast >= 4.5, $"{foreground} on {background}: {contrast:F2}:1");
+            });
+        }
+
+        private static double Luminance(Color color)
+        {
+            static double Linear(byte component)
+            {
+                double value = component / 255.0;
+                return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+            }
+
+            return 0.2126 * Linear(color.R) + 0.7152 * Linear(color.G) + 0.0722 * Linear(color.B);
+        }
+
+        private static double Contrast(Brush foreground, Brush background)
+        {
+            double first = Luminance(Assert.IsType<SolidColorBrush>(foreground).Color);
+            double second = Luminance(Assert.IsType<SolidColorBrush>(background).Color);
+            return (Math.Max(first, second) + 0.05) / (Math.Min(first, second) + 0.05);
+        }
+
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
         public void DisabledButtonsAndNestedText_AreGrayAndFollowThemeChanges(string theme)
         {
             _application.Run(window =>
             {
-                AddButtonStyles(window);
+                AddButtonStyles(window.Resources);
                 var dictionary = Theme(theme);
                 window.Resources.MergedDictionaries.Add(dictionary);
                 var text = new TextBlock { Text = "Explicit button text" };
@@ -264,7 +456,7 @@ namespace XMAT.Tests
             return (T)XamlReader.Parse(element.ToString());
         }
 
-        private static void AddButtonStyles(Window window)
+        internal static void AddButtonStyles(ResourceDictionary resources)
         {
             var styles = ProductMarkup("App.xaml").Descendants(Presentation + "ResourceDictionary").First()
                 .Elements(Presentation + "Style")
@@ -280,7 +472,7 @@ namespace XMAT.Tests
                     "{x:Static ToolBar.ToggleButtonStyleKey}" => ToolBar.ToggleButtonStyleKey,
                     _ => style.TargetType
                 };
-                window.Resources[resourceKey] = style;
+                resources[resourceKey] = style;
             }
         }
 

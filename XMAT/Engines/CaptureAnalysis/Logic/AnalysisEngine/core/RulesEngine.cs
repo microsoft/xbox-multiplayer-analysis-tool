@@ -7,7 +7,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace CaptureAnalysisEngine
@@ -16,16 +16,11 @@ namespace CaptureAnalysisEngine
     public class RulesEngine
     {
         private Dictionary<String, LinkedList<Rule>> m_ruleDefines = new Dictionary<String, LinkedList<Rule>>();
+        private readonly List<String> m_ruleDefineOrder = new();
         private Dictionary<EndpointKey, LinkedList<Rule>> m_endpointRuleMap = new Dictionary<EndpointKey, LinkedList<Rule>>();
         private Dictionary<String, ConcurrentBag<RuleResult>> m_results = new Dictionary<string, ConcurrentBag<RuleResult>>();
         private String m_version = String.Empty;
         private String m_ruleFile = String.Empty;
-
-        // TODO: move this to a utility
-        private static String WildCardToRegular(String value)
-        {
-            return "^" + Regex.Escape(value).Replace("\\?", ".").Replace("\\*", ".*") + "$";
-        }
 
         public String RuleFile
         {
@@ -42,23 +37,50 @@ namespace CaptureAnalysisEngine
         public bool IsInternal { get; }
 
         public RulesEngine(bool isInternal)
+            : this(
+                isInternal,
+                new AnalysisWorkBudget())
         {
-            IsInternal = isInternal;
         }
 
-        // Rules are classified by an endpoint's logical name; each endpoint bucket keeps its own rule instances.
-        void MapRules(IEnumerable<EndpointKey> endpoints)
+        internal RulesEngine(
+            bool isInternal,
+            AnalysisWorkBudget workBudget)
         {
-            foreach (EndpointKey endpoint in endpoints)
+            ArgumentNullException.ThrowIfNull(
+                workBudget);
+            IsInternal = isInternal;
+            WorkBudget = workBudget;
+        }
+
+        internal AnalysisWorkBudget WorkBudget { get; }
+
+        internal CancellationToken CancellationToken { get; private set; }
+
+        // Rules are classified by an endpoint's logical name; each endpoint bucket keeps its own rule instances.
+        void MapRules(
+            IEnumerable<EndpointKey> endpoints,
+            CancellationToken cancellationToken)
+        {
+            foreach (EndpointKey endpoint in endpoints
+                .OrderBy(
+                    item => item.LogicalName,
+                    StringComparer.Ordinal)
+                .ThenBy(item => item.Kind))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var rules = new LinkedList<Rule>();
 
-                foreach (var typeRules in m_ruleDefines)
+                foreach (string ruleId in
+                    m_ruleDefineOrder)
                 {
-                    foreach (var rule in typeRules.Value)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    foreach (Rule rule in
+                        m_ruleDefines[ruleId])
                     {
-                        var regex = new Regex(WildCardToRegular(rule.Endpoint));
-                        if (regex.IsMatch(endpoint.LogicalName))
+                        if (WildcardMatcher.IsMatch(
+                                rule.Endpoint,
+                                endpoint.LogicalName))
                         {
                             var newRule = rule.Clone();
                             newRule.Endpoint = endpoint.LogicalName;
@@ -76,8 +98,18 @@ namespace CaptureAnalysisEngine
 
         public void RunRulesOnData(String console, ServiceCallData.PerConsoleData data)
         {
+            RunRulesOnData(console, data, CancellationToken.None);
+        }
+
+        internal void RunRulesOnData(
+            String console,
+            ServiceCallData.PerConsoleData data,
+            CancellationToken cancellationToken)
+        {
+            CancellationToken = cancellationToken;
+
             // Expand the wildcard (*) endpoint rules out to match the actual endpoints
-            MapRules(data.m_servicesHistory.Keys);
+            MapRules(data.m_servicesHistory.Keys, cancellationToken);
 
             if (!m_results.ContainsKey(console))
             {
@@ -85,29 +117,81 @@ namespace CaptureAnalysisEngine
             }
 
             var endpointRules = m_endpointRuleMap
+                .OrderBy(
+                    endpoint => endpoint.Key.LogicalName,
+                    StringComparer.Ordinal)
+                .ThenBy(endpoint => endpoint.Key.Kind)
                 .SelectMany(endpoint => endpoint.Value.Select(rule => (Endpoint: endpoint.Key, Rule: rule)))
                 .ToList();
             var actionableHosts = data.m_servicesHistory.ToDictionary(
                 endpoint => endpoint.Key,
                 endpoint => ServiceCallData.GetActionableHost(endpoint.Key, endpoint.Value));
 
-            // Now the rules can be run in parallel
-            Parallel.ForEach(endpointRules, endpointRule =>
+            foreach (var endpointRule in endpointRules.Where(
+                item => RetainsWorkBudget(item.Rule)))
             {
-                if (data.m_servicesHistory.TryGetValue(endpointRule.Endpoint, out var history))
+                cancellationToken.ThrowIfCancellationRequested();
+                RunRule(
+                    console,
+                    data,
+                    endpointRule,
+                    actionableHosts);
+            }
+
+            // Budget-retaining rules have completed in stable ordinal endpoint/rule order. The remaining rules do not
+            // charge or retain the shared budget and can still run in parallel.
+            Parallel.ForEach(
+                endpointRules.Where(item =>
+                    !RetainsWorkBudget(item.Rule)),
+                new ParallelOptions
                 {
-                    RuleResult result = endpointRule.Rule.Run(this, history, data.m_servicesStats[endpointRule.Endpoint]);
-                    if (result != null)
-                    {
-                        // Identity and provenance travel with the result for report projection.
-                        result.EndpointKey = endpointRule.Endpoint;
-                        result.ActionableHost = actionableHosts[endpointRule.Endpoint];
-                    }
-                    m_results[console].Add(result);
-                }
-            });
+                    CancellationToken =
+                        cancellationToken,
+                },
+                endpointRule => RunRule(
+                    console,
+                    data,
+                    endpointRule,
+                    actionableHosts));
 
             return;
+        }
+
+        private static bool RetainsWorkBudget(
+            Rule rule) =>
+            rule is PollingDetectionRule or
+                RepeatedCallsRule;
+
+        private void RunRule(
+            string console,
+            ServiceCallData.PerConsoleData data,
+            (
+                EndpointKey Endpoint,
+                Rule Rule) endpointRule,
+            IReadOnlyDictionary<
+                EndpointKey,
+                string> actionableHosts)
+        {
+            if (data.m_servicesHistory.TryGetValue(
+                    endpointRule.Endpoint,
+                    out var history))
+            {
+                RuleResult result = endpointRule.Rule.Run(
+                    this,
+                    history,
+                    data.m_servicesStats[
+                        endpointRule.Endpoint]);
+                if (result != null)
+                {
+                    // Identity and provenance travel with the result for report projection.
+                    result.EndpointKey =
+                        endpointRule.Endpoint;
+                    result.ActionableHost =
+                        actionableHosts[
+                            endpointRule.Endpoint];
+                }
+                m_results[console].Add(result);
+            }
         }
 
         public void AddRules(IEnumerable<Rule> rules)
@@ -130,6 +214,8 @@ namespace CaptureAnalysisEngine
             if (!m_ruleDefines.ContainsKey(rule.RuleID))
             {
                 m_ruleDefines.Add(rule.RuleID, new LinkedList<Rule>());
+                m_ruleDefineOrder.Add(
+                    rule.RuleID);
             }
 
             m_ruleDefines[rule.RuleID].AddLast(rule);
@@ -169,6 +255,7 @@ namespace CaptureAnalysisEngine
         public void ClearAllRules()
         {
             m_ruleDefines.Clear();
+            m_ruleDefineOrder.Clear();
             m_endpointRuleMap.Clear();
         }
 
@@ -189,8 +276,18 @@ namespace CaptureAnalysisEngine
 
         public void DumpServiceCallData(string filename, ServiceCallData serviceCallData)
         {
-            List<string> dataLines = new List<string>();
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(filename));
+            File.WriteAllLines(
+                filename,
+                EnumerateServiceCallData(
+                    serviceCallData));
+        }
 
+        private static IEnumerable<string>
+            EnumerateServiceCallData(
+                ServiceCallData serviceCallData)
+        {
             var perConsoleDataKeys = serviceCallData.m_perConsoleData.Keys.ToList();
             perConsoleDataKeys.Sort();
             foreach (var perConsoleDataKey in perConsoleDataKeys)
@@ -204,7 +301,7 @@ namespace CaptureAnalysisEngine
                     var serviceHistory = perConsoleData.m_servicesHistory[serviceHistoryKey];
                     foreach (var item in serviceHistory)
                     {
-                        dataLines.Add(item.Stringify());
+                        yield return item.Stringify();
                     }
                 }
 
@@ -213,88 +310,105 @@ namespace CaptureAnalysisEngine
                 foreach (var serviceCallStatsKey in serviceCallStatsKeys)
                 {
                     var serviceCallStats = perConsoleData.m_servicesStats[serviceCallStatsKey];
-                    dataLines.Add(serviceCallStats.Stringify());
+                    yield return serviceCallStats.Stringify();
                 }
             }
-
-            string directory = Path.GetDirectoryName(filename);
-            Directory.CreateDirectory(Path.GetDirectoryName(filename));
-            File.WriteAllLines(filename, dataLines);
         }
 
         public void DumpServiceCallItems(string filename, List<ServiceCallItem> serviceCallItems)
         {
-            List<string> itemLines = new List<string>();
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(filename));
+            File.WriteAllLines(
+                filename,
+                EnumerateServiceCallItems(
+                    serviceCallItems));
+        }
 
-            itemLines.Add($"Total of [{serviceCallItems.Count}] service call items.");
-
-            foreach (var item in serviceCallItems)
+        private static IEnumerable<string>
+            EnumerateServiceCallItems(
+                IReadOnlyCollection<ServiceCallItem> items)
+        {
+            yield return
+                $"Total of [{items.Count}] service call items.";
+            foreach (ServiceCallItem item in items)
             {
-                itemLines.Add(item.Stringify());
+                yield return item.Stringify();
             }
-
-            string directory = Path.GetDirectoryName(filename);
-            Directory.CreateDirectory(Path.GetDirectoryName(filename));
-            File.WriteAllLines(filename, itemLines);
         }
 
         public void DumpResultsToFile(string filename)
         {
-            List<string> resultLines = new List<string>();
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(filename));
+            File.WriteAllLines(
+                filename,
+                EnumerateResults());
+        }
 
-            resultLines.Add($"Devices: {m_results.Count}");
+        private IEnumerable<string> EnumerateResults()
+        {
+            yield return $"Devices: {m_results.Count}";
             var deviceKeys = m_results.Keys.ToList();
             deviceKeys.Sort();
             foreach (var deviceKey in deviceKeys)
             {
-                resultLines.Add($". {deviceKey}");
-                resultLines.Add($". Rule Results: {m_results[deviceKey].Count}");
+                yield return $". {deviceKey}";
+                yield return
+                    $". Rule Results: {m_results[deviceKey].Count}";
                 var deviceResults = m_results[deviceKey].ToList();
                 deviceResults.Sort((a, b) => (a.RuleName + a.Endpoint).CompareTo(b.RuleName + b.Endpoint));
                 foreach (var ruleResult in deviceResults)
                 {
-                    resultLines.Add($"... {ruleResult.RuleName}");
-                    resultLines.Add($"... {ruleResult.Endpoint}");
-                    resultLines.Add($"... {ruleResult.RuleDescription}");
+                    yield return
+                        $"... {ruleResult.RuleName}";
+                    yield return
+                        $"... {ruleResult.Endpoint}";
+                    yield return
+                        $"... {ruleResult.RuleDescription}";
 
-                    resultLines.Add($"... Violations: {ruleResult.ViolationCount}");
+                    yield return
+                        $"... Violations: {ruleResult.ViolationCount}";
                     foreach (var violation in ruleResult.Violations)
                     {
-                        resultLines.Add($"..... {violation.m_level}");
-                        resultLines.Add($"..... {violation.m_endpoint}");
-                        resultLines.Add(violation.m_summary.ToString());
-                        resultLines.Add($"..... Violating Calls: {violation.m_violatingCalls.Count}");
+                        yield return
+                            $"..... {violation.m_level}";
+                        yield return
+                            $"..... {violation.m_endpoint}";
+                        yield return
+                            violation.m_summary.ToString();
+                        yield return
+                            $"..... Violating Calls: {violation.m_violatingCalls.Count}";
                         foreach (var violatingCall in violation.m_violatingCalls)
                         {
-                            resultLines.Add($"....... {violatingCall.Id}");
-                            resultLines.Add($"....... {violatingCall.Uri}");
+                            yield return
+                                $"....... {violatingCall.Id}";
+                            yield return
+                                $"....... {violatingCall.Uri}";
                         }
                     }
 
-                    resultLines.Add($"... Results: {ruleResult.Results.Count}");
+                    yield return
+                        $"... Results: {ruleResult.Results.Count}";
                     var resultKeys = ruleResult.Results.Keys.ToList();
                     resultKeys.Sort();
                     foreach (var resultKey in resultKeys)
                     {
                         object value = ruleResult.Results[resultKey];
-                        resultLines.Add($"..... {resultKey}");
+                        yield return $"..... {resultKey}";
                         if (value.GetType().IsValueType ||
                             value.GetType().IsPrimitive ||
                             value.GetType() == typeof(string))
                         {
-                            resultLines.Add($"..... {value}");
+                            yield return $"..... {value}";
                         }
                         else
                         {
-                            resultLines.Add($"..... [OBJECT]");
+                            yield return "..... [OBJECT]";
                         }
                     }
                 }
             }
-
-            string directory = Path.GetDirectoryName(filename);
-            Directory.CreateDirectory(Path.GetDirectoryName(filename));
-            File.WriteAllLines(filename, resultLines);
         }
 
         // TODO: ignoring serialization for now

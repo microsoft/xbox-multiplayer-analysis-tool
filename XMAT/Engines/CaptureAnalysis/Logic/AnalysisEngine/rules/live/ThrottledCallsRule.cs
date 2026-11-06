@@ -48,14 +48,20 @@ namespace CaptureAnalysisEngine
         public override RuleResult Run(RulesEngine engine, IEnumerable<ServiceCallItem> items, ServiceCallStats stats)
         {
             RuleResult result = InitializeResult(DisplayName, Description);
+            List<ServiceCallItem> orderedItems =
+                items.ToList();
 
-            m_totalCalls = items.Count();
-            m_throttledCallsCount = items.Where(call => call.HttpStatusCode == 429).Count();
+            m_totalCalls = orderedItems.Count;
+            m_throttledCallsCount =
+                orderedItems.Count(
+                    call =>
+                        call.HttpStatusCode == 429);
 
             // We need to search over all of the calls to the endpoint
             for (int i = 0; i < m_totalCalls;)
             {
-                var call = items.ElementAt(i);
+                ServiceCallItem call =
+                    orderedItems[i];
 
                 // If its not a throttled call, move to the next call
                 if (call.HttpStatusCode != 429)
@@ -66,7 +72,7 @@ namespace CaptureAnalysisEngine
 
                 // If it is throttled, start a list
                 List<ServiceCallItem> throttledCallSet = new List<ServiceCallItem>();
-                throttledCallSet.Add(items.ElementAt(i));
+                throttledCallSet.Add(call);
                 var throttledCall = throttledCallSet.First();
                 string throttleGuidline = string.Empty;
 
@@ -74,7 +80,9 @@ namespace CaptureAnalysisEngine
                 {
                     if (!string.IsNullOrEmpty(throttledCall.RspBody))
                     {
-                        var doc = JsonDocument.Parse(throttledCall.ReqBody);
+                        using var doc =
+                            JsonDocument.Parse(
+                                throttledCall.ReqBody);
                         var rootElement = doc.RootElement;
                         JsonElement maxRequestsObject;
                         JsonElement periodInSecondsObject;
@@ -92,8 +100,6 @@ namespace CaptureAnalysisEngine
                 // If there are 2 or more throttled calls in a row the title is not properly handling the response
                 while (++i < m_throttledCallsCount)
                 {
-                    var nextCall = items.ElementAt(i);
-
                     if (call.HttpStatusCode != 429)
                     {
                         ++i;

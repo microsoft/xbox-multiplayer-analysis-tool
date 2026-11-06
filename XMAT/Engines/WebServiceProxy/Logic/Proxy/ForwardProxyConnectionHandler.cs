@@ -26,7 +26,46 @@ namespace XMAT.WebServiceCapture.Proxy
         private readonly InterceptedTunnelRegistry _interceptedTunnels;
         private readonly Logger _logger;
         private readonly WebServiceProxy _proxy;
+        private readonly InitialProxyRequestReader _requestReader;
         private readonly CancellationToken _applicationStopping;
+
+        internal Action<LogLevel, string> LogObserver { get; set; }
+
+        internal Func<
+            Stream,
+            ProxyRequestReadFailure,
+            CancellationToken,
+            Task> FailureResponseWriterOverride { get; set; }
+
+        internal ProxyRequestBufferBudget RequestBufferBudget =>
+            _requestReader.BufferBudget;
+
+        private const int RejectedInputDrainBytes =
+            64 * 1024;
+        private static readonly TimeSpan
+            RejectedInputDrainTime =
+                TimeSpan.FromMilliseconds(250);
+
+        private static readonly byte[] HeaderTooLargeResponse =
+            Encoding.ASCII.GetBytes(
+                "HTTP/1.1 431 Request Header Fields Too Large\r\n" +
+                "Connection: close\r\n" +
+                "Content-Length: 0\r\n\r\n");
+        private static readonly byte[] BodyTooLargeResponse =
+            Encoding.ASCII.GetBytes(
+                "HTTP/1.1 413 Content Too Large\r\n" +
+                "Connection: close\r\n" +
+                "Content-Length: 0\r\n\r\n");
+        private static readonly byte[] TimeoutResponse =
+            Encoding.ASCII.GetBytes(
+                "HTTP/1.1 408 Request Timeout\r\n" +
+                "Connection: close\r\n" +
+                "Content-Length: 0\r\n\r\n");
+        private static readonly byte[] BufferExhaustedResponse =
+            Encoding.ASCII.GetBytes(
+                "HTTP/1.1 503 Service Unavailable\r\n" +
+                "Connection: close\r\n" +
+                "Content-Length: 0\r\n\r\n");
 
         public ForwardProxyConnectionHandler(
             HttpClient httpClient,
@@ -34,13 +73,19 @@ namespace XMAT.WebServiceCapture.Proxy
             InterceptedTunnelRegistry interceptedTunnels,
             Logger logger,
             WebServiceProxy proxy,
-            IHostApplicationLifetime applicationLifetime)
+            IHostApplicationLifetime applicationLifetime,
+            InitialProxyRequestReader requestReader = null)
         {
             _httpClient = httpClient;
             _interceptedHost = interceptedHost;
             _interceptedTunnels = interceptedTunnels;
             _logger = logger;
             _proxy = proxy;
+            _requestReader =
+                requestReader ??
+                new InitialProxyRequestReader(
+                    ProxyRequestReadPolicy.Default,
+                    ProxyRequestBufferBudget.Shared);
             _applicationStopping = applicationLifetime.ApplicationStopping;
         }
 
@@ -64,15 +109,70 @@ namespace XMAT.WebServiceCapture.Proxy
 
             try
             {
-                var stream = new DuplexPipeStream(connection.Transport);
-                var request = await ReadHttpRequestAsync(connectionID, stream, cancellationToken).ConfigureAwait(false);
-
-                if (request == null)
+                ProxyRequestReadResult readResult =
+                    await _requestReader.ReadAsync(
+                            connection.Transport.Input,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                var stream =
+                    new DuplexPipeStream(
+                        connection.Transport);
+                if (readResult.Failure !=
+                    ProxyRequestReadFailure.None)
                 {
-                    _logger.Log(connectionID, LogLevel.ERROR, "Failed reading initial request");
+                    _logger.Log(
+                        connectionID,
+                        LogLevel.WARN,
+                        $"Initial request rejected: {readResult.Failure}");
+                    if (!cancellationToken
+                        .IsCancellationRequested)
+                    {
+                        Func<
+                            Stream,
+                            ProxyRequestReadFailure,
+                            CancellationToken,
+                            Task> writer =
+                                FailureResponseWriterOverride;
+                        if (writer == null)
+                        {
+                            await WriteReadFailureAsync(
+                                    stream,
+                                    readResult.Failure,
+                                    _applicationStopping)
+                                .ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            await writer(
+                                    stream,
+                                    readResult.Failure,
+                                    _applicationStopping)
+                                .ConfigureAwait(false);
+                        }
+                    }
+                    RejectedInputDrainResult drain =
+                        await DrainRejectedInputAsync(
+                            connection.Transport.Input,
+                            _applicationStopping)
+                            .ConfigureAwait(false);
+                    _logger.Log(
+                        connectionID,
+                        LogLevel.DEBUG,
+                        $"Rejected request close path: {drain.Outcome}; " +
+                        $"drained {drain.Bytes} bytes.");
+                    await connection.Transport.Output
+                        .CompleteAsync()
+                        .ConfigureAwait(false);
+                    await connection.Transport.Input
+                        .CompleteAsync()
+                        .ConfigureAwait(false);
                     return;
                 }
 
+                ClientRequest request =
+                    readResult.Request;
+                request.RequestNumber =
+                    _proxy.GetNextRequestID();
                 if (request.Method == "CONNECT")
                 {
                     await HandleConnectAsync(connectionID, stream, request, remoteEndPoint, cancellationToken).ConfigureAwait(false);
@@ -85,11 +185,27 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             catch (OperationCanceledException)
             {
-                _logger.Log(connectionID, LogLevel.DEBUG, "Connection cancelled");
+                LogConnection(
+                    connectionID,
+                    LogLevel.DEBUG,
+                    "Connection cancelled");
+            }
+            catch (Exception ex) when (
+                ex is IOException or
+                SocketException or
+                ObjectDisposedException)
+            {
+                LogConnection(
+                    connectionID,
+                    LogLevel.WARN,
+                    $"Connection ended while reading or writing: {ex.Message}");
             }
             catch (Exception ex)
             {
-                _logger.Log(connectionID, LogLevel.ERROR, $"Exception in connection handler: {ex}");
+                LogConnection(
+                    connectionID,
+                    LogLevel.ERROR,
+                    $"Exception in connection handler: {ex}");
             }
             finally
             {
@@ -223,6 +339,11 @@ namespace XMAT.WebServiceCapture.Proxy
                 result = await _httpClient.SendAsync(requestMessage, ct).ConfigureAwait(false);
                 _logger.Log(connectionID, LogLevel.DEBUG, $"Request forwarded to {uri}");
             }
+            catch (OperationCanceledException) when (
+                ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.Log(connectionID, LogLevel.ERROR, $"Failed sending proxied request: {ex}");
@@ -254,9 +375,22 @@ namespace XMAT.WebServiceCapture.Proxy
                 await clientStream.FlushAsync(ct).ConfigureAwait(false);
                 _logger.Log(connectionID, LogLevel.DEBUG, "Response sent to client");
             }
+            catch (Exception ex) when (
+                ex is IOException or
+                SocketException or
+                ObjectDisposedException)
+            {
+                LogConnection(
+                    connectionID,
+                    LogLevel.WARN,
+                    $"Client connection ended while writing the response: {ex.Message}");
+            }
             catch (Exception ex)
             {
-                _logger.Log(connectionID, LogLevel.ERROR, $"Failed writing response to client: {ex}");
+                LogConnection(
+                    connectionID,
+                    LogLevel.ERROR,
+                    $"Failed writing response to client: {ex}");
             }
         }
 
@@ -300,178 +434,141 @@ namespace XMAT.WebServiceCapture.Proxy
             return serverResponse;
         }
 
-        private async Task<ClientRequest> ReadHttpRequestAsync(int connectionID, Stream stream, CancellationToken ct)
+        private static async Task WriteReadFailureAsync(
+            Stream stream,
+            ProxyRequestReadFailure failure,
+            CancellationToken cancellationToken)
         {
-            _logger.Log(connectionID, LogLevel.DEBUG, "Reading client request...");
+            byte[] response =
+                failure switch
+                {
+                    ProxyRequestReadFailure
+                        .HeaderTooLarge =>
+                        HeaderTooLargeResponse,
+                    ProxyRequestReadFailure
+                        .BodyTooLarge =>
+                        BodyTooLargeResponse,
+                    ProxyRequestReadFailure
+                        .Timeout =>
+                        TimeoutResponse,
+                    ProxyRequestReadFailure
+                        .BufferExhausted =>
+                        BufferExhaustedResponse,
+                    _ => null,
+                };
+            if (response == null ||
+                cancellationToken
+                    .IsCancellationRequested)
+            {
+                return;
+            }
+            await stream.WriteAsync(
+                    response,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await stream.FlushAsync(
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
 
-            byte[] buffer = new byte[8192];
-            int totalRead = 0;
-
+        private static async Task<RejectedInputDrainResult>
+            DrainRejectedInputAsync(
+            PipeReader reader,
+            CancellationToken cancellationToken)
+        {
+            using var drainCancellation =
+                CancellationTokenSource
+                    .CreateLinkedTokenSource(
+                        cancellationToken);
+            drainCancellation.CancelAfter(
+                RejectedInputDrainTime);
+            var drained = 0;
             try
             {
-                do
+                while (true)
                 {
-                    int bytesRead = await stream.ReadAsync(buffer, totalRead, buffer.Length - totalRead, ct).ConfigureAwait(false);
-                    if (bytesRead == 0)
+                    ReadResult result =
+                        await reader.ReadAsync(
+                                drainCancellation.Token)
+                            .ConfigureAwait(false);
+                    ReadOnlySequence<byte> buffer =
+                        result.Buffer;
+                    if (drained >=
+                        RejectedInputDrainBytes)
                     {
-                        if (totalRead == 0)
-                            return null;
-                        break;
+                        if (buffer.IsEmpty)
+                        {
+                            reader.AdvanceTo(
+                                buffer.Start,
+                                buffer.End);
+                            if (result.IsCompleted)
+                            {
+                                return new RejectedInputDrainResult(
+                                    drained,
+                                    "peer FIN");
+                            }
+                            continue;
+                        }
+                        reader.AdvanceTo(
+                            buffer.Start,
+                            buffer.Start);
+                        return new RejectedInputDrainResult(
+                            drained,
+                            "drain cap");
                     }
-                    totalRead += bytesRead;
-
-                    if (totalRead >= buffer.Length)
+                    int count =
+                        checked(
+                            (int)Math.Min(
+                                RejectedInputDrainBytes -
+                                drained,
+                                buffer.Length));
+                    SequencePosition consumed =
+                        buffer.GetPosition(count);
+                    reader.AdvanceTo(
+                        consumed,
+                        consumed);
+                    drained += count;
+                    if (result.IsCompleted ||
+                        count == 0)
                     {
-                        Array.Resize(ref buffer, buffer.Length * 2);
-                    }
-
-                    // Check if we have a complete header section (ends with \r\n\r\n)
-                    if (ContainsHeaderEnd(buffer, totalRead))
-                        break;
-                }
-                while (!ct.IsCancellationRequested);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.Log(connectionID, LogLevel.WARN, $"Exception reading request: {ex.Message}");
-                if (totalRead == 0)
-                    return null;
-            }
-
-            if (totalRead == 0)
-                return null;
-
-            // Parse headers and body
-            int headerEnd = FindHeaderEnd(buffer, totalRead);
-            if (headerEnd < 0)
-            {
-                _logger.Log(connectionID, LogLevel.ERROR, "No header terminator found");
-                return null;
-            }
-
-            string headerSection = Encoding.UTF8.GetString(buffer, 0, headerEnd);
-            string[] lines = headerSection.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
-
-            var request = ParseRequestLines(connectionID, lines);
-            if (request == null)
-                return null;
-
-            // Extract body if present
-            int bodyStart = headerEnd + 4; // skip \r\n\r\n
-            if (bodyStart < totalRead)
-            {
-                int bodyLength = totalRead - bodyStart;
-
-                // Read remaining body if Content-Length indicates more
-                string lengthStr = request.ContentHeaders["content-length"];
-                if (int.TryParse(lengthStr, out int contentLength) && contentLength > bodyLength)
-                {
-                    if (buffer.Length < bodyStart + contentLength)
-                        Array.Resize(ref buffer, bodyStart + contentLength);
-
-                    while (bodyLength < contentLength && !ct.IsCancellationRequested)
-                    {
-                        int read = await stream.ReadAsync(buffer, bodyStart + bodyLength, contentLength - bodyLength, ct).ConfigureAwait(false);
-                        if (read == 0)
-                            break;
-                        bodyLength += read;
+                        return new RejectedInputDrainResult(
+                            drained,
+                            result.IsCompleted
+                                ? "peer FIN"
+                                : "empty read");
                     }
                 }
-
-                request.BodyBytes = new byte[bodyLength];
-                Array.Copy(buffer, bodyStart, request.BodyBytes, 0, bodyLength);
             }
-
-            return request;
+            catch (Exception ex) when (
+                ex is OperationCanceledException or
+                IOException or
+                ObjectDisposedException)
+            {
+                // A bounded best-effort drain must not replace the policy response.
+                return new RejectedInputDrainResult(
+                    drained,
+                    ex is OperationCanceledException
+                        ? "drain timeout or cancellation"
+                        : "drain I/O ended");
+            }
         }
 
-        private ClientRequest ParseRequestLines(int connectionID, string[] lines)
+        private readonly record struct RejectedInputDrainResult(
+            int Bytes,
+            string Outcome);
+
+        private void LogConnection(
+            int connectionID,
+            LogLevel level,
+            string message)
         {
-            if (lines == null || lines.Length == 0)
-            {
-                _logger.Log(connectionID, LogLevel.ERROR, "Request has no data");
-                return null;
-            }
-
-            string[] firstLine = lines[0].Split(' ');
-            if (firstLine.Length < 3)
-            {
-                _logger.Log(connectionID, LogLevel.ERROR, $"Invalid request line: {lines[0]}");
-                return null;
-            }
-
-            var request = new ClientRequest
-            {
-                Method = firstLine[0],
-                Path = firstLine[1],
-                Version = firstLine[2],
-                RequestNumber = _proxy.GetNextRequestID()
-            };
-
-            for (int i = 1; i < lines.Length; i++)
-            {
-                string[] header = lines[i].Split(':', 2, StringSplitOptions.TrimEntries);
-                if (header.Length < 2)
-                    continue;
-
-                string name = header[0];
-                string value = header[1];
-
-                if (ProxyHeaderUtilities.IsContentHeader(name))
-                    request.ContentHeaders[name] = value;
-                else
-                    request.Headers[name] = value;
-            }
-
-            string hostFull = request.Headers["Host"];
-            if (!string.IsNullOrEmpty(hostFull))
-            {
-                // Only the authority's structure is checked: bracketed IPv6 is never split at its
-                // colons and other hosts keep the client's spelling. Malformed authorities end
-                // the connection through the explicit failed-request path.
-                if (!HostAuthority.TryParse(hostFull, out string host, out int? port))
-                {
-                    _logger.Log(connectionID, LogLevel.ERROR, $"Invalid Host authority: {hostFull}");
-                    return null;
-                }
-                request.Host = host;
-                request.Port = port ?? -1;
-            }
-            else if (request.Method == "CONNECT")
-            {
-                // For CONNECT, the path is the host:port authority
-                if (!HostAuthority.TryParse(request.Path, out string host, out int? port))
-                {
-                    _logger.Log(connectionID, LogLevel.ERROR, $"Invalid CONNECT authority: {request.Path}");
-                    return null;
-                }
-                request.Host = host;
-                request.Port = port ?? 443;
-            }
-
-            return request;
-        }
-
-        private static bool ContainsHeaderEnd(byte[] buffer, int length)
-        {
-            for (int i = 0; i <= length - 4; i++)
-            {
-                if (buffer[i] == '\r' && buffer[i + 1] == '\n' &&
-                    buffer[i + 2] == '\r' && buffer[i + 3] == '\n')
-                    return true;
-            }
-            return false;
-        }
-
-        private static int FindHeaderEnd(byte[] buffer, int length)
-        {
-            for (int i = 0; i <= length - 4; i++)
-            {
-                if (buffer[i] == '\r' && buffer[i + 1] == '\n' &&
-                    buffer[i + 2] == '\r' && buffer[i + 3] == '\n')
-                    return i;
-            }
-            return -1;
+            _logger.Log(
+                connectionID,
+                level,
+                message);
+            LogObserver?.Invoke(
+                level,
+                message);
         }
 
         private static string GetHostFromPath(string path) =>

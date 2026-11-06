@@ -63,7 +63,11 @@ namespace XMAT.DataAbstractionLayer
                 escapedValue;
         }
 
-        internal static FieldDefinition CreateFromSchema(string name, Type type, int columnIndex)
+        internal static FieldDefinition CreateFromSchema(
+            string name,
+            Type type,
+            int columnIndex,
+            bool isExtension = false)
         {
             var fieldValueType = FieldValueType.Undefined;
             if (type == typeof(string))
@@ -87,7 +91,8 @@ namespace XMAT.DataAbstractionLayer
                 FieldType = FieldType.DataElement,
                 ColumnIndex = columnIndex,
                 ValueType = fieldValueType,
-                Name = name
+                Name = name,
+                IsExtension = isExtension,
             };
         }
 
@@ -97,6 +102,7 @@ namespace XMAT.DataAbstractionLayer
         public int ColumnIndex { get; private set; }
         public FieldValueType ValueType { get; private set; }
         public string Name { get; private set; }
+        public bool IsExtension { get; private set; }
 
         internal string AsFieldCreate()
         {
