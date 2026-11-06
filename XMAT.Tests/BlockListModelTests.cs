@@ -91,6 +91,44 @@ namespace XMAT.Tests
                 $"{scheme}://ignored.example/public/item?token=secret"));
         }
 
+        [Theory]
+        [InlineData("/public/../private/dot")]
+        [InlineData("/%70rivate/encoded")]
+        public void IsBlocked_CanonicalizesForwardedOriginPaths(string path)
+        {
+            var list = new BlockListModel();
+            list.Add("example.com/private/*");
+
+            Assert.False(list.IsBlocked("example.com", "/%2Fprivate/reserved"));
+            Assert.False(list.IsBlocked("example.com", "/public/item"));
+            Assert.False(list.IsBlocked("other.example", path));
+            Assert.True(list.IsBlocked("example.com", path));
+        }
+
+        [Fact]
+        public void IsBlocked_OtherSchemeAndMalformedAbsoluteTextKeepLegacyMatching()
+        {
+            var fallback = new BlockListModel();
+            fallback.Add("example.com/ftp://origin.example/private/item");
+            fallback.Add("example.com/http://[broken/private/item");
+            Assert.True(fallback.IsBlocked("example.com", "ftp://origin.example/private/item"));
+            Assert.True(fallback.IsBlocked("example.com", "http://[broken/private/item"));
+        }
+
+        [Fact]
+        public void IsBlocked_AbsoluteTargetMatchesSuppliedOrUriHost()
+        {
+            const string target = "http://destination.example/private/item";
+            var supplied = new BlockListModel();
+            supplied.Add("claimed.example/private/*");
+            var destination = new BlockListModel();
+            destination.Add("destination.example/private/*");
+
+            Assert.True(supplied.IsBlocked("claimed.example", target));
+            Assert.True(destination.IsBlocked("claimed.example", target));
+            Assert.False(destination.IsBlocked("claimed.example", "http://other.example/private/item"));
+        }
+
         [Fact]
         public void IsBlocked_EmptyHostReturnsFalse()
         {

@@ -93,6 +93,111 @@ namespace XMAT.Tests.Operations.Export
             Assert.Equal(new[] { Key(2), Key(3) }, result.Value.Keys);
         }
 
+        [Theory]
+        [InlineData("/public/../private/dot")]
+        [InlineData("/%70rivate/encoded")]
+        public void Select_GlobIncludeCanonicalizesForwardedOriginPath(string path)
+        {
+            CaptureExportSession[] sessions =
+            [
+                Session(1, path: path),
+                Session(2, path: "/%2Fprivate/reserved"),
+                Session(3, path: "/public/item"),
+                Session(4, host: "other.example", path: path),
+                Session(5, path: "ftp://wire.example/private/item"),
+                Session(6, path: "http://[broken/private/item"),
+            ];
+            var selection = Selection(host: new HostSelection(
+                HostMatchMode.Glob,
+                ImmutableArray.Create("api.example.test/private/*"),
+                ImmutableArray<string>.Empty));
+
+            OperationResult<CaptureSessionSelection> result =
+                CaptureSessionSelector.Select(sessions, selection, "d1", isLive: false);
+
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            Assert.Equal(new[] { Key(1) }, result.Value.Keys);
+        }
+
+        [Fact]
+        public void Select_GlobIncludeMatchesSuppliedOrAbsoluteUriHost()
+        {
+            CaptureExportSession[] sessions =
+            [
+                Session(1, host: "claimed.example", path: "http://destination.example/private/item"),
+            ];
+            OperationResult<CaptureSessionSelection> supplied = CaptureSessionSelector.Select(
+                sessions,
+                Selection(host: new HostSelection(
+                    HostMatchMode.Glob,
+                    ImmutableArray.Create("claimed.example/private/*"),
+                    ImmutableArray<string>.Empty)),
+                "d1",
+                isLive: false);
+            OperationResult<CaptureSessionSelection> destination = CaptureSessionSelector.Select(
+                sessions,
+                Selection(host: new HostSelection(
+                    HostMatchMode.Glob,
+                    ImmutableArray.Create("destination.example/private/*"),
+                    ImmutableArray<string>.Empty)),
+                "d1",
+                isLive: false);
+            OperationResult<CaptureSessionSelection> unrelated = CaptureSessionSelector.Select(
+                sessions,
+                Selection(host: new HostSelection(
+                    HostMatchMode.Glob,
+                    ImmutableArray.Create("other.example/private/*"),
+                    ImmutableArray<string>.Empty)),
+                "d1",
+                isLive: false);
+
+            Assert.Equal(new[] { Key(1) }, supplied.Value.Keys);
+            Assert.Empty(unrelated.Value.Keys);
+            Assert.Equal(new[] { Key(1) }, destination.Value.Keys);
+        }
+
+        [Fact]
+        public void Select_GlobExcludeWithoutIncludeCanonicalizesForwardedOriginPaths()
+        {
+            CaptureExportSession[] sessions =
+            [
+                Session(1, path: "/public/../private/dot"),
+                Session(2, path: "/%70rivate/encoded"),
+                Session(3, path: "/%2Fprivate/reserved"),
+                Session(4, path: "/public/item"),
+            ];
+            var selection = Selection(host: new HostSelection(
+                HostMatchMode.Glob,
+                null,
+                ImmutableArray.Create("api.example.test/private/*")));
+
+            OperationResult<CaptureSessionSelection> result =
+                CaptureSessionSelector.Select(sessions, selection, "d1", isLive: false);
+
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            Assert.Equal(new[] { Key(3), Key(4) }, result.Value.Keys);
+        }
+
+        [Fact]
+        public void Select_GlobExcludeWithoutIncludeMatchesAbsoluteUriHost()
+        {
+            CaptureExportSession[] sessions =
+            [
+                Session(1, host: "claimed.example", path: "https://destination.example/private/sensitive"),
+                Session(2, host: "claimed.example", path: "https://other.example/private/safe"),
+            ];
+            var selection = Selection(host: new HostSelection(
+                HostMatchMode.Glob,
+                null,
+                ImmutableArray.Create("destination.example/private/*")));
+
+            OperationResult<CaptureSessionSelection> result =
+                CaptureSessionSelector.Select(sessions, selection, "d1", isLive: false);
+
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            Assert.Equal(new[] { Key(2) }, result.Value.Keys);
+        }
+
         [Fact]
         public void Select_ExactModeUsesOrdinalEmptyDisplayValues()
         {
