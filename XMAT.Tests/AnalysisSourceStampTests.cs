@@ -79,6 +79,41 @@ namespace XMAT.Tests
             });
         }
 
+        [Theory]
+        [InlineData("2", false)]
+        [InlineData("99", false)]
+        [InlineData("x", false)]
+        [InlineData("1", true)]
+        public void SessionLinks_RequireAUniqueRequestIdBeforeSelectingTheStampedSource(
+            string parameter,
+            bool expected)
+        {
+            _application.Run(window =>
+            {
+                var app = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+                using var twin = new LiveCaptureTab(app, "Other tab");
+                twin.Add(1);
+                using var source = new LiveCaptureTab(app, "Analyzed tab");
+                ProxyConnectionModel first = source.Add(1);
+                ProxyConnectionModel selected = source.Add(2);
+                CaptureSourceStamp analyzed = source.Controller.SourceStamp;
+                _ = source.Add(2);
+                Assert.Equal(analyzed, source.Controller.SourceStamp);
+                Assert.Null(source.Controller.ProxyConnections.ById(2));
+                PerEndpointReportView links =
+                    ShowAnalysis(window, app, source.DeviceName, analyzed).Links;
+                source.Controller.SelectedConnectionModel = selected;
+                app.SelectedDeviceContext = twin;
+
+                Assert.Equal(expected, CaptureAnalysisCommands.GoToId.CanExecute(parameter, links));
+                CaptureAnalysisCommands.GoToId.Execute(parameter, links);
+                WpfTestHost.Pump();
+
+                Assert.Same(expected ? source : twin, app.SelectedDeviceContext);
+                Assert.Same(expected ? first : selected, source.Controller.SelectedConnectionModel);
+            });
+        }
+
         // B3: opening the analyzed capture file again replaces the sessions of its tab. The analysis becomes historical, and
         // its session links neither resolve nor select a tab.
         [Fact]
