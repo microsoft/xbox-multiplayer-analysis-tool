@@ -13,7 +13,7 @@ using XMAT.Operations.Export;
 
 namespace XMAT
 {
-    public partial class SanitizedExportProgressWindow : Window, IProgress<OperationProgress>
+    public partial class ExportProgressWindow : Window, IProgress<OperationProgress>
     {
         private readonly Task _operation;
         private readonly Action _cancel;
@@ -21,14 +21,14 @@ namespace XMAT
         private bool _cancellationRequested;
         private bool _canClose;
 
-        internal SanitizedExportProgressWindow(Task operation, Action cancel)
+        internal ExportProgressWindow(Task operation, Action cancel)
         {
             _operation = operation ?? throw new ArgumentNullException(nameof(operation));
             _cancel = cancel ?? throw new ArgumentNullException(nameof(cancel));
             InitializeComponent();
             Title = Localization.GetLocalizedString("EXPORT_TITLE");
-            StatusText.Text = Localization.GetLocalizedString("SANITIZED_EXPORT_SCANNING");
-            DetailsText.Text = Localization.GetLocalizedString("SANITIZED_EXPORT_PROGRESS_DETAILS");
+            StatusText.Text = Localization.GetLocalizedString("EXPORT_PROGRESS_EXPORTING");
+            DetailsText.Text = Localization.GetLocalizedString("EXPORT_PROGRESS_DETAILS");
             CancelExport.Content = Localization.GetLocalizedString("CANCEL");
         }
 
@@ -41,7 +41,7 @@ namespace XMAT
             {
                 ExportCaptureSessionsOperation.SelectPhase => "EXPORT_PHASE_SELECT",
                 ExportCaptureSessionsOperation.ReadPhase or ExportCaptureSessionsOperation.WritePhase =>
-                    "SANITIZED_EXPORT_SCANNING",
+                    "EXPORT_PROGRESS_EXPORTING",
                 ExportCaptureSessionsOperation.PublishPhase => "EXPORT_PHASE_PUBLISH",
                 _ => null,
             };
@@ -82,7 +82,7 @@ namespace XMAT
             }
             _cancellationRequested = true;
             CancelExport.IsEnabled = false;
-            StatusText.Text = Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLING");
+            StatusText.Text = Localization.GetLocalizedString("EXPORT_PROGRESS_CANCELLING");
             _cancel();
         }
 
