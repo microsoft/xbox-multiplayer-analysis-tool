@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Immutable;
+using System.Reflection;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.Operations;
@@ -12,6 +13,7 @@ using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Cli;
+using XMAT.Tests.Fixtures;
 using XMAT.Tests.Operations.Analysis;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
@@ -125,6 +127,80 @@ namespace XMAT.Tests
                     all.Statuses == null && all.Methods == null && all.Keys == null && !all.MatchNone,
                 "File > Export ignores the capture list's filters.");
             AssertReleased(app, snapshot);
+        }
+
+        [Theory]
+        [InlineData("source", nameof(CaptureExportFormat.Saz), "export.output.is-source")]
+        [InlineData("source", nameof(CaptureExportFormat.SanitizedSaz), "export.output.is-source")]
+        [InlineData("alias-saz", nameof(CaptureExportFormat.Saz), "export.output.is-source")]
+        [InlineData("alias-xmatcap", nameof(CaptureExportFormat.Xmatcap), "export.output.is-source")]
+        [InlineData("other-tab", nameof(CaptureExportFormat.Saz), "export.output.open-capture")]
+        public async Task ImportedSazExport_RefusesItsSourceAliasesAndAnotherOpenImport(
+            string destinationKind,
+            string formatName,
+            string expectedCode)
+        {
+            await using var fixture = new ImportedExportFixture();
+            string source = fixture.WriteSaz("imported-source.saz", requests: 1);
+            string destination = source;
+            if (destinationKind.StartsWith("alias", StringComparison.Ordinal))
+            {
+                destination = fixture.PathOf(
+                    destinationKind == "alias-xmatcap" ? "source-alias.xmatcap" : "source-alias.saz");
+                CaptureAppModelTests.CreateHardLink(destination, source);
+            }
+            await fixture.ImportAsync(source);
+            string otherSource = null;
+            if (destinationKind == "other-tab")
+            {
+                otherSource = fixture.WriteSaz("exporting-import.saz", requests: 2);
+                await fixture.ImportAsync(otherSource);
+            }
+            byte[] sourceBefore = File.ReadAllBytes(source);
+            byte[] destinationBefore = File.ReadAllBytes(destination);
+            byte[] otherBefore = otherSource == null ? null : File.ReadAllBytes(otherSource);
+
+            OperationResult<ExportCaptureResult> result = await fixture.ExportAsync(
+                destination,
+                Enum.Parse<CaptureExportFormat>(formatName),
+                replaceExisting: true);
+
+            Assert.Equal(OperationOutcome.Conflict, result.Outcome);
+            Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == expectedCode);
+            Assert.False(result.Value?.Published ?? false);
+            Assert.Equal(sourceBefore, File.ReadAllBytes(source));
+            Assert.Equal(destinationBefore, File.ReadAllBytes(destination));
+            if (otherSource != null)
+            {
+                Assert.Equal(otherBefore, File.ReadAllBytes(otherSource));
+            }
+            fixture.AssertNoStaging();
+        }
+
+        [Theory]
+        [InlineData(nameof(CaptureExportFormat.Xmatcap), "new-copy.xmatcap")]
+        [InlineData(nameof(CaptureExportFormat.Saz), "new-copy.saz")]
+        [InlineData(nameof(CaptureExportFormat.SanitizedSaz), "new-sanitized.saz")]
+        public async Task ImportedSazExport_NewDestinationSucceeds(
+            string formatName,
+            string outputName)
+        {
+            await using var fixture = new ImportedExportFixture();
+            string source = fixture.WriteSaz("new-destination-source.saz", requests: 1);
+            byte[] sourceBefore = File.ReadAllBytes(source);
+            string destination = fixture.PathOf(outputName);
+            await fixture.ImportAsync(source);
+
+            OperationResult<ExportCaptureResult> result = await fixture.ExportAsync(
+                destination,
+                Enum.Parse<CaptureExportFormat>(formatName),
+                replaceExisting: false);
+
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            Assert.True(result.Value.Published);
+            Assert.True(File.Exists(destination));
+            Assert.Equal(sourceBefore, File.ReadAllBytes(source));
+            fixture.AssertNoStaging();
         }
 
         // A file name of the other format is refused with a message before anything is written, and the save dialog
@@ -269,6 +345,81 @@ namespace XMAT.Tests
             Assert.True(app.CanStopCaptures, "The export must let Stop run again.");
             Assert.True(app.TryBeginCaptureDataOperation(out IDisposable next), "The export must release the lease.");
             next.Dispose();
+        }
+
+        private sealed class ImportedExportFixture : IAsyncDisposable
+        {
+            private readonly XMAT.Tests.Operations.Export.ExportTestDirectory _directory = new();
+            private readonly SqLtDatabase _database = new();
+            private readonly IDataTable _table;
+            private readonly CaptureAppModel _app = new();
+
+            internal ImportedExportFixture()
+            {
+                _database.Initialize();
+                _table = _database.CreateTable(
+                    WebServiceCaptureMethod.TableName,
+                    WebProxyCaptureSchema.CreateFields());
+            }
+
+            internal string PathOf(string name) => _directory.PathOf(name);
+
+            internal string WriteSaz(string name, int requests) =>
+                SyntheticCaptures.WriteSaz(
+                    _directory.Root,
+                    name,
+                    new SyntheticSazOptions(RequestsPerConsole: requests));
+
+            internal async Task ImportAsync(string path)
+            {
+                await _app.ImportDataCapturesAsync(
+                    ImportType.Fiddler,
+                    path,
+                    (source, target) => WebServiceCaptureMethod.MethodInstance.ImportFromFiddlerAsync(
+                        source,
+                        target,
+                        _table));
+                var controller = Assert.IsType<WebServiceDeviceCaptureController>(
+                    _app.SelectedDeviceContext.CaptureController);
+                FieldInfo dataTable = typeof(WebServiceDeviceCaptureController)
+                    .GetField("_dataTable", BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.NotNull(dataTable);
+                dataTable.SetValue(controller, _table);
+            }
+
+            internal async Task<OperationResult<ExportCaptureResult>> ExportAsync(
+                string destination,
+                CaptureExportFormat format,
+                bool replaceExisting)
+            {
+                var dialogs = new Dialogs
+                {
+                    Destination = new CaptureExportDestination(destination, format, replaceExisting),
+                };
+                await CaptureExportWorkflow.For(dialogs).RunForSelectedTabAsync(_app, sanitizedOnly: false);
+                return dialogs.Result;
+            }
+
+            internal void AssertNoStaging() =>
+                Assert.DoesNotContain(
+                    Directory.GetFileSystemEntries(_directory.Root),
+                    path => Path.GetFileName(path).Contains(".export-", StringComparison.Ordinal));
+
+            public async ValueTask DisposeAsync()
+            {
+                try
+                {
+                    while (_app.CaptureDeviceContexts.Count != 0)
+                    {
+                        await _app.RemoveDeviceContextAsync(_app.CaptureDeviceContexts[^1]);
+                    }
+                }
+                finally
+                {
+                    _database.Dispose();
+                    _directory.Dispose();
+                }
+            }
         }
 
         // Records each dialog (the confirmation with its tab) and answers as configured; the save dialog first answers with

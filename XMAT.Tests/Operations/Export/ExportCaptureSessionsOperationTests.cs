@@ -7,6 +7,7 @@ using System.Text;
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
@@ -184,6 +185,84 @@ namespace XMAT.Tests.Operations.Export
             Assert.Null(result.Value.OutputBytes);
             Assert.Null(result.Value.OutputSha256);
             Assert.Equal(0, publisher.Calls);
+        }
+
+        [Theory]
+        [InlineData("validation")]
+        [InlineData("after-selection")]
+        [InlineData("final-loop")]
+        public async Task Execute_CancellationDuringSelectionStopsBeforePublisherOrWriter(string phase)
+        {
+            using var cancellation = new CancellationTokenSource();
+            CaptureExportSession[] values = Enumerable.Range(1, 32).Select(index => Session(index)).ToArray();
+            CancelingSessionList canceling = phase == "validation"
+                ? new CancelingSessionList(values, cancellation, cancelOnVisit: 2)
+                : null;
+            var comparer = phase == "final-loop" ? new CancelingKeyComparer(cancellation, cancelOnCall: 2) : null;
+            ImmutableHashSet<CaptureRowKey> keys = comparer == null ? null :
+                ImmutableHashSet.CreateRange(comparer, values.Select(session => session.Key));
+            if (comparer != null)
+            {
+                comparer.Armed = true;
+            }
+            IReadOnlyList<CaptureExportSession> sessions = canceling == null ? values : canceling;
+            var snapshot = new FakeExportSnapshot(sessions, values.Select(session => Row(session.Key.RowId)));
+            var progress = phase == "after-selection"
+                ? new RecordingProgress(value =>
+                {
+                    if (value?.Phase == ExportCaptureSessionsOperation.SelectPhase && value.Fraction == 1)
+                    {
+                        cancellation.Cancel();
+                    }
+                })
+                : null;
+
+            await AssertCancelledBeforePublishAsync(snapshot, cancellation.Token, progress,
+                keys == null ? null : Selection(keys: keys));
+
+            if (canceling != null)
+            {
+                Assert.True(canceling.Visits < canceling.Count, "Selection continued visiting sessions after cancellation.");
+            }
+            else if (comparer != null)
+            {
+                Assert.True(comparer.Calls < values.Length, "Final selection continued after cancellation.");
+            }
+            else
+            {
+                Assert.True(cancellation.IsCancellationRequested);
+            }
+        }
+
+        private static async Task AssertCancelledBeforePublishAsync(
+            ICaptureExportSnapshot snapshot,
+            CancellationToken cancellationToken,
+            IProgress<OperationProgress> progress = null,
+            CaptureSelectionSpec selection = null)
+        {
+            var publisher = new RecordingExportPublisher();
+            var writerCreations = 0;
+            var operation = new ExportCaptureSessionsOperation
+            {
+                Publisher = publisher,
+                WriterFactory = (_, _, _, _) =>
+                {
+                    writerCreations++;
+                    return new RecordingExportWriter();
+                },
+            };
+
+            OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
+                Request(snapshot, selection ?? Selection()),
+                progress == null ? OperationContext.None : new OperationContext(progress: progress),
+                cancellationToken);
+
+            Assert.Equal(OperationOutcome.Cancelled, result.Outcome);
+            OperationDiagnostic diagnostic = Assert.Single(result.Diagnostics);
+            Assert.Equal("export.cancelled", diagnostic.Code);
+            Assert.Equal(OperationDiagnosticSeverity.Info, diagnostic.Severity);
+            Assert.Equal(0, publisher.Calls);
+            Assert.Equal(0, writerCreations);
         }
 
         [Theory]
@@ -532,11 +611,59 @@ namespace XMAT.Tests.Operations.Export
             }
         }
 
-        private sealed class RecordingProgress : IProgress<OperationProgress>
+        private sealed class RecordingProgress(Action<OperationProgress> reported = null)
+            : IProgress<OperationProgress>
         {
             internal List<OperationProgress> Updates { get; } = new();
 
-            public void Report(OperationProgress value) => Updates.Add(value);
+            public void Report(OperationProgress value)
+            {
+                Updates.Add(value);
+                reported?.Invoke(value);
+            }
+        }
+
+        private sealed class CancelingSessionList(
+            IReadOnlyList<CaptureExportSession> sessions,
+            CancellationTokenSource cancellation,
+            int cancelOnVisit) : IReadOnlyList<CaptureExportSession>
+        {
+            internal int Visits { get; private set; }
+            public int Count => sessions.Count;
+            public CaptureExportSession this[int index] => sessions[index];
+
+            public IEnumerator<CaptureExportSession> GetEnumerator()
+            {
+                foreach (CaptureExportSession session in sessions)
+                {
+                    Visits++;
+                    if (Visits == cancelOnVisit)
+                    {
+                        cancellation.Cancel();
+                    }
+                    yield return session;
+                }
+            }
+
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+        }
+
+        private sealed class CancelingKeyComparer(
+            CancellationTokenSource cancellation,
+            int cancelOnCall) : IEqualityComparer<CaptureRowKey>
+        {
+            internal bool Armed { get; set; }
+            internal int Calls { get; private set; }
+            public bool Equals(CaptureRowKey left, CaptureRowKey right) =>
+                EqualityComparer<CaptureRowKey>.Default.Equals(left, right);
+            public int GetHashCode(CaptureRowKey value)
+            {
+                if (Armed && ++Calls == cancelOnCall)
+                {
+                    cancellation.Cancel();
+                }
+                return EqualityComparer<CaptureRowKey>.Default.GetHashCode(value);
+            }
         }
     }
 }
