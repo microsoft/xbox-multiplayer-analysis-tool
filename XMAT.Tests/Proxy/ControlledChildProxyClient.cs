@@ -56,16 +56,12 @@ namespace XMAT.Tests.Proxy
 
         public ValueTask DisposeAsync()
         {
-            try
+            using (_process)
             {
                 if (!_process.HasExited)
                 {
                     _process.Kill(entireProcessTree: true);
                 }
-            }
-            finally
-            {
-                _process.Dispose();
             }
             return ValueTask.CompletedTask;
         }
