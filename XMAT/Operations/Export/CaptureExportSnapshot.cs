@@ -103,7 +103,7 @@ namespace XMAT.Operations.Export
             for (var deviceIndex = 0; deviceIndex < input.Devices.Count; deviceIndex++)
             {
                 LoadedDevice device = input.Devices[deviceIndex];
-                string deviceId = $"d{deviceIndex + 1}";
+                string deviceId = CaptureDeviceIds.Ordinal(deviceIndex);
                 if (descriptorByName.TryGetValue(device.Name, out IDataRecord descriptor))
                 {
                     devices.Add(

@@ -19,17 +19,23 @@ namespace XMAT.Operations.Export
         private const int MaximumValues = 64;
         private const int MaximumValueLength = 260;
 
-        internal static OperationResult<CaptureSelectionSpec> Validate(CaptureSelectionSpec selection)
+        internal static OperationResult<CaptureSelectionSpec> Validate(CaptureSelectionSpec selection) =>
+            Validate(selection, out _);
+
+        internal static OperationResult<CaptureSelectionSpec> Validate(
+            CaptureSelectionSpec selection,
+            out ProcessFilter compiled)
         {
+            compiled = null;
             if (selection == null)
             {
                 return Failure("export.selection.missing");
             }
 
-            ProcessFilterSpec process;
+            ProcessFilter process;
             try
             {
-                process = ProcessFilter.Compile(selection.Process).Specification;
+                process = ProcessFilter.Compile(selection.Process);
             }
             catch (ArgumentException)
             {
@@ -53,13 +59,15 @@ namespace XMAT.Operations.Export
                 return Failure(code);
             }
 
-            return OperationResult<CaptureSelectionSpec>.Success(new CaptureSelectionSpec(
-                process,
+            var canonical = new CaptureSelectionSpec(
+                process.Specification,
                 new HostSelection(host.Mode, include, exclude ?? ImmutableArray<string>.Empty),
                 statuses,
                 methods,
                 selection.Keys,
-                selection.MatchNone));
+                selection.MatchNone);
+            compiled = process;
+            return OperationResult<CaptureSelectionSpec>.Success(canonical);
         }
 
         private static bool TryNormalizeHosts(
@@ -185,7 +193,8 @@ namespace XMAT.Operations.Export
                     "export.selection.sessions-missing",
                     "Capture sessions are required.");
             }
-            OperationResult<CaptureSelectionSpec> validated = CaptureSelectionValidator.Validate(selection);
+            OperationResult<CaptureSelectionSpec> validated =
+                CaptureSelectionValidator.Validate(selection, out ProcessFilter process);
             if (!validated.Succeeded)
             {
                 return new OperationResult<CaptureSessionSelection>(
@@ -193,12 +202,13 @@ namespace XMAT.Operations.Export
                     null,
                     validated.Diagnostics);
             }
-            return SelectValidated(sessions, validated.Value, deviceId, isLive);
+            return SelectValidated(sessions, validated.Value, process, deviceId, isLive);
         }
 
         internal static OperationResult<CaptureSessionSelection> SelectValidated(
             IReadOnlyList<CaptureExportSession> sessions,
             CaptureSelectionSpec canonical,
+            ProcessFilter process,
             string deviceId,
             bool isLive)
         {
@@ -217,9 +227,11 @@ namespace XMAT.Operations.Export
             var processSessions = candidates
                 .Select(session => new CaptureSessionRef(session.Key, session.DeviceId, session.Process))
                 .ToList();
-            OperationResult<FilterCaptureSessionsResult> processResult = FilterCaptureSessionsOperation.Select(
-                new FilterCaptureSessionsRequest(processSessions, canonical.Process),
-                CancellationToken.None);
+            OperationResult<FilterCaptureSessionsResult> processResult =
+                FilterCaptureSessionsOperation.SelectCompiled(
+                    processSessions,
+                    process,
+                    CancellationToken.None);
             if (!processResult.Succeeded)
             {
                 return new OperationResult<CaptureSessionSelection>(

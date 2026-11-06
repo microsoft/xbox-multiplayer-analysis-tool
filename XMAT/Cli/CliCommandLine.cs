@@ -235,24 +235,12 @@ namespace XMAT.Cli
                 return HelpFor(command);
             }
 
-            if (arguments.Positionals.Count == 0)
+            error = ReadTarget(
+                arguments, command, "analyze needs the INPUT capture file.", "analyze takes a single INPUT capture file.",
+                "analyze needs --out DIR.", out string output, out string deviceId);
+            if (error != null)
             {
-                return CliParseResult.UsageError(command, "cli.usage.missing-argument", "analyze needs the INPUT capture file.");
-            }
-
-            if (arguments.Positionals.Count > 1)
-            {
-                return CliParseResult.UsageError(command, "cli.usage.unexpected-argument", "analyze takes a single INPUT capture file.");
-            }
-
-            if (!arguments.Options.TryGetValue(OutOption, out string output))
-            {
-                return CliParseResult.UsageError(command, "cli.usage.missing-option", "analyze needs --out DIR.");
-            }
-
-            if (arguments.Options.TryGetValue(DeviceOption, out string deviceId) && !IsDeviceId(deviceId))
-            {
-                return CliParseResult.UsageError(command, "cli.usage.invalid-value", DeviceMessage);
+                return error;
             }
 
             bool failOnFindings = arguments.Options.TryGetValue(FailOnOption, out string failOn);
@@ -270,15 +258,11 @@ namespace XMAT.Cli
             ProcessFilterSpec processFilter = null;
             if (arguments.RepeatedOptions.Count != 0)
             {
-                OperationResult<ProcessFilterSpec> selectors = ProcessFilter.Parse(
-                    arguments.ValuesOf(ProcessOption),
-                    arguments.ValuesOf(ExcludeProcessOption));
-                if (!selectors.Succeeded || selectors.Value == null)
+                processFilter = ReadProcessSelectors(arguments, command, out error);
+                if (error != null)
                 {
-                    return CliParseResult.UsageError(command, "cli.usage.invalid-value", InvalidProcessSelectorMessage);
+                    return error;
                 }
-
-                processFilter = selectors.Value;
             }
 
             return CliParseResult.Success(new CliRequest(
@@ -307,22 +291,12 @@ namespace XMAT.Cli
                 return HelpFor(command);
             }
 
-            if (arguments.Positionals.Count != 1)
+            error = ReadTarget(
+                arguments, command, "export takes a single INPUT capture file.", "export takes a single INPUT capture file.",
+                "export needs --out FILE.", out string output, out string deviceId);
+            if (error != null)
             {
-                return CliParseResult.UsageError(
-                    command,
-                    arguments.Positionals.Count == 0 ? "cli.usage.missing-argument" : "cli.usage.unexpected-argument",
-                    "export takes a single INPUT capture file.");
-            }
-
-            if (!arguments.Options.TryGetValue(OutOption, out string output))
-            {
-                return CliParseResult.UsageError(command, "cli.usage.missing-option", "export needs --out FILE.");
-            }
-
-            if (arguments.Options.TryGetValue(DeviceOption, out string deviceId) && !IsDeviceId(deviceId))
-            {
-                return CliParseResult.UsageError(command, "cli.usage.invalid-value", DeviceMessage);
+                return error;
             }
 
             CaptureExportFormat? format = ExportFormat(output, arguments.Options.GetValueOrDefault(FormatOption));
@@ -347,16 +321,14 @@ namespace XMAT.Cli
                 return invalidLimit;
             }
 
-            OperationResult<ProcessFilterSpec> process = ProcessFilter.Parse(
-                arguments.ValuesOf(ProcessOption),
-                arguments.ValuesOf(ExcludeProcessOption));
-            if (!process.Succeeded || process.Value == null)
+            ProcessFilterSpec process = ReadProcessSelectors(arguments, command, out error);
+            if (error != null)
             {
-                return CliParseResult.UsageError(command, "cli.usage.invalid-value", InvalidProcessSelectorMessage);
+                return error;
             }
 
             OperationResult<CaptureSelectionSpec> selection = CaptureSelectionValidator.Validate(new CaptureSelectionSpec(
-                process.Value,
+                process,
                 new HostSelection(
                     mode == "exact" ? HostMatchMode.Exact : HostMatchMode.Glob,
                     Given(arguments, HostOption),
@@ -409,6 +381,44 @@ namespace XMAT.Cli
                     ? CliParseResult.UsageError(command, "cli.usage.invalid-value", CliLimits.RecordOverDataMessage)
                     : null;
             return limits;
+        }
+
+        // The checks that analyze and export share, in this order: a single INPUT, --out, then a valid --device. The
+        // messages are the command's own; its other checks follow.
+        private static CliParseResult ReadTarget(
+            CliArguments arguments, string command, string noInputMessage, string extraInputMessage, string noOutputMessage,
+            out string output, out string deviceId)
+        {
+            deviceId = null;
+            if (arguments.Positionals.Count != 1)
+            {
+                output = null;
+                return arguments.Positionals.Count == 0
+                    ? CliParseResult.UsageError(command, "cli.usage.missing-argument", noInputMessage)
+                    : CliParseResult.UsageError(command, "cli.usage.unexpected-argument", extraInputMessage);
+            }
+
+            if (!arguments.Options.TryGetValue(OutOption, out output))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.missing-option", noOutputMessage);
+            }
+
+            return arguments.Options.TryGetValue(DeviceOption, out deviceId) && !IsDeviceId(deviceId)
+                ? CliParseResult.UsageError(command, "cli.usage.invalid-value", DeviceMessage)
+                : null;
+        }
+
+        // The --process and --exclude-process selectors; null and the usage error when one is invalid.
+        private static ProcessFilterSpec ReadProcessSelectors(
+            CliArguments arguments, string command, out CliParseResult error)
+        {
+            OperationResult<ProcessFilterSpec> selectors = ProcessFilter.Parse(
+                arguments.ValuesOf(ProcessOption),
+                arguments.ValuesOf(ExcludeProcessOption));
+            error = !selectors.Succeeded || selectors.Value == null
+                ? CliParseResult.UsageError(command, "cli.usage.invalid-value", InvalidProcessSelectorMessage)
+                : null;
+            return error == null ? selectors.Value : null;
         }
 
         private static CliParseResult ParseDoctor(IReadOnlyList<string> args)

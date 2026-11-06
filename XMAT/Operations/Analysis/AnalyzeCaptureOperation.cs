@@ -194,7 +194,7 @@ namespace XMAT.Operations.Analysis
                 diagnostics,
                 cancellationToken);
             var indexedDevices = loaded.Devices
-                .Select((device, index) => new IndexedDevice($"d{index + 1}", device))
+                .Select((device, index) => new IndexedDevice(CaptureDeviceIds.Ordinal(index), device))
                 .ToList();
             var selectedDevices = SelectDevices(
                 indexedDevices,

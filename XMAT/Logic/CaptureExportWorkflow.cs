@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using XMAT.Models;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
@@ -66,7 +67,8 @@ namespace XMAT
         internal static CaptureExportWorkflow For(ICaptureExportDialogService dialogs) =>
             new(
                 dialogs,
-                tab => ((WebServiceDeviceCaptureController)tab.CaptureController).CreateExportSnapshot("d1"),
+                tab => ((WebServiceDeviceCaptureController)tab.CaptureController).CreateExportSnapshot(
+                    CaptureDeviceIds.Ordinal(0)),
                 new ExportCaptureSessionsOperation());
 
         internal async Task RunAsync(

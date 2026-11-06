@@ -249,7 +249,7 @@ namespace XMAT.Tests
 
         private static ICaptureDeviceContext Tab(CaptureAppModel app, string name, IDeviceCaptureController controller = null)
         {
-            var tab = new Probe(name, controller);
+            var tab = new TestCaptureContext(controller, name, readOnly: false, DeviceType.LocalPC);
             app.CaptureDeviceContexts.Add(tab);
             app.SelectedDeviceContext = tab;
             return tab;
@@ -380,17 +380,6 @@ namespace XMAT.Tests
                     throw DisposeFailure;
                 }
             }
-        }
-
-        private sealed class Probe(string name, IDeviceCaptureController controller) : ICaptureDeviceContext
-        {
-            public DeviceType DeviceType => DeviceType.LocalPC;
-            public CaptureType CaptureType => CaptureType.WebProxy;
-            public string DeviceName => name;
-            public bool IsSelected { get; set; }
-            public bool IsReadOnly { get; set; }
-            public System.Drawing.Color DeviceColor { get; set; }
-            public IDeviceCaptureController CaptureController => controller;
         }
     }
 }

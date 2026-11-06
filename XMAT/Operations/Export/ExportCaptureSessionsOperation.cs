@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Captures;
+using XMAT.Operations.Processes;
 using XMAT.WebServiceCapture;
 
 namespace XMAT.Operations.Export
@@ -93,7 +94,9 @@ namespace XMAT.Operations.Export
                 PrecheckDestination(request);
                 CaptureInputReader.ValidateLimits(request.Limits);
                 OperationResult<CaptureSelectionSpec> validated =
-                    CaptureSelectionValidator.Validate(request.Selection);
+                    CaptureSelectionValidator.Validate(
+                        request.Selection,
+                        out ProcessFilter process);
                 if (!validated.Succeeded)
                 {
                     return new OperationResult<ExportCaptureResult>(
@@ -131,6 +134,7 @@ namespace XMAT.Operations.Export
                 OperationResult<CaptureSessionSelection> selection = CaptureSessionSelector.SelectValidated(
                     snapshot.Sessions,
                     validated.Value,
+                    process,
                     request.DeviceId,
                     snapshot.IsLive);
                 if (!selection.Succeeded)
