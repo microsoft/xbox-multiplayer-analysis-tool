@@ -180,6 +180,25 @@ namespace XMAT.Tests.Cli
             }
         }
 
+        // export selects sessions by process as analyze does, so both list capture.process-filter, each with only its
+        // own command lines: export's help gains an export command line, and analyze's help is unchanged.
+        [Fact]
+        public void Help_ListsProcessFilteringUnderEachCommandWithItsOwnCommandLines()
+        {
+            CliCommandHelp export = CliHelp.Describe(CliCommands.Export);
+            CliCommandHelp analyze = CliHelp.Describe(CliCommands.Analyze);
+
+            Assert.Contains("capture.process-filter", export.Capabilities);
+            Assert.Contains(
+                "export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...", export.Usage);
+            Assert.All(export.Usage, usage => Assert.Equal(CliCommands.Export, CliCatalog.CommandOf(usage)));
+            Assert.Equal(
+                new[] { "analysis.xbox-live", "capture-file.import-saz", "capture-file.read-xmatcap", "capture.process-filter" },
+                analyze.Capabilities);
+            Assert.Equal(
+                CliCatalog.CapabilitiesOf(CliCommands.Analyze).Select(item => item.CliRoute), analyze.Usage);
+        }
+
         [Theory]
         [InlineData(nameof(OperationOutcome.Succeeded), 0)]
         [InlineData(nameof(OperationOutcome.InvalidInput), 3)]

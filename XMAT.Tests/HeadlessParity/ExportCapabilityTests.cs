@@ -4,6 +4,7 @@
 
 using XMAT.Cli;
 using XMAT.Operations.Capabilities;
+using XMAT.Operations.Captures;
 
 namespace XMAT.Tests.HeadlessParity
 {
@@ -18,7 +19,9 @@ namespace XMAT.Tests.HeadlessParity
         [Fact]
         public void Export_IsSupportedForEveryFormatThroughTheSharedOperation()
         {
-            Capability[] export = CliCatalog.CapabilitiesOf(CliCommands.Export).ToArray();
+            Capability[] export = CliCatalog.CapabilitiesOf(CliCommands.Export)
+                .Where(capability => capability.Operation == Operation)
+                .ToArray();
             string[] named = export
                 .SelectMany(capability => capability.CliRoute.Split(new[] { ' ', '[', ']' }, StringSplitOptions.RemoveEmptyEntries))
                 .Where(token => token.StartsWith("--", StringComparison.Ordinal))
@@ -35,11 +38,22 @@ namespace XMAT.Tests.HeadlessParity
             foreach (Capability capability in export)
             {
                 string fileCommand = capability.Id == "capture-file.sanitize" ? "ExportSanitized" : "Export";
-                Assert.Equal(Operation, capability.Operation);
                 Assert.Contains(CapabilityKeys.Command("XMAT.AppCommands." + fileCommand), capability.GuiEntryPoints);
                 Assert.Contains(CapabilityKeys.Command(ProxyCommands + "ExportSelectedSessions"), capability.GuiEntryPoints);
                 Assert.Contains(CapabilityKeys.Command(ProxyCommands + "ExportVisibleSessions"), capability.GuiEntryPoints);
             }
+        }
+
+        // export also selects sessions by process: that capability is the shared filtering operation, not a format.
+        [Fact]
+        public void Export_SelectsByProcessThroughTheSharedFilteringOperation()
+        {
+            Capability process = Assert.Single(
+                CliCatalog.CapabilitiesOf(CliCommands.Export),
+                capability => capability.Operation != Operation);
+
+            Assert.Equal("capture.process-filter", process.Id);
+            Assert.Equal(typeof(FilterCaptureSessionsOperation).FullName, process.Operation);
         }
     }
 }
