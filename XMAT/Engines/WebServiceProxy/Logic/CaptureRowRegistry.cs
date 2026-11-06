@@ -101,17 +101,8 @@ namespace XMAT.WebServiceCapture
                 {
                     connection.IdentityChanged += Resolve;
                 }
-                var key = new CaptureRowKey(SourceId, _generation, rowId, checked(++_nextIncarnation));
                 var binding = new Binding(connection.RunId, connection, inserted, request: request);
-                _bindings.Add(key, binding);
-                _requests.Add(request, key);
-                IndexRequest(connection, request);
-                if (!_connectionRows.TryGetValue(connection, out HashSet<CaptureRowKey> rows))
-                {
-                    rows = new HashSet<CaptureRowKey>();
-                    _connectionRows.Add(connection, rows);
-                }
-                rows.Add(key);
+                CaptureRowKey key = Bind(connection, request, rowId, binding);
 
                 catchUp = connection.Identity;
                 if (catchUp.Status != ClientProcessStatus.NotRecorded && ConnectionApplied(connection, catchUp))
@@ -140,22 +131,13 @@ namespace XMAT.WebServiceCapture
                     catchUp = connection.Identity;
                     return existing;
                 }
-                var key = new CaptureRowKey(SourceId, _generation, rowId, checked(++_nextIncarnation));
                 var binding = new Binding(
                     _acceptingUpdates ? _activeRun : connection.RunId,
                     connection,
                     inserted,
                     request: request,
                     isFallback: true);
-                _bindings.Add(key, binding);
-                _requests.Add(request, key);
-                IndexRequest(connection, request);
-                if (!_connectionRows.TryGetValue(connection, out HashSet<CaptureRowKey> rows))
-                {
-                    rows = new HashSet<CaptureRowKey>();
-                    _connectionRows.Add(connection, rows);
-                }
-                rows.Add(key);
+                CaptureRowKey key = Bind(connection, request, rowId, binding);
                 catchUp = connection.Identity;
                 return key;
             }
@@ -548,6 +530,16 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        private CaptureRowKey Bind(ClientProcessContext connection, RequestKey request, long rowId, Binding binding)
+        {
+            var key = new CaptureRowKey(SourceId, _generation, rowId, checked(++_nextIncarnation));
+            _bindings.Add(key, binding);
+            _requests.Add(request, key);
+            IndexRequest(connection, request);
+            IndexRow(connection, key);
+            return key;
+        }
+
         private void IndexRequest(ClientProcessContext connection, RequestKey request)
         {
             if (!_connectionRequests.TryGetValue(connection, out HashSet<RequestKey> requests))
@@ -556,6 +548,16 @@ namespace XMAT.WebServiceCapture
                 _connectionRequests.Add(connection, requests);
             }
             requests.Add(request);
+        }
+
+        private void IndexRow(ClientProcessContext connection, CaptureRowKey key)
+        {
+            if (!_connectionRows.TryGetValue(connection, out HashSet<CaptureRowKey> rows))
+            {
+                rows = new HashSet<CaptureRowKey>();
+                _connectionRows.Add(connection, rows);
+            }
+            rows.Add(key);
         }
 
         private void IndexStream(ClientProcessContext connection, StreamKey stream)
