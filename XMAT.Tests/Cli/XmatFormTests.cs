@@ -428,6 +428,83 @@ namespace XMAT.Tests.Cli
             CliAssert.NoStagingFolders(directory.Root);
         }
 
+        // I4-A2: making the body passes on the run's own cancellation at every step, shown by a cancel that only that step can
+        // observe. A read under way, of a --form file or of a --body-file, stops when the run is cancelled: the read sees the
+        // cancellation through its own token. Its wait is bounded, so a read that never sees it ends.
+        [Theory]
+        [InlineData("form")]
+        [InlineData("body-file")]
+        public async Task AReadUnderWay_StopsWhenTheRunIsCancelled(string kind)
+        {
+            using var cancellation = new CancellationTokenSource();
+            using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            CancellationToken seen = default;
+            Func<string, long, CancellationToken, Task<ReplayBodyRead>> read = async (_, _, token) =>
+            {
+                seen = token;
+                reading.TrySetResult();
+                using var either = CancellationTokenSource.CreateLinkedTokenSource(token, bound.Token);
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, either.Token);
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    // Only the bound ended the wait: the run's cancellation never reached the read.
+                }
+
+                token.ThrowIfCancellationRequested();
+                return new ReplayBodyRead(new byte[] { 1 }, null);
+            };
+            CliReplay replay = kind == "form"
+                ? new CliReplay(Form: new[] { new CliFormPart("f", null, "part.bin", null) })
+                : new CliReplay(BodyFile: "body.bin");
+
+            Task<(CliRequestBody Body, CliFailure Failure)> preparing = CliRequestBody.PrepareAsync(replay, read, cancellation.Token);
+            await reading.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => preparing);
+            Assert.True(seen.IsCancellationRequested);
+            Assert.False(bound.IsCancellationRequested);
+        }
+
+        // Texts are measured with the run's cancellation, before any file is read: a run cancelled by then reads no file.
+        [Fact]
+        public async Task ARunCancelledBeforeItsTextsAreMeasured_ReadsNoFile()
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            int reads = 0;
+            Func<string, long, CancellationToken, Task<ReplayBodyRead>> read = (_, _, _) =>
+            {
+                reads++;
+                return Task.FromResult(new ReplayBodyRead(new byte[] { 1 }, null));
+            };
+            var form = new[] { new CliFormPart("a", "text", null, null), new CliFormPart("f", null, "part.bin", null) };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => CliRequestBody.PrepareAsync(new CliReplay(Form: form), read, cancellation.Token));
+            Assert.Equal(0, reads);
+        }
+
+        // The form is built with the run's cancellation: a run cancelled once its last file is read builds no form.
+        [Fact]
+        public async Task ARunCancelledAfterItsLastRead_BuildsNoForm()
+        {
+            using var cancellation = new CancellationTokenSource();
+            Func<string, long, CancellationToken, Task<ReplayBodyRead>> read = (_, _, _) =>
+            {
+                cancellation.Cancel();
+                return Task.FromResult(new ReplayBodyRead(new byte[] { 1 }, null));
+            };
+            var form = new[] { new CliFormPart("f", null, "part.bin", null) };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => CliRequestBody.PrepareAsync(new CliReplay(Form: form), read, cancellation.Token));
+        }
+
         private static string Boundary(LoopbackRequest request)
         {
             string contentType = request.Header("Content-Type");
