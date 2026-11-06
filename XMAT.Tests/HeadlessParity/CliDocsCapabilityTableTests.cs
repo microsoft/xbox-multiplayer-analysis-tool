@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using XMAT.Cli;
 using XMAT.Operations.Capabilities;
 
 namespace XMAT.Tests.HeadlessParity
@@ -37,6 +38,23 @@ namespace XMAT.Tests.HeadlessParity
             Assert.All(
                 table.Split('\n', StringSplitOptions.RemoveEmptyEntries),
                 line => Assert.Equal(4, line.Replace("\\|", string.Empty, StringComparison.Ordinal).Count(c => c == '|')));
+        }
+
+        // Each command that provides a capability shows one of its command lines in the capability's row, so process
+        // filtering, which analyze and export both provide, shows a command line of each.
+        [Fact]
+        public void RenderedTable_ShowsACommandLineForEachCommandThatProvidesACapability()
+        {
+            string[] rows = CapabilityTable.RenderMarkdown(CapabilityRegistry.All).Split('\n');
+            var provided = CliCatalog.Commands()
+                .SelectMany(command => CliCatalog.CapabilitiesOf(command).Select(item => (Command: command, item.Id)))
+                .ToArray();
+
+            Assert.Contains((CliCommands.Export, "capture.process-filter"), provided);
+            Assert.All(provided, pair => Assert.Contains(
+                $"`xmat {pair.Command} ",
+                Assert.Single(rows, row => row.Contains($"(`{pair.Id}`)", StringComparison.Ordinal)),
+                StringComparison.Ordinal));
         }
 
         private static string Between(string text, string begin, string end)
