@@ -38,7 +38,7 @@ namespace XMAT.DataAbstractionLayer
         }
 
         private IDictionary<string, IFieldDefinition> _fieldDefs;
-        private IReadOnlySet<string> _untypedColumns;
+        private readonly IReadOnlySet<string> _untypedColumns;
         private SqliteDataReader _dataReader;
         private Predicate<IDataRecord> _predicate;
         private Action<SqLtDataEnumerable> _onDisposed;

@@ -129,6 +129,6 @@ namespace XMAT.DataAbstractionLayer
 
         private IDictionary<string, IFieldDefinition> _fieldDefs;
         private IDictionary<int, object> _fieldValues;
-        private IDictionary<string, object> _rawValues;
+        private readonly IDictionary<string, object> _rawValues;
     }
 }
