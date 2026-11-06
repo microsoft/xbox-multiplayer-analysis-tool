@@ -185,7 +185,8 @@ namespace XMAT.Operations.Export
             IReadOnlyList<CaptureExportSession> sessions,
             CaptureSelectionSpec selection,
             string deviceId,
-            bool isLive)
+            bool isLive,
+            CancellationToken cancellationToken = default)
         {
             if (sessions == null)
             {
@@ -202,7 +203,7 @@ namespace XMAT.Operations.Export
                     null,
                     validated.Diagnostics);
             }
-            return SelectValidated(sessions, validated.Value, process, deviceId, isLive);
+            return SelectValidated(sessions, validated.Value, process, deviceId, isLive, cancellationToken);
         }
 
         internal static OperationResult<CaptureSessionSelection> SelectValidated(
@@ -210,9 +211,15 @@ namespace XMAT.Operations.Export
             CaptureSelectionSpec canonical,
             ProcessFilter process,
             string deviceId,
-            bool isLive)
+            bool isLive,
+            CancellationToken cancellationToken)
         {
-            if (sessions.Any(session => session == null))
+            cancellationToken.ThrowIfCancellationRequested();
+            if (sessions.Any(session =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return session == null;
+                }))
             {
                 return Failure(
                     "export.selection.session-invalid",
@@ -220,18 +227,25 @@ namespace XMAT.Operations.Export
             }
             List<CaptureExportSession> candidates = sessions
                 .Where(session =>
-                    string.IsNullOrEmpty(deviceId) ||
-                    string.Equals(session.DeviceId, deviceId, StringComparison.Ordinal))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return string.IsNullOrEmpty(deviceId) ||
+                        string.Equals(session.DeviceId, deviceId, StringComparison.Ordinal);
+                })
                 .ToList();
 
             var processSessions = candidates
-                .Select(session => new CaptureSessionRef(session.Key, session.DeviceId, session.Process))
+                .Select(session =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new CaptureSessionRef(session.Key, session.DeviceId, session.Process);
+                })
                 .ToList();
             OperationResult<FilterCaptureSessionsResult> processResult =
                 FilterCaptureSessionsOperation.SelectCompiled(
                     processSessions,
                     process,
-                    CancellationToken.None);
+                    cancellationToken);
             if (!processResult.Succeeded)
             {
                 return new OperationResult<CaptureSessionSelection>(
@@ -240,15 +254,18 @@ namespace XMAT.Operations.Export
                     processResult.Diagnostics);
             }
 
-            var processKeys = processResult.Value.IncludedKeys.ToHashSet();
-            HostMatcher host = HostMatcher.Compile(canonical.Host);
-            HashSet<string> statuses = ExactSet(canonical.Statuses);
-            HashSet<string> methods = ExactSet(canonical.Methods);
+            HashSet<CaptureRowKey> processKeys = KeySet(
+                processResult.Value.IncludedKeys,
+                cancellationToken);
+            HostMatcher host = HostMatcher.Compile(canonical.Host, cancellationToken);
+            HashSet<string> statuses = ExactSet(canonical.Statuses, cancellationToken);
+            HashSet<string> methods = ExactSet(canonical.Methods, cancellationToken);
             var keys = new List<CaptureRowKey>();
             var overall = new MutableCounts();
             var devices = new Dictionary<string, MutableCounts>(StringComparer.Ordinal);
             foreach (CaptureExportSession session in candidates)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!devices.TryGetValue(session.DeviceId, out MutableCounts device))
                 {
                     device = new MutableCounts();
@@ -288,6 +305,7 @@ namespace XMAT.Operations.Export
                 device.Eligible++;
                 keys.Add(session.Key);
             }
+            cancellationToken.ThrowIfCancellationRequested();
 
             return OperationResult<CaptureSessionSelection>.Success(new CaptureSessionSelection(
                 keys.AsReadOnly(),
@@ -296,8 +314,35 @@ namespace XMAT.Operations.Export
                 processResult.Value.Scope));
         }
 
-        private static HashSet<string> ExactSet(ImmutableArray<string>? values) =>
-            values.HasValue ? values.Value.ToHashSet(StringComparer.Ordinal) : null;
+        private static HashSet<CaptureRowKey> KeySet(
+            IEnumerable<CaptureRowKey> values,
+            CancellationToken cancellationToken)
+        {
+            var result = new HashSet<CaptureRowKey>();
+            foreach (CaptureRowKey value in values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                result.Add(value);
+            }
+            return result;
+        }
+
+        private static HashSet<string> ExactSet(
+            ImmutableArray<string>? values,
+            CancellationToken cancellationToken)
+        {
+            if (!values.HasValue)
+            {
+                return null;
+            }
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string value in values.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                result.Add(value);
+            }
+            return result;
+        }
 
         private static bool MatchesExact(HashSet<string> values, ImmutableArray<string>? source, string candidate) =>
             !source.HasValue || values.Contains(candidate ?? string.Empty);
@@ -315,24 +360,27 @@ namespace XMAT.Operations.Export
             private readonly Regex[] _includePatterns;
             private readonly Regex[] _excludePatterns;
 
-            private HostMatcher(HostSelection selection)
+            private HostMatcher(
+                HostSelection selection,
+                CancellationToken cancellationToken)
             {
                 _mode = selection.Mode;
                 if (_mode == HostMatchMode.Glob)
                 {
-                    _includePatterns = Compile(selection.Include);
-                    _excludePatterns = selection.Exclude.Select(HostListEntry.CreatePattern).ToArray();
+                    _includePatterns = Compile(selection.Include, cancellationToken);
+                    _excludePatterns = Compile(selection.Exclude, cancellationToken);
                 }
                 else
                 {
-                    _includeExact = selection.Include.HasValue
-                        ? selection.Include.Value.ToHashSet(StringComparer.Ordinal)
-                        : null;
-                    _excludeExact = selection.Exclude.ToHashSet(StringComparer.Ordinal);
+                    _includeExact = ExactSet(selection.Include, cancellationToken);
+                    _excludeExact = ExactSet(selection.Exclude, cancellationToken);
                 }
             }
 
-            internal static HostMatcher Compile(HostSelection selection) => new(selection);
+            internal static HostMatcher Compile(
+                HostSelection selection,
+                CancellationToken cancellationToken) =>
+                new(selection, cancellationToken);
 
             internal bool Matches(string host, string path)
             {
@@ -349,8 +397,22 @@ namespace XMAT.Operations.Export
                 return globIncluded && !MatchesAny(_excludePatterns, candidates);
             }
 
-            private static Regex[] Compile(ImmutableArray<string>? patterns) =>
-                patterns.HasValue ? patterns.Value.Select(HostListEntry.CreatePattern).ToArray() : null;
+            private static Regex[] Compile(
+                ImmutableArray<string>? patterns,
+                CancellationToken cancellationToken)
+            {
+                if (!patterns.HasValue)
+                {
+                    return null;
+                }
+                var result = new Regex[patterns.Value.Length];
+                for (var index = 0; index < result.Length; index++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    result[index] = HostListEntry.CreatePattern(patterns.Value[index]);
+                }
+                return result;
+            }
 
             private static bool MatchesAny(
                 Regex[] patterns,
