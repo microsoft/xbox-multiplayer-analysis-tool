@@ -41,9 +41,11 @@ sanitized `.SAZ`. A file name that does not end in the chosen type's extension i
 refused with an explanation and the save dialog opens again; nothing is written. The
 completion message reports **Exported N of M sessions**, where M counts the capture's
 sessions when the export started, and any sessions it skipped. An existing file is
-replaced only after you confirm it in the save dialog and the export completes. While
-an export runs, the capture cannot be stopped. `xmat export` makes the same exports
-from the command line (see [Command line](cli.md)).
+replaced only after you confirm it in the save dialog and the export completes. XMAT
+never replaces a capture open in a tab, including the `.SAZ` an imported tab was read
+from or another name for the same file. While an export runs, the capture cannot be
+stopped. `xmat export` makes the same exports from the command line (see
+[Command line](cli.md)).
 
 An exported file can be opened only by your Windows account, also when it replaces a
 file, and so can the temporary folder next to it that XMAT writes it in. On storage
