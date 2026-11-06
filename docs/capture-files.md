@@ -60,6 +60,11 @@ XMAT checks capture files before reading them and never changes them:
   lines and incomplete frames are skipped, and the status bar notes that data was
   skipped. A request without a usable `Host` header is imported without a host;
   analysis keeps its path, and the Block and Bypass actions do not apply to it.
+- Header lines are read as Latin-1, so a byte from 0x80 to 0xFF shows as that
+  character rather than `?`. A header name may contain an apostrophe, as HTTP allows,
+  and a name that repeats is shown once, with its values joined by commas. A time with
+  an offset or `Z` is read as that instant; one without, as XMAT's own exports write
+  it, is this PC's local time.
 
 ## Export a sanitized capture
 

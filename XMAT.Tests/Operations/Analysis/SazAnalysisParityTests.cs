@@ -321,6 +321,29 @@ namespace XMAT.Tests.Operations.Analysis
             }
         }
 
+        // A header name with an apostrophe, which replay sends, is kept by both readers, and the capture is still analyzed:
+        // analysis leaves the line out of the headers that it reads.
+        [Fact]
+        public async Task AnApostropheInAHeaderName_IsKeptByBothReaders_AndTheCaptureIsAnalyzed()
+        {
+            using var directory = new TestDirectory();
+            string path = XMAT.Tests.Replay.ReplayCaptures.WriteSaz(
+                directory.Path,
+                "apostrophe.saz",
+                new XMAT.Tests.Replay.CapturedExchange(
+                    "GET", "http://example.test/users/me", "User-Agent: XboxServicesAPI\r\nX'Name: kept\r\n"));
+
+            FiddlerSazImportResult imported = FiddlerSazHandler.ImportSazFileWithDiagnostics(path, CancellationToken.None);
+            BoundedSazReadResult bounded = ReadBounded(path);
+            OperationResult<AnalysisResult> analyzed = await AnalyzeFile(path, System.IO.Path.Combine(directory.Path, "output"));
+
+            Assert.Equal((0, 0), (imported.SkippedMalformedHeaderLines, bounded.SkippedMalformedHeaderLines));
+            Assert.Contains("\r\nX'Name: kept\r\n", Assert.Single(imported.Records).RequestLineAndHeaders, StringComparison.Ordinal);
+            Assert.Contains("\r\nX'Name: kept\r\n", Assert.Single(bounded.Records).RequestLineAndHeaders, StringComparison.Ordinal);
+            Assert.Equal(OperationOutcome.Succeeded, analyzed.Outcome);
+            Assert.Equal(1, Assert.Single(analyzed.Value.Summary.Devices).Consoles.Sum(console => console.Calls));
+        }
+
         private static Task<OperationResult<AnalysisResult>> AnalyzeFile(
             string path,
             string output)

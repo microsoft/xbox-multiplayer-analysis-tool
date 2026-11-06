@@ -4,10 +4,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Net;
 using System.Text;
 using System.Threading;
 using System.Xml.Linq;
@@ -183,7 +183,7 @@ namespace XMAT.WebServiceCapture
                         }
                     }
 
-                    WebHeaderCollection reqHeaders = ReadHeaders(
+                    SazHeaderFields reqHeaders = ReadHeaders(
                         cFile,
                         ref requestHeaderBytes,
                         ref skippedMalformedHeaderLines);
@@ -223,7 +223,7 @@ namespace XMAT.WebServiceCapture
                         status = firstLineSplit[1];
                     }
 
-                    WebHeaderCollection headers = ReadHeaders(
+                    SazHeaderFields headers = ReadHeaders(
                         sFile,
                         ref responseHeaderBytes,
                         ref skippedMalformedHeaderLines);
@@ -252,11 +252,13 @@ namespace XMAT.WebServiceCapture
 
                     XElement sessionTimers = xmldata.Element("Session").Element("SessionTimers");
 
-                    requestTime = DateTime.Parse((string)sessionTimers.Attribute("ClientBeginRequest"));
-
-                    DateTime endTime = DateTime.Parse((string)sessionTimers.Attribute("ClientDoneResponse"));
-
-                    duration = endTime - requestTime;
+                    // Each timer is an instant: one with Z or an offset is exact, and one without, as XMAT's own export
+                    // writes for a time of unspecified kind, is this machine's local time. The duration is the time between
+                    // the two instants, whatever their offsets, and the request time is the first one in local time.
+                    DateTimeOffset begin = ParseTimer((string)sessionTimers.Attribute("ClientBeginRequest"));
+                    DateTimeOffset done = ParseTimer((string)sessionTimers.Attribute("ClientDoneResponse"));
+                    requestTime = begin.LocalDateTime;
+                    duration = done.UtcDateTime - begin.UtcDateTime;
 
                     var sessionFlags = xmldata.Element("Session").Element("SessionFlags");
 
@@ -383,12 +385,12 @@ namespace XMAT.WebServiceCapture
                 skippedMalformedHeaderLines);
         }
 
-        private static WebHeaderCollection ReadHeaders(
+        private static SazHeaderFields ReadHeaders(
             BinaryReader reader,
             ref int rawHeaderBytes,
             ref int skippedMalformedHeaderLines)
         {
-            var headers = new WebHeaderCollection();
+            var headers = new SazHeaderFields();
             var headerLines = 0;
             while (true)
             {
@@ -416,6 +418,7 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        // Head lines are decoded as Latin-1, which keeps every byte: a byte from 0x80 to 0xFF is that character, never '?'.
         private static string ReadHeaderLine(
             BinaryReader reader,
             ref int rawHeaderBytes)
@@ -424,6 +427,7 @@ namespace XMAT.WebServiceCapture
             {
                 string line = reader.ReadLine(
                     MaxRawHeaderBytesPerMessage - rawHeaderBytes,
+                    Encoding.Latin1,
                     out int bytesRead);
                 rawHeaderBytes += bytesRead;
                 return line;
@@ -488,7 +492,7 @@ namespace XMAT.WebServiceCapture
             value == (byte)' ';
 
         private static void AddHeaderOrSkip(
-            WebHeaderCollection headers,
+            SazHeaderFields headers,
             string line,
             ref int skippedMalformedHeaderLines)
         {
@@ -498,17 +502,11 @@ namespace XMAT.WebServiceCapture
                 return;
             }
 
-            try
-            {
-                headers.Add(line);
-            }
-            catch (ArgumentException)
-            {
-                skippedMalformedHeaderLines++;
-            }
+            headers.Add(line);
         }
 
-        // Mirrors .NET 10 WebHeaderCollection.Add(string) validation without using exceptions for control flow.
+        // WebHeaderCollection.Add(string)'s rules, checked without exceptions, with one difference: a name may have an
+        // apostrophe, which HTTP allows (RFC 9110 tokens) and replay sends, so a request that XMAT sent reads back whole.
         internal static bool IsValidHeaderLine(string line)
         {
             if (string.IsNullOrEmpty(line))
@@ -593,9 +591,12 @@ namespace XMAT.WebServiceCapture
                 value < 127 &&
                 value is not (
                     '(' or ')' or '<' or '>' or '@' or ',' or ';' or
-                    ':' or '\\' or '"' or '\'' or '/' or '[' or ']' or
+                    ':' or '\\' or '"' or '/' or '[' or ']' or
                     '?' or '=' or '{' or '}');
         }
+
+        private static DateTimeOffset ParseTimer(string value) =>
+            DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal);
 
         private static bool IsHeaderValueTrimCharacter(char value) =>
             value is '\t' or '\n' or '\v' or '\f' or '\r' or ' ';
