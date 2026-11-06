@@ -73,9 +73,9 @@ namespace XMAT.Tests.Replay
         });
 
         // Both exports are available for one request as it is, with Automatic or HTTP/1.1 only, and each button says why
-        // not: for a URL with '#', Follow same-origin redirects, HTTP/2 only and Connect to another endpoint. Copy as cURL
-        // also needs a body of at most 64 KiB, which a body held as bytes shows by its length; Save as cURL script takes a
-        // larger one. Availability prepares and decodes nothing: a body that is not Base64 leaves it as it was.
+        // not: for a URL with '#', Follow same-origin redirects, HTTP/2 only, Connect to another endpoint and Upstream proxy.
+        // Copy as cURL also needs a body of at most 64 KiB, which a body held as bytes shows by its length; Save as cURL
+        // script takes a larger one. Availability prepares and decodes nothing: a body that is not Base64 leaves it as it was.
         [Fact]
         public Task Availability_SaysWhy_FromWhatCostsNothing() => _application.RunAsync(async () =>
         {
@@ -88,6 +88,7 @@ namespace XMAT.Tests.Replay
                 var url = Find<TextBox>(window, "UrlBox");
                 var follow = Find<CheckBox>(window, "FollowRedirectsBox");
                 var connectTo = Find<CheckBox>(window, "ConnectToBox");
+                var proxy = Find<CheckBox>(window, "ProxyBox");
                 (bool, object, bool, object) Buttons() => (copy.IsEnabled, copy.ToolTip, script.IsEnabled, script.ToolTip);
                 (bool, object, bool, object) Neither(string key) =>
                     (false, Localization.GetLocalizedString(key), false, Localization.GetLocalizedString(key));
@@ -118,6 +119,13 @@ namespace XMAT.Tests.Replay
                 connectTo.IsChecked = true;
                 Assert.Equal(Neither("COMPOSER_CURL_CONNECT_TO"), Buttons());
                 connectTo.IsChecked = false;
+                Assert.Equal(both, Buttons());
+
+                // Whatever its text, which availability does not read.
+                Find<TextBox>(window, "ProxyText").Text = "not a proxy";
+                proxy.IsChecked = true;
+                Assert.Equal(Neither("COMPOSER_CURL_PROXY"), Buttons());
+                proxy.IsChecked = false;
                 Assert.Equal(both, Buttons());
 
                 byte[] held = new byte[RequestCurlExporter.MaxPasteableBodyBytes + 1];
@@ -629,6 +637,7 @@ namespace XMAT.Tests.Replay
         [InlineData("redirects", "COMPOSER_CURL_REDIRECTS")]
         [InlineData("http2", "COMPOSER_CURL_HTTP2")]
         [InlineData("connect-to", "COMPOSER_CURL_CONNECT_TO")]
+        [InlineData("proxy", "COMPOSER_CURL_PROXY")]
         [InlineData("head-body", "COMPOSER_CURL_HEAD_BODY")]
         [InlineData("control-header", "COMPOSER_CURL_CONTROL_HEADER")]
         [InlineData("too-long", "COMPOSER_CURL_TOO_LONG")]
@@ -639,6 +648,7 @@ namespace XMAT.Tests.Replay
             var window = RequestComposerWindow.ForNewRequest(confirm: NoQuestion);
             var copied = new List<string>();
             Assert.True(ReplayConnectTo.TryParse("127.0.0.2:9443", out ReplayConnectTo endpoint));
+            Assert.True(ReplayProxy.TryParse("http://192.0.2.20:3128", out ReplayProxy upstream));
             window.CopyText = copied.Add;
             window.ChooseCurlScriptPath = () => throw new Xunit.Sdk.XunitException("Nothing is asked about a refused request.");
             window.PrepareCurl = (draft, transport, redirects, token) => refusal switch
@@ -649,6 +659,8 @@ namespace XMAT.Tests.Replay
                     draft, new ReplayTransportOptions(ReplayHttpVersion.Http2, null), redirects, token),
                 "connect-to" => RequestCurlExporter.Prepare(
                     draft, new ReplayTransportOptions(ReplayHttpVersion.Auto, endpoint), redirects, token),
+                "proxy" => RequestCurlExporter.Prepare(
+                    draft, new ReplayTransportOptions(ReplayHttpVersion.Auto, null, upstream), redirects, token),
                 _ => RequestCurlExporter.Prepare(draft, transport, redirects, token),
             };
             try
@@ -692,6 +704,9 @@ namespace XMAT.Tests.Replay
                         break;
                     case "connect-to":
                         Find<CheckBox>(window, "ConnectToBox").IsChecked = true;
+                        break;
+                    case "proxy":
+                        Find<CheckBox>(window, "ProxyBox").IsChecked = true;
                         break;
                     default:
                         return;

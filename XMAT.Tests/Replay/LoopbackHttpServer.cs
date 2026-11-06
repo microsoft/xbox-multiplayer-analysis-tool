@@ -210,7 +210,9 @@ namespace XMAT.Tests.Replay
             return ssl;
         }
 
-        private static async Task<LoopbackRequest> ReadRequestAsync(Stream stream, CancellationToken cancellationToken)
+        // Reads one request's head and its Content-Length body, as a server or a proxy receives it; null when the stream ends
+        // first or the head is too large.
+        internal static async Task<LoopbackRequest> ReadRequestAsync(Stream stream, CancellationToken cancellationToken)
         {
             var buffer = new MemoryStream();
             var chunk = new byte[4096];
@@ -260,7 +262,8 @@ namespace XMAT.Tests.Replay
         private static int IndexOfHeadEnd(MemoryStream buffer) =>
             buffer.GetBuffer().AsSpan(0, (int)buffer.Length).IndexOf("\r\n\r\n"u8);
 
-        private static byte[] Serialize(LoopbackResponse response)
+        // The response as HTTP/1.1 bytes, always with Connection: close.
+        internal static byte[] Serialize(LoopbackResponse response)
         {
             byte[] body = response.Body ?? Array.Empty<byte>();
             var head = new StringBuilder($"HTTP/1.1 {response.Status} {response.Reason}\r\n").Append(response.Headers);

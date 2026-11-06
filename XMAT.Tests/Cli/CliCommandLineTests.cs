@@ -217,6 +217,24 @@ namespace XMAT.Tests.Cli
             Assert.Equal((verify, verifyDiff), (replay.Verify, replay.VerifyDiff));
         }
 
+        // compose and replay take --proxy, kept in its canonical form, and --allow-proxy, the permission that it needs; a
+        // proxy URL that cannot be used is a usage error with one fixed message.
+        [Theory]
+        [InlineData("compose --url https://a.test/ --out r")]
+        [InlineData("replay a.saz --request 1 --out r")]
+        public void Parse_ReadsTheProxyAndItsPermission(string commandLine)
+        {
+            CliReplay allowed = CliCommandLine.Parse(Split(commandLine + " --proxy http://Proxy.Test:3128 --allow-proxy")).Request.Replay;
+            CliReplay notAllowed = CliCommandLine.Parse(Split(commandLine + " --proxy http://127.0.0.1")).Request.Replay;
+            CliReplay none = CliCommandLine.Parse(Split(commandLine)).Request.Replay;
+            CliParseResult invalid = CliCommandLine.Parse(Split(commandLine + " --proxy https://a.test"));
+
+            Assert.Equal(("http://proxy.test:3128", true), (allowed.Proxy.ToString(), allowed.AllowProxy));
+            Assert.Equal(("http://127.0.0.1:80", false), (notAllowed.Proxy.ToString(), notAllowed.AllowProxy));
+            Assert.Equal(((ReplayProxy)null, false), (none.Proxy, none.AllowProxy));
+            Assert.Equal(("cli.usage.invalid-value", CliCommandLine.ProxyMessage), (invalid.Error.Code, invalid.Error.Message));
+        }
+
         [Fact]
         public void Parse_ReadsComposeOptionsAndTheDefaults()
         {
@@ -292,8 +310,8 @@ namespace XMAT.Tests.Cli
             foreach (string sendOnly in new[]
             {
                 "--repeat 2", "--parallel 2", "--timeout 5", "--max-response-mib 16", "--follow-redirects 1",
-                "--connect-to 127.0.0.1:9", "--allow-connect-to", "--sequence 1-2", "--allow-unsafe-methods", "--verify",
-                "--verify-diff", "--origin http://a.test",
+                "--connect-to 127.0.0.1:9", "--allow-connect-to", "--proxy http://127.0.0.1:9", "--allow-proxy",
+                "--sequence 1-2", "--allow-unsafe-methods", "--verify", "--verify-diff", "--origin http://a.test",
             })
             {
                 CliParseResult refused = CliCommandLine.Parse(Split("curl --url http://a.test/ --out o --include-sensitive " + sendOnly));
@@ -341,6 +359,10 @@ namespace XMAT.Tests.Cli
         [InlineData(@"curl C:\secret\a.saz --request C:\secret --out C:\secret\results --include-sensitive")]
         [InlineData(@"curl --url http://secret.test/ --out results --repeat secret")]
         [InlineData(@"curl --url http://secret.test/ --out results --http-version secret")]
+        [InlineData(@"compose --url http://a.test/ --out results --proxy http://user:secret@proxy.test:8080")]
+        [InlineData(@"compose --url http://a.test/ --out results --proxy http://proxy.test/secret")]
+        [InlineData(@"replay a.saz --request 1 --out results --proxy secret")]
+        [InlineData(@"curl --url http://a.test/ --out results --include-sensitive --proxy http://secret.test")]
         public void Parse_ErrorsNeverRepeatValues(string commandLine)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));
@@ -451,11 +473,13 @@ namespace XMAT.Tests.Cli
         }
 
         // The JSON of a replay holds numbers, ids, outcomes, codes and artifact paths only, and lists the files of each
-        // send only once they were published. It says that a run connected to another endpoint, never which one.
+        // send only once they were published. It says that a run connected to another endpoint or went through a proxy,
+        // never which one.
         [Fact]
         public void ReplayJson_HoldsOnlyAllowListedFields()
         {
             Assert.True(ReplayConnectTo.TryParse("198.51.100.77:8443", out ReplayConnectTo endpoint));
+            Assert.True(ReplayProxy.TryParse("http://secretproxy.test:3128", out ReplayProxy proxy));
             var report = new CliReport(CliCommands.Replay, "run")
             {
                 Replay = new CliReplayReport(
@@ -466,7 +490,9 @@ namespace XMAT.Tests.Cli
                         BodyFile: @"C:\secret",
                         HttpVersion: ReplayHttpVersion.Http2,
                         ConnectTo: endpoint,
-                        AllowConnectTo: true),
+                        AllowConnectTo: true,
+                        Proxy: proxy,
+                        AllowProxy: true),
                     CliLimits.Default)
                 {
                     InputKind = "saz",
@@ -496,6 +522,7 @@ namespace XMAT.Tests.Cli
                 Assert.DoesNotContain("secret", text, StringComparison.OrdinalIgnoreCase);
                 Assert.DoesNotContain("198.51.100.77", text, StringComparison.Ordinal);
                 Assert.DoesNotContain("8443", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("3128", text, StringComparison.Ordinal);
             }
 
             Assert.Equal(
@@ -503,9 +530,10 @@ namespace XMAT.Tests.Cli
                 summary.RootElement.EnumerateObject().Select(property => property.Name));
             JsonElement options = published.RootElement.GetProperty("options");
             Assert.Equal(
-                ("2", true, true),
+                ("2", true, true, true, true),
                 (options.GetProperty("httpVersion").GetString(), options.GetProperty("connectTo").GetBoolean(),
-                    options.GetProperty("allowConnectTo").GetBoolean()));
+                    options.GetProperty("allowConnectTo").GetBoolean(), options.GetProperty("proxy").GetBoolean(),
+                    options.GetProperty("allowProxy").GetBoolean()));
             JsonElement[] replays = published.RootElement.GetProperty("replays").EnumerateArray().ToArray();
             Assert.Equal(
                 new[]

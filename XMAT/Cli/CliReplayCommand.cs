@@ -261,8 +261,9 @@ namespace XMAT.Cli
                 AllowUnsafeMethods: replay.AllowUnsafeMethods,
                 AllowOriginChange: replay.AllowOriginChange,
                 AllowConnectTo: replay.AllowConnectTo,
-                Transport: new ReplayTransportOptions(httpVersion, replay.ConnectTo),
-                VerifyDiff: replay.VerifyDiff);
+                Transport: new ReplayTransportOptions(httpVersion, replay.ConnectTo, replay.Proxy),
+                VerifyDiff: replay.VerifyDiff,
+                AllowProxy: replay.AllowProxy);
             if (request.Command == CliCommands.Compose)
             {
                 // The operation applies and checks the method, headers and body of a composed request like any edit; with

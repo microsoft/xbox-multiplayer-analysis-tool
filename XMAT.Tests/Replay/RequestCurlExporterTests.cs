@@ -147,19 +147,21 @@ namespace XMAT.Tests.Replay
         }
 
         [Theory]
-        [InlineData("Http2", false, 0, "https://e.test/", "Http2Exact")]
-        [InlineData("Auto", true, 0, "https://e.test/", "ConnectTo")]
-        [InlineData("Auto", false, 1, "https://e.test/", "Redirects")]
-        [InlineData("Auto", false, 0, "https://e.test/item/#", "NumberedUrl")]
+        [InlineData("Http2", false, 0, "https://e.test/", "Http2Exact", false)]
+        [InlineData("Auto", true, 0, "https://e.test/", "ConnectTo", false)]
+        [InlineData("Auto", false, 0, "https://e.test/", "Proxy", true)]
+        [InlineData("Auto", false, 1, "https://e.test/", "Redirects", false)]
+        [InlineData("Auto", false, 0, "https://e.test/item/#", "NumberedUrl", false)]
         public void ATransportThatCurlIsNotKnownToMatch_IsRefused(
-            string version, bool connectTo, int redirects, string url, string reason)
+            string version, bool connectTo, int redirects, string url, string reason, bool proxy)
         {
             Assert.True(ReplayConnectTo.TryParse("192.0.2.10:443", out ReplayConnectTo target));
+            Assert.True(ReplayProxy.TryParse("http://192.0.2.20:3128", out ReplayProxy upstream));
             var draft = new RequestReplayDraft { Method = "GET", Url = url };
 
             CurlExportException refused = Assert.Throws<CurlExportException>(() => RequestCurlExporter.Prepare(
                 draft,
-                new ReplayTransportOptions(Enum.Parse<ReplayHttpVersion>(version), connectTo ? target : null),
+                new ReplayTransportOptions(Enum.Parse<ReplayHttpVersion>(version), connectTo ? target : null, proxy ? upstream : null),
                 redirects,
                 CancellationToken.None));
 

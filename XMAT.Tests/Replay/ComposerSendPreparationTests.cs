@@ -272,9 +272,9 @@ namespace XMAT.Tests.Replay
         });
 
         // Send's first check refuses as Send always did, in this order: a form whose Content-Type the headers would drop, an
-        // endpoint that is not one, a part that a request file left out, and a '#' outside the path and query. A URL with
-        // '#' that passes them all gets the transport that the check parsed, and no plan yet: nothing is previewed before
-        // the user chooses the numbers.
+        // endpoint that is not one, a proxy that is not one, a part that a request file left out, and a '#' outside the path
+        // and query. A URL with '#' that passes them all gets the transport that the check parsed, its proxy included, and
+        // no plan yet: nothing is previewed before the user chooses the numbers.
         [Fact]
         public void TheFirstCheck_RefusesInTheOrderThatSendKeeps()
         {
@@ -305,24 +305,34 @@ namespace XMAT.Tests.Replay
                 {
                     Words("COMPOSER_FORM_CONTENT_TYPE_DROPPED"),
                     Words("COMPOSER_ERROR", Words("COMPOSER_CONNECT_TO_INVALID")),
+                    Words("COMPOSER_ERROR", Words("COMPOSER_PROXY_INVALID")),
                     Words("COMPOSER_ERROR", Words("COMPOSER_INCOMPLETE", Words("COMPOSER_PART_BODY"))),
                     Words("COMPOSER_SEQUENCE_INVALID"),
                 },
                 new[]
                 {
-                    Check(omitted, form: true, connectTo: true).Refusal,
-                    Check(omitted, form: false, connectTo: true).Refusal,
-                    Check(omitted, form: false, connectTo: false).Refusal,
-                    Check(complete, form: false, connectTo: false).Refusal,
+                    Check(omitted, form: true, connectTo: true, proxy: true).Refusal,
+                    Check(omitted, form: false, connectTo: true, proxy: true).Refusal,
+                    Check(omitted, form: false, connectTo: false, proxy: true).Refusal,
+                    Check(omitted, form: false, connectTo: false, proxy: false).Refusal,
+                    Check(complete, form: false, connectTo: false, proxy: false).Refusal,
                 });
-            SendCheck numbered = Check(new RequestReplayDraft { Url = "http://127.0.0.1:9/n/#" }, form: false, connectTo: false);
+            var template = new RequestReplayDraft { Url = "http://127.0.0.1:9/n/#" };
+            SendCheck numbered = Check(template, form: false, connectTo: false, proxy: false);
             Assert.Null(numbered.Refusal);
             Assert.Equal(new ReplayTransportOptions(), numbered.Transport);
             Assert.Null(numbered.Plan);
+            SendCheck proxied = RequestComposerWindow.CheckSend(
+                new FrozenSend(template, false, 0, ReplayHttpVersion.Auto, false, "", true, true, " HTTP://Proxy.XMAT.test:8080/ "),
+                client,
+                CancellationToken.None);
+            Assert.True(ReplayProxy.TryParse("http://proxy.xmat.test:8080", out ReplayProxy parsed));
+            Assert.Null(proxied.Refusal);
+            Assert.Equal(new ReplayTransportOptions(ReplayHttpVersion.Auto, null, parsed), proxied.Transport);
             Assert.Equal(0, previews);
 
-            SendCheck Check(RequestReplayDraft draft, bool form, bool connectTo) => RequestComposerWindow.CheckSend(
-                new FrozenSend(draft, form, 0, ReplayHttpVersion.Auto, connectTo, " xmat.test:443 ", true),
+            SendCheck Check(RequestReplayDraft draft, bool form, bool connectTo, bool proxy) => RequestComposerWindow.CheckSend(
+                new FrozenSend(draft, form, 0, ReplayHttpVersion.Auto, connectTo, " xmat.test:443 ", true, proxy, " xmat.test:443 "),
                 client,
                 CancellationToken.None);
         }
@@ -556,7 +566,7 @@ namespace XMAT.Tests.Replay
 
         // A frozen GET without a body or options.
         private static FrozenSend Frozen(string url) =>
-            new(new RequestReplayDraft { Url = url }, false, 0, ReplayHttpVersion.Auto, false, "", url.Contains('#'));
+            new(new RequestReplayDraft { Url = url }, false, 0, ReplayHttpVersion.Auto, false, "", url.Contains('#'), false, "");
 
         // Runs a check with a client whose preview stops the check while it runs, and gives what the check gives.
         private static SendCheck StoppedDuringPreview(Func<RequestReplayClient, CancellationToken, SendCheck> check)

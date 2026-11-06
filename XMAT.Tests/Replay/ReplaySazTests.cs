@@ -138,6 +138,23 @@ namespace XMAT.Tests.Replay
             Assert.Equal("x-xmat-replay-outcome=failed", Flags(Archive((Result(1), With(exchange, outcome: ReplayOutcome.Failed, code: null, redirects: 0))), 1)[2]);
         }
 
+        // A send that was not direct says how it was sent, last, by its transport's name and never its endpoint or proxy; a
+        // direct send's flags are unchanged.
+        [Theory]
+        [InlineData(ReplayTransportOptions.DirectName, null)]
+        [InlineData(ReplayTransportOptions.ConnectToName, "x-xmat-replay-transport=connect-to")]
+        [InlineData(ReplayTransportOptions.ProxyName, "x-xmat-replay-transport=proxy")]
+        public void TheTransportFlag_NamesASendThatWasNotDirect(string transport, string flag)
+        {
+            ReplayExchange exchange = Exchange(
+                new Uri("http://example.test/"), "GET", new[] { Header("Host", "example.test") }, [], Response("HTTP/1.1 200 OK", Array.Empty<KeyValuePair<string, string>>(), []));
+
+            string[] flags = Flags(Archive((Result(1) with { Transport = transport }, exchange)), 1);
+
+            string[] direct = { "x-clientip=0.0.0.0", "x-xmat-replay-id=1", "x-xmat-replay-outcome=completed", "x-xmat-replay-redirects=0" };
+            Assert.Equal(flag == null ? direct : direct.Append(flag), flags);
+        }
+
         // The command line's flags keep to their alphabet, so a value outside it is a bug that stops the run.
         [Theory]
         [InlineData("d 1")]

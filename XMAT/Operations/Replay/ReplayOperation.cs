@@ -18,11 +18,11 @@ namespace XMAT.Operations.Replay
 {
     // Reissues captured requests, or sends a composed one, for the GUI and xmat.exe. Everything is checked before anything
     // is sent: the selection, the edits, every request's validity, how the requests may reach the server and the safety
-    // policy, under which a method that can change server state, captured headers going to another origin, or a
-    // connection to another endpoint than the URL's host, needs the caller's permission. One failed check fails the run
-    // with InvalidInput and nothing is sent. Then every selected request is sent once per iteration, in order, or up to
-    // Parallelism at a time. Each send is a result whether it got a response or not, so a run that was not cancelled
-    // succeeds once every send is done.
+    // policy, under which a method that can change server state, captured headers going to another origin, a connection
+    // to another endpoint than the URL's host, or sending through a proxy, needs the caller's permission. One failed check
+    // fails the run with InvalidInput and nothing is sent. Then every selected request is sent once per iteration, in
+    // order, or up to Parallelism at a time. Each send is a result whether it got a response or not, so a run that was not
+    // cancelled succeeds once every send is done.
     internal sealed class ReplayOperation : IOperation<ReplayRequest, ReplayResult>
     {
         internal const string SkippedCode = "replay.request.skipped";
@@ -35,14 +35,17 @@ namespace XMAT.Operations.Replay
         internal const string ConnectToHttpsCode = "replay.connect-to.https-required";
         internal const string ConnectToOriginCountCode = "replay.connect-to.origin-count";
         internal const string ConnectToPolicyCode = "replay.policy.connect-to";
+        internal const string ProxyConnectToCode = "replay.proxy.connect-to";
+        internal const string ProxyPolicyCode = "replay.policy.proxy";
 
         // The sender of a run that connects to the URL's host; the GUI's composer passes one over its pooled connections.
         internal Func<ReplaySender> SenderFactory { get; set; } = static () => new ReplaySender();
 
-        // The sender of a run that connects to another endpoint (ReplayTransportOptions.ConnectTo): always one of its own,
-        // so no pooled connection to the URL's host carries its requests, and none of its connections serve another run.
-        internal Func<ReplayConnectTo, ReplaySender> ConnectToSenderFactory { get; set; } =
-            static target => new ReplaySender(target);
+        // The sender of a run whose transport is a setting of the handler (ReplayTransportOptions.NeedsOwnSender: a
+        // connect-to endpoint or a proxy): always one made for that run and disposed when it ends, so no pooled connection
+        // carries its requests, and none of its connections serve another run.
+        internal Func<ReplaySenderSetup, ReplaySender> OwnSenderFactory { get; set; } =
+            static setup => new ReplaySender(setup);
 
         internal Func<AnalyzeCaptureOperation> CaptureReaderFactory { get; set; } =
             static () => new AnalyzeCaptureOperation();
@@ -689,13 +692,31 @@ namespace XMAT.Operations.Replay
                     "Connecting to another endpoint than the URL's host sends the requests, with their headers and body, " +
                         "to that endpoint, and that was not allowed; nothing was sent.");
             }
+
+            if (transport.Proxy != null && !options.AllowProxy)
+            {
+                throw new ReplayInputException(
+                    ProxyPolicyCode,
+                    "Sending through a proxy gives the proxy the whole of every http:// request, its headers and body " +
+                        "included. For HTTPS, the unencrypted CONNECT request exposes the destination host and port and, " +
+                        "when supplied, User-Agent information that may identify the application/title, SDK or device. " +
+                        "Sending through the proxy was not allowed; nothing was sent.");
+            }
         }
 
-        // How the requests may reach the server: HTTP/2 only and a connect-to endpoint need HTTPS, so the server must
-        // prove that it is the URL's host; a connect-to endpoint serves one origin, and never an address that no request
-        // may go to.
+        // How the requests may reach the server: a proxy chooses where it connects, so it cannot be combined with a
+        // connect-to endpoint; HTTP/2 only and a connect-to endpoint need HTTPS, so the server must prove that it is the
+        // URL's host; a connect-to endpoint serves one origin, and never an address that no request may go to.
         private static void CheckTransport(IEnumerable<RequestReplayDraft> drafts, ReplayTransportOptions transport)
         {
+            if (transport.Proxy != null && transport.ConnectTo != null)
+            {
+                throw new ReplayInputException(
+                    ProxyConnectToCode,
+                    "A proxy and a connect-to endpoint cannot be used together: the proxy chooses where it connects; " +
+                        "nothing was sent.");
+            }
+
             if (transport.HttpVersion == ReplayHttpVersion.Http2 && !drafts.All(IsHttps))
             {
                 throw new ReplayInputException(
@@ -799,7 +820,7 @@ namespace XMAT.Operations.Replay
             ReplaySendOptions sendOptions = options.ToSendOptions();
             ReplayTransportOptions transport = options.EffectiveTransport;
             using ReplaySender sender =
-                (transport.ConnectTo == null ? SenderFactory() : ConnectToSenderFactory(transport.ConnectTo)) ??
+                (transport.NeedsOwnSender ? OwnSenderFactory(ReplaySenderSetup.For(transport)) : SenderFactory()) ??
                 throw new InvalidOperationException("The replay sender factory returned no sender.");
             ReportProgress(context, 0, plan.Count);
             await Parallel.ForEachAsync(

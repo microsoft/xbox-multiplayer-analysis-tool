@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Globalization;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
@@ -367,6 +368,61 @@ namespace XMAT.Tests.Cli
             IEnumerable<string> outputs = new[] { denied.Stdout, denied.Stderr, sent.Stdout, sent.Stderr }
                 .Concat(Directory.GetFiles(published, "*", SearchOption.AllDirectories).Select(File.ReadAllText));
             Assert.All(outputs, text => Assert.DoesNotContain("127.0.0.1", text, StringComparison.Ordinal));
+        }
+
+        // --proxy sends through an upstream proxy, so it needs --allow-proxy: without it, nothing reaches the proxy or the
+        // server. With it, an http request goes to the proxy whole and never directly, and the output, the published files
+        // and the archive say that the send went through a proxy, never which one.
+        [Fact]
+        public async Task Compose_Proxy_NeedsItsOwnPermission_AndTheOutputNeverNamesTheProxy()
+        {
+            using var directory = new CliTestDirectory();
+            await using var origin = new LoopbackHttpServer(_ => LoopbackResponse.Ok("direct"));
+            await using var proxy = new LoopbackProxy(_ => new ProxyAnswer.Respond(LoopbackResponse.Ok("via proxy")));
+            string[] command =
+            {
+                "compose", "--url", origin.Origin + "/item", "--header", "Authorization: Bearer " + Canary,
+                "--proxy", $"http://localhost:{proxy.Port}",
+            };
+
+            XmatRun denied = await XmatProcess.RunAsync(directory.Root, command.Concat(new[] { "--out", "denied" }).ToArray());
+
+            CliAssert.ExitCode(3, denied);
+            Assert.Equal(new[] { ReplayOperation.ProxyPolicyCode }, denied.ErrorCodes());
+            Assert.Equal((0, 0), (proxy.Connections, origin.Connections));
+            Assert.False(Directory.Exists(Path.Join(directory.Root, "denied")));
+
+            XmatRun sent = await XmatProcess.RunAsync(
+                directory.Root, command.Concat(new[] { "--allow-proxy", "--save-saz", "--out", "results" }).ToArray());
+
+            CliAssert.ExitCode(0, sent);
+            JsonElement json = sent.Json();
+            JsonElement options = json.GetProperty("options");
+            Assert.Equal((true, true), (options.GetProperty("proxy").GetBoolean(), options.GetProperty("allowProxy").GetBoolean()));
+            JsonElement replay = Assert.Single(json.GetProperty("replays").EnumerateArray());
+            Assert.Equal(
+                ("completed", ReplayTransportOptions.ProxyName),
+                (replay.GetProperty("outcome").GetString(), replay.GetProperty("transport").GetString()));
+            Assert.Equal(0, origin.Connections);
+            LoopbackRequest received = Assert.Single(proxy.Requests);
+            Assert.Equal((origin.Origin + "/item", "Bearer " + Canary), (received.Target, received.Header("Authorization")));
+            string published = Path.Join(directory.Root, "results");
+            string archive;
+            using (ZipArchive saz = ZipFile.OpenRead(Path.Join(published, "replays.saz")))
+            {
+                archive = string.Concat(saz.Entries.Select(entry =>
+                {
+                    using var reader = new StreamReader(entry.Open(), Encoding.Latin1);
+                    return reader.ReadToEnd();
+                }));
+            }
+
+            Assert.Contains("N=\"x-xmat-replay-transport\" V=\"proxy\"", archive, StringComparison.Ordinal);
+            IEnumerable<string> outputs = new[] { denied.Stdout, denied.Stderr, sent.Stdout, sent.Stderr, archive }
+                .Concat(Directory.GetFiles(published, "*", SearchOption.AllDirectories)
+                    .Where(path => !path.EndsWith(".saz", StringComparison.Ordinal))
+                    .Select(File.ReadAllText));
+            Assert.All(outputs, text => Assert.DoesNotContain("localhost", text, StringComparison.OrdinalIgnoreCase));
         }
 
         // A --connect-to that is not an address and port, or an HTTP version that XMAT does not offer, is a usage error

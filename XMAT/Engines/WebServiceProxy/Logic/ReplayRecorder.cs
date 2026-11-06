@@ -337,15 +337,20 @@ namespace XMAT.WebServiceCapture
         }
 
         // How a send went with the composer's transport options, as the operation recorded it (ReplayItemResult, in the
-        // names of ReplayTransportOptions): through another endpoint than the URL's host, and the HTTP version requested
-        // and the one that the response came with ("1.1" or "2", shown as HTTP/1.1 or HTTP/2). Null for a send with the
-        // default transport, directly to the URL's host with the version chosen automatically; a requested version that
-        // replay does not name is shown as Automatic.
+        // names of ReplayTransportOptions): through another endpoint than the URL's host, or through an upstream proxy, never
+        // named, and the HTTP version requested and the one that the response came with ("1.1" or "2", shown as HTTP/1.1 or
+        // HTTP/2). Null for a send with the default transport, directly to the URL's host with the version chosen
+        // automatically; a requested version that replay does not name is shown as Automatic.
         internal static string TransportNote(ReplayItemResult sent)
         {
-            bool connectTo = sent?.Transport == ReplayTransportOptions.ConnectToName;
+            string transportKey = sent?.Transport switch
+            {
+                ReplayTransportOptions.ConnectToName => "REPLAY_NOTE_CONNECT_TO",
+                ReplayTransportOptions.ProxyName => "REPLAY_NOTE_PROXY",
+                _ => null,
+            };
             string requestedName = sent?.HttpVersion ?? ReplayTransportOptions.AutoVersionName;
-            if (sent == null || (!connectTo && requestedName == ReplayTransportOptions.AutoVersionName))
+            if (sent == null || (transportKey == null && requestedName == ReplayTransportOptions.AutoVersionName))
             {
                 return null;
             }
@@ -363,7 +368,7 @@ namespace XMAT.WebServiceCapture
             string version = sent.ResponseVersion == null
                 ? Localization.GetLocalizedString("REPLAY_NOTE_HTTP_VERSION_NO_RESPONSE", requested)
                 : Localization.GetLocalizedString("REPLAY_NOTE_HTTP_VERSION", requested, "HTTP/" + sent.ResponseVersion);
-            return connectTo ? Localization.GetLocalizedString("REPLAY_NOTE_CONNECT_TO") + " " + version : version;
+            return transportKey == null ? version : Localization.GetLocalizedString(transportKey) + " " + version;
         }
 
         // A verified send's verdict, and, when the tab did not keep its verification differences, that it did not; null for

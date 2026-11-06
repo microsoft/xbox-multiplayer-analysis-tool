@@ -464,10 +464,10 @@ namespace XMAT.Tests.Replay
         // connecting anywhere.
         private static ReplayOperation ConnectingOperation(List<string> targets, RecordingHandler handler) => new()
         {
-            ConnectToSenderFactory = target =>
+            OwnSenderFactory = setup =>
             {
-                targets.Add(target.ToString());
-                return new ReplaySender(new HttpMessageInvoker(handler, disposeHandler: false), ownsInvoker: true);
+                targets.Add(setup.ConnectTo.ToString());
+                return new ReplaySender(new HttpMessageInvoker(handler, disposeHandler: false), ownsInvoker: true, setup);
             },
         };
 

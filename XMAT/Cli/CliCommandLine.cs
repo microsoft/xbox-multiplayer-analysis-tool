@@ -47,7 +47,8 @@ namespace XMAT.Cli
     // out; HttpVersionSet says whether --http-version was given, which then wins over a file's version. IncludeSensitive
     // saves captured content (save-request only). Form is the multipart form of --form, --form-string and --form-type, in
     // command-line order, or null; its files are read when the run starts (CliRequestBody). SaveSaz also saves the sends as
-    // a Fiddler archive, replays.saz (replay and compose).
+    // a Fiddler archive, replays.saz (replay and compose). Proxy is the proxy of --proxy, which only AllowProxy
+    // (--allow-proxy) lets the run send through.
     internal sealed record CliReplay(
         string Selection = null,
         int Repeat = 1,
@@ -76,7 +77,9 @@ namespace XMAT.Cli
         bool HttpVersionSet = false,
         bool IncludeSensitive = false,
         IReadOnlyList<CliFormPart> Form = null,
-        bool SaveSaz = false)
+        bool SaveSaz = false,
+        ReplayProxy Proxy = null,
+        bool AllowProxy = false)
     {
         internal static CliReplay Default { get; } = new();
     }
@@ -124,12 +127,14 @@ namespace XMAT.Cli
         internal const string SequenceOption = "--sequence";
         internal const string HttpVersionOption = "--http-version";
         internal const string ConnectToOption = "--connect-to";
+        internal const string ProxyOption = "--proxy";
         internal const string UnconditionalSwitch = "--unconditional";
         internal const string VerifySwitch = "--verify";
         internal const string VerifyDiffSwitch = "--verify-diff";
         internal const string AllowUnsafeMethodsSwitch = "--allow-unsafe-methods";
         internal const string AllowOriginChangeSwitch = "--allow-origin-change";
         internal const string AllowConnectToSwitch = "--allow-connect-to";
+        internal const string AllowProxySwitch = "--allow-proxy";
         internal const string RequestFileOption = "--request-file";
         internal const string ClearHeadersSwitch = "--clear-headers";
         internal const string EmptyBodySwitch = "--empty-body";
@@ -144,6 +149,11 @@ namespace XMAT.Cli
         internal const string ConnectToMessage =
             "--connect-to takes an IP address and a port, as IPv4:PORT or [IPv6]:PORT, with no host name; the port is " +
                 "1 to 65535.";
+
+        internal const string ProxyMessage =
+            "--proxy takes the URL of an HTTP proxy, http://HOST or http://HOST:PORT: an ASCII host name or an IP address " +
+                "(an IPv6 address in brackets), with no user name, password, path, query or fragment; the port is 1 to " +
+                "65535, 80 by default.";
 
         // The whole-number options of replay and compose, with their defaults and maximums (ReplayOptions' limits).
         internal static readonly CliLimitOption RepeatOption = new("--repeat", string.Empty, 1, ReplayOptions.MaxRepeat);
@@ -198,6 +208,7 @@ namespace XMAT.Cli
             FollowRedirectsOption.Name,
             HttpVersionOption,
             ConnectToOption,
+            ProxyOption,
             FormOption,
             FormStringOption,
             FormTypeOption,
@@ -228,12 +239,14 @@ namespace XMAT.Cli
 
         // compose has no captured origin to change, and replay never follows a redirect to another origin, so only replay
         // takes --allow-origin-change, and compose only with --request-file, whose URL is the origin. Both take
-        // --allow-connect-to, the permission that --connect-to needs, and --save-saz, which also saves the sends as a Fiddler
-        // archive. Only replay has captured responses to verify against (--verify, --verify-diff).
+        // --allow-connect-to and --allow-proxy, the permissions that --connect-to and --proxy need, and --save-saz, which
+        // also saves the sends as a Fiddler archive. Only replay has captured responses to verify against (--verify,
+        // --verify-diff).
         private static readonly HashSet<string> ComposeSwitches = new(StringComparer.Ordinal)
         {
             AllowUnsafeMethodsSwitch,
             AllowConnectToSwitch,
+            AllowProxySwitch,
             SaveSazSwitch,
         };
 
@@ -290,13 +303,14 @@ namespace XMAT.Cli
             MaxResponseOption.Name,
             FollowRedirectsOption.Name,
             ConnectToOption,
+            ProxyOption,
             SequenceOption,
             OriginOption,
         };
 
         private static readonly HashSet<string> CurlSendOnlySwitches = new(StringComparer.Ordinal)
         {
-            AllowConnectToSwitch, AllowUnsafeMethodsSwitch, VerifySwitch, VerifyDiffSwitch,
+            AllowConnectToSwitch, AllowProxySwitch, AllowUnsafeMethodsSwitch, VerifySwitch, VerifyDiffSwitch,
         };
 
         private static readonly HashSet<string> CurlReadOptions = new(SaveRequestOptions.Concat(CurlSendOnlyOptions), StringComparer.Ordinal);
@@ -305,8 +319,8 @@ namespace XMAT.Cli
 
         internal const string CurlSendOnlyMessage =
             "xmat curl exports each request with curl's default transport and sends nothing: --repeat, --parallel, " +
-            "--timeout, --max-response-mib, --follow-redirects, --connect-to, --allow-connect-to, --sequence, " +
-            "--allow-unsafe-methods, --verify, --verify-diff and --origin do not apply.";
+            "--timeout, --max-response-mib, --follow-redirects, --connect-to, --allow-connect-to, --proxy, --allow-proxy, " +
+            "--sequence, --allow-unsafe-methods, --verify, --verify-diff and --origin do not apply.";
 
         internal const string CurlHttpVersionMessage =
             "xmat curl takes --http-version auto or 1.1: curl's HTTP/2-only mode is not known to send the same request.";
@@ -1139,6 +1153,12 @@ namespace XMAT.Cli
                 return CliParseResult.UsageError(command, "cli.usage.invalid-value", ConnectToMessage);
             }
 
+            ReplayProxy proxy = null;
+            if (arguments.Options.TryGetValue(ProxyOption, out string proxyText) && !ReplayProxy.TryParse(proxyText, out proxy))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", ProxyMessage);
+            }
+
             arguments.Options.TryGetValue(BodyFileOption, out string bodyFile);
             replay = new CliReplay(
                 Repeat: values[0],
@@ -1158,7 +1178,9 @@ namespace XMAT.Cli
                 ConnectTo: connectTo,
                 AllowConnectTo: arguments.Switches.Contains(AllowConnectToSwitch),
                 HttpVersionSet: arguments.Options.ContainsKey(HttpVersionOption),
-                SaveSaz: arguments.Switches.Contains(SaveSazSwitch));
+                SaveSaz: arguments.Switches.Contains(SaveSazSwitch),
+                Proxy: proxy,
+                AllowProxy: arguments.Switches.Contains(AllowProxySwitch));
             return null;
         }
 

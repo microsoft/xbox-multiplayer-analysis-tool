@@ -481,7 +481,7 @@ namespace XMAT.Tests.Replay
             var operation = new ReplayOperation
             {
                 SenderFactory = () => throw new InvalidOperationException("No sender."),
-                ConnectToSenderFactory = _ => throw new InvalidOperationException("No sender."),
+                OwnSenderFactory = _ => throw new InvalidOperationException("No sender."),
             };
 
             OperationResult<ReplayExport> prepared = operation.PrepareForExport(

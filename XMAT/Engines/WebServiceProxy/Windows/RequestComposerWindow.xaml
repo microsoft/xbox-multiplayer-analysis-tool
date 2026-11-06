@@ -101,6 +101,10 @@
                     Checked="ConnectTo_Changed" Unchecked="ConnectTo_Changed"/>
           <TextBox x:Name="ConnectToText" MinWidth="190" Margin="6,0,0,0" VerticalContentAlignment="Center"
                    IsEnabled="False"/>
+          <CheckBox x:Name="ProxyBox" Margin="18,0,0,0" VerticalAlignment="Center"
+                    Checked="Proxy_Changed" Unchecked="Proxy_Changed"/>
+          <TextBox x:Name="ProxyText" MinWidth="190" Margin="6,0,0,0" VerticalContentAlignment="Center"
+                   IsEnabled="False"/>
         </WrapPanel>
       </Grid>
       <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" ResizeDirection="Columns"/>

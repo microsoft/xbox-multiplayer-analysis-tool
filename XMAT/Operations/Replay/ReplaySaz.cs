@@ -22,7 +22,8 @@ namespace XMAT.Operations.Replay
     //   X-XMAT-Response-Body-Not-Kept, the size that the response declared or "unknown", and its body is empty. A send
     //   without a complete response (Failed, TimedOut) has no response.
     // - The session's Id is the send's id, and its flags name the send: Flag* below, in that order, each value in the
-    //   alphabet [0-9A-Za-z._:-] and at most 64 characters long, which ToSession checks.
+    //   alphabet [0-9A-Za-z._:-] and at most 64 characters long, which ToSession checks. TransportFlag names a send that
+    //   was not direct ("connect-to" or "proxy"), never its endpoint or proxy; a direct send has none.
     internal static class ReplaySaz
     {
         internal const string ClientIpFlag = "x-clientip";
@@ -33,6 +34,7 @@ namespace XMAT.Operations.Replay
         internal const string OutcomeFlag = "x-xmat-replay-outcome";
         internal const string CodeFlag = "x-xmat-replay-code";
         internal const string RedirectsFlag = "x-xmat-replay-redirects";
+        internal const string TransportFlag = "x-xmat-replay-transport";
         internal const int MaxFlagChars = 64;
 
         // The session of one send; null for a send that recorded no request, which has nothing to save, as it has no
@@ -129,6 +131,11 @@ namespace XMAT.Operations.Replay
             }
 
             flags.Add(new(RedirectsFlag, Number(exchange.Redirects)));
+            if (result.Transport != ReplayTransportOptions.DirectName)
+            {
+                flags.Add(new(TransportFlag, result.Transport));
+            }
+
             foreach (KeyValuePair<string, string> flag in flags)
             {
                 if (!IsFlagText(flag.Key) || !IsFlagText(flag.Value))

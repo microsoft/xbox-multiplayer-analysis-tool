@@ -178,13 +178,14 @@ if no further requests arrive.
 Loaded and imported captures can be resent too. Binary, compressed, and non-UTF-8
 request bodies are preserved as editable Base64; text bodies use UTF-8.
 
-Requests are sent directly from this PC, bypassing system proxies and capture scripts.
-HTTPS certificates are validated, redirects are not followed unless you select **Follow
-same-origin redirects** (see below), and response cookies are not reused. **Captured
-headers, including credentials, are sent to the edited URL.** Host and Content-Length
-are regenerated, and connection-only headers are omitted. Methods other than exactly
-GET, HEAD, and OPTIONS, in capitals, require confirmation, as does changing the captured
-origin. CONNECT and WebSocket handshakes cannot be resent.
+Requests are sent directly from this PC, unless you select **Upstream proxy** (see
+below), bypassing system proxies and capture scripts. HTTPS certificates are validated,
+redirects are not followed unless you select **Follow same-origin redirects** (see
+below), and response cookies are not reused. **Captured headers, including credentials,
+are sent to the edited URL.** Host and Content-Length are regenerated, and
+connection-only headers are omitted. Methods other than exactly GET, HEAD, and OPTIONS,
+in capitals, require confirmation, as does changing the captured origin. CONNECT and
+WebSocket handshakes cannot be resent.
 
 Use **Cancel request** to stop waiting. Sending has a 30-second timeout and a 16 MiB
 response limit for each request. Cancelling or timing out cannot undo changes already
@@ -234,17 +235,66 @@ send and says so; send again when it has finished.
   DNS or a proxy, and redirects followed within the URL's origin go to the same
   endpoint. Sending needs your confirmation, which names the URL's origin and the
   endpoint, together with any other confirmation that the send needs.
+- **Upstream proxy** is off by default. It sends every request, and every redirect
+  followed, through an HTTP proxy that you enter, as Fiddler's gateway does; see
+  [Send through an upstream proxy](#send-through-an-upstream-proxy).
 
 The options are fixed when you confirm or start a send: changing them while it runs, or
 while XMAT asks you about it, changes nothing for that send. In the **XMAT Replays**
-tab, a request sent with an HTTP version other than **Automatic** or with **Connect to
-another endpoint** has a note that says so, with the HTTP version requested and the one
-used. The note is kept in memory only.
+tab, a request sent with an HTTP version other than **Automatic**, with **Connect to
+another endpoint**, or with **Upstream proxy** has a note that says so, without the
+endpoint or the proxy, with the HTTP version requested and the one used. The note is
+kept in memory only.
 
 Fiddler's control headers `Fiddler-Host`, `X-OverrideHost`, `X-IgnoreCertCNMismatch`,
 and `X-OverrideGateway` are not applied, and XMAT does not send a request that has one:
 in the composer, delete it from the headers. Use **Connect to another endpoint** to send
-to another address.
+to another address, and **Upstream proxy** to send through a proxy.
+
+### Send through an upstream proxy
+
+**Upstream proxy** sends every request of a send, and every redirect followed, through
+the HTTP proxy that you enter, as Fiddler's gateway does: an `http://` request goes to
+the proxy whole, and an `https://` one through a `CONNECT` tunnel, with TLS to the
+server inside it. XMAT never sends such a request directly instead, never through the
+system's proxy settings, and never with **Connect to another endpoint**: the two cannot
+be used together, since the proxy chooses where it connects.
+
+- **The proxy.** Enter `http://HOST` or `http://HOST:PORT`, with port 80 when you leave
+  it out, such as `http://proxy.example:8080` or `http://[2001:db8::10]:3128`. `HOST` is
+  an ASCII host name or an IP address, an IPv6 address in brackets without a zone. For
+  the proxy only, XMAT refuses a user name or password, a path, query, or fragment,
+  another scheme, HTTPS and SOCKS proxies included, a host name with non-ASCII
+  characters or a trailing dot, a host name whose last label is a number, or an address
+  in another form, such as `127.1` or `0x7f.0.0.1`. The status line then says how to
+  write a proxy, without repeating what you entered.
+- **What the proxy receives.** The proxy is a trusted recipient of the whole request: it
+  receives the whole of every `http://` request, its `Authorization`, `Cookie` and other
+  headers and its body included. For HTTPS, the unencrypted CONNECT request exposes the
+  destination host and port and, when supplied, User-Agent information that may
+  identify the application/title, SDK or device. If the proxy intercepts HTTPS with a
+  certificate this PC trusts, it also receives the whole request and it—not
+  XMAT—decides whether the server is genuine. XMAT's own proxy does not check servers'
+  certificates. XMAT checks the server's certificate as it does without a proxy, so a
+  proxy that intercepts HTTPS with a certificate that this PC does not trust fails the
+  send. Use only a proxy that you trust with the requests' credentials.
+- **Your confirmation.** Sending needs your confirmation, which names the proxy and says
+  what it receives, together with any other confirmation that the send needs. The send
+  goes through the proxy that you confirmed: changing it while XMAT asks, or while the
+  send runs, changes nothing for that send.
+- **When the send fails.** XMAT never authenticates to a proxy. When an HTTP 407 is
+  received, whether it answers the request, the CONNECT of its tunnel, or comes inside
+  the tunnel, the send fails without a response, is not retried, and the status line
+  says "HTTP 407 (Proxy Authentication Required) was received. XMAT does not
+  authenticate to proxies and did not retry the request." A proxy that does not open a
+  tunnel to an HTTPS server, or that cannot be reached, fails the send too. The status
+  line says what failed in its own words, never with the error message of the proxy or
+  of Windows, which can name the proxy.
+- **Never kept.** Dragging a request into the composer, **Open request**, and **Load**
+  turn **Upstream proxy** off and clear its proxy, so they ask first when you have
+  changed it. Request files, the history, and the **XMAT Replays** tab never keep the
+  proxy. **Copy as cURL** and **Save as cURL script** are not available with it, since
+  curl would send the request directly.
 
 ### Copy as cURL and Save as cURL script
 
@@ -278,7 +328,8 @@ script can use them.
   exactly; with **Automatic**, curl chooses the version itself.
 - **When they are not available.** While a part that a request file left out is not
   supplied, for a numbered URL (see below), and with **Follow same-origin redirects**,
-  **HTTP/2 only**, or **Connect to another endpoint**: each button says why. A request
+  **HTTP/2 only**, **Connect to another endpoint**, or **Upstream proxy**: each button
+  says why. A request
   with a Fiddler control header, a HEAD request with a body, or a URL and headers too
   long for one command line are refused when you select either button, and the status
   line says why.
@@ -392,9 +443,11 @@ as it was when the drag began, clears the previous response, and sends nothing. 
 have edited the request in the composer, it asks before replacing it. A drop keeps the
 **HTTP version**, **Connect to another endpoint**, and **Follow same-origin redirects**
 as they are, so changing only those asks nothing here; opening a request file or loading
-a request from history still asks about them, since both reset them. Only requests
-dragged from XMAT can be dropped; text, links, and files are refused, and nothing can be
-dropped while the composer sends or reads a file.
+a request from history still asks about them, since both reset them. A drop turns
+**Upstream proxy** off and clears its proxy, as both of those do, so it asks first when
+you have changed that option. Only requests dragged from XMAT can be dropped; text,
+links, and files are refused, and nothing can be dropped while the composer sends or
+reads a file.
 
 ### Load a request from history
 
@@ -409,14 +462,14 @@ any character that could hide or reorder text shown as `\uXXXX`.
 - **Load** loads the request in place of the request in the editors, as **Edit and
   resend** would, clears the previous response, and sends nothing. It resets the
   transport options: **HTTP version** to **Automatic**, **Connect to another endpoint**
-  off, without an endpoint, and **Follow same-origin redirects** off, with *N* back to
-  10; **Inspect session** stays as it is. If you have edited the request or changed
-  these options, XMAT asks first, No by default. The request is prepared in the
-  background: **Cancel request**, or closing the composer, stops it and loads nothing.
-  A body larger than 64 KiB is kept as its exact bytes and shown only by its size:
-  **Copy as cURL** does not copy it, and **Save as cURL script** saves it whole.
-  **Load** is not available for CONNECT tunnels, protocol upgrades, and requests
-  recorded without their body.
+  off, without an endpoint, **Upstream proxy** off, without a proxy, and **Follow
+  same-origin redirects** off, with *N* back to 10; **Inspect session** stays as it is.
+  If you have edited the request or changed these options, XMAT asks first, No by
+  default. The request is prepared in the background: **Cancel request**, or closing
+  the composer, stops it and loads nothing. A body larger than 64 KiB is kept as its
+  exact bytes and shown only by its size: **Copy as cURL** does not copy it, and **Save
+  as cURL script** saves it whole. **Load** is not available for CONNECT tunnels,
+  protocol upgrades, and requests recorded without their body.
 - **Show in Replays** selects the request in its tab, also when it cannot be loaded.
 - **Clear history** empties the history in every composer. The requests stay in the
   **XMAT Replays** tab, and a request that you loaded stays in its composer.
@@ -433,8 +486,8 @@ no permission: sending the request, and exporting it for curl, ask as they alway
 sending it, and **Open request** opens one in place of the request in the editors. A
 request file is JSON in XMAT's `xmat-request/1` format; XMAT suggests the extension
 `.xmat-request.json`. It holds one request and its **HTTP version**, and never **Connect
-to another endpoint**, **Follow same-origin redirects**, a range for a numbered URL, or
-any permission.
+to another endpoint**, **Upstream proxy**, **Follow same-origin redirects**, a range for
+a numbered URL, or any permission.
 
 - **A template by default.** Unless you include the captured content, the file is a
   template: it keeps only safe protocol structure, which is the method when it is a
@@ -467,19 +520,20 @@ any permission.
   changes: a file that cannot be read, is larger than 96 MiB, or is not a valid request
   file leaves the request as it was. So does **Cancel request**, even if the file was
   read by then, and nothing is asked. Opening sets the **HTTP version** from the file,
-  turns off **Connect to another endpoint**, clearing its endpoint, and **Follow
-  same-origin redirects**, with *N* back to 10, clears the previous response, and sends
-  nothing. Before it discards your edits, XMAT asks whether to replace the current
-  request: edits to the request since it was loaded, even only supplying a part that
-  its file left out, and changes to these transport options from what the composer
-  started with, the last opened file, or the last request loaded from history set,
-  including changes made before you dragged in a request. Declining keeps everything as
-  it was, and no answer is a permission to send. Text in the file, such as Fiddler's
-  `<@INCLUDE@>`, is used as it is, and no other file is read. The composer shows only
-  the file's name, never its folder, with any character that could hide or reorder text
-  shown as `\uXXXX`, and the **XMAT Replays** tab records each send as coming from that
-  file name. A file never grants a permission: sending still asks for every confirmation
-  that it needs, and the file's URL is the origin that a changed URL is checked against.
+  turns off **Connect to another endpoint**, clearing its endpoint, **Upstream proxy**,
+  clearing its proxy, and **Follow same-origin redirects**, with *N* back to 10, clears
+  the previous response, and sends nothing. Before it discards your edits, XMAT asks
+  whether to replace the current request: edits to the request since it was loaded,
+  even only supplying a part that its file left out, and changes to these transport
+  options from what the composer started with, the last opened file, or the last
+  request loaded from history set, including changes made before you dragged in a
+  request. Declining keeps everything as it was, and no answer is a permission to send.
+  Text in the file, such as Fiddler's `<@INCLUDE@>`, is used as it is, and no other
+  file is read. The composer shows only the file's name, never its folder, with any
+  character that could hide or reorder text shown as `\uXXXX`, and the **XMAT Replays**
+  tab records each send as coming from that file name. A file never grants a
+  permission: sending still asks for every confirmation that it needs, and the file's
+  URL is the origin that a changed URL is checked against.
 - **A large body is not shown.** The editor shows a body of at most 64 KiB from a
   request file. A larger body is kept as its exact bytes, which the composer sends and
   saves as they are, and shown only by the file's name and the body's size, never as

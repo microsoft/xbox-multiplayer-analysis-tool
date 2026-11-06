@@ -379,9 +379,11 @@ namespace XMAT.Cli
             writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
             writer.WriteString("httpVersion", ReplayTransportOptions.VersionName(options.HttpVersion));
 
-            // Whether --connect-to was given, never its address: the output names no endpoint.
+            // Whether --connect-to and --proxy were given, never their address or URL: the output names no endpoint.
             writer.WriteBoolean("connectTo", options.ConnectTo != null);
             writer.WriteBoolean("allowConnectTo", options.AllowConnectTo);
+            writer.WriteBoolean("proxy", options.Proxy != null);
+            writer.WriteBoolean("allowProxy", options.AllowProxy);
             writer.WriteBoolean("saveSaz", options.SaveSaz);
             writer.WriteEndObject();
 

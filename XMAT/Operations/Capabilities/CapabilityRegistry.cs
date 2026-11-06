@@ -194,16 +194,16 @@ namespace XMAT.Operations.Capabilities
                     Click(BypassListXaml, "ClearAll_Click"),
                 }),
 
-            // Replay sends captured requests again, as captured or edited, directly from this PC through the shared
-            // ReplaySender; the replays are not captured. The composer is its GUI adapter for one request, or one per number
-            // of a URL with '#' (SequenceRangeWindow).
+            // Replay sends captured requests again, as captured or edited, from this PC through the shared ReplaySender,
+            // directly or, when allowed, through an upstream proxy; the replays are not captured. The composer is its GUI
+            // adapter for one request, or one per number of a URL with '#' (SequenceRangeWindow).
             Capability.Supported(
                 "request.replay", "Replay captured requests, as captured or edited", "S9",
                 cli: "replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
                     "[--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
                     "[--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] " +
-                    "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] " +
-                    "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] " +
+                    "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] " +
+                    "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--max-input-mib N] " +
                     "[--max-data-mib N] [--max-record-mib N] [--max-records N]",
                 operation: ReplayOperation,
                 gui: new[]
@@ -236,8 +236,8 @@ namespace XMAT.Operations.Capabilities
                 cli: "compose --url URL | --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD] " +
                     "[--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] " +
                     "[--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
-                    "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] " +
-                    "[--allow-origin-change] [--allow-connect-to]",
+                    "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] [--allow-unsafe-methods] " +
+                    "[--allow-origin-change] [--allow-connect-to] [--allow-proxy]",
                 operation: ReplayOperation,
                 gui: new[]
                 {

@@ -33,6 +33,7 @@ namespace XMAT.Operations.Replay
         ConnectTo,
         Redirects,
         NumberedUrl,
+        Proxy,
     }
 
     internal sealed class CurlExportException : Exception
@@ -154,6 +155,11 @@ namespace XMAT.Operations.Replay
             if (transport.ConnectTo != null)
             {
                 throw Unsupported(CurlUnsupported.ConnectTo, "a connection to another endpoint");
+            }
+
+            if (transport.Proxy != null)
+            {
+                throw Unsupported(CurlUnsupported.Proxy, "a proxy");
             }
 
             if (followRedirects > 0)

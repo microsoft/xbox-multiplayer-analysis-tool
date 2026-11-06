@@ -45,6 +45,66 @@ namespace XMAT.Tests.Replay
             Assert.Equal("hello"u8.ToArray(), received.Body);
         }
 
+        // A direct send records the request as replay built it, as it always has: Host first, then the headers in order with
+        // each value of a repeated one on a line of its own, then the content headers without Content-Length, and the
+        // length of the body last.
+        [Fact]
+        public async Task SendAsync_RecordsEachHeaderLineInOrder()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            using var sender = new ReplaySender();
+            var draft = new RequestReplayDraft
+            {
+                Method = "PUT",
+                Url = server.Origin + "/item?q=1",
+                HeadersText = "Accept: text/plain\r\nX-Multi: one\r\nX-Multi: two\r\nContent-Type: text/plain\r\nContent-Language: en",
+                BodyText = "hello",
+            };
+
+            ReplayExchange exchange = await sender.SendAsync(draft, ReplaySendOptions.Default, CancellationToken.None);
+
+            Assert.Equal("PUT /item?q=1 HTTP/1.1", exchange.Request.StartLine);
+            Assert.Equal(
+                new[] { $"Host: 127.0.0.1:{server.Port}", "Accept: text/plain", "X-Multi: one", "X-Multi: two" },
+                exchange.Request.Headers.Select(Line));
+            Assert.Equal(
+                new[] { "Content-Type: text/plain", "Content-Language: en", "Content-Length: 5" },
+                exchange.Request.ContentHeaders.Select(Line));
+        }
+
+        // F5: what the HTTP stack adds to a message while it sends it, such as an authentication header, is neither recorded
+        // nor sent again on a redirect: each hop is described, and the next one built, from what replay put in it.
+        [Fact]
+        public async Task SendAsync_NeverRecordsOrResendsWhatTheStackAddedWhileSending()
+        {
+            const string Canary = "XMATSNAPSHOTCANARY";
+            var arrived = new List<string>();
+            var handler = new StubHandler((request, _) =>
+            {
+                arrived.Add(string.Join(",", request.Headers.NonValidated.Select(header => header.Key)));
+                request.Headers.TryAddWithoutValidation("Authorization", "Negotiate " + Canary);
+                request.Headers.TryAddWithoutValidation("Proxy-Authorization", "Basic " + Canary);
+                var response = new HttpResponseMessage(arrived.Count == 1 ? HttpStatusCode.TemporaryRedirect : HttpStatusCode.OK);
+                if (arrived.Count == 1)
+                {
+                    response.Headers.Location = new Uri("/next", UriKind.Relative);
+                }
+
+                return Task.FromResult(response);
+            });
+            using var sender = new ReplaySender(new HttpMessageInvoker(handler));
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Url = "https://example.test/start", HeadersText = "X-Keep: 1" },
+                ReplaySendOptions.Default with { MaxRedirects = 1 },
+                CancellationToken.None);
+
+            Assert.Equal((ReplayOutcome.Completed, 200, 1), (exchange.Outcome, exchange.StatusCode, exchange.Redirects));
+            Assert.Equal(new[] { "X-Keep", "X-Keep" }, arrived);
+            Assert.Equal(new[] { "Host: example.test", "X-Keep: 1" }, exchange.Request.Headers.Select(Line));
+            Assert.DoesNotContain(Canary, Encoding.Latin1.GetString(exchange.Request.ToBytes()), StringComparison.Ordinal);
+        }
+
         [Fact]
         public async Task SendAsync_FollowsSameOriginRedirectsOnlyUpToTheLimit()
         {
@@ -353,6 +413,8 @@ namespace XMAT.Tests.Replay
             Assert.Null(exchange.Response);
             Assert.NotNull(exchange.Request);
         }
+
+        private static string Line(KeyValuePair<string, string> header) => header.Key + ": " + header.Value;
 
         private sealed class StubHandler(
             Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> callback) : HttpMessageHandler

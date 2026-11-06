@@ -33,13 +33,26 @@ namespace XMAT.Operations.Replay
         internal static ReplaySendOptions Default { get; } = new(DefaultTimeout, DefaultMaxResponseBytes);
     }
 
-    // The one way XMAT sends a replayed or composed request, for the GUI and xmat.exe alike. A replay never goes through a
-    // proxy (so Local PC capture does not record it), never sends or keeps cookies of its own, never answers an
-    // authentication challenge with the user's Windows credentials, never decompresses (so inspectors see the bytes the
-    // server sent) and keeps the platform's certificate validation. Replay follows redirects itself, at most MaxRedirects
-    // of them, and only within the origin it sent to: a server never chooses where the request's headers and body go next,
-    // so a hop to another origin, from HTTPS to HTTP or to anything but HTTP and HTTPS is never followed. A sender made for
-    // a connect-to endpoint connects only there, for every request and redirect, and never falls back to the URL's host.
+    // What a sender's handler is made for (ReplaySender.CreateHandler): directly to the URL's host, to one connect-to
+    // endpoint, or through one proxy, never both of the last two.
+    internal sealed record ReplaySenderSetup(ReplayConnectTo ConnectTo = null, ReplayProxy Proxy = null)
+    {
+        internal static ReplaySenderSetup Direct { get; } = new();
+
+        internal static ReplaySenderSetup For(ReplayTransportOptions transport) =>
+            new((transport ?? throw new ArgumentNullException(nameof(transport))).ConnectTo, transport.Proxy);
+    }
+
+    // The one way XMAT sends a replayed or composed request, for the GUI and xmat.exe alike. A replay goes through a proxy
+    // only when its sender was made for one (so Local PC capture does not record it otherwise), never sends or keeps
+    // cookies of its own, never answers an authentication challenge with the user's Windows credentials or a proxy's with
+    // any, never decompresses (so inspectors see the bytes the server sent) and keeps the platform's certificate
+    // validation. Replay follows redirects itself, at most MaxRedirects of them, and only within the origin it sent to: a
+    // server never chooses where the request's headers and body go next, so a hop to another origin, from HTTPS to HTTP
+    // or to anything but HTTP and HTTPS is never followed. A sender made for a connect-to endpoint connects only there,
+    // and one made for a proxy sends only through it, for every request and redirect; neither falls back to the URL's
+    // host. Each hop is recorded, and a redirect built, from what replay put in the request before the HTTP stack sent it,
+    // never from what the stack added while sending.
     internal sealed class ReplaySender : IDisposable
     {
         // Why a redirect was not followed; the redirect response is then the result.
@@ -52,44 +65,69 @@ namespace XMAT.Operations.Replay
         internal const string TimeoutCode = "replay.response.timeout";
         internal const string TooLargeCode = "replay.response.too-large";
 
+        // Why a send through a proxy failed: an HTTP 407 was received (Proxy Authentication Required), which is never
+        // answered or retried and never taken for the server's response, wherever it came from; the proxy refused the
+        // tunnel to an HTTPS server; or it could not be reached.
+        internal const string ProxyAuthRequiredCode = "replay.proxy.auth-required";
+        internal const string ProxyTunnelFailedCode = "replay.proxy.tunnel-failed";
+        internal const string ProxyUnreachableCode = "replay.proxy.unreachable";
+
         private readonly HttpMessageInvoker _invoker;
         private readonly bool _ownsInvoker;
+        private readonly ReplaySenderSetup _setup;
 
         internal ReplaySender()
-            : this(new HttpMessageInvoker(CreateHandler(), disposeHandler: true), ownsInvoker: true)
+            : this(ReplaySenderSetup.Direct)
         {
         }
 
-        // A sender of its own for one connect-to endpoint, which no direct send shares.
-        internal ReplaySender(ReplayConnectTo connectTo)
+        // A sender of its own for its setup, which no other sender shares.
+        internal ReplaySender(ReplaySenderSetup setup)
             : this(
-                new HttpMessageInvoker(
-                    CreateHandler(connectTo ?? throw new ArgumentNullException(nameof(connectTo))), disposeHandler: true),
-                ownsInvoker: true)
+                new HttpMessageInvoker(CreateHandler(setup ?? throw new ArgumentNullException(nameof(setup))), disposeHandler: true),
+                ownsInvoker: true,
+                setup)
         {
         }
 
         // An injected invoker, such as an HttpClient or one over a test handler, belongs to its caller unless ownsInvoker.
-        internal ReplaySender(HttpMessageInvoker invoker, bool ownsInvoker = false)
+        // setup says what its handler was made for (ReplaySenderSetup.Direct when null), which decides how a proxy's
+        // failures are reported.
+        internal ReplaySender(HttpMessageInvoker invoker, bool ownsInvoker = false, ReplaySenderSetup setup = null)
         {
             _invoker = invoker ?? throw new ArgumentNullException(nameof(invoker));
             _ownsInvoker = ownsInvoker;
+            _setup = setup ?? ReplaySenderSetup.Direct;
         }
 
-        // Without connectTo, the handler connects to the URL's host; with it, only to that endpoint. Credentials stay unset,
-        // so an NTLM or Negotiate challenge is the result, never answered with the user's Windows credentials.
-        internal static SocketsHttpHandler CreateHandler(ReplayConnectTo connectTo = null)
+        // Directly, the handler connects to the URL's host; for a connect-to endpoint, only to that endpoint; for a proxy,
+        // only to the proxy (FixedProxy), never with proxy credentials, so a 407 is the result. Never the system's or the
+        // environment's proxy. Credentials stay unset, so an NTLM or Negotiate challenge is the result, never answered with
+        // the user's Windows credentials.
+        internal static SocketsHttpHandler CreateHandler(ReplaySenderSetup setup = null)
         {
+            setup ??= ReplaySenderSetup.Direct;
+            if (setup.ConnectTo != null && setup.Proxy != null)
+            {
+                throw new ArgumentException("A sender connects to another endpoint or sends through a proxy, not both.", nameof(setup));
+            }
+
             var handler = new SocketsHttpHandler
             {
-                UseProxy = false,
+                UseProxy = setup.Proxy != null,
                 UseCookies = false,
                 AllowAutoRedirect = false,
                 AutomaticDecompression = DecompressionMethods.None,
             };
-            if (connectTo != null)
+            if (setup.Proxy != null)
             {
-                handler.ConnectCallback = ConnectOnlyTo(connectTo);
+                handler.Proxy = new FixedProxy(setup.Proxy);
+                handler.DefaultProxyCredentials = null;
+            }
+
+            if (setup.ConnectTo != null)
+            {
+                handler.ConnectCallback = ConnectOnlyTo(setup.ConnectTo);
             }
 
             return handler;
@@ -124,15 +162,25 @@ namespace XMAT.Operations.Replay
                         body = Array.Empty<byte>();
                     }
 
-                    sent = DescribeRequest(request, body, AttemptedVersion(request));
+                    Hop hop = Hop.Of(request, body);
+                    sent = DescribeRequest(hop, AttemptedVersion(hop));
                     using HttpResponseMessage response =
                         await _invoker.SendAsync(request, timeout.Token).ConfigureAwait(false);
-                    sent = DescribeRequest(request, body, response.Version);
+                    sent = DescribeRequest(hop, response.Version);
+
+                    // A 407 on a run through a proxy asks for proxy authentication, which XMAT never gives, whichever hop it
+                    // answers and whether the proxy or a server inside its tunnel sent it: it is never the server's response.
+                    if (_setup.Proxy != null && response.StatusCode == HttpStatusCode.ProxyAuthenticationRequired)
+                    {
+                        return Failure(
+                            ReplayOutcome.Failed, ProxyAuthRequiredCode, sent, hop.Uri, started, redirects, stopwatch, error: null);
+                    }
+
                     string stopCode = null;
                     if (options.MaxRedirects > 0 && IsRedirect(response))
                     {
-                        Uri location = ResolveLocation(request.RequestUri, response.Headers.NonValidated);
-                        stopCode = CheckRedirect(request.RequestUri, location);
+                        Uri location = ResolveLocation(hop.Uri, response.Headers.NonValidated);
+                        stopCode = CheckRedirect(hop.Uri, location);
                         if (stopCode == null && redirects >= options.MaxRedirects)
                         {
                             stopCode = RedirectLimitCode;
@@ -140,7 +188,7 @@ namespace XMAT.Operations.Replay
 
                         if (stopCode == null)
                         {
-                            HttpRequestMessage next = CreateRedirect(request, response.StatusCode, location, body);
+                            HttpRequestMessage next = CreateRedirect(hop, response.StatusCode, location);
                             request.Dispose();
                             request = next;
                             redirects++;
@@ -149,7 +197,7 @@ namespace XMAT.Operations.Replay
                     }
 
                     // HEAD, 1xx, 204 and 304 responses have no body, whatever their Content-Length says.
-                    bool hasBody = request.Method != HttpMethod.Head && (int)response.StatusCode >= 200 &&
+                    bool hasBody = hop.Method != HttpMethod.Head && (int)response.StatusCode >= 200 &&
                         response.StatusCode is not (HttpStatusCode.NoContent or HttpStatusCode.NotModified);
                     (byte[] responseBody, bool tooLarge) = hasBody
                         ? await ReadBoundedAsync(response.Content, options.MaxResponseBytes, timeout.Token).ConfigureAwait(false)
@@ -159,7 +207,7 @@ namespace XMAT.Operations.Replay
                         Outcome = tooLarge ? ReplayOutcome.TooLarge : ReplayOutcome.Completed,
                         Code = tooLarge ? TooLargeCode : stopCode,
                         Request = sent,
-                        RequestUri = request.RequestUri,
+                        RequestUri = hop.Uri,
                         Started = started,
                         Response = DescribeResponse(response, responseBody),
                         StatusCode = (int)response.StatusCode,
@@ -176,7 +224,12 @@ namespace XMAT.Operations.Replay
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException)
             {
-                return Failure(ReplayOutcome.Failed, SendFailedCode, sent, request.RequestUri, started, redirects, stopwatch, ex);
+                // A 407 is the proxy's answer, never an error of the send: auth-required keeps no exception, whether the
+                // 407 answered the request or the CONNECT of its tunnel.
+                string code = FailureCode(ex);
+                return Failure(
+                    ReplayOutcome.Failed, code, sent, request.RequestUri, started, redirects, stopwatch,
+                    code == ProxyAuthRequiredCode ? null : ex);
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex) && ex is not OperationCanceledException)
             {
@@ -222,6 +275,28 @@ namespace XMAT.Operations.Replay
             response.StatusCode is HttpStatusCode.MovedPermanently or HttpStatusCode.Found or HttpStatusCode.SeeOther or
                 HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect;
 
+        // Through a proxy, every connection goes to the proxy, so a connection or name failure is the proxy's, and the HTTP
+        // stack reports the CONNECT of an HTTPS request that the proxy did not answer with 200 as a tunnel error with that
+        // status. Any other failure, and every failure of a direct or connect-to send, is SendFailedCode.
+        private string FailureCode(Exception ex)
+        {
+            if (_setup.Proxy != null && ex is HttpRequestException failure)
+            {
+                switch (failure.HttpRequestError)
+                {
+                    case HttpRequestError.ProxyTunnelError:
+                        return failure.StatusCode == HttpStatusCode.ProxyAuthenticationRequired
+                            ? ProxyAuthRequiredCode
+                            : ProxyTunnelFailedCode;
+                    case HttpRequestError.ConnectionError:
+                    case HttpRequestError.NameResolutionError:
+                        return ProxyUnreachableCode;
+                }
+            }
+
+            return SendFailedCode;
+        }
+
         // An explicit version is asked for exactly: the request fails rather than go out with another. Auto keeps what the
         // request factory chose, HTTP/2 or lower, as replay has always sent. Redirects keep the version of the request.
         private static void ApplyVersion(HttpRequestMessage request, ReplayHttpVersion version)
@@ -258,10 +333,10 @@ namespace XMAT.Operations.Replay
 
         // The version a request goes out with before any response says otherwise: cleartext HTTP never upgrades to
         // HTTP/2 when a lower version is allowed, so only HTTPS can start with the requested version.
-        private static Version AttemptedVersion(HttpRequestMessage request) =>
-            request.RequestUri.Scheme == Uri.UriSchemeHttp && request.VersionPolicy != HttpVersionPolicy.RequestVersionExact
+        private static Version AttemptedVersion(Hop hop) =>
+            hop.Uri.Scheme == Uri.UriSchemeHttp && hop.VersionPolicy != HttpVersionPolicy.RequestVersionExact
                 ? HttpVersion.Version11
-                : request.Version;
+                : hop.Version;
 
         // The absolute target of the Location header, or null when there is none or it cannot be resolved.
         private static Uri ResolveLocation(Uri current, HttpHeadersNonValidated headers)
@@ -299,11 +374,11 @@ namespace XMAT.Operations.Replay
                 StringComparison.OrdinalIgnoreCase);
 
         // As browsers and HttpClient do, 303 makes the next request a GET (a HEAD stays a HEAD) without the body, and 301
-        // and 302 turn a POST into a GET without the body; otherwise the method and body go to the same-origin target.
-        private static HttpRequestMessage CreateRedirect(
-            HttpRequestMessage request, HttpStatusCode status, Uri location, byte[] body)
+        // and 302 turn a POST into a GET without the body; otherwise the method and body go to the same-origin target. The
+        // next request is built from the hop as replay made it, never from the message that the HTTP stack sent.
+        private static HttpRequestMessage CreateRedirect(Hop hop, HttpStatusCode status, Uri location)
         {
-            HttpMethod method = request.Method;
+            HttpMethod method = hop.Method;
             bool keepBody = true;
             if (status == HttpStatusCode.SeeOther)
             {
@@ -319,18 +394,18 @@ namespace XMAT.Operations.Replay
             // The resolved target as it is: re-parsing its escaped form can fail, and a fragment is never sent.
             var next = new HttpRequestMessage(method, location)
             {
-                Version = request.Version,
-                VersionPolicy = request.VersionPolicy,
+                Version = hop.Version,
+                VersionPolicy = hop.VersionPolicy,
             };
-            foreach (KeyValuePair<string, HeaderStringValues> header in request.Headers.NonValidated)
+            foreach (KeyValuePair<string, string[]> header in hop.Headers)
             {
                 next.Headers.TryAddWithoutValidation(header.Key, header.Value);
             }
 
-            if (keepBody && request.Content != null)
+            if (keepBody && hop.ContentHeaders != null)
             {
-                next.Content = new ByteArrayContent(body);
-                foreach (KeyValuePair<string, HeaderStringValues> header in request.Content.Headers.NonValidated)
+                next.Content = new ByteArrayContent(hop.Body);
+                foreach (KeyValuePair<string, string[]> header in hop.ContentHeaders)
                 {
                     if (!header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
                     {
@@ -374,27 +449,26 @@ namespace XMAT.Operations.Replay
         }
 
         // The request in HTTP/1.1 form, with the Host and Content-Length values the HTTP stack sends: Host is the URL's
-        // authority in ASCII (ReplayAuthority).
-        private static ReplayMessage DescribeRequest(HttpRequestMessage request, byte[] body, Version version)
+        // authority in ASCII (ReplayAuthority). Only the hop as replay made it is described, never what the stack added.
+        private static ReplayMessage DescribeRequest(Hop hop, Version version)
         {
-            Uri uri = request.RequestUri;
-            var headers = new List<KeyValuePair<string, string>> { new("Host", ReplayAuthority.Ascii(uri)) };
-            headers.AddRange(Flatten(request.Headers.NonValidated));
-            var contentHeaders = request.Content == null
+            var headers = new List<KeyValuePair<string, string>> { new("Host", ReplayAuthority.Ascii(hop.Uri)) };
+            headers.AddRange(Flatten(hop.Headers));
+            var contentHeaders = hop.ContentHeaders == null
                 ? new List<KeyValuePair<string, string>>()
-                : Flatten(request.Content.Headers.NonValidated)
+                : Flatten(hop.ContentHeaders)
                     .Where(header => !header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
                     .ToList();
-            if (body.Length > 0)
+            if (hop.Body.Length > 0)
             {
-                contentHeaders.Add(new("Content-Length", body.Length.ToString(CultureInfo.InvariantCulture)));
+                contentHeaders.Add(new("Content-Length", hop.Body.Length.ToString(CultureInfo.InvariantCulture)));
             }
 
             return new ReplayMessage(
-                $"{request.Method.Method} {uri.PathAndQuery} {ReplayMessage.FormatVersion(version)}",
+                $"{hop.Method.Method} {hop.Uri.PathAndQuery} {ReplayMessage.FormatVersion(version)}",
                 headers,
                 contentHeaders,
-                body);
+                hop.Body);
         }
 
         // The HTTP stack removes the chunked framing from the body, so Transfer-Encoding no longer describes it.
@@ -419,6 +493,35 @@ namespace XMAT.Operations.Replay
             }
 
             return result;
+        }
+
+        private static List<KeyValuePair<string, string>> Flatten(IReadOnlyList<KeyValuePair<string, string[]>> headers) =>
+            headers.SelectMany(header => header.Value.Select(value => new KeyValuePair<string, string>(header.Key, value))).ToList();
+
+        // One hop as replay made it, taken before the HTTP stack sends it: the stack can add to the message while it
+        // sends (an authentication header, for one), and none of that is recorded or sent again on a redirect. Headers
+        // keep their order and values; ContentHeaders is null without content; Body is the content's own array, or empty.
+        private sealed record Hop(
+            HttpMethod Method,
+            Uri Uri,
+            Version Version,
+            HttpVersionPolicy VersionPolicy,
+            IReadOnlyList<KeyValuePair<string, string[]>> Headers,
+            IReadOnlyList<KeyValuePair<string, string[]>> ContentHeaders,
+            byte[] Body)
+        {
+            internal static Hop Of(HttpRequestMessage request, byte[] body) =>
+                new(
+                    request.Method,
+                    request.RequestUri,
+                    request.Version,
+                    request.VersionPolicy,
+                    Snapshot(request.Headers.NonValidated),
+                    request.Content == null ? null : Snapshot(request.Content.Headers.NonValidated),
+                    request.Content == null ? Array.Empty<byte>() : body);
+
+            private static List<KeyValuePair<string, string[]>> Snapshot(HttpHeadersNonValidated headers) =>
+                headers.Select(header => new KeyValuePair<string, string[]>(header.Key, header.Value.ToArray())).ToList();
         }
     }
 }

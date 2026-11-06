@@ -19,23 +19,31 @@ namespace XMAT.Operations.Replay
         Http2,
     }
 
-    // How replay reaches the server, fixed for a whole run: the HTTP version to ask for and, optionally, another endpoint
-    // to connect to instead of the address of the URL's host (Fiddler's Fiddler-Host). The URL, the Host header and the
-    // TLS server name and certificate check stay those of the URL.
+    // How replay reaches the server, fixed for a whole run: the HTTP version to ask for and, optionally, either another
+    // endpoint to connect to instead of the address of the URL's host (Fiddler's Fiddler-Host) or an upstream HTTP proxy
+    // to send through (Fiddler's gateway). The URL, the Host header and the TLS server name and certificate check stay
+    // those of the URL. The operation refuses a run with both an endpoint and a proxy before anything is sent.
     internal sealed record ReplayTransportOptions(
         ReplayHttpVersion HttpVersion = ReplayHttpVersion.Auto,
-        ReplayConnectTo ConnectTo = null)
+        ReplayConnectTo ConnectTo = null,
+        ReplayProxy Proxy = null)
     {
         internal const string DirectName = "direct";
         internal const string ConnectToName = "connect-to";
+        internal const string ProxyName = "proxy";
         internal const string AutoVersionName = "auto";
 
         internal static ReplayTransportOptions Default { get; } = new();
 
-        internal bool IsDefault => HttpVersion == ReplayHttpVersion.Auto && ConnectTo == null;
+        internal bool IsDefault => HttpVersion == ReplayHttpVersion.Auto && ConnectTo == null && Proxy == null;
 
-        // How a send was configured to reach the server, as replay reports it: "direct" or "connect-to".
-        internal string TransportName => ConnectTo == null ? DirectName : ConnectToName;
+        // Whether the run needs a sender of its own, made for it and disposed when it ends: a connect-to endpoint or a proxy
+        // is a setting of the handler, so no pooled connection may carry the run's requests. The HTTP version is asked for
+        // per request, so it alone needs none.
+        internal bool NeedsOwnSender => ConnectTo != null || Proxy != null;
+
+        // How a send was configured to reach the server, as replay reports it: "direct", "connect-to" or "proxy".
+        internal string TransportName => ConnectTo != null ? ConnectToName : Proxy != null ? ProxyName : DirectName;
 
         internal string HttpVersionName => VersionName(HttpVersion);
 
@@ -176,10 +184,192 @@ namespace XMAT.Operations.Replay
         }
 
         // 1 to maxDigits ASCII digits, no leading zero, at most maxValue.
-        private static bool IsDecimal(string text, int maxDigits, int maxValue) =>
+        internal static bool IsDecimal(string text, int maxDigits, int maxValue) =>
             text.Length is >= 1 && text.Length <= maxDigits &&
             text.All(char.IsAsciiDigit) &&
             (text.Length == 1 || text[0] != '0') &&
             int.Parse(text, NumberStyles.None, CultureInfo.InvariantCulture) <= maxValue;
+    }
+
+    // An upstream HTTP proxy that every request of a run goes through when the caller allows it, written http://HOST or
+    // http://HOST:PORT, with or without a final "/". HOST is an ASCII host name or an IP address, an IPv6 one in brackets
+    // without a zone; PORT is 1 to 65535, 80 by default. Nothing else is accepted: no user name or password, path, query or
+    // fragment, no other scheme (HTTPS and SOCKS proxies included), no Unicode host name or trailing dot, and no address
+    // that Uri would read as another host, such as 127.1 or 0x7f.0.0.1, so the proxy that the user allows is exactly the
+    // one that the HTTP stack connects to.
+    internal sealed record ReplayProxy
+    {
+        private const string Scheme = "http://";
+        private const int DefaultPort = 80;
+        private const int MaxNameLength = 253;
+        private const int MaxLabelLength = 63;
+
+        private readonly bool _ipv6;
+
+        private ReplayProxy(string host, bool ipv6, int port)
+        {
+            Host = host;
+            _ipv6 = ipv6;
+            Port = port;
+        }
+
+        // The host in its canonical form: a lower-case name, a dotted IPv4 address or an IPv6 address without brackets.
+        internal string Host { get; }
+
+        internal int Port { get; }
+
+        internal static bool TryParse(string text, out ReplayProxy proxy)
+        {
+            proxy = null;
+            if (string.IsNullOrEmpty(text) || !text.StartsWith(Scheme, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string authority = text[Scheme.Length..];
+            if (authority.EndsWith('/'))
+            {
+                authority = authority[..^1];
+            }
+
+            // What remains may hold only a host, an IPv6 literal and a port: '/', '?', '#', '@', '%', '\', whitespace and
+            // anything outside ASCII refuse the text.
+            if (authority.Length == 0 ||
+                !authority.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or ':' or '[' or ']'))
+            {
+                return false;
+            }
+
+            string host;
+            string port = null;
+            bool ipv6 = authority[0] == '[';
+            if (ipv6)
+            {
+                int close = authority.IndexOf(']', StringComparison.Ordinal);
+                if (close < 2 || (close + 1 < authority.Length && authority[close + 1] != ':'))
+                {
+                    return false;
+                }
+
+                if (close + 1 < authority.Length)
+                {
+                    port = authority[(close + 2)..];
+                }
+
+                string inside = authority[1..close];
+                if (!inside.All(character => char.IsAsciiHexDigit(character) || character is ':' or '.') ||
+                    !IPAddress.TryParse(inside, out IPAddress parsed) ||
+                    parsed.AddressFamily != AddressFamily.InterNetworkV6)
+                {
+                    return false;
+                }
+
+                host = parsed.ToString();
+            }
+            else
+            {
+                int colon = authority.IndexOf(':', StringComparison.Ordinal);
+                if (colon != authority.LastIndexOf(':'))
+                {
+                    return false;
+                }
+
+                host = colon < 0 ? authority : authority[..colon];
+                port = colon < 0 ? null : authority[(colon + 1)..];
+                if (!IsIPv4(host) && !IsName(host))
+                {
+                    return false;
+                }
+
+                host = host.ToLowerInvariant();
+            }
+
+            if (port != null && (!ReplayConnectTo.IsDecimal(port, 5, 65535) || port == "0"))
+            {
+                return false;
+            }
+
+            var candidate = new ReplayProxy(
+                host, ipv6, port == null ? DefaultPort : int.Parse(port, NumberStyles.None, CultureInfo.InvariantCulture));
+
+            // The HTTP stack connects to the proxy URI's IdnHost and Port: they must be what was written.
+            if (!Uri.TryCreate(candidate.ToString() + "/", UriKind.Absolute, out Uri uri) ||
+                uri.HostNameType != (ipv6 ? UriHostNameType.IPv6 : IsIPv4(host) ? UriHostNameType.IPv4 : UriHostNameType.Dns) ||
+                !string.Equals(uri.IdnHost, host, StringComparison.Ordinal) ||
+                uri.Port != candidate.Port)
+            {
+                return false;
+            }
+
+            proxy = candidate;
+            return true;
+        }
+
+        // http://HOST:PORT/, the URI that FixedProxy gives the HTTP stack.
+        internal Uri ToUri() => new(ToString() + "/", UriKind.Absolute);
+
+        // http://HOST:PORT, always with the port.
+        public override string ToString() =>
+            Scheme + (_ipv6 ? "[" + Host + "]" : Host) + ":" + Port.ToString(CultureInfo.InvariantCulture);
+
+        // Four decimal numbers of 0 to 255 without leading zeros. A host of digits and dots is an IPv4 address or nothing.
+        private static bool IsIPv4(string host)
+        {
+            string[] parts = host.Split('.');
+            return parts.Length == 4 && parts.All(part => ReplayConnectTo.IsDecimal(part, 3, 255));
+        }
+
+        // Labels of 1 to 63 letters, digits and hyphens, neither starting nor ending with a hyphen, at most 253 characters
+        // in all. As URL parsers do, a host whose last label is a number (all digits, or 0x and hexadecimal digits) is read
+        // as an IPv4 address, so it is no name: 127.1, 0x7f.0.0.1 and 2130706433 are refused, not looked up.
+        private static bool IsName(string host)
+        {
+            if (host.Length is < 1 or > MaxNameLength)
+            {
+                return false;
+            }
+
+            string[] labels = host.Split('.');
+            string last = labels[^1];
+            if (last.All(char.IsAsciiDigit) ||
+                (last.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && last[2..].All(char.IsAsciiHexDigit)))
+            {
+                return false;
+            }
+
+            return labels.All(label =>
+                label.Length is >= 1 and <= MaxLabelLength &&
+                label.All(character => char.IsAsciiLetterOrDigit(character) || character == '-') &&
+                label[0] != '-' && label[^1] != '-');
+        }
+    }
+
+    // The proxy of a replay handler that sends through one (ReplaySender.CreateHandler): every request goes to the one
+    // proxy, none is bypassed, loopback included, and no proxy credentials are ever given. No member throws, and GetProxy
+    // never returns null, because the HTTP stack sends a request directly when its proxy throws or names none
+    // (HttpConnectionPoolManager.SendAsync).
+    internal sealed class FixedProxy : IWebProxy
+    {
+        private readonly Uri _uri;
+
+        internal FixedProxy(ReplayProxy proxy)
+        {
+            ArgumentNullException.ThrowIfNull(proxy);
+            _uri = proxy.ToUri();
+        }
+
+        // Always null; a value that anyone sets is ignored.
+        public ICredentials Credentials
+        {
+            get => null;
+            set
+            {
+                // Ignored: the proxy is never answered with credentials.
+            }
+        }
+
+        public Uri GetProxy(Uri destination) => _uri;
+
+        public bool IsBypassed(Uri host) => false;
     }
 }

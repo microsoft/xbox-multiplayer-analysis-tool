@@ -121,7 +121,8 @@ namespace XMAT.Operations.Replay
         bool AllowOriginChange = false,
         bool AllowConnectTo = false,
         ReplayTransportOptions Transport = null,
-        bool VerifyDiff = false)
+        bool VerifyDiff = false,
+        bool AllowProxy = false)
     {
         internal const int MaxRepeat = 1000;
         internal const int MaxParallelism = 16;
@@ -178,8 +179,9 @@ namespace XMAT.Operations.Replay
     // What a composed request, or one per number of a sequence, would send (ReplayOperation.Preview). Template is a copy
     // of the draft that was checked, so later edits to that draft change nothing here; send it with ToSource and
     // Transport, which is how the plan was checked to reach the server. Sends counts every send, repeats included.
-    // UsesUnsafeMethod, ChangesOrigin and UsesConnectTo say which consent the options must carry (AllowUnsafeMethods,
-    // AllowOriginChange, AllowConnectTo) for the operation to send them; it checks them again when it runs.
+    // UsesUnsafeMethod, ChangesOrigin, UsesConnectTo and UsesProxy say which consent the options must carry
+    // (AllowUnsafeMethods, AllowOriginChange, AllowConnectTo, AllowProxy) for the operation to send them; it checks them
+    // again when it runs.
     internal sealed record ReplayPlanPreview(
         RequestReplayDraft Template,
         ReplaySequence Sequence,
@@ -190,6 +192,8 @@ namespace XMAT.Operations.Replay
     {
         internal bool UsesConnectTo => Transport?.ConnectTo != null;
 
+        internal bool UsesProxy => Transport?.Proxy != null;
+
         internal ReplaySource ToSource() =>
             Sequence == null ? ReplaySource.FromDraft(Template) : ReplaySource.FromTemplate(Template, Sequence);
     }
@@ -198,7 +202,7 @@ namespace XMAT.Operations.Replay
     // iteration, iterations in turn. DeviceId and RequestNumber are null for a composed request. SourceIndex is the
     // position of the sent request in ReplaySource.Captures (the GUI's rows), and null for other sources. Sequence is the
     // number that a sequence put in the URL, and null for other sources. Transport is how the send was configured to reach
-    // the server ("direct" or "connect-to"), HttpVersion the version it asked for ("auto", "1.1" or "2") and
+    // the server ("direct", "connect-to" or "proxy"), HttpVersion the version it asked for ("auto", "1.1" or "2") and
     // ResponseVersion the version of the response that it got ("1.1" or "2"), null without a response.
     internal sealed record ReplayItemResult(
         int Id,

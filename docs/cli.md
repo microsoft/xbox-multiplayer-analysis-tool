@@ -19,15 +19,15 @@ xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat 
             [--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header "NAME: VALUE"]...
             [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]...
             [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS]
-            [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods]
-            [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N]
-            [--max-records N]
+            [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL]
+            [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--max-input-mib N]
+            [--max-data-mib N] [--max-record-mib N] [--max-records N]
 xmat compose --url URL | --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD]
              [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body]
              [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]...
              [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
-             [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change]
-             [--allow-connect-to]
+             [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] [--allow-unsafe-methods]
+             [--allow-origin-change] [--allow-connect-to] [--allow-proxy]
 xmat save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] [--method METHOD]
                   [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE]
                   [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]...
@@ -134,11 +134,13 @@ xmat --version
   artifact paths relative to `DIR`, such as `summary.json`. They hold rule names, levels and counts, service labels,
   ordinal device and console ids and the SHA-256 of the input. The input is never modified.
 - `xmat replay` sends requests from a capture again, like Fiddler's Reissue, and `xmat compose` sends one new request,
-  like Fiddler's Composer. Both send directly from this PC, the way the GUI's request composer does: never through a
-  proxy (so XMAT's capture, scripts and host lists do not apply and the replays are not captured), without cookies of
-  their own, without decompressing responses, and with Windows' certificate validation. `replay` reads `INPUT` exactly
-  as `analyze` does, with the same limit options and `analysis.input.*` errors. `--request` selects requests by the
-  number the GUI shows in its `#` column: `all`, or numbers and ranges such as `1,5,9-12` (at most 10,000 numbers). A
+  like Fiddler's Composer. Both send from this PC, the way the GUI's request composer does: directly, unless `--proxy`
+  names an upstream proxy, and never through the system's or the environment's proxy settings (so, unless you name
+  XMAT's own proxy, XMAT's capture, scripts and host lists do not apply and the replays are not captured), without
+  cookies of their own, without decompressing responses, and with Windows' certificate validation. `replay` reads
+  `INPUT` exactly as `analyze` does, with the same limit options and `analysis.input.*` errors. `--request` selects
+  requests by the number the GUI shows in its `#` column: `all`, or numbers and ranges such as `1,5,9-12` (at most
+  10,000 numbers). A
   number given on its own must exist (`replay.request.not-found`) and be an HTTP or HTTPS request without a protocol
   upgrade, recorded with its request body (`replay.request.unsupported`); a range or `all` skips CONNECT tunnels,
   WebSocket handshakes, replays that XMAT recorded without their request body (`X-XMAT-Request-Body-Not-Kept`) and
@@ -217,6 +219,28 @@ xmat --version
   whatever the address: the requests, with their headers and body, go to that endpoint. Redirects within the origin
   go there too. When the endpoint cannot be reached, the send fails (`replay.send.failed`); xmat never falls back to
   the URL's host, a proxy or a name lookup.
+- `--proxy URL` sends every request through that upstream HTTP proxy, as Fiddler's gateway does: an `http://` request
+  goes to the proxy whole, and an `https://` one through a `CONNECT` tunnel, with TLS to the server inside it. `URL` is
+  `http://HOST` or `http://HOST:PORT`, with or without a final `/`: `HOST` is an ASCII host name (an international one
+  in its `xn--` form) or an IP address, an IPv6 one in brackets without a zone, and `PORT` is 1 to 65535, 80 by
+  default. For the proxy only, anything else is a usage error that never repeats the value (exit code 2): a user name
+  or password, a path, query or fragment, another scheme (HTTPS and SOCKS proxies included), a host name that ends
+  with a dot or whose last label is a number, or an address in another form, such as `127.1` or `0x7f.0.0.1`. Every
+  request of the run goes through the proxy, a loopback URL included, and so does every redirect that is followed;
+  `--proxy` cannot be used with `--connect-to` (`replay.proxy.connect-to`). The proxy is a trusted recipient of the
+  whole request: it receives the whole of every `http://` request, its `Authorization`, `Cookie` and other headers and
+  its body included. For HTTPS, the unencrypted CONNECT request exposes the destination host and port and, when
+  supplied, User-Agent information that may identify the application/title, SDK or device. If the proxy intercepts
+  HTTPS with a certificate this PC trusts, it also receives the whole request and it—not XMAT—decides whether the
+  server is genuine. XMAT's own proxy does not check servers' certificates. xmat checks the server's certificate as it
+  does without a proxy, so a proxy that intercepts HTTPS with a certificate that this PC does not trust fails the send.
+  Use only a proxy that you trust with the requests' credentials: xmat sends nothing without `--allow-proxy`
+  (`replay.policy.proxy`). An HTTP 407 on a send through the proxy, whether it answers the request, the `CONNECT` of
+  its tunnel or comes inside the tunnel, fails the send without a response or status, with
+  `replay.proxy.auth-required`, which means: HTTP 407 (Proxy Authentication Required) was received. XMAT does not
+  authenticate to proxies and did not retry the request. A proxy that answers the `CONNECT` of an `https://` request
+  with a status other than 200 or 407 fails the send with `replay.proxy.tunnel-failed`, and one that cannot be reached
+  fails it with `replay.proxy.unreachable`; xmat never falls back to sending directly.
 - Each request waits for its response up to `--timeout` seconds (30 by default, at most 600) and keeps a body of up to
   `--max-response-mib` (16 by default, at most 512). HEAD, 1xx, 204 and 304 responses have no body, whatever their
   `Content-Length` says. A request without a complete response is a result too: its
@@ -262,7 +286,8 @@ xmat --version
   request without a complete response has no response. A session's number is its send's id, and sessions come in the
   order the sends completed, which `--parallel` can change. Session flags name the send: `x-xmat-replay-id`,
   `x-xmat-replay-of` (the request number), `x-xmat-replay-device`, `x-xmat-replay-sequence`, `x-xmat-replay-outcome`
-  (`completed`, `failed`, `timed-out` or `too-large`), `x-xmat-replay-code` and `x-xmat-replay-redirects`. The archive
+  (`completed`, `failed`, `timed-out` or `too-large`), `x-xmat-replay-code`, `x-xmat-replay-redirects` and, for a send
+  that was not direct, `x-xmat-replay-transport` (`connect-to` or `proxy`, never the endpoint or the proxy). The archive
   is completed only when the run publishes `DIR`; a run that publishes nothing removes it with the staging folder. It
   holds captured content, as the request and response files do, and is published privately with them. xmat reads it
   back only within its input limits (`--max-input-mib`, `--max-record-mib` and the others below), refusing a larger
@@ -328,8 +353,9 @@ xmat --version
   request that still leaves anything out (`replay.request.incomplete`) and an invalid request
   (`replay.request.invalid`), such as one with a header value that is not well-formed Unicode. `--http-version 2` is a
   usage error, and so are the options that only sending uses: `--repeat`, `--parallel`, `--timeout`,
-  `--max-response-mib`, `--follow-redirects`, `--connect-to`, `--allow-connect-to`, `--sequence`,
-  `--allow-unsafe-methods`, `--verify`, `--verify-diff` and `--origin` (`cli.usage.unsupported-option`, exit code 2).
+  `--max-response-mib`, `--follow-redirects`, `--connect-to`, `--allow-connect-to`, `--proxy`, `--allow-proxy`,
+  `--sequence`, `--allow-unsafe-methods`, `--verify`, `--verify-diff` and `--origin` (`cli.usage.unsupported-option`,
+  exit code 2).
 - A script needs PowerShell 7.2 or later on Windows. It refuses to send unless `curl.exe` is at least version 8.21.0
   and, when the URL or a header is not ASCII, supports Unicode. It runs curl without a configuration file (`-q`) and
   with only `SystemRoot`, `windir`, `SystemDrive`, `TEMP` and `TMP` in its environment, so no proxy, CA bundle or other
@@ -409,10 +435,12 @@ whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFai
 of the capabilities that the command provides); and `--version` reports `version`. Instead of the analysis fields,
 `replay` and `compose` report `options` (`repeat`, `parallel`, `timeoutSeconds`, `maxResponseMib`, `followRedirects`,
 `unconditional`, `verify`, `verifyDiff`, `allowUnsafeMethods`, `allowOriginChange`, `httpVersion`, `connectTo`, which
-says whether `--connect-to` was given but never its endpoint, `allowConnectTo` and `saveSaz`), `replays` (one per send,
+says whether `--connect-to` was given but never its endpoint, `allowConnectTo`, `proxy`, which says whether `--proxy`
+was given but never its URL, `allowProxy` and `saveSaz`), `replays` (one per send,
 in order, each with its `id`, `device` and `request` (null for `compose`), `sequence` (the number that `--sequence` put
 in the URL, otherwise null), `iteration`, `outcome`, `status` (null without a response), `durationMs`, `responseBytes`,
-`redirects`, `transport` (`direct` or `connect-to`, as the send was configured), `httpVersion` (the version asked for:
+`redirects`, `transport` (`direct`, `connect-to` or `proxy`, as the send was configured), `httpVersion` (the version
+asked for:
 `auto`, `1.1` or `2`), `responseVersion` (the version of the response, such as `1.1` or `2`, null without one), `code`,
 `verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`, its `differences`, a list of `status`
 and `body`, and its `detail`, null without `--verify-diff`, otherwise the `state` of its `diff.json` and, once
@@ -432,7 +460,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 |---|---|
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
-| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device; for `replay` and `compose` also a selection, edit, sequence, `--body-file` or `--form` body, HTTP version or connect-to endpoint that cannot be used, a Fiddler control header, or a request that needs `--allow-unsafe-methods`, `--allow-origin-change` or `--allow-connect-to` (nothing is sent) |
+| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device; for `replay` and `compose` also a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint or proxy that cannot be used, a Fiddler control header, or a request that needs `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to` or `--allow-proxy` (nothing is sent) |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists |
 | 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`) |
@@ -502,9 +530,9 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
-| Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to]` | Supported (S9) |
+| Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--proxy URL] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy]` | Supported (S9) |
 | Export requests as cURL scripts for PowerShell 7, without sending them (`request.curl`) | `xmat curl INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--include-sensitive] [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto\|1.1] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
-| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
+| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--proxy URL] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | Save requests as request files, without sending them (`request.save`) | `xmat save-request INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto\|1.1\|2] [--include-sensitive] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |
