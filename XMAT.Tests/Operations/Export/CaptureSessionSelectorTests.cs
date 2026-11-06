@@ -51,6 +51,49 @@ namespace XMAT.Tests.Operations.Export
         }
 
         [Fact]
+        public void Select_GlobIncludeMatchesAbsoluteAndOriginFormPaths()
+        {
+            CaptureExportSession[] sessions =
+            [
+                Session(1, path: "http://wire.example/api/private/absolute?token=1"),
+                Session(2, path: "/api/private/origin?token=2"),
+                Session(3, path: "https://wire.example/api/public"),
+                Session(4, host: "other.example", path: "https://wire.example/api/private/other"),
+            ];
+            var selection = Selection(host: new HostSelection(
+                HostMatchMode.Glob,
+                ImmutableArray.Create("api.example.test/api/private/*"),
+                ImmutableArray<string>.Empty));
+
+            OperationResult<CaptureSessionSelection> result =
+                CaptureSessionSelector.Select(sessions, selection, "d1", isLive: false);
+
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            Assert.Equal(new[] { Key(1), Key(2) }, result.Value.Keys);
+        }
+
+        [Fact]
+        public void Select_GlobExcludeWithoutIncludeOmitsAbsoluteFormPath()
+        {
+            CaptureExportSession[] sessions =
+            [
+                Session(1, path: "https://wire.example/api/private/sensitive"),
+                Session(2, path: "http://wire.example/api/public"),
+                Session(3, host: "other.example", path: "http://wire.example/api/private/sensitive"),
+            ];
+            var selection = Selection(host: new HostSelection(
+                HostMatchMode.Glob,
+                null,
+                ImmutableArray.Create("api.example.test/api/private/*")));
+
+            OperationResult<CaptureSessionSelection> result =
+                CaptureSessionSelector.Select(sessions, selection, "d1", isLive: false);
+
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+            Assert.Equal(new[] { Key(2), Key(3) }, result.Value.Keys);
+        }
+
+        [Fact]
         public void Select_ExactModeUsesOrdinalEmptyDisplayValues()
         {
             CaptureExportSession[] sessions =

@@ -72,6 +72,25 @@ namespace XMAT.Tests
             Assert.False(list.IsBlocked("example.com"));
         }
 
+        [Theory]
+        [InlineData("http")]
+        [InlineData("HTTPS")]
+        public void IsBlocked_AbsoluteHttpTargetsUseSuppliedHostPathAndQuery(string scheme)
+        {
+            var list = new BlockListModel();
+            list.Add("example.com/private/item?token=*");
+            string target = $"{scheme}://ignored.example/private/item?token=secret";
+
+            Assert.True(list.IsBlocked("example.com", target));
+            Assert.False(list.IsBlocked("other.example", target));
+            Assert.False(list.IsBlocked(
+                "example.com",
+                $"{scheme}://ignored.example/private/item?other=secret"));
+            Assert.False(list.IsBlocked(
+                "example.com",
+                $"{scheme}://ignored.example/public/item?token=secret"));
+        }
+
         [Fact]
         public void IsBlocked_EmptyHostReturnsFalse()
         {
