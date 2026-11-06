@@ -198,6 +198,79 @@ namespace XMAT.Tests.Operations.Export
             Assert.Equal(new[] { Key(2) }, result.Value.Keys);
         }
 
+        [Theory]
+        [InlineData("ws", "destination.example", "/public")]
+        [InlineData("wss", "destination.example", "/public")]
+        [InlineData("ws", "destination.example/private/*", "/private/item")]
+        [InlineData("wss", "destination.example/private/*", "/private/item")]
+        public void Select_GlobExcludeWithoutIncludeMatchesWebSocketDestination(
+            string scheme,
+            string pattern,
+            string path)
+        {
+            CaptureExportSession[] sessions =
+            [
+                Session(1, host: "decoy.example", path: $"{scheme}://destination.example{path}"),
+                Session(2, path: "/public/safe"),
+            ];
+            var selection = Selection(host: new HostSelection(
+                HostMatchMode.Glob,
+                null,
+                ImmutableArray.Create(pattern)));
+
+            OperationResult<CaptureSessionSelection> result =
+                CaptureSessionSelector.Select(sessions, selection, "d1", isLive: false);
+
+            Assert.Equal(new[] { Key(2) }, result.Value.Keys);
+        }
+
+        [Theory]
+        [InlineData("api\u3002example.com", "api.example.com")]
+        [InlineData("\uFF45\uFF58\uFF41\uFF4D\uFF50\uFF4C\uFF45.com", "example.com")]
+        [InlineData("exam\u00ADple.com", "example.com")]
+        public void Select_GlobExcludeWithoutIncludeUsesIdnDestinationSpelling(
+            string destination,
+            string canonical)
+        {
+            CaptureExportSession[] sessions =
+            [
+                Session(1, host: "decoy.example", path: $"http://{destination}/private/item"),
+                Session(2, path: "/public/safe"),
+            ];
+            var selection = Selection(host: new HostSelection(
+                HostMatchMode.Glob,
+                null,
+                ImmutableArray.Create(canonical + "/private/*")));
+
+            OperationResult<CaptureSessionSelection> result =
+                CaptureSessionSelector.Select(sessions, selection, "d1", isLive: false);
+
+            Assert.Equal(new[] { Key(2) }, result.Value.Keys);
+        }
+
+        [Theory]
+        [InlineData("0177.0.0.1")]
+        [InlineData("127.1")]
+        [InlineData("2130706433")]
+        [InlineData("0x7f.0.0.1")]
+        public void Select_GlobExcludeWithoutIncludeUsesNumericHostAlias(string host)
+        {
+            CaptureExportSession[] sessions =
+            [
+                Session(1, host: host, path: "/private/item"),
+                Session(2, host: host, path: "/public/safe"),
+            ];
+            var selection = Selection(host: new HostSelection(
+                HostMatchMode.Glob,
+                null,
+                ImmutableArray.Create("127.0.0.1/private/*")));
+
+            OperationResult<CaptureSessionSelection> result =
+                CaptureSessionSelector.Select(sessions, selection, "d1", isLive: false);
+
+            Assert.Equal(new[] { Key(2) }, result.Value.Keys);
+        }
+
         [Fact]
         public void Select_ExactModeUsesOrdinalEmptyDisplayValues()
         {
