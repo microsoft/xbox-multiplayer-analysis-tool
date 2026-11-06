@@ -294,9 +294,11 @@ namespace XMAT.Operations.Replay
             return new RequestFileContent(kind, method, url, version, headers?.AsReadOnly(), body, omissions);
         }
 
-        private static string ShortString(ref Utf8JsonReader reader, int maxBytes)
+        // A string of at most maxChars characters once its escapes are decoded, counted from its raw value before the string
+        // is made: an escaped spelling of a value, such as "\u0075rl" for url, is that value.
+        private static string ShortString(ref Utf8JsonReader reader, int maxChars)
         {
-            if (reader.TokenType != JsonTokenType.String || reader.ValueSpan.Length > maxBytes)
+            if (reader.TokenType != JsonTokenType.String || DecodedCharLength(reader.ValueSpan) > maxChars)
             {
                 throw new FormatException();
             }

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Globalization;
 using System.Text;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
@@ -175,6 +176,57 @@ namespace XMAT.Tests.Replay
             Assert.Equal("replay.request-file." + reason, RequestFileReader.Read(Encoding.UTF8.GetBytes(json)).Code);
         }
 
+        // A value's JSON escapes are only its spelling: fully escaped, each value reads as itself, also when its escaped
+        // spelling is longer than the value's limit, and an unknown value stays unknown however it is spelled. Member names
+        // are never escaped (InvalidFiles_AreRefused).
+        [Fact]
+        public void EscapedValues_ReadAsWhatTheyDecodeTo()
+        {
+            string template =
+                "{\"schema\":\"" + Escaped("xmat-request/1") + "\",\"profile\":\"" + Escaped("template") + "\"," +
+                "\"method\":null,\"url\":null,\"httpVersion\":\"" + Escaped("1.1") + "\",\"headers\":null,\"body\":null," +
+                "\"omitted\":[\"" + Escaped("method") + "\",\"" + Escaped("url") + "\",\"" + Escaped("headers") + "\",\"" +
+                Escaped("body") + "\"]}";
+            string content =
+                "{\"schema\":\"xmat-request/1\",\"profile\":\"" + Escaped("content") + "\",\"method\":\"GET\"," +
+                "\"url\":\"https://e.test/\",\"httpVersion\":\"" + Escaped("auto") + "\",\"headers\":[],\"body\":\"\"," +
+                "\"omitted\":[]}";
+
+            RequestFileContent read = Read(Encoding.UTF8.GetBytes(template));
+
+            Assert.Equal(RequestFileProfile.Template, read.Profile);
+            Assert.Equal(ReplayHttpVersion.Http11, read.HttpVersion);
+            Assert.Equal(new RequestOmissions(true, true, true, true), read.Omitted);
+            Assert.Equal(ReplayHttpVersion.Auto, Read(Encoding.UTF8.GetBytes(content)).HttpVersion);
+            Assert.Equal(
+                RequestFileCodes.Invalid,
+                RequestFileReader.Read(Encoding.UTF8.GetBytes(template.Replace(Escaped("url"), Escaped("urls")))).Code);
+            Assert.Equal(
+                RequestFileCodes.Unsupported,
+                RequestFileReader.Read(Encoding.UTF8.GetBytes(
+                    template.Replace(Escaped("xmat-request/1"), Escaped("xmat-request/2")))).Code);
+        }
+
+        // A value's length is counted decoded before the value is made, escaped or not: a megabyte of either is refused
+        // without a string of its size.
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void ALongValue_IsRefusedBeforeItIsMade(bool escaped)
+        {
+            string value = escaped
+                ? string.Concat(Enumerable.Repeat("\\u0074", 1024 * 1024 / 6))
+                : new string('t', 1024 * 1024);
+            byte[] json = Encoding.UTF8.GetBytes(Valid.Replace("\"template\"", "\"" + value + "\""));
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            RequestFileReadResult refused = RequestFileReader.Read(json);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Equal(RequestFileCodes.Invalid, refused.Code);
+            Assert.InRange(allocated, 0, 64 * 1024);
+        }
+
         // A header's size is its decoded UTF-8, never its escaped length: 256 KiB written as \u0041 escapes (six times
         // larger) still fits, and one byte more does not.
         [Fact]
@@ -273,7 +325,8 @@ namespace XMAT.Tests.Replay
             }
         }
 
-        // A body one byte over 64 MiB is refused from its Base64 length, before anything of its size is allocated.
+        // A body one byte over 64 MiB is refused from its Base64 length, before anything of its size is allocated. The Base64
+        // is padded to decode to exactly 64 MiB + 1 bytes, so a limit one byte larger would take it.
         [Fact]
         public void ABodyBeyondTheLimit_IsRefusedBeforeItIsDecoded()
         {
@@ -281,21 +334,26 @@ namespace XMAT.Tests.Replay
                 "{\"schema\":\"xmat-request/1\",\"profile\":\"content\",\"method\":\"PUT\",\"url\":\"https://e.test/\"," +
                 "\"httpVersion\":\"auto\",\"headers\":[],\"body\":\"");
             byte[] tail = Encoding.UTF8.GetBytes("\",\"omitted\":[]}");
-            int length = 4 * ((RequestFileLimits.MaxBodyBytes + 1 + 2) / 3);
+            const int Decoded = RequestFileLimits.MaxBodyBytes + 1;
+            int length = 4 * ((Decoded + 2) / 3);
+            int padding = (3 - (Decoded % 3)) % 3;
             var json = new byte[head.Length + length + tail.Length];
             head.CopyTo(json, 0);
-            json.AsSpan(head.Length, length).Fill((byte)'A');
+            json.AsSpan(head.Length, length - padding).Fill((byte)'A');
+            json.AsSpan(head.Length + length - padding, padding).Fill((byte)'=');
             tail.CopyTo(json, head.Length + length);
 
             long before = GC.GetAllocatedBytesForCurrentThread();
             RequestFileReadResult result = RequestFileReader.Read(json);
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
+            Assert.Equal(Decoded, (length / 4 * 3) - padding);
             Assert.Equal(RequestFileCodes.Invalid, result.Code);
             Assert.InRange(allocated, 0, 8L * 1024 * 1024);
         }
 
         // The body's Base64 is written in chunks of whole 3-byte groups: it is the body's one Base64, padded at its end only.
+        // 64 MiB itself round-trips in RequestFileIsolatedTests.
         [Theory]
         [InlineData(0)]
         [InlineData(1)]
@@ -304,6 +362,9 @@ namespace XMAT.Tests.Replay
         [InlineData(49151)]
         [InlineData(49152)]
         [InlineData(49153)]
+        [InlineData(65535)]
+        [InlineData(65536)]
+        [InlineData(65537)]
         [InlineData(98305)]
         public void Bodies_RoundTrip_PaddedOnlyAtTheEnd(int size)
         {
@@ -491,5 +552,9 @@ namespace XMAT.Tests.Replay
             Assert.Null(result.Code);
             return result.Content;
         }
+
+        // The JSON spelling of value with every character as a \u escape.
+        private static string Escaped(string value) =>
+            string.Concat(value.Select(character => "\\u" + ((int)character).ToString("x4", CultureInfo.InvariantCulture)));
     }
 }
