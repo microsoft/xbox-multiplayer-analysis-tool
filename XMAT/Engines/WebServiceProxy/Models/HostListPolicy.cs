@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.Text.RegularExpressions;
 
 namespace XMAT.WebServiceCapture.Models
@@ -99,9 +100,17 @@ namespace XMAT.WebServiceCapture.Models
             string path = null)
         {
             string candidate = MatchCandidate(host) ?? string.Empty;
-            string normalizedPath = string.IsNullOrEmpty(path)
+            string matchingPath = path;
+            if (!string.IsNullOrEmpty(path) &&
+                (path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                    path.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) &&
+                Uri.TryCreate(path, UriKind.Absolute, out Uri absolute))
+            {
+                matchingPath = absolute.PathAndQuery;
+            }
+            string normalizedPath = string.IsNullOrEmpty(matchingPath)
                 ? null
-                : path.StartsWith('/') ? path : "/" + path;
+                : matchingPath.StartsWith('/') ? matchingPath : "/" + matchingPath;
             return (candidate, normalizedPath == null ? null : candidate + normalizedPath);
         }
 
