@@ -137,7 +137,7 @@ namespace XMAT.Tests.Operations.Export
                 probe.MetadataReadFailure = failure;
             else
                 probe.ColumnsFailure = failure;
-            try
+            using (borrowed as IDisposable)
             {
                 InvalidOperationException actual = Assert.Throws<InvalidOperationException>(
                     () => controller.CreateExportSnapshot("d1"));
@@ -145,10 +145,6 @@ namespace XMAT.Tests.Operations.Export
                 Assert.Same(failure, actual);
                 Assert.Equal(ownsDataset ? 1 : 0, payloadDisposals);
                 Assert.Equal(failurePoint == "freeze" ? 1 : 0, metadataDisposals);
-            }
-            finally
-            {
-                (borrowed as IDisposable)?.Dispose();
             }
 
             Assert.Equal(1, payloadDisposals);
