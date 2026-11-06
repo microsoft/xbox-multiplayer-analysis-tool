@@ -38,7 +38,7 @@ namespace XMAT.WebServiceCapture
         private static readonly TimeSpan ProcessEditDelay =
             TimeSpan.FromMilliseconds(250);
         // A capture tab shows one device; the shared selection counts its sessions under this ordinal id.
-        private const string ProcessSessionsDeviceId = "d1";
+        private static readonly string ProcessSessionsDeviceId = CaptureDeviceIds.Ordinal(0);
         private bool _notAtBottom;
         private readonly Predicate<object> _connectionFilter;
         private readonly HashSet<ProxyConnectionModel> _observedConnections = new(ReferenceEqualityComparer.Instance);

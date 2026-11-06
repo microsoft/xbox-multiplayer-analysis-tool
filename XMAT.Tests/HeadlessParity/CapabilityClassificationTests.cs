@@ -139,6 +139,7 @@ namespace XMAT.Tests.HeadlessParity
             var registry = new[]
             {
                 Capability.GuiOnly("capture.hidden", "Not presentation", "Because", gui: null),
+                Capability.GuiOnly("view.routed", "Routed view", "Presentation: shows rows.") with { AdditionalCliRoutes = new[] { "analyze X" } },
                 Capability.Supported("analysis.unbacked", "No operation", "S1", "analyze X",
                     gui: new[] { CapabilityKeys.Command("XMAT.AppCommands.AnalyzeCaptures") }),
                 Capability.Supported("analysis.wrong-operation", "Not an operation", "S1", "analyze X",
@@ -151,6 +152,7 @@ namespace XMAT.Tests.HeadlessParity
 
             Assert.Contains(problems, problem => problem.StartsWith("capture.hidden: GuiOnly is for presentation only", StringComparison.Ordinal));
             Assert.Contains(problems, problem => problem.StartsWith("capture.hidden: a GuiOnly reason", StringComparison.Ordinal));
+            Assert.Contains(problems, problem => problem.StartsWith("view.routed: a GuiOnly capability has no command line", StringComparison.Ordinal));
             Assert.Contains(problems, problem => problem.StartsWith("analysis.unbacked: a supported GUI capability needs the shared operation", StringComparison.Ordinal));
             Assert.Contains(problems, problem => problem.StartsWith("analysis.wrong-operation: 'XMAT.PublicUtilities' is not an IOperation", StringComparison.Ordinal));
             Assert.Contains(problems, problem => problem.StartsWith("Bad Id: ids are lower-case", StringComparison.Ordinal));

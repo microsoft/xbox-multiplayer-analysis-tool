@@ -92,16 +92,22 @@ namespace XMAT.Tests
                 .CreateDelegate<TDelegate>(Controller);
 
         // Stops the capture callbacks and drains the UI updates they queued, then closes the database. Each step is attempted
-        // even if the other fails, and the first failure is reported. The shared dispatcher is pumped for a bounded time and
+        // even if another fails, and the first failure is reported. The shared dispatcher is pumped for a bounded time and
         // never blocked on work that needs it.
         public void Dispose()
         {
             ExceptionDispatchInfo failure = null;
-            foreach (Func<Task> step in new Func<Task>[] { _callbacks.StopAcceptingAndWaitAsync, _uiUpdates.CompleteAndDrainAsync })
+            foreach (Action step in new Action[]
+            {
+                () => WpfTestHost.Complete(_callbacks.StopAcceptingAndWaitAsync(), TimeSpan.FromSeconds(10)),
+                () => WpfTestHost.Complete(_uiUpdates.CompleteAndDrainAsync(), TimeSpan.FromSeconds(10)),
+                () => _app.CaptureDeviceContexts.Remove(this),
+                _database.Dispose,
+            })
             {
                 try
                 {
-                    Complete(step());
+                    step();
                 }
                 catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
                 {
@@ -109,32 +115,14 @@ namespace XMAT.Tests
                 }
             }
 
-            _app.CaptureDeviceContexts.Remove(this);
-            _database.Dispose();
             failure?.Throw();
-        }
-
-        private static void Complete(Task task)
-        {
-            var clock = Stopwatch.StartNew();
-            while (!task.IsCompleted && clock.Elapsed < TimeSpan.FromSeconds(10))
-            {
-                WpfTestHost.Pump();
-            }
-
-            if (!task.IsCompleted)
-            {
-                throw new TimeoutException("The capture tab's callbacks or UI updates did not finish.");
-            }
-
-            task.GetAwaiter().GetResult();
         }
 
         // Runs a capture policy handler to completion, then the UI updates it queued.
         private bool Raise<T>(string policy, T args)
         {
             Task<bool> task = Handler<Func<T, CancellationToken, Task<bool>>>(policy)(args, CancellationToken.None);
-            bool result = task.Wait(TimeSpan.FromSeconds(5)) && task.Result;
+            bool result = WpfTestHost.Complete(task, TimeSpan.FromSeconds(5));
             WpfTestHost.Pump();
             return result;
         }

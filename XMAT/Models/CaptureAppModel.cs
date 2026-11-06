@@ -197,17 +197,6 @@ namespace XMAT.Models
             return true;
         }
 
-        public ICaptureDeviceContext SelectCaptureDeviceContext(string deviceContextName)
-        {
-            ICaptureDeviceContext context = _captureDeviceContexts.FirstOrDefault(
-                captureDeviceContext => captureDeviceContext.DeviceName == deviceContextName);
-            if (context != null && context != SelectedDeviceContext)
-            {
-                SelectedDeviceContext = context;
-            }
-            return context;
-        }
-
         // The open capture tab that an analysis read, while it still holds the sessions that the analysis saw; null once
         // that tab was closed or its sessions were deleted, cleared or reloaded. It never selects a tab.
         internal ICaptureDeviceContext ResolveCaptureSource(CaptureSourceStamp stamp) =>

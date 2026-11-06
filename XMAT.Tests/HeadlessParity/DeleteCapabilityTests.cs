@@ -48,6 +48,7 @@ namespace XMAT.Tests.HeadlessParity
             Assert.Contains("needs the delivery slice", Problems(valid with { Slice = null }));
             Assert.Contains("lists its GUI entry points", Problems(valid with { GuiEntryPoints = Array.Empty<string>() }));
             Assert.Contains("no command line or operation", Problems(valid with { CliRoute = "delete INPUT" }));
+            Assert.Contains("no command line or operation", Problems(valid with { AdditionalCliRoutes = new[] { "delete INPUT" } }));
             Assert.Contains(
                 "no command line or operation",
                 Problems(valid with { Operation = "XMAT.Operations.Export.ExportCaptureSessionsOperation" }));

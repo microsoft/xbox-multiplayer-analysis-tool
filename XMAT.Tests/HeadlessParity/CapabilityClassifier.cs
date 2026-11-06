@@ -144,7 +144,7 @@ namespace XMAT.Tests.HeadlessParity
                             problems.Add($"{id}: a GuiOnly reason starts with 'Presentation:' and says why nothing runs headless.");
                         }
 
-                        if (capability.CliRoute != null || capability.Operation != null || capability.Slice != null)
+                        if (capability.CliRoutes.Any() || capability.Operation != null || capability.Slice != null)
                         {
                             problems.Add($"{id}: a GuiOnly capability has no command line, operation or slice.");
                         }
@@ -175,7 +175,7 @@ namespace XMAT.Tests.HeadlessParity
                             problems.Add($"{id}: a policy exception lists its GUI entry points.");
                         }
 
-                        if (capability.CliRoute != null || capability.Operation != null)
+                        if (capability.CliRoutes.Any() || capability.Operation != null)
                         {
                             problems.Add($"{id}: a policy exception has no command line or operation.");
                         }

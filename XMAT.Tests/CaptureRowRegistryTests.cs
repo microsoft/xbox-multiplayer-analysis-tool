@@ -251,6 +251,48 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void RegisterFallback_ReusesDuplicateRequestWithoutSubscribingForResolution()
+        {
+            var applied = new List<(CaptureRowKey Key, ClientProcessInfo Process)>();
+            var registry = Registry(applied);
+            Guid run = Guid.NewGuid();
+            ClientProcessContext connection = Connection(run, 1018);
+            registry.StartRun(run);
+
+            CaptureRowKey first = registry.RegisterFallback(
+                connection,
+                requestToken: 27,
+                rowId: 58,
+                ClientProcessInfo.NotRecorded,
+                out ClientProcessInfo firstCatchUp);
+            CaptureRowKey duplicate = registry.RegisterFallback(
+                connection,
+                requestToken: 27,
+                rowId: 59,
+                ClientProcessInfo.NotRecorded,
+                out ClientProcessInfo duplicateCatchUp);
+            ClientProcessInfo resolved = Local("fallback.exe", 118);
+
+            connection.Publish(resolved);
+
+            Assert.Equal(first, duplicate);
+            Assert.Equal(ClientProcessInfo.NotRecorded, firstCatchUp);
+            Assert.Equal(ClientProcessInfo.NotRecorded, duplicateCatchUp);
+            Assert.Equal(
+                CaptureRowLookup.Current,
+                registry.Lookup(connection, 27, out CaptureRowKey requestKey));
+            Assert.Equal(first, requestKey);
+            Assert.Equal(
+                CaptureRowLookup.Missing,
+                registry.Lookup(first with { RowId = 59, Incarnation = first.Incarnation + 1 }));
+            Assert.Empty(applied);
+
+            registry.ApplyFallback(first, resolved);
+
+            Assert.Equal((first, resolved), Assert.Single(applied));
+        }
+
+        [Fact]
         public void FailedApplicationIsNotAcknowledgedAndCanBeRetried()
         {
             var attempts = 0;
