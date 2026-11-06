@@ -1066,32 +1066,217 @@ namespace XMAT.Tests.Replay
             }
         });
 
-        // Once the body is no longer a form, a Connection header that names Content-Type is the request's own, as always:
-        // Copy as cURL copies it.
-        [Fact]
-        public Task WithoutAForm_AConnectionHeaderNamingContentType_RefusesNothing() => _application.RunAsync(async () =>
+        // Once the body is no longer a form, a Connection header that names Content-Type is the request's own, as always: Send
+        // sends the request, Copy as cURL copies it, and Save as cURL script and Save request as go on to ask where.
+        [Theory]
+        [InlineData("send")]
+        [InlineData("copy")]
+        [InlineData("script")]
+        [InlineData("save")]
+        public Task WithoutAForm_AConnectionHeaderNamingContentType_RefusesNothing(string action) => _application.RunAsync(async () =>
         {
-            var window = new RequestComposerWindow(Capture(9, "GET"), confirm: NoQuestion);
-            var copied = new List<string>();
-            window.CopyText = copied.Add;
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            using var client = new RequestReplayClient();
+            var window = new RequestComposerWindow(Capture(server.Port, "GET"), client, NoQuestion);
+            List<string> steps = RecordSteps(window);
             try
             {
-                MultipartFormWindow dialog = OpenForm(window);
-                AddText(dialog, "a", "1");
-                await dialog.UseFormAsync();
+                await UseAFormAsync(window);
                 window.ClearBody();
                 Find<TextBox>(window, "HeadersBox").Text += "\r\nConnection: Content-Type";
 
-                await window.CopyAsCurlAsync();
+                await ActionOf(window, action)();
 
-                Assert.Single(copied);
                 Assert.NotEqual(Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED"), Status(window));
+                if (action == "send")
+                {
+                    Assert.Single(server.Requests);
+                    Assert.Empty(steps);
+                }
+                else
+                {
+                    Assert.Equal(new[] { action }, steps);
+                    Assert.Empty(server.Requests);
+                }
             }
             finally
             {
                 window.Close();
             }
         });
+
+        // Save request as and both cURL exports check a form's Content-Type off the UI thread, over the request and the form
+        // flag that they froze, as the first step of their work; without a Connection nomination, each then goes ahead.
+        [Theory]
+        [InlineData("copy")]
+        [InlineData("script")]
+        [InlineData("save")]
+        public Task TheContentTypeCheckOfAForm_RunsOffTheUiThread(string action) => _application.RunAsync(async () =>
+        {
+            var window = new RequestComposerWindow(Capture(9, "POST"), confirm: NoQuestion);
+            List<string> steps = RecordSteps(window);
+            int uiThread = Environment.CurrentManagedThreadId;
+            var checks = new List<(bool Form, int Thread)>();
+            window.CheckFormContentType = (form, draft, token) =>
+            {
+                lock (checks)
+                {
+                    checks.Add((form, Environment.CurrentManagedThreadId));
+                }
+
+                return RequestComposerWindow.FormContentTypeDropped(form, draft, token);
+            };
+            try
+            {
+                await UseAFormAsync(window);
+
+                await ActionOf(window, action)();
+
+                (bool form, int thread) = Assert.Single(checks);
+                Assert.True(form);
+                Assert.NotEqual(uiThread, thread);
+                Assert.Equal(new[] { action }, steps);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+        // Cancel request, or closing the window, while Save request as or a cURL export checks a form's Content-Type stops the
+        // check, which is given the action's token. Nothing is asked, inspected, prepared, copied or saved, and the request in
+        // the editors stays as it was; the check's result, a refusal that arrives after the cancel, is discarded: the status
+        // says that the action was cancelled.
+        [Theory]
+        [InlineData("copy", false)]
+        [InlineData("copy", true)]
+        [InlineData("script", false)]
+        [InlineData("script", true)]
+        [InlineData("save", false)]
+        [InlineData("save", true)]
+        public Task CancelOrClose_StopsTheContentTypeCheck_AndDiscardsALateResult(string action, bool close) => _application.RunAsync(async () =>
+        {
+            var questions = new List<string>();
+            var window = new RequestComposerWindow(
+                Capture(9, "POST"),
+                confirm: message =>
+                {
+                    questions.Add(message);
+                    return true;
+                });
+            List<string> steps = RecordSteps(window);
+            window.PrepareCurl = (_, _, _, _) => throw new Xunit.Sdk.XunitException("Nothing is prepared once the check stopped.");
+            window.InspectRequest = (_, _) => throw new Xunit.Sdk.XunitException("Nothing is inspected once the check stopped.");
+            var checking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            bool cancelled = false;
+            window.CheckFormContentType = (_, _, token) =>
+            {
+                checking.TrySetResult();
+                cancelled = token.WaitHandle.WaitOne(Patience);
+                return true;
+            };
+            bool closed = false;
+            try
+            {
+                await UseAFormAsync(window);
+                string request = HeadersAndBody(window);
+                Task act = ActionOf(window, action)();
+                await checking.Task.WaitAsync(Patience);
+
+                if (close)
+                {
+                    window.Close();
+                    closed = true;
+                }
+                else
+                {
+                    window.CancelSend();
+                }
+
+                await act.WaitAsync(Patience);
+
+                Assert.True(cancelled);
+                Assert.Empty(questions);
+                Assert.Empty(steps);
+                Assert.Equal(request, HeadersAndBody(window));
+                if (!close)
+                {
+                    Assert.Equal(
+                        Localization.GetLocalizedString(action == "copy" ? "COMPOSER_COPY_CURL_CANCELLED" : "COMPOSER_SAVE_CANCELLED"),
+                        Status(window));
+                }
+            }
+            finally
+            {
+                if (!closed)
+                    window.Close();
+            }
+        });
+
+        // A form's Content-Type that the headers would drop refuses Save request as and both cURL exports before anything is
+        // inspected or prepared for the request, and before any question: also for a URL that goes to another origin, which
+        // the exports would ask about, and which the check's refusal never gets to.
+        [Theory]
+        [InlineData("copy")]
+        [InlineData("script")]
+        [InlineData("save")]
+        public Task AFormsContentTypeRefusal_ComesBeforeAnyInspectionPreparationOrQuestion(string action) => _application.RunAsync(async () =>
+        {
+            var questions = new List<string>();
+            var window = new RequestComposerWindow(
+                Capture(9, "POST"),
+                confirm: message =>
+                {
+                    questions.Add(message);
+                    return true;
+                });
+            List<string> steps = RecordSteps(window);
+            window.PrepareCurl = (_, _, _, _) => throw new Xunit.Sdk.XunitException("Nothing is prepared for a refused form.");
+            window.InspectRequest = (_, _) => throw new Xunit.Sdk.XunitException("Nothing is inspected for a refused form.");
+            window.CheckFormContentType = (form, _, _) => form;
+            try
+            {
+                await UseAFormAsync(window);
+                Find<TextBox>(window, "UrlBox").Text = "http://127.0.0.2:9/upload";
+                string request = HeadersAndBody(window);
+
+                await ActionOf(window, action)();
+
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED"), Status(window));
+                Assert.Empty(questions);
+                Assert.Empty(steps);
+                Assert.Equal(request, HeadersAndBody(window));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+        // The check itself is pure, over a request and a form flag, without the window: only a form's request whose Connection
+        // header nominates Content-Type, in any case, is refused; header text that is not valid is not, nor is a request
+        // without a form. It changes nothing, and once cancelled it gives no result, with or without a form.
+        [Fact]
+        public void TheContentTypeCheck_IsPure_AndACancelledCheckGivesNoResult()
+        {
+            static RequestReplayDraft Draft(string headers) =>
+                new() { Method = "POST", Url = "http://127.0.0.1:9/upload", HeadersText = headers };
+            const string Nominating = "Content-Type: multipart/form-data; boundary=b\r\nConnection: keep-alive, content-TYPE";
+            RequestReplayDraft nominated = Draft(Nominating);
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            Assert.True(RequestComposerWindow.FormContentTypeDropped(true, nominated, CancellationToken.None));
+            Assert.False(RequestComposerWindow.FormContentTypeDropped(false, nominated, CancellationToken.None));
+            Assert.False(RequestComposerWindow.FormContentTypeDropped(true, Draft("Connection: keep-alive"), CancellationToken.None));
+            Assert.False(RequestComposerWindow.FormContentTypeDropped(
+                true, Draft("not a header line\r\nConnection: Content-Type"), CancellationToken.None));
+            Assert.Equal(Nominating, nominated.HeadersText);
+            Assert.Throws<OperationCanceledException>(
+                () => RequestComposerWindow.FormContentTypeDropped(true, nominated, cancellation.Token));
+            Assert.Throws<OperationCanceledException>(
+                () => RequestComposerWindow.FormContentTypeDropped(false, nominated, cancellation.Token));
+        }
 
         // While the body is a form, header text that is not valid is left to the action, which refuses it as it always does.
         [Fact]
@@ -1350,6 +1535,42 @@ namespace XMAT.Tests.Replay
             window.ShowFormDialog = dialog => opened = dialog;
             window.BuildForm();
             return Assert.IsType<MultipartFormWindow>(opened);
+        }
+
+        // Uses a form of one text part in the composer.
+        private static async Task UseAFormAsync(RequestComposerWindow window)
+        {
+            MultipartFormWindow dialog = OpenForm(window);
+            AddText(dialog, "a", "1");
+            await dialog.UseFormAsync();
+        }
+
+        // The action as the composer runs it: Send, Copy as cURL, Save as cURL script or Save request as.
+        private static Func<Task> ActionOf(RequestComposerWindow window, string action) => action switch
+        {
+            "send" => window.SendAsync,
+            "copy" => window.CopyAsCurlAsync,
+            "script" => window.SaveCurlScriptAsync,
+            _ => window.SaveRequestAsync,
+        };
+
+        // Records, by its action's name, what each export does once it goes ahead: Copy as cURL copies, and Save as cURL
+        // script and Save request as ask where to save, which nobody answers.
+        private static List<string> RecordSteps(RequestComposerWindow window)
+        {
+            var steps = new List<string>();
+            window.CopyText = _ => steps.Add("copy");
+            window.ChooseCurlScriptPath = () =>
+            {
+                steps.Add("script");
+                return null;
+            };
+            window.ChooseSavePath = () =>
+            {
+                steps.Add("save");
+                return null;
+            };
+            return steps;
         }
 
         // A dialog of its own, for a request with this method, whose form nothing takes.

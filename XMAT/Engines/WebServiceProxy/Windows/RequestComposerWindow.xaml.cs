@@ -239,7 +239,9 @@ namespace XMAT.WebServiceCapture
                 return;
 
             // Everything that the run sends is fixed here, before the user is asked anything: the request, as a copy that
-            // later edits do not change, the options, the transport and where the request comes from.
+            // later edits do not change, the options, the transport and where the request comes from. A form whose
+            // Content-Type the headers would drop is refused here, at the entry, because Send prepares its request
+            // synchronously, on the UI thread (DropsFormContentType).
             UpdateDraft();
             if (DropsFormContentType())
                 return;
@@ -376,6 +378,11 @@ namespace XMAT.WebServiceCapture
 
         // Test seam: how Build form shows its dialog, by default modally, owned by the window (ShowOwnedFormDialog).
         internal Action<MultipartFormWindow> ShowFormDialog { get; set; }
+
+        // Test seam: whether building a request would drop the Content-Type of a form that Build form made, which Save request
+        // and both cURL exports check first, off the UI thread, over the request and the form flag that they froze; by default
+        // FormContentTypeDropped.
+        internal Func<bool, RequestReplayDraft, CancellationToken, bool> CheckFormContentType { get; set; }
 
         // The client that sends. The window disposes the client that it created once it is closed and no run uses it.
         internal RequestReplayClient Client => _client;
@@ -1050,30 +1057,62 @@ namespace XMAT.WebServiceCapture
             StatusText.Text = Localization.GetLocalizedString("COMPOSER_FORM_USED", _fileName, form.Body.LongLength);
         }
 
-        // Whether the form's Content-Type would be lost: while the body is a form that Build form made, a Connection header
-        // that names Content-Type makes the request drop it when the request is built (RequestReplayDraft.
-        // IsNominatedByConnection). Send and Save request check this as they start; both cURL exports keep their availability
-        // and transport checks first (TryFreezeForCurl), then check this. Each refuses before any question, send or output,
-        // says why, and changes no header. Header text that is not valid is left to the action, which refuses it in its own
-        // words.
+        // Send's check, at its entry and on the UI thread, because Send prepares its request synchronously: while the body
+        // is a form that Build form made, a request whose Connection header nominates Content-Type is refused, with the reason
+        // in the status and no header changed (FormContentTypeDropped). Save request and both cURL exports make the same check
+        // off the UI thread, as the first step of their work, before any question or output (RefuseDroppedFormContentType).
         private bool DropsFormContentType()
         {
-            if (_formSeed == null)
+            if (!FormContentTypeDropped(_formSeed != null, _draft, CancellationToken.None))
                 return false;
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED");
+            return true;
+        }
+
+        // Whether building this request would drop the Content-Type of a form that Build form made (form): its Connection
+        // header nominates Content-Type (RequestReplayDraft.IsNominatedByConnection). Header text that is not valid is not
+        // this refusal: the action refuses it in its own words. Pure: it reads only the request and the form flag that it is
+        // given, which nothing changes meanwhile, and changes nothing, so it can parse header text of any length off the UI
+        // thread. The token is checked before the headers are parsed and again before the result is given: a cancelled
+        // check gives none.
+        internal static bool FormContentTypeDropped(bool form, RequestReplayDraft draft, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(draft);
+            cancellationToken.ThrowIfCancellationRequested();
+            bool dropped = form && NominatesContentType(draft);
+            cancellationToken.ThrowIfCancellationRequested();
+            return dropped;
+        }
+
+        // Whether the request's Connection header nominates Content-Type; false for header text that is not valid.
+        private static bool NominatesContentType(RequestReplayDraft draft)
+        {
             IReadOnlyList<KeyValuePair<string, string>> headers;
             try
             {
-                headers = _draft.GetHeaders();
+                headers = draft.GetHeaders();
             }
             catch (FormatException)
             {
                 return false;
             }
 
-            if (!RequestReplayDraft.IsNominatedByConnection(headers, "Content-Type"))
-                return false;
-            StatusText.Text = Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED");
-            return true;
+            return RequestReplayDraft.IsNominatedByConnection(headers, "Content-Type");
+        }
+
+        // The first step of the work that Save request and both cURL exports run off the UI thread, over the request and the
+        // form flag that they froze: a form's Content-Type that the headers would drop (CheckFormContentType, by default
+        // FormContentTypeDropped) refuses the action, as content-type-dropped, before anything is inspected, prepared or
+        // rendered for it, and so before any question or output; the window says so once the work has ended. It changes no
+        // header.
+        private static void RefuseDroppedFormContentType(
+            bool form,
+            RequestReplayDraft draft,
+            Func<bool, RequestReplayDraft, CancellationToken, bool> dropsContentType,
+            CancellationToken cancellationToken)
+        {
+            if (dropsContentType(form, draft, cancellationToken))
+                throw new MultipartFormException(MultipartCodes.ContentTypeDropped);
         }
 
         // Open request: loads a request file in place of the request in the editors, after asking when the user has edited
@@ -1436,47 +1475,58 @@ namespace XMAT.WebServiceCapture
 
         // Save request as: saves the request as a request file, without sending it. What is saved is fixed first, on the UI
         // thread: a copy of the draft that later edits do not change, which shares the body's text or bytes, never changed
-        // in place, with the HTTP version chosen now. Checking that copy and recognizing what it holds can read a body of
-        // 64 MiB, so that runs off the UI thread (InspectForSaving). The window then asks where, then how: as a template,
-        // which keeps only the request's shape, unless the user includes the captured content for this save. The content
-        // needs every part that a request file left out, and its own permission when the URL goes to another origin than
-        // the request was captured or loaded for. The file is written off the UI thread too, privately and never in place
-        // of another file. The window is busy while it checks or writes, and closing it or Cancel request stops either: a
-        // check stopped even once it ended asks nothing and saves nothing. The request in the editors is never changed,
-        // whatever happens. A form whose Content-Type the headers would drop is not saved, as a template either
-        // (DropsFormContentType).
+        // in place, with the HTTP version chosen now, and whether the body is a form that Build form made. Off the UI thread,
+        // a form's Content-Type that the headers would drop refuses the save first, whether as a template or with the
+        // content, before anything is inspected or asked (RefuseDroppedFormContentType); then checking that copy and
+        // recognizing what it holds, which can read a body of 64 MiB (InspectForSaving). The window then asks where, then
+        // how: as a template, which keeps only the request's shape, unless the user includes the captured content for this
+        // save. The content needs every part that a request file left out, and its own permission when the URL goes to
+        // another origin than the request was captured or loaded for. The file is written off the UI thread too, privately
+        // and never in place of another file. The window is busy while it checks or writes, and closing it or Cancel request
+        // stops either: a check stopped even once it ended asks nothing and saves nothing. The request in the editors is
+        // never changed, whatever happens.
         internal async Task SaveRequestAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
 
             UpdateDraft();
-            if (DropsFormContentType())
-                return;
             RequestReplayDraft draft = _draft.WithUrl(_draft.Url);
+            bool form = _formSeed != null;
             ReplayHttpVersion httpVersion = SelectedHttpVersion;
+            Func<bool, RequestReplayDraft, CancellationToken, bool> dropsContentType =
+                CheckFormContentType ?? FormContentTypeDropped;
             Func<RequestReplayDraft, CancellationToken, RequestFileRecognized> inspect =
                 InspectRequest ?? InspectForSaving;
             using var checking = new CancellationTokenSource();
             CancellationToken checkingToken = checking.Token;
+            Func<RequestFileRecognized> examine = () =>
+            {
+                RefuseDroppedFormContentType(form, draft, dropsContentType, checkingToken);
+                return inspect(draft, checkingToken);
+            };
             _checkingCancellation = checking;
             _state = ComposerState.Checking;
             SetBusy(true);
             StatusText.Text = Localization.GetLocalizedString("COMPOSER_SAVE_CHECKING");
             RequestFileRecognized recognized = null;
-            string invalid = null;
+            string refusal = null;
             bool stopped;
             try
             {
-                recognized = await Task.Run(() => inspect(draft, checkingToken), checkingToken);
+                recognized = await Task.Run(examine, checkingToken);
             }
             catch (OperationCanceledException) when (checking.IsCancellationRequested)
             {
                 // Cancelled, or the window closed: nothing is saved.
             }
+            catch (MultipartFormException exception) when (exception.Code == MultipartCodes.ContentTypeDropped)
+            {
+                refusal = Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED");
+            }
             catch (Exception exception) when (exception is FormatException or ArgumentException or RequestFileException)
             {
-                invalid = exception.Message;
+                refusal = Localization.GetLocalizedString("COMPOSER_SAVE_INVALID", exception.Message);
             }
             finally
             {
@@ -1490,9 +1540,9 @@ namespace XMAT.WebServiceCapture
                 return;
             if (stopped || recognized == null)
             {
-                StatusText.Text = stopped || invalid == null
+                StatusText.Text = stopped || refusal == null
                     ? Localization.GetLocalizedString("COMPOSER_SAVE_CANCELLED")
-                    : Localization.GetLocalizedString("COMPOSER_SAVE_INVALID", invalid);
+                    : refusal;
                 return;
             }
 
@@ -2026,30 +2076,39 @@ namespace XMAT.WebServiceCapture
         // Copy as cURL: one click copies to the clipboard a command for PowerShell 7 that sends the request as the editors
         // hold it, with the inbox curl.exe (RequestCurlExporter, CurlScriptForm.Pasteable); the warning beside the button
         // says beforehand that it copies the full request, credentials and body included. The request and its options are
-        // fixed first (TryFreezeForCurl). Preparing the request, holding its body to 64 KiB, beyond which Save as cURL
-        // script saves it, and rendering the command run off the UI thread while the window is busy; Cancel request or
-        // closing the window stops them, and a command made by then is not copied. Only then, for a URL that goes to another
-        // origin than the request was captured or loaded for, the user is asked whether to export it for that origin
-        // (AllowsCurlOrigin). Nothing ever clears the clipboard: a command that is not copied leaves it as it was.
+        // fixed first (TryFreezeForCurl). Off the UI thread, while the window is busy, a form's Content-Type that the headers
+        // would drop refuses the copy first (RefuseDroppedFormContentType); then the request is prepared, its body held to 64
+        // KiB, beyond which Save as cURL script saves it, and the command rendered. Cancel request or closing the window stops
+        // that work, and a command made by then is not copied. Only then, for a URL that goes to another origin than the
+        // request was captured or loaded for, the user is asked whether to export it for that origin (AllowsCurlOrigin).
+        // Nothing ever clears the clipboard: a command that is not copied leaves it as it was.
         internal async Task CopyAsCurlAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
             if (!TryFreezeForCurl(
-                copying: true, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects))
+                copying: true,
+                out RequestReplayDraft draft,
+                out ReplayTransportOptions transport,
+                out int redirects,
+                out bool form))
             {
                 return;
             }
 
+            Func<bool, RequestReplayDraft, CancellationToken, bool> dropsContentType =
+                CheckFormContentType ?? FormContentTypeDropped;
             Func<RequestReplayDraft, ReplayTransportOptions, int, CancellationToken, CurlRequest> prepare =
                 PrepareCurl ?? RequestCurlExporter.Prepare;
             Action<CurlRequest, CurlScriptForm, string, Stream, CancellationToken> write =
                 WriteCurlScript ?? RequestCurlExporter.Write;
             using var rendering = new CancellationTokenSource();
             CancellationToken token = rendering.Token;
-            // Prepared, held to what the clipboard takes and rendered off the UI thread: no command for a larger body.
+            // Checked for a form's Content-Type, prepared, held to what the clipboard takes and rendered off the UI thread: no
+            // command for a larger body.
             Func<string> render = () =>
             {
+                RefuseDroppedFormContentType(form, draft, dropsContentType, token);
                 CurlRequest request = prepare(draft, transport, redirects, token);
                 if (request.Body.Length > RequestCurlExporter.MaxPasteableBodyBytes)
                     return null;
@@ -2128,29 +2187,42 @@ namespace XMAT.WebServiceCapture
 
         // Save as cURL script: saves, without sending it, a PowerShell 7 script that sends the request with the inbox
         // curl.exe, its body inline up to 64 MiB (RequestCurlExporter, CurlScriptForm.File). The request and its options are
-        // fixed first (TryFreezeForCurl) and prepared off the UI thread while the window is busy; Cancel request or closing
-        // the window stops that, and a request prepared by then is neither asked about nor saved. The window then asks
-        // where; for a URL that goes to another origin than the request was captured or loaded for, whether to export it for
-        // that origin (AllowsCurlOrigin); then whether to save the full request at all, No by default, for every script.
-        // The script is rendered straight into the file and published off the UI thread, privately and never in place of
-        // another file (PrivateFilePublisher). What the publication did is what the status says, also after Cancel request:
-        // a script published by then stays published, and closing the window never deletes it or says otherwise.
+        // fixed first (TryFreezeForCurl). Off the UI thread, while the window is busy, a form's Content-Type that the headers
+        // would drop refuses the script first (RefuseDroppedFormContentType); then the request is prepared. Cancel request or
+        // closing the window stops that work, and a request prepared by then is neither asked about nor saved. The window
+        // then asks where; for a URL that goes to another origin than the request was captured or loaded for, whether to
+        // export it for that origin (AllowsCurlOrigin); then whether to save the full request at all, No by default, for
+        // every script. The script is rendered straight into the file and published off the UI thread, privately and never
+        // in place of another file (PrivateFilePublisher). What the publication did is what the status says, also after
+        // Cancel request: a script published by then stays published, and closing the window never deletes it or says
+        // otherwise.
         internal async Task SaveCurlScriptAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
             if (!TryFreezeForCurl(
-                copying: false, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects))
+                copying: false,
+                out RequestReplayDraft draft,
+                out ReplayTransportOptions transport,
+                out int redirects,
+                out bool form))
             {
                 return;
             }
 
+            Func<bool, RequestReplayDraft, CancellationToken, bool> dropsContentType =
+                CheckFormContentType ?? FormContentTypeDropped;
             Func<RequestReplayDraft, ReplayTransportOptions, int, CancellationToken, CurlRequest> prepare =
                 PrepareCurl ?? RequestCurlExporter.Prepare;
             Action<CurlRequest, CurlScriptForm, string, Stream, CancellationToken> write =
                 WriteCurlScript ?? RequestCurlExporter.Write;
             using var preparing = new CancellationTokenSource();
             CancellationToken preparingToken = preparing.Token;
+            Func<CurlRequest> prepareChecked = () =>
+            {
+                RefuseDroppedFormContentType(form, draft, dropsContentType, preparingToken);
+                return prepare(draft, transport, redirects, preparingToken);
+            };
             _checkingCancellation = preparing;
             _state = ComposerState.Checking;
             SetBusy(true);
@@ -2160,7 +2232,7 @@ namespace XMAT.WebServiceCapture
             bool stopped;
             try
             {
-                request = await Task.Run(() => prepare(draft, transport, redirects, preparingToken), preparingToken);
+                request = await Task.Run(prepareChecked, preparingToken);
             }
             catch (OperationCanceledException) when (preparing.IsCancellationRequested)
             {
@@ -2256,14 +2328,16 @@ namespace XMAT.WebServiceCapture
         }
 
         // Fixes what a cURL export exports, from the editors and options as they are now: a copy of the draft that later
-        // edits do not change, which shares the body's text or bytes, never changed in place, with the transport and the
-        // most redirects. False, with the reason in the status, when the export is not available (CurlUnavailableText), or
-        // would lose a form's Content-Type (DropsFormContentType).
+        // edits do not change, which shares the body's text or bytes, never changed in place, with the transport, the most
+        // redirects, and whether the body is a form that Build form made, whose Content-Type the export checks off the UI
+        // thread first (RefuseDroppedFormContentType). False, with the reason in the status, when the export is not
+        // available (CurlUnavailableText), which costs nothing to know.
         private bool TryFreezeForCurl(
-            bool copying, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects)
+            bool copying, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects, out bool form)
         {
             draft = null;
             redirects = 0;
+            form = false;
             string unavailable = CurlUnavailableText(copying);
             if (unavailable != null || !TryReadTransport(out transport))
             {
@@ -2273,9 +2347,8 @@ namespace XMAT.WebServiceCapture
             }
 
             UpdateDraft();
-            if (DropsFormContentType())
-                return false;
             draft = _draft.WithUrl(_draft.Url);
+            form = _formSeed != null;
             redirects = MaxRedirects;
             return true;
         }
@@ -2291,12 +2364,15 @@ namespace XMAT.WebServiceCapture
         // A URL's origin as a question or the status shows it (UntrustedText).
         private static string ShownOrigin(string url) => UntrustedText.Show(Origin(url), MaxShownOriginChars);
 
-        // Why RequestCurlExporter.Prepare refused the request, in the words that the buttons use when they are unavailable
-        // for the same reason; null for an exception that is no refusal. pending is what the request still leaves out.
+        // Why RequestCurlExporter.Prepare, or the check of a form's Content-Type before it (RefuseDroppedFormContentType),
+        // refused the request, in the words that the buttons use when they are unavailable for the same reason; null for an
+        // exception that is no refusal. pending is what the request still leaves out.
         private static string CurlRefusalText(Exception exception, RequestOmissions pending) => exception switch
         {
             RequestIncompleteException =>
                 Localization.GetLocalizedString("COMPOSER_CURL_INCOMPLETE", PendingParts(pending)),
+            MultipartFormException { Code: MultipartCodes.ContentTypeDropped } =>
+                Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED"),
             CurlExportException { Code: CurlExportCodes.Unsupported, Reason: CurlUnsupported unsupported } =>
                 UnsupportedCurlText(unsupported),
             CurlExportException { Code: CurlExportCodes.HeadBody } =>
