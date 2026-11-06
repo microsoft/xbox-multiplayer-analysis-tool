@@ -211,7 +211,6 @@ namespace XMAT.Operations.Capabilities
                     Window("XMAT.WebServiceCapture.RequestComposerWindow"),
                     Click(ComposerXaml, "Send_Click"),
                     Click(ComposerXaml, "CancelSend_Click"),
-                    Click(ComposerXaml, "CopyCurl_Click"),
                     Click(ComposerXaml, "UploadFile_Click"),
                     Click(ComposerXaml, "ClearBody_Click"),
                     Click(ComposerXaml, "Close_Click"),
@@ -251,6 +250,21 @@ namespace XMAT.Operations.Capabilities
                     Click(ComposerXaml, "CompletePart_Click"),
                     Window("XMAT.WebServiceCapture.SaveRequestWindow"),
                     Click("Engines/WebServiceProxy/Windows/SaveRequestWindow.xaml", "Save_Click"),
+                }),
+
+            // A cURL script runs one request again outside XMAT: PowerShell 7 runs the inbox curl.exe with arguments that
+            // send what XMAT's sender sends. A script holds its request as captured, so exporting always needs consent; it
+            // sends nothing and starts nothing (RequestCurlExporter).
+            Capability.Supported(
+                "request.curl", "Export requests as cURL scripts for PowerShell 7, without sending them", "S9",
+                cli: "curl INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--include-sensitive] " +
+                    "[--device ID] [--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... " +
+                    "[--clear-headers] [--body-file FILE] [--empty-body] [--unconditional] [--http-version auto|1.1] " +
+                    "[--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Click(ComposerXaml, "CopyCurl_Click"),
                 }),
 
             // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.

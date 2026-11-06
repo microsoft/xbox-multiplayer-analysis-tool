@@ -214,8 +214,13 @@ namespace XMAT.WebServiceCapture
         internal const string RequestBodyNotKeptHeader = "X-XMAT-Request-Body-Not-Kept";
         internal const string ResponseBodyNotKeptHeader = "X-XMAT-Response-Body-Not-Kept";
 
-        internal HttpRequestMessage CreateRequest()
+        internal HttpRequestMessage CreateRequest() => CreateRequest(GetBodyBytes());
+
+        // The request with these body bytes in place of the draft's own, which it does not decode: an export builds the
+        // headers once over an empty body, and makes the body itself once.
+        internal HttpRequestMessage CreateRequest(byte[] body)
         {
+            ArgumentNullException.ThrowIfNull(body);
             if (!Uri.TryCreate(Url, UriKind.Absolute, out var uri) ||
                 (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
                 !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment))
@@ -242,7 +247,7 @@ namespace XMAT.WebServiceCapture
                     connectionHeaders.Add(name);
             }
 
-            var request = new ClientRequest { Method = Method, BodyBytes = GetBodyBytes() };
+            var request = new ClientRequest { Method = Method, BodyBytes = body };
             foreach (var header in headers)
             {
                 // The edited URL and body determine the new authority and length, not the captured framing.

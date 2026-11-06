@@ -275,6 +275,40 @@ namespace XMAT.Tests.Cli
             Assert.Equal(("https://a.test/#?p=#", null, false), (fromUrl.Replay.Url, fromUrl.Limits, fromUrl.Replay.IncludeSensitive));
         }
 
+        // curl takes what save-request takes. The options that only a send uses and HTTP/2 only are usage errors, each with
+        // one fixed message. Consent is left to the run, which refuses without it before reading anything (exit code 3),
+        // so --allow-origin-change without --include-sensitive parses.
+        [Fact]
+        public void Parse_Curl_TakesWhatSaveRequestTakes_AndRefusesWhatOnlyASendUses()
+        {
+            CliRequest curl = CliCommandLine.Parse(Split(
+                "curl a.saz --request 1-2 --out o --allow-origin-change --http-version 1.1 --unconditional")).Request;
+            Assert.Equal(
+                (CliCommands.Curl, "a.saz", "1-2", false, true, ReplayHttpVersion.Http11, true),
+                (curl.Command, curl.Input, curl.Replay.Selection, curl.Replay.IncludeSensitive, curl.Replay.AllowOriginChange,
+                    curl.Replay.HttpVersion, curl.Replay.Unconditional));
+            Assert.Equal(CliLimits.Default, curl.Limits);
+
+            foreach (string sendOnly in new[]
+            {
+                "--repeat 2", "--parallel 2", "--timeout 5", "--max-response-mib 16", "--follow-redirects 1",
+                "--connect-to 127.0.0.1:9", "--allow-connect-to", "--sequence 1-2", "--allow-unsafe-methods", "--verify",
+                "--verify-diff", "--origin http://a.test",
+            })
+            {
+                CliParseResult refused = CliCommandLine.Parse(Split("curl --url http://a.test/ --out o --include-sensitive " + sendOnly));
+                Assert.Equal(
+                    ("cli.usage.unsupported-option", CliCommandLine.CurlSendOnlyMessage), (refused.Error.Code, refused.Error.Message));
+            }
+
+            CliParseResult http2 = CliCommandLine.Parse(Split("curl --url https://a.test/ --out o --include-sensitive --http-version 2"));
+            Assert.Equal(("cli.usage.invalid-value", CliCommandLine.CurlHttpVersionMessage), (http2.Error.Code, http2.Error.Message));
+            Assert.Equal("curl needs --out DIR.", CliCommandLine.Parse(Split("curl --url https://a.test/")).Error.Message);
+            Assert.Equal(
+                "cli.usage.missing-option",
+                CliCommandLine.Parse(Split("save-request --url https://a.test/ --out o --allow-origin-change")).Error.Code);
+        }
+
         // --sequence turns --url into a template; a '#' without it is refused with a pointer to --sequence.
         [Fact]
         public void Parse_ReadsComposeSequences_AndPointsAFragmentAtThem()
@@ -303,6 +337,10 @@ namespace XMAT.Tests.Cli
         [InlineData(@"compose --url http://secret.test/ --out results --header secret")]
         [InlineData(@"compose --url http://secret.test/ --out results --method se(cret")]
         [InlineData(@"compose --url http://secret.test/ --out results --repeat secret")]
+        [InlineData(@"curl --url http://secret.test/ --out results --header secret")]
+        [InlineData(@"curl C:\secret\a.saz --request C:\secret --out C:\secret\results --include-sensitive")]
+        [InlineData(@"curl --url http://secret.test/ --out results --repeat secret")]
+        [InlineData(@"curl --url http://secret.test/ --out results --http-version secret")]
         public void Parse_ErrorsNeverRepeatValues(string commandLine)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));
@@ -366,7 +404,7 @@ namespace XMAT.Tests.Cli
             CliReport report = CliHelp.Create("run", topic: null);
 
             Assert.Equal(
-                new[] { CliCommands.Analyze, CliCommands.Compose, CliCommands.Doctor, CliCommands.Replay, CliCommands.SaveRequest },
+                new[] { CliCommands.Analyze, CliCommands.Compose, CliCommands.Curl, CliCommands.Doctor, CliCommands.Replay, CliCommands.SaveRequest },
                 report.Commands.Select(command => command.Name));
             foreach (Capability capability in CapabilityRegistry.All.Where(item => item.Status == CapabilityStatus.Supported))
             {
@@ -374,12 +412,13 @@ namespace XMAT.Tests.Cli
             }
         }
 
-        // The command lines of replay, compose and save-request in the capability registry, which help and docs/cli.md show,
-        // name exactly the options and switches that the parser accepts.
+        // The command lines of replay, compose, save-request and curl in the capability registry, which help and docs/cli.md
+        // show, name exactly the options and switches that the parser accepts.
         [Theory]
         [InlineData("request.replay", CliCommands.Replay)]
         [InlineData("request.compose", CliCommands.Compose)]
         [InlineData("request.save", CliCommands.SaveRequest)]
+        [InlineData("request.curl", CliCommands.Curl)]
         public void ReplayCommandLines_NameExactlyTheOptionsThatTheParserAccepts(string capabilityId, string command)
         {
             Capability capability = CapabilityRegistry.All.Single(item => item.Id == capabilityId);
@@ -387,6 +426,7 @@ namespace XMAT.Tests.Cli
             {
                 CliCommands.Replay => CliCommandLine.ReplayOptionNames,
                 CliCommands.Compose => CliCommandLine.ComposeOptionNames,
+                CliCommands.Curl => CliCommandLine.CurlOptionNames,
                 _ => CliCommandLine.SaveRequestOptionNames,
             };
 

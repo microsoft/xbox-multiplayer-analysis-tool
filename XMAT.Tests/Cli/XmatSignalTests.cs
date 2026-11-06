@@ -9,10 +9,11 @@ using System.Text.Json;
 using XMAT.Cli;
 using XMAT.Tests.Fixtures;
 using XMAT.Tests.Proxy;
+using XMAT.Tests.Replay;
 
 namespace XMAT.Tests.Cli
 {
-    // A real console signal to a running xmat analyze, made deterministic without test hooks in xmat: the test keeps a
+    // A real console signal to a running xmat analyze or curl, made deterministic without test hooks in xmat: the test keeps a
     // file open in xmat's staging folder, so xmat can neither publish (rename the folder to --out) nor remove the folder
     // until the test lets go, and the signal always lands before publication however fast the analysis is. Removing the
     // folder deletes the test's marker file first; once it is gone, xmat has given up publishing, the test lets go, and
@@ -48,6 +49,38 @@ namespace XMAT.Tests.Cli
             JsonElement json = run.Json();
             Assert.Equal("cancelled", json.GetProperty("status").GetString());
             Assert.Contains(run.ErrorCodes(), code => code is "cli.cancelled" or "analysis.cancelled");
+            Assert.Empty(json.GetProperty("artifacts").EnumerateArray());
+            Assert.Equal("completed", json.GetProperty("cleanup").GetProperty("state").GetString());
+            Assert.Equal(new[] { "capture.saz" }, directory.Entries());
+        }
+
+        // The same for xmat curl, while it reads the capture or writes the scripts: nothing is published.
+        [Fact]
+        public async Task CtrlBreak_BeforeCurlPublication_CancelsAndPublishesNothing()
+        {
+            using var directory = new CliTestDirectory();
+            using var helperDirectory = new CliTestDirectory();
+            string input = ReplayCaptures.WriteSaz(
+                directory.Root,
+                "capture.saz",
+                Enumerable.Range(1, 2000).Select(number => new CapturedExchange("GET", $"http://127.0.0.1:9/{number}")).ToArray());
+            using ConsoleSignal signal = await ConsoleSignal.StartAsync(helperDirectory.Root);
+            using XmatChild xmat = XmatProcess.Start(
+                XmatProcess.CliDirectory, directory.Root, "curl", input, "--request", "all", "--include-sensitive", "--out", "scripts");
+
+            string staging = await WaitForStagingFolderAsync(directory.Root, xmat);
+            using (StagingHold hold = StagingHold.Take(staging))
+            {
+                await signal.SendAsync(xmat.Id, ConsoleSignal.CtrlBreak);
+                await hold.WaitUntilRemovalStartsAsync(xmat);
+            }
+
+            XmatRun run = await xmat.CompleteAsync();
+
+            CliAssert.ExitCode(130, run);
+            JsonElement json = run.Json();
+            Assert.Equal("cancelled", json.GetProperty("status").GetString());
+            Assert.Contains(run.ErrorCodes(), code => code is "cli.cancelled" or "replay.cancelled");
             Assert.Empty(json.GetProperty("artifacts").EnumerateArray());
             Assert.Equal("completed", json.GetProperty("cleanup").GetProperty("state").GetString());
             Assert.Equal(new[] { "capture.saz" }, directory.Entries());

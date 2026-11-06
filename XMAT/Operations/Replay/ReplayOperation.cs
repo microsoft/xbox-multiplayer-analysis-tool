@@ -29,23 +29,12 @@ namespace XMAT.Operations.Replay
         internal const string RequestInvalidCode = "replay.request.invalid";
         internal const string VerifySkippedCode = "replay.verify.skipped";
         internal const string SequenceInvalidCode = "replay.sequence.invalid";
-        internal const string ControlHeaderCode = "replay.request.control-header";
+        internal const string ControlHeaderCode = ReplayControlHeaders.Code;
         internal const string Http2HttpsCode = "replay.http-version.https-required";
         internal const string ConnectToDeniedCode = "replay.connect-to.target-denied";
         internal const string ConnectToHttpsCode = "replay.connect-to.https-required";
         internal const string ConnectToOriginCountCode = "replay.connect-to.origin-count";
         internal const string ConnectToPolicyCode = "replay.policy.connect-to";
-
-        // Headers that tell Fiddler how to send a request. XMAT never acts on them, and refuses a request that carries one
-        // rather than send it as if it did: a captured header is never a permission. Removing it makes the request
-        // replayable.
-        private static readonly string[] ControlHeaders =
-        {
-            "Fiddler-Host",
-            "X-OverrideHost",
-            "X-IgnoreCertCNMismatch",
-            "X-OverrideGateway",
-        };
 
         // The sender of a run that connects to the URL's host; the GUI's composer passes one over its pooled connections.
         internal Func<ReplaySender> SenderFactory { get; set; } = static () => new ReplaySender();
@@ -752,7 +741,7 @@ namespace XMAT.Operations.Replay
                 throw Invalid(ex);
             }
 
-            if (draft.HasAnyHeader(ControlHeaders))
+            if (ReplayControlHeaders.Has(draft))
             {
                 throw new ReplayInputException(
                     ControlHeaderCode,

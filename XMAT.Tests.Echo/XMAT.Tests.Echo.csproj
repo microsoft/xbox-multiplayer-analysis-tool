@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- xmat-echo.exe: a test helper, never shipped, that stands in for curl.exe in the cURL scripts that tests generate.
+       It records the arguments that it received (as .NET and as the Windows command-line parser read them), its
+       environment and its process id; answers curl's version probe; and can close its stdin and keep running, so tests
+       can see what a script passed to its child and that the script stops and reaps it. It builds to the same relative
+       folder as the tests, as XMAT.Cli does. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <AssemblyName>xmat-echo</AssemblyName>
+    <RootNamespace>XMAT.Tests.Echo</RootNamespace>
+    <Platforms>x64</Platforms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>True</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

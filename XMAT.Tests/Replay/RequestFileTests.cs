@@ -93,7 +93,7 @@ namespace XMAT.Tests.Replay
 
             Assert.Equal(pending, loaded.Omissions);
             Assert.Equal(pending, loaded.WithUrl("https://other.test/").Omissions);
-            Assert.Throws<RequestIncompleteException>(() => loaded.ToCurlCommand());
+            Assert.Throws<RequestIncompleteException>(() => RequestCurlExporter.Prepare(loaded, null, 0, CancellationToken.None));
             Assert.Equal(pending, Read(Write(loaded, RequestFileProfile.Template)).Omitted);
             Assert.Equal(
                 RequestFileCodes.Incomplete,
@@ -104,7 +104,7 @@ namespace XMAT.Tests.Replay
             loaded.ReplaceHeaders("");
             loaded.CompleteBody(Array.Empty<byte>());
             Assert.False(loaded.Omissions.Any);
-            Assert.StartsWith("curl.exe", loaded.ToCurlCommand(), StringComparison.Ordinal);
+            Assert.Equal("-q", RequestCurlExporter.Prepare(loaded, null, 0, CancellationToken.None).Arguments[0]);
         }
 
         // The file's URL is the origin that a change needs consent for: supplying a URL never replaces it.

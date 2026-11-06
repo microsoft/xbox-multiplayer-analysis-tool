@@ -121,6 +121,38 @@ namespace XMAT.Cli
         IReadOnlyList<string> Omitted,
         RequestFileRecognized Recognized);
 
+    // The allow-listed results of curl: the source's kind and hash, its limits for a capture, and for each script its
+    // ordinal id, where its request came from, the size of its body, the HTTP version that it asks for, whether it needs a
+    // curl.exe with Unicode, and how many recognized secret names it holds. Never a name, value, URL or body.
+    internal sealed class CliCurlReport
+    {
+        internal CliCurlReport(CliReplay options, CliLimits limits)
+        {
+            Options = options ?? CliReplay.Default;
+            Limits = limits;
+        }
+
+        internal CliReplay Options { get; }
+
+        // The input limits when the source is a capture file; null otherwise.
+        internal CliLimits Limits { get; }
+
+        internal string InputKind { get; set; }
+
+        internal string InputSha256 { get; set; }
+
+        internal List<CliCurlScript> Scripts { get; } = new();
+    }
+
+    internal sealed record CliCurlScript(
+        int Id,
+        string DeviceId,
+        long? RequestNumber,
+        long BodyBytes,
+        ReplayHttpVersion HttpVersion,
+        bool UnicodeCurl,
+        RequestFileRecognized Recognized);
+
     // Everything one xmat run reports: the JSON document on standard output (CliJson) and the text on standard error.
     internal sealed class CliReport
     {
@@ -160,6 +192,8 @@ namespace XMAT.Cli
         internal CliReplayReport Replay { get; set; }
 
         internal CliSaveRequestReport SaveRequest { get; set; }
+
+        internal CliCurlReport Curl { get; set; }
 
         internal CliDoctorReport Doctor { get; set; }
 

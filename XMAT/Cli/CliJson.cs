@@ -28,6 +28,9 @@ namespace XMAT.Cli
         // summary.json of a published save-request run.
         internal const string SaveRequestSummarySchema = "xmat-save-request/1";
 
+        // summary.json of a published curl run.
+        internal const string CurlSummarySchema = "xmat-curl/1";
+
         // The only error of the fallback document (SerializeFallback).
         internal static readonly OperationDiagnostic OutputFailure = new(
             "cli.internal.output",
@@ -67,6 +70,11 @@ namespace XMAT.Cli
                 if (report.SaveRequest != null)
                 {
                     WriteSaveRequest(writer, report.SaveRequest, includeFiles: report.Artifacts.Count != 0);
+                }
+
+                if (report.Curl != null)
+                {
+                    WriteCurl(writer, report.Curl, includeFiles: report.Artifacts.Count != 0);
                 }
 
                 if (report.Doctor != null)
@@ -258,6 +266,81 @@ namespace XMAT.Cli
                 writer.WriteNumber("bodyBytesNotInspected", saved.Recognized.BodyBytesNotInspected);
                 writer.WriteEndObject();
                 writer.WriteString("file", includeFiles ? CliSaveRequestCommand.FileOf(saved.Id) : null);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        // summary.json of curl: what each script asks for, without its status (a published folder always succeeded).
+        internal static byte[] SerializeCurlSummary(CliReport report)
+        {
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream, Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("schema", CurlSummarySchema);
+                writer.WriteString("command", report.Command);
+                writer.WriteString("runId", report.RunId);
+                writer.WriteString("version", CliReport.ToolVersion);
+                WriteCurl(writer, report.Curl ?? new CliCurlReport(null, null), includeFiles: true);
+                WriteDiagnostics(writer, "warnings", report.Warnings);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+
+        // Only kinds, hashes, numbers, ordinal ids, versions and counts: never a URL, method, header name or value, or body,
+        // which are in the scripts and body files.
+        private static void WriteCurl(Utf8JsonWriter writer, CliCurlReport curl, bool includeFiles)
+        {
+            if (curl.InputKind != null)
+            {
+                writer.WriteStartObject("input");
+                writer.WriteString("kind", curl.InputKind);
+                writer.WriteString("sha256", curl.InputSha256);
+                writer.WriteEndObject();
+            }
+
+            if (curl.Limits != null)
+            {
+                WriteLimits(writer, curl.Limits);
+            }
+
+            CliReplay options = curl.Options;
+            writer.WriteStartObject("options");
+            writer.WriteBoolean("includeSensitive", options.IncludeSensitive);
+            writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+            writer.WriteBoolean("unconditional", options.Unconditional);
+            writer.WriteString(
+                "httpVersion", options.HttpVersionSet ? ReplayTransportOptions.VersionName(options.HttpVersion) : null);
+            writer.WriteEndObject();
+
+            writer.WriteStartArray("scripts");
+            foreach (CliCurlScript script in curl.Scripts)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("id", script.Id);
+                writer.WriteString("device", script.DeviceId);
+                if (script.RequestNumber is long request)
+                {
+                    writer.WriteNumber("request", request);
+                }
+                else
+                {
+                    writer.WriteNull("request");
+                }
+
+                writer.WriteNumber("bodyBytes", script.BodyBytes);
+                writer.WriteString("httpVersion", ReplayTransportOptions.VersionName(script.HttpVersion));
+                writer.WriteBoolean("unicodeCurl", script.UnicodeCurl);
+                writer.WriteStartObject("recognized");
+                writer.WriteNumber("headers", script.Recognized.HeaderNames.Count);
+                writer.WriteNumber("queryParameters", script.Recognized.QueryParameterNames.Count);
+                writer.WriteEndObject();
+                writer.WriteString("script", includeFiles ? CliCurlCommand.ScriptOf(script.Id) : null);
+                writer.WriteString("body", includeFiles && script.BodyBytes > 0 ? CliCurlCommand.BodyOf(script.Id) : null);
                 writer.WriteEndObject();
             }
 

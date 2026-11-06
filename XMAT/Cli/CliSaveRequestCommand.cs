@@ -231,7 +231,9 @@ namespace XMAT.Cli
             };
         }
 
-        private static ReplayRequest CreateRequest(CliRequest request, byte[] body, RequestFileContent file)
+        // The source and edits of save-request and curl: a capture file's selection, a request file's request, or a new one
+        // whose URL is the --url edit.
+        internal static ReplayRequest CreateRequest(CliRequest request, byte[] body, RequestFileContent file)
         {
             CliReplay save = request.Replay;
             var edits = new ReplayEdits(

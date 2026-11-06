@@ -17,6 +17,7 @@ namespace XMAT.Cli
     {
         internal const string Analyze = "analyze";
         internal const string Compose = "compose";
+        internal const string Curl = "curl";
         internal const string Doctor = "doctor";
         internal const string Help = "help";
         internal const string Replay = "replay";
@@ -24,7 +25,7 @@ namespace XMAT.Cli
         internal const string Version = "version";
 
         // The commands xmat.exe runs. Each one needs a Supported capability in the registry (XMAT.Tests/Cli checks it).
-        internal static IReadOnlyList<string> Implemented { get; } = new[] { Analyze, Compose, Doctor, Replay, SaveRequest };
+        internal static IReadOnlyList<string> Implemented { get; } = new[] { Analyze, Compose, Curl, Doctor, Replay, SaveRequest };
     }
 
     internal sealed record CliRequest(
@@ -250,6 +251,37 @@ namespace XMAT.Cli
             UnconditionalSwitch, ClearHeadersSwitch, EmptyBodySwitch, IncludeSensitiveSwitch, AllowOriginChangeSwitch,
         };
 
+        // curl takes what save-request takes. It reads the options that only a send uses so that it can refuse them with
+        // one message: a script is made with curl's default transport, never one that leaves a choice out.
+        private static readonly HashSet<string> CurlSendOnlyOptions = new(StringComparer.Ordinal)
+        {
+            RepeatOption.Name,
+            ParallelOption.Name,
+            TimeoutOption.Name,
+            MaxResponseOption.Name,
+            FollowRedirectsOption.Name,
+            ConnectToOption,
+            SequenceOption,
+            OriginOption,
+        };
+
+        private static readonly HashSet<string> CurlSendOnlySwitches = new(StringComparer.Ordinal)
+        {
+            AllowConnectToSwitch, AllowUnsafeMethodsSwitch, VerifySwitch, VerifyDiffSwitch,
+        };
+
+        private static readonly HashSet<string> CurlReadOptions = new(SaveRequestOptions.Concat(CurlSendOnlyOptions), StringComparer.Ordinal);
+
+        private static readonly HashSet<string> CurlReadSwitches = new(SaveRequestSwitches.Concat(CurlSendOnlySwitches), StringComparer.Ordinal);
+
+        internal const string CurlSendOnlyMessage =
+            "xmat curl exports each request with curl's default transport and sends nothing: --repeat, --parallel, " +
+            "--timeout, --max-response-mib, --follow-redirects, --connect-to, --allow-connect-to, --sequence, " +
+            "--allow-unsafe-methods, --verify, --verify-diff and --origin do not apply.";
+
+        internal const string CurlHttpVersionMessage =
+            "xmat curl takes --http-version auto or 1.1: curl's HTTP/2-only mode is not known to send the same request.";
+
         // The options that analyze accepts; its command line in the capability registry names exactly these.
         internal static IReadOnlySet<string> AnalyzeOptionNames => AnalyzeOptions;
 
@@ -260,6 +292,9 @@ namespace XMAT.Cli
         internal static IReadOnlySet<string> ComposeOptionNames { get; } = new HashSet<string>(ComposeCommandOptions.Concat(ComposeCommandSwitches), StringComparer.Ordinal);
 
         internal static IReadOnlySet<string> SaveRequestOptionNames { get; } = new HashSet<string>(SaveRequestOptions.Concat(SaveRequestSwitches), StringComparer.Ordinal);
+
+        // curl accepts exactly what save-request accepts; the options that only a send uses are refused (CurlSendOnlyMessage).
+        internal static IReadOnlySet<string> CurlOptionNames => SaveRequestOptionNames;
 
         internal static CliParseResult Parse(IReadOnlyList<string> args)
         {
@@ -303,7 +338,12 @@ namespace XMAT.Cli
 
             if (first == CliCommands.SaveRequest)
             {
-                return ParseSaveRequest(args);
+                return ParseExport(args, CliCommands.SaveRequest);
+            }
+
+            if (first == CliCommands.Curl)
+            {
+                return ParseExport(args, CliCommands.Curl);
             }
 
             if (first.StartsWith('-'))
@@ -606,14 +646,21 @@ namespace XMAT.Cli
                 }));
         }
 
-        // xmat save-request: one source (an INPUT capture file with --request, a request file, or --url for a new
-        // request), the edits and completions that compose takes, and whether to save captured content. Nothing is sent,
-        // so it takes no transport option but --http-version.
-        private static CliParseResult ParseSaveRequest(IReadOnlyList<string> args)
+        // xmat save-request and xmat curl: one source (an INPUT capture file with --request, a request file, or --url for
+        // a new request), the edits and completions that compose takes, and whether to export captured content. Nothing is
+        // sent, so they take no transport option but --http-version: curl refuses the options that only a send uses, and
+        // HTTP/2 only. curl always exports captured content, so its missing consent is a policy refusal (exit code 3,
+        // CliCurlCommand), not a usage error.
+        private static CliParseResult ParseExport(IReadOnlyList<string> args, string command)
         {
-            const string command = CliCommands.SaveRequest;
+            bool curl = command == CliCommands.Curl;
             var arguments = new CliArguments();
-            CliParseResult error = arguments.Read(args, command, SaveRequestOptions, RepeatableOptions, SaveRequestSwitches);
+            CliParseResult error = arguments.Read(
+                args,
+                command,
+                curl ? CurlReadOptions : SaveRequestOptions,
+                RepeatableOptions,
+                curl ? CurlReadSwitches : SaveRequestSwitches);
             if (error != null)
             {
                 return error;
@@ -624,10 +671,15 @@ namespace XMAT.Cli
                 return HelpFor(command);
             }
 
+            if (curl && (CurlSendOnlyOptions.Any(name => Has(arguments, name)) || CurlSendOnlySwitches.Any(name => Has(arguments, name))))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.unsupported-option", CurlSendOnlyMessage);
+            }
+
             if (arguments.Positionals.Count > 1)
             {
                 return CliParseResult.UsageError(
-                    command, "cli.usage.unexpected-argument", "save-request takes at most one INPUT capture file.");
+                    command, "cli.usage.unexpected-argument", command + " takes at most one INPUT capture file.");
             }
 
             string input = arguments.Positionals.Count == 1 ? arguments.Positionals[0] : null;
@@ -641,13 +693,13 @@ namespace XMAT.Cli
                 return CliParseResult.UsageError(
                     command,
                     "cli.usage.conflicting-options",
-                    "save-request takes one source: an INPUT capture file, --request-file, or --url for a new request.");
+                    command + " takes one source: an INPUT capture file, --request-file, or --url for a new request.");
             }
 
             if (input != null && selection == null)
             {
                 return CliParseResult.UsageError(
-                    command, "cli.usage.missing-option", "save-request needs --request with an INPUT capture file.");
+                    command, "cli.usage.missing-option", command + " needs --request with an INPUT capture file.");
             }
 
             if (input == null && captureOptions)
@@ -663,7 +715,7 @@ namespace XMAT.Cli
                 return CliParseResult.UsageError(
                     command,
                     "cli.usage.missing-argument",
-                    "save-request needs an INPUT capture file with --request, --request-file FILE, or --url URL.");
+                    command + " needs an INPUT capture file with --request, --request-file FILE, or --url URL.");
             }
 
             if (!fromFile && (Has(arguments, ClearHeadersSwitch) || Has(arguments, EmptyBodySwitch)))
@@ -672,7 +724,7 @@ namespace XMAT.Cli
                     command, "cli.usage.missing-option", "--clear-headers and --empty-body need --request-file.");
             }
 
-            if (Has(arguments, AllowOriginChangeSwitch) && !Has(arguments, IncludeSensitiveSwitch))
+            if (!curl && Has(arguments, AllowOriginChangeSwitch) && !Has(arguments, IncludeSensitiveSwitch))
             {
                 return CliParseResult.UsageError(
                     command,
@@ -688,7 +740,7 @@ namespace XMAT.Cli
 
             if (!arguments.Options.TryGetValue(OutOption, out string output))
             {
-                return CliParseResult.UsageError(command, "cli.usage.missing-option", "save-request needs --out DIR.");
+                return CliParseResult.UsageError(command, "cli.usage.missing-option", command + " needs --out DIR.");
             }
 
             if (selection != null && !ReplaySelection.TryParse(selection, out _))
@@ -752,6 +804,11 @@ namespace XMAT.Cli
                 !ReplayTransportOptions.TryParseVersion(versionText, out httpVersion))
             {
                 return CliParseResult.UsageError(command, "cli.usage.invalid-value", HttpVersionMessage);
+            }
+
+            if (curl && httpVersion == ReplayHttpVersion.Http2)
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", CurlHttpVersionMessage);
             }
 
             error = ReadRemoveHeaders(command, arguments, out List<string> removeHeaders);
