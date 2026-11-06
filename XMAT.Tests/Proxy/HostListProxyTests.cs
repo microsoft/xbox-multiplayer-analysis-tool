@@ -113,19 +113,35 @@ namespace XMAT.Tests.Proxy
             Assert.Empty(capture.Records("GET"));
         }
 
-        // Path patterns need a decrypted request: they apply to intercepted HTTPS requests but
-        // cannot see inside an opaque bypassed tunnel. Plain HTTP is never bypassed.
+        // Path patterns apply to plain and intercepted requests, but cannot see inside an opaque
+        // bypassed tunnel. Bypass never exempts plain HTTP from Block.
         [Fact]
-        public async Task PathOnlyBlock_AppliesToInterceptedRequestsButCannotInspectAnOpaqueTunnel()
+        public async Task PathOnlyBlock_AppliesToPlainAndInterceptedRequestsButCannotInspectAnOpaqueTunnel()
         {
             var policy = new HostListPolicy();
-            Assert.True(policy.BypassList.Add("127.0.0.1"));
             Assert.True(policy.BlockList.Add("127.0.0.1/private/*"));
             Assert.True(policy.BlockList.Add("localhost/private/*"));
             await using var plainOrigin = await LoopbackOrigin.StartAsync();
             await using var tlsOrigin = await LoopbackOrigin.StartAsync(useTls: true);
             await using var capture = await PolicyCapture.StartAsync(policy, "path-block");
 
+            Exception blockedWithoutBypass;
+            using (HttpClient plain = capture.CreateClient())
+            {
+                blockedWithoutBypass = await Record.ExceptionAsync(
+                    () => plain.GetStringAsync(plainOrigin.Url("/private/no-bypass")));
+            }
+            Assert.True(policy.BypassList.Add("127.0.0.1"));
+            Exception blockedWithBypass;
+            using (HttpClient plain = capture.CreateClient())
+            {
+                blockedWithBypass = await Record.ExceptionAsync(
+                    () => plain.GetStringAsync(plainOrigin.Url("/private/with-bypass")));
+            }
+            using (HttpClient plain = capture.CreateClient())
+            {
+                Assert.Equal("origin-ok", await plain.GetStringAsync(plainOrigin.Url("/public")));
+            }
             using (HttpClient intercepted = capture.CreateClient())
             {
                 Exception blocked = await Record.ExceptionAsync(
@@ -136,12 +152,10 @@ namespace XMAT.Tests.Proxy
             {
                 Assert.Equal("origin-ok", await opaque.GetStringAsync(tlsOrigin.Url("/private/item")));
             }
-            using (HttpClient plain = capture.CreateClient())
-            {
-                Assert.Equal("origin-ok", await plain.GetStringAsync(plainOrigin.Url("/public")));
-            }
             await capture.DrainCallbacksAsync();
 
+            Assert.IsAssignableFrom<HttpRequestException>(blockedWithoutBypass);
+            Assert.IsAssignableFrom<HttpRequestException>(blockedWithBypass);
             Assert.Equal(new[] { "/private/item" }, tlsOrigin.Requests.Select(request => request.Path));
             Assert.Equal(new[] { "/public" }, plainOrigin.Requests.Select(request => request.Path));
             // The client retries the aborted intercepted request on new tunnels, while the opaque
@@ -158,10 +172,20 @@ namespace XMAT.Tests.Proxy
             AssertBlockedAttempts(blockedAttempts, "localhost");
             Assert.All(blockedAttempts, row =>
                 Assert.Equal("/private/item", row.Str(WebServiceCaptureMethod.FieldKey_RequestPath)));
-            IDataRecord plainRequest = Assert.Single(
-                requests, row => row.Str(WebServiceCaptureMethod.FieldKey_RequestHost) == "127.0.0.1");
-            Assert.Equal("http", plainRequest.Str(WebServiceCaptureMethod.FieldKey_RequestScheme));
-            Assert.Equal(blockedAttempts.Count + 1, requests.Count);
+            List<IDataRecord> plainRequests = requests
+                .Where(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestHost) == "127.0.0.1")
+                .ToList();
+            List<IDataRecord> blockedPlainRequests = plainRequests
+                .Where(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath).Contains(
+                    "/private/", StringComparison.Ordinal))
+                .ToList();
+            AssertBlockedAttempts(blockedPlainRequests, "127.0.0.1");
+            IDataRecord allowedPlainRequest = Assert.Single(
+                plainRequests,
+                row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath).EndsWith(
+                    "/public", StringComparison.Ordinal));
+            Assert.Equal("http", allowedPlainRequest.Str(WebServiceCaptureMethod.FieldKey_RequestScheme));
+            Assert.Equal(blockedAttempts.Count + blockedPlainRequests.Count + 1, requests.Count);
         }
 
         [Fact]
