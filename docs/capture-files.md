@@ -61,10 +61,14 @@ XMAT checks capture files before reading them and never changes them:
   skipped. A request without a usable `Host` header is imported without a host;
   analysis keeps its path, and the Block and Bypass actions do not apply to it.
 - Header lines are read as Latin-1, so a byte from 0x80 to 0xFF shows as that
-  character rather than `?`. A header name may contain an apostrophe, as HTTP allows,
-  and a name that repeats is shown once, with its values joined by commas. A time with
-  an offset or `Z` is read as that instant; one without, as XMAT's own exports write
-  it, is this PC's local time.
+  character rather than `?`, and a line of such characters alone, such as 0x85 or 0xA0,
+  is a malformed header line rather than the empty line that ends the headers. A header
+  name may contain an apostrophe, as HTTP allows, and a name that repeats is shown once,
+  with its values joined by commas. A time with an offset or `Z` is read as that
+  instant; one without, as XMAT's own exports write it, is this PC's local time. A
+  duration is the time between two instants, also across a daylight saving change, and
+  exports keep it. A time that names no instant, such as an unknown time that XMAT
+  exports as the year 1, read in a time zone east of UTC, is read as unknown.
 
 ## Export a sanitized capture
 

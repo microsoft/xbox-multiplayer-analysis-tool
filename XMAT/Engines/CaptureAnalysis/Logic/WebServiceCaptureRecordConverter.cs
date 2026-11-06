@@ -9,6 +9,7 @@ using System.Text;
 using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.XboxLiveCaptureAnalysis
 {
@@ -70,7 +71,9 @@ namespace XMAT.XboxLiveCaptureAnalysis
             }
 
             var requestTime = DateTime.Parse(requestTimestamp);
-            var duration = DateTime.Parse(responseTimestamp) - requestTime;
+            // The time between the two instants, never between their local clock readings, which differ by an hour across
+            // a daylight saving change.
+            var duration = ProxyConnectionModel.Elapsed(requestTime, DateTime.Parse(responseTimestamp));
 
             item.Host = string.IsNullOrWhiteSpace(requestHost)
                 ? string.Empty

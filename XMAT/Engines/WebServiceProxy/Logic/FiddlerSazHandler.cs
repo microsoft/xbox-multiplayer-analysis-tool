@@ -254,11 +254,20 @@ namespace XMAT.WebServiceCapture
 
                     // Each timer is an instant: one with Z or an offset is exact, and one without, as XMAT's own export
                     // writes for a time of unspecified kind, is this machine's local time. The duration is the time between
-                    // the two instants, whatever their offsets, and the request time is the first one in local time.
-                    DateTimeOffset begin = ParseTimer((string)sessionTimers.Attribute("ClientBeginRequest"));
-                    DateTimeOffset done = ParseTimer((string)sessionTimers.Attribute("ClientDoneResponse"));
-                    requestTime = begin.LocalDateTime;
-                    duration = done.UtcDateTime - begin.UtcDateTime;
+                    // the two instants, whatever their offsets, and the request time is the first one in local time. A
+                    // timer that names no instant (ParseTimer) is no time: the request time stays unknown, and the
+                    // duration zero.
+                    DateTimeOffset? begin = ParseTimer((string)sessionTimers.Attribute("ClientBeginRequest"));
+                    DateTimeOffset? done = ParseTimer((string)sessionTimers.Attribute("ClientDoneResponse"));
+                    if (begin != null)
+                    {
+                        requestTime = begin.Value.LocalDateTime;
+                    }
+
+                    if (begin != null && done != null)
+                    {
+                        duration = done.Value.UtcDateTime - begin.Value.UtcDateTime;
+                    }
 
                     var sessionFlags = xmldata.Element("Session").Element("SessionFlags");
 
@@ -405,7 +414,7 @@ namespace XMAT.WebServiceCapture
                 string line = ReadHeaderLine(
                     reader,
                     ref rawHeaderBytes);
-                if (string.IsNullOrWhiteSpace(line))
+                if (IsBlankHeadLine(line))
                 {
                     return headers;
                 }
@@ -490,6 +499,22 @@ namespace XMAT.WebServiceCapture
             value == (byte)'\f' ||
             value == (byte)'\r' ||
             value == (byte)' ';
+
+        // The blank line that ends a head: empty, or only the ASCII whitespace that string.IsNullOrWhiteSpace saw when heads
+        // were read as ASCII. That method would also end a head at a line of 0x85 or 0xA0, which Latin-1 reads as U+0085 and
+        // U+00A0, and make the headers after that line part of the body.
+        private static bool IsBlankHeadLine(string line)
+        {
+            foreach (char value in line)
+            {
+                if (value is not ('\t' or '\n' or '\v' or '\f' or '\r' or ' '))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
 
         private static void AddHeaderOrSkip(
             SazHeaderFields headers,
@@ -595,8 +620,24 @@ namespace XMAT.WebServiceCapture
                     '?' or '=' or '{' or '}');
         }
 
-        private static DateTimeOffset ParseTimer(string value) =>
-            DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal);
+        // A timer as an instant, or null for one that DateTime reads but that names no instant: a time whose UTC falls outside
+        // years 1 to 9999, such as DateTime.MinValue, which XMAT's export writes without an offset for a time it does not
+        // know, read east of UTC. Anything else that is not a time throws, as DateTime.Parse did.
+        private static DateTimeOffset? ParseTimer(string value)
+        {
+            if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out DateTimeOffset instant))
+            {
+                return instant;
+            }
+
+            if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+            {
+                return null;
+            }
+
+            // Throws the exception that the value is not a time, or ArgumentNullException without one.
+            return DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal);
+        }
 
         private static bool IsHeaderValueTrimCharacter(char value) =>
             value is '\t' or '\n' or '\v' or '\f' or '\r' or ' ';
@@ -613,7 +654,7 @@ namespace XMAT.WebServiceCapture
                 var metaData = new FiddlerMetaData(record.RecordRowId);
                 metaData.SetClientIP(record.ClientIP);
                 metaData.ClientBeginRequest = record.RequestTime;
-                metaData.ClientDoneResponse = record.RequestTime + record.Duration;
+                metaData.ClientDoneResponse = record.ResponseDoneTime;
                 AddMetaEntry(archive, record.RequestNumber, metaData);
 
                 if (!string.IsNullOrEmpty(record.ResponseLineAndHeaders))
@@ -650,7 +691,7 @@ namespace XMAT.WebServiceCapture
                         var metadata = new FiddlerMetaData(record.RecordRowId)
                         {
                             ClientBeginRequest = record.RequestTime,
-                            ClientDoneResponse = record.RequestTime + record.Duration
+                            ClientDoneResponse = record.ResponseDoneTime
                         };
                         metadata.SetClientIP("0.0.0.0");
                         if (!string.IsNullOrEmpty(record.ClientIP) && record.ClientIP != "0.0.0.0")

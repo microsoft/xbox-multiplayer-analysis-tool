@@ -344,7 +344,7 @@ namespace XMAT.WebServiceCapture.Models
                 RequestNumber,
                 Id,
                 ToDateTimeString(RequestTime),
-                ToDateTimeString(RequestTime + Duration),
+                ToDateTimeString(ResponseDoneTime),
                 Scheme,
                 Host,
                 Port,
@@ -378,7 +378,7 @@ namespace XMAT.WebServiceCapture.Models
             var responseTimestamp = dataRecord.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp);
             if (!string.IsNullOrEmpty(responseTimestamp))
             {
-                Duration = DateTime.Parse(responseTimestamp) - RequestTime;
+                Duration = Elapsed(RequestTime, DateTime.Parse(responseTimestamp));
             }
 
             var requestScheme = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestScheme);
@@ -458,5 +458,18 @@ namespace XMAT.WebServiceCapture.Models
         {
             return dt.ToUniversalTime().ToString("o");
         }
+
+        // When the response ended, in RequestTime's kind (EndOf).
+        internal DateTime ResponseDoneTime => EndOf(RequestTime, Duration);
+
+        // The time elapsed after start, in start's kind. Duration is elapsed time, so it is added to the instant that a local
+        // time names, never to its clock reading, which is an hour off across a daylight saving change. A UTC time is its
+        // instant, and a time of no kind, such as an unknown DateTime.MinValue, names none and is added to as it is.
+        internal static DateTime EndOf(DateTime start, TimeSpan elapsed) =>
+            start.Kind == DateTimeKind.Local ? (start.ToUniversalTime() + elapsed).ToLocalTime() : start + elapsed;
+
+        // The time from start to end, the inverse of EndOf: the time between their instants, unless start has no kind.
+        internal static TimeSpan Elapsed(DateTime start, DateTime end) =>
+            start.Kind == DateTimeKind.Unspecified ? end - start : end.ToUniversalTime() - start.ToUniversalTime();
     }
 }
