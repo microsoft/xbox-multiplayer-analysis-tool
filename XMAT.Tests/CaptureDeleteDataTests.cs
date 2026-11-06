@@ -14,6 +14,8 @@ namespace XMAT.Tests
 {
     public sealed class CaptureDeleteDataTests
     {
+        private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(30);
+
         [Fact]
         public void DeleteRows_DeletesOnlyTheExactDeviceAndReturnsCommittedIds()
         {
@@ -44,7 +46,7 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public async Task DeleteRows_ConcurrentOtherTableWriteWaitsAndSucceeds()
+        public async Task DeleteRows_ConcurrentOtherTableWriteSucceeds()
         {
             using SqLtDatabase database = Database(out IDataTable captures);
             IDataTable trace = database.CreateTable("NetworkTracePackets", new Field<string>("Payload"));
@@ -55,7 +57,10 @@ namespace XMAT.Tests
             connection.CreateFunction<long, long>("hold_exact_delete", value =>
             {
                 entered.TrySetResult();
-                release.Wait();
+                if (!release.Wait(CompletionTimeout))
+                {
+                    throw new TimeoutException("The exact-delete test callback was not released.");
+                }
                 return value;
             });
             Execute(connection,
@@ -63,20 +68,32 @@ namespace XMAT.Tests
                 "BEGIN SELECT hold_exact_delete(old.id); END");
 
             Task<IReadOnlyList<long>> deletion = Task.Run(() => Delete(captures, "console-a", rowId));
-            Assert.Same(entered.Task, await Task.WhenAny(deletion, entered.Task));
-            var writerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            Task<long> writer = Task.Run(() =>
+            Task<long> writer = null;
+            try
             {
-                writerStarted.SetResult();
-                return trace.AddRow("packet");
-            });
-            await writerStarted.Task;
-            release.Set();
-            await Task.WhenAll(deletion, writer);
+                Assert.Same(
+                    entered.Task,
+                    await Task.WhenAny(deletion, entered.Task).WaitAsync(CompletionTimeout));
+                var writerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                writer = Task.Run(() =>
+                {
+                    writerStarted.SetResult();
+                    return trace.AddRow("packet");
+                });
+                await writerStarted.Task.WaitAsync(CompletionTimeout);
+                release.Set();
+                await Task.WhenAll(deletion, writer).WaitAsync(CompletionTimeout);
 
-            Assert.Equal(new[] { rowId }, await deletion);
-            Assert.True(await writer > 0);
-            Assert.Single(trace.Dataset.DataRecords);
+                Assert.Equal(new[] { rowId }, await deletion);
+                Assert.True(await writer > 0);
+                Assert.Single(trace.Dataset.DataRecords);
+            }
+            finally
+            {
+                release.Set();
+                await ObserveStartedWorkAsync(
+                    writer == null ? deletion : Task.WhenAll(deletion, writer));
+            }
         }
 
         [Fact]
@@ -135,6 +152,20 @@ namespace XMAT.Tests
                 new Field<string>(WebServiceCaptureMethod.FieldKey_DeviceName),
                 new Field<string>("Payload"));
             return database;
+        }
+
+        private static async Task ObserveStartedWorkAsync(Task task)
+        {
+            try
+            {
+                await task.WaitAsync(CompletionTimeout);
+            }
+            catch (Exception exception) when (
+                exception is not TimeoutException &&
+                !ExceptionUtilities.IsFatal(exception))
+            {
+                // Cleanup only observes a worker failure already owned by the primary test path.
+            }
         }
 
         private static SqLtDatabase UnconfiguredDatabase() =>

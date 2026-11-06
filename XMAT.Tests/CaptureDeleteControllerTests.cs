@@ -170,6 +170,7 @@ namespace XMAT.Tests
 
             Assert.Equal(deleted.RowId, twin.RowId);
             Assert.Equal("survivor.exe", twin.Model.ClientProcess.Name);
+            Assert.Equal("survivor.exe", ClientProcessRecordCodec.Read(capture.Record(twin)).Name);
             Assert.Equal(CaptureRowLookup.Retired, capture.Registry.Lookup(deleted.Key));
         }
 

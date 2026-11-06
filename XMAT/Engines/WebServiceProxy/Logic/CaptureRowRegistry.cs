@@ -318,12 +318,8 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(keys);
             lock (_syncRoot)
             {
-                foreach (CaptureRowKey key in keys)
+                foreach (CaptureRowKey key in keys.Where(key => LookupCore(key) == CaptureRowLookup.Current))
                 {
-                    if (LookupCore(key) != CaptureRowLookup.Current)
-                    {
-                        continue;
-                    }
                     _retiredRows.Add(key);
                     _streamKeys.Remove(key);
                     if (!_bindings.Remove(key, out Binding binding) ||
