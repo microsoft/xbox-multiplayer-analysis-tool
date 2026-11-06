@@ -104,6 +104,56 @@ namespace XMAT.Tests.Operations.Export
                 });
         }
 
+        [Theory]
+        [InlineData(true, "columns")]
+        [InlineData(false, "columns")]
+        [InlineData(true, "freeze")]
+        public void CreateExportSnapshot_ConstructionFailureDisposesOnlyOwnedDataset(bool ownsDataset, string failurePoint)
+        {
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            IDataTable table = database.CreateTable(
+                WebServiceCaptureMethod.TableName,
+                WebProxyCaptureSchema.CreateFields());
+            if (!ownsDataset)
+            {
+                Dictionary<string, object> values = Values(1);
+                _ = table.AddRow(WebProxyCaptureSchema.Fields.Select(field => values[field.Name]).ToArray());
+            }
+            var probe = new ExportReadProbe(table);
+            var payloadDisposals = 0;
+            var metadataDisposals = 0;
+            probe.DatasetDisposed = metadata => _ = metadata ? metadataDisposals++ : payloadDisposals++;
+            IDataset borrowed = ownsDataset ? null : probe.Dataset;
+            WebServiceDeviceCaptureController controller = ownsDataset
+                ? Controller(probe)
+                : new WebServiceDeviceCaptureController("Export PC", DeviceType.LocalPC, true);
+            if (borrowed != null)
+            {
+                controller.LoadCaptureDataset(borrowed);
+            }
+            var failure = new InvalidOperationException("Injected capture-column failure.");
+            if (failurePoint == "freeze")
+                probe.MetadataReadFailure = failure;
+            else
+                probe.ColumnsFailure = failure;
+            try
+            {
+                InvalidOperationException actual = Assert.Throws<InvalidOperationException>(
+                    () => controller.CreateExportSnapshot("d1"));
+
+                Assert.Same(failure, actual);
+                Assert.Equal(ownsDataset ? 1 : 0, payloadDisposals);
+                Assert.Equal(failurePoint == "freeze" ? 1 : 0, metadataDisposals);
+            }
+            finally
+            {
+                (borrowed as IDisposable)?.Dispose();
+            }
+
+            Assert.Equal(1, payloadDisposals);
+        }
+
         [Fact]
         public async Task ReadChunk_UsesBoundedBatchesAndAllowsOneOversizedGuiRow()
         {

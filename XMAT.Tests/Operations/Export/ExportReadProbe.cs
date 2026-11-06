@@ -28,6 +28,9 @@ namespace XMAT.Tests.Operations.Export
         }
 
         internal IReadOnlyList<ExportReadRequest> Reads => _reads.ToArray();
+        internal Exception ColumnsFailure { get; set; }
+        internal Exception MetadataReadFailure { get; set; }
+        internal Action<bool> DatasetDisposed { get; set; }
         internal void Reset() => _reads.Clear();
 
         public event Action<IDataTable, long> RowAdded
@@ -64,23 +67,48 @@ namespace XMAT.Tests.Operations.Export
             }
         }
 
+        private IReadOnlyList<SqLtSchemaColumn> Columns(IRawCaptureDataset raw)
+        {
+            if (ColumnsFailure != null)
+            {
+                throw ColumnsFailure;
+            }
+            return raw.Columns;
+        }
+
         private sealed class ObservedDataset(ExportReadProbe owner, IDataset inner, bool isMetadata)
             : IDataset, IRawCaptureDataset, IDisposable
         {
             private readonly IRawCaptureDataset _raw = (IRawCaptureDataset)inner;
+            private bool _disposed;
 
             public IEnumerable<IFieldDefinition> FieldDefs => inner.FieldDefs;
             public IEnumerable<IDataRecord> DataRecords =>
                 owner.Observe(inner.DataRecords, isMetadata, ExportReadRoute.DataRecords);
-            public IReadOnlyList<SqLtSchemaColumn> Columns => _raw.Columns;
+            public IReadOnlyList<SqLtSchemaColumn> Columns => owner.Columns(_raw);
             public IEnumerable<IDataRecord> DataRecordsFrom(long firstRowId) =>
                 owner.Observe(inner.DataRecordsFrom(firstRowId), isMetadata, ExportReadRoute.DataRecordsFrom);
             public IEnumerable<IDataRecord> DataRecordsFrom(long firstRowId, int limit) =>
                 owner.Observe(inner.DataRecordsFrom(firstRowId, limit), isMetadata,
                     ExportReadRoute.DataRecordsFromLimited, limit);
-            public IEnumerable<IDataRecord> DataRecordsWhen(params IFieldValue[] values) =>
-                owner.Observe(inner.DataRecordsWhen(values), isMetadata, ExportReadRoute.DataRecordsWhen);
-            public void Dispose() => (inner as IDisposable)?.Dispose();
+            public IEnumerable<IDataRecord> DataRecordsWhen(params IFieldValue[] values)
+            {
+                if (isMetadata && owner.MetadataReadFailure != null)
+                {
+                    throw owner.MetadataReadFailure;
+                }
+                return owner.Observe(inner.DataRecordsWhen(values), isMetadata, ExportReadRoute.DataRecordsWhen);
+            }
+            public void Dispose()
+            {
+                owner.DatasetDisposed?.Invoke(isMetadata);
+                if (_disposed)
+                {
+                    return;
+                }
+                _disposed = true;
+                (inner as IDisposable)?.Dispose();
+            }
         }
     }
 }
