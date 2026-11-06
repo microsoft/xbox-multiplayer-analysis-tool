@@ -56,6 +56,32 @@ namespace XMAT.Tests.Cli
             Assert.Equal("failed", report.Status);
         }
 
+        // With several problems, the first in the parser's order is reported: INPUT, --out and --device, then analyze's
+        // --fail-on or export's format and --host-mode, the limits, the process selectors and export's other selectors.
+        // The missing INPUT and --out messages keep each command's wording.
+        [Theory]
+        [InlineData("analyze --device 1 --fail-on x --max-records 0", "missing-argument", "analyze needs the INPUT")]
+        [InlineData("analyze a b --device 1", "unexpected-argument", "analyze takes a single INPUT")]
+        [InlineData("analyze a --device 1 --fail-on x", "missing-option", "analyze needs --out DIR")]
+        [InlineData("analyze a --out o --device 1 --fail-on x", "invalid-value", "--device")]
+        [InlineData("analyze a --out o --fail-on x --max-records 0", "invalid-value", "--fail-on")]
+        [InlineData("analyze a --out o --max-records 0 --process a/b", "invalid-value", "--max-records")]
+        [InlineData("export --device 1 --host-mode x", "missing-argument", "export takes a single INPUT")]
+        [InlineData("export a b --device 1", "unexpected-argument", "export takes a single INPUT")]
+        [InlineData("export a --device 1 --host-mode x", "missing-option", "export needs --out FILE")]
+        [InlineData("export a --out o.txt --device 1", "invalid-value", "--device")]
+        [InlineData("export a --out o.txt --host-mode x", "invalid-value", "--out must")]
+        [InlineData("export a --out o.saz --host-mode x --max-records 0", "invalid-value", "--host-mode")]
+        [InlineData("export a --out o.saz --max-records 0 --process a/b", "invalid-value", "--max-records")]
+        [InlineData("export a --out o.saz --process a/b --host=", "invalid-value", "--process")]
+        public void Parse_ReportsTheFirstProblemInValidationOrder(string commandLine, string code, string message)
+        {
+            OperationDiagnostic error = Assert.IsType<OperationDiagnostic>(CliCommandLine.Parse(Split(commandLine)).Error);
+
+            Assert.Equal("cli.usage." + code, error.Code);
+            Assert.StartsWith(message, error.Message, StringComparison.Ordinal);
+        }
+
         [Fact]
         public void Parse_ReadsAnalyzeOptionsInEitherForm()
         {
@@ -85,6 +111,7 @@ namespace XMAT.Tests.Cli
         [InlineData("--help doctor", "doctor")]
         [InlineData("analyze --help", "analyze")]
         [InlineData("doctor -?", "doctor")]
+        [InlineData("export --help --device 1", "export")]
         public void Parse_RecognizesHelp(string commandLine, string topic)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));

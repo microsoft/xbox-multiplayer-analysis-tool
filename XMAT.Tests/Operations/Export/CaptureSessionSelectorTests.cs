@@ -144,6 +144,23 @@ namespace XMAT.Tests.Operations.Export
         }
 
         [Fact]
+        public void Select_SelectionValidationPrecedesSessionValidation()
+        {
+            var invalidProcess = new ProcessFilterSpec(
+                ImmutableArray.Create(@"C:\private\game.exe"),
+                ImmutableArray<string>.Empty);
+
+            OperationResult<CaptureSessionSelection> result = CaptureSessionSelector.Select(
+                [null],
+                Selection(process: invalidProcess),
+                "d1",
+                isLive: false);
+
+            Assert.Equal(OperationOutcome.InvalidInput, result.Outcome);
+            Assert.Equal("export.selection.invalid-process", Assert.Single(result.Diagnostics).Code);
+        }
+
+        [Fact]
         public void Validate_CanonicalizesDefaultArraysAndPreservesDisabledArrays()
         {
             ImmutableArray<string>? defaultInclude = default(ImmutableArray<string>);

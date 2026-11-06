@@ -75,6 +75,29 @@ namespace XMAT.Tests.Operations.Captures
         }
 
         [Fact]
+        public void Select_ValidatesBeforeCancellationAndThenObservesIt()
+        {
+            CaptureSessionRef session = Session(1, "d1", Local("game.exe", 10));
+            var invalid = new ProcessFilterSpec(
+                ImmutableArray.Create(@"C:\private\game.exe"),
+                ImmutableArray<string>.Empty);
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            OperationResult<FilterCaptureSessionsResult> rejected =
+                FilterCaptureSessionsOperation.Select(
+                    new FilterCaptureSessionsRequest([session], invalid),
+                    cancellation.Token);
+
+            Assert.Equal(OperationOutcome.InvalidInput, rejected.Outcome);
+            Assert.Equal("process-filter.invalid-selector", Assert.Single(rejected.Diagnostics).Code);
+            Assert.Throws<OperationCanceledException>(() =>
+                FilterCaptureSessionsOperation.Select(
+                    new FilterCaptureSessionsRequest([session], ProcessFilterSpec.Empty),
+                    cancellation.Token));
+        }
+
+        [Fact]
         public void CaptureSessionReference_IsBodyFree()
         {
             string[] members = typeof(CaptureSessionRef).GetProperties().Select(property => property.Name).ToArray();
