@@ -159,7 +159,6 @@ namespace XMAT.WebServiceCapture
         public ProcessFilterSpec ProcessFilter { get; private set; }
         internal ClientProcessResolver ProcessResolverOverride { get; set; }
         internal TimeSpan? CaptureCallbackDrainTimeoutOverride { get; set; }
-        internal Action<int, long> ExportReadBatchObserver { get; set; }
         public ProxyConnectionModel SelectedConnectionModel
         {
             get => _selectedConnectionModel;
@@ -366,10 +365,6 @@ namespace XMAT.WebServiceCapture
                             break;
                         }
                     }
-                }
-                if (result.Count != 0)
-                {
-                    ExportReadBatchObserver?.Invoke(result.Count, batchBytes);
                 }
                 return new CaptureExportChunk(consumed.ToArray(), result);
             }
