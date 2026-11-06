@@ -31,7 +31,7 @@ namespace XMAT.Operations.Capabilities
         private const string BypassListXaml = "Engines/WebServiceProxy/Views/BypassListView.xaml";
         private const string CaptureViewXaml = "Engines/WebServiceProxy/Views/CaptureConnectionView.xaml";
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
-        private const string SanitizedExportXaml = "Windows/SanitizedExportProgressWindow.xaml";
+        private const string ExportProgressXaml = "Windows/ExportProgressWindow.xaml";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
@@ -361,8 +361,8 @@ namespace XMAT.Operations.Capabilities
             Command(AppCommandsPrefix + fileCommand),
             Command(ProxyCommandsPrefix + "ExportSelectedSessions"),
             Command(ProxyCommandsPrefix + "ExportVisibleSessions"),
-            Window("XMAT.SanitizedExportProgressWindow"),
-            Click(SanitizedExportXaml, "CancelExport_Click"),
+            Window("XMAT.ExportProgressWindow"),
+            Click(ExportProgressXaml, "CancelExport_Click"),
         };
     }
 }

@@ -11,11 +11,11 @@ using XMAT.Operations.Export;
 namespace XMAT.Tests
 {
     [Collection(CaptureUiApplicationCollection.Name)]
-    public sealed class SanitizedExportProgressWindowTests
+    public sealed class ExportProgressWindowTests
     {
         private readonly CaptureUiApplicationFixture _application;
 
-        public SanitizedExportProgressWindowTests(CaptureUiApplicationFixture application)
+        public ExportProgressWindowTests(CaptureUiApplicationFixture application)
         {
             _application = application;
         }
@@ -31,7 +31,7 @@ namespace XMAT.Tests
             {
                 var worker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 var requests = 0;
-                var dialog = new SanitizedExportProgressWindow(worker.Task, () => requests++)
+                var dialog = new ExportProgressWindow(worker.Task, () => requests++)
                 {
                     Left = -12000,
                     Top = -12000,
@@ -71,7 +71,7 @@ namespace XMAT.Tests
                     Assert.True(dialog.IsVisible);
                     Assert.False(worker.Task.IsCompleted);
                     Assert.False(cancel.IsEnabled);
-                    Assert.Equal(Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLING"), status.Text);
+                    Assert.Equal(Localization.GetLocalizedString("EXPORT_PROGRESS_CANCELLING"), status.Text);
                     dialog.Close();
                     Assert.Equal(1, requests);
                     Assert.True(dialog.IsVisible);
@@ -97,7 +97,7 @@ namespace XMAT.Tests
             {
                 var worker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 var requests = 0;
-                var dialog = new SanitizedExportProgressWindow(worker.Task, () => requests++)
+                var dialog = new ExportProgressWindow(worker.Task, () => requests++)
                 {
                     Left = -12000,
                     Top = -12000,

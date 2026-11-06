@@ -89,7 +89,7 @@ namespace XMAT
         {
             using var cancellation = new CancellationTokenSource();
             var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var window = new SanitizedExportProgressWindow(finished.Task, cancellation.Cancel) { Owner = this };
+            var window = new ExportProgressWindow(finished.Task, cancellation.Cancel) { Owner = this };
             using (PublicUtilities.BlockingOperation())
             {
                 Task<OperationResult<ExportCaptureResult>> running = Task.Run(() => export(window, cancellation.Token));
