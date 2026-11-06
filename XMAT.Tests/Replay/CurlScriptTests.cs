@@ -9,6 +9,8 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture;
@@ -308,13 +310,19 @@ namespace XMAT.Tests.Replay
                 EchoRun send = Assert.Single(CurlScripts.ReadEcho(record), echo => echo.Kind == "send");
 
                 Assert.Equal(1, run.ExitCode);
-                Assert.False(IsRunning(send.ProcessId), "The script's own child is still running.");
+                Assert.False(CurlScripts.IsAlive(send), "The script's own child is still running.");
                 Assert.False(decoy.HasExited, "An unrelated process was stopped.");
             }
             finally
             {
-                CurlScripts.StopRecorded(record);
-                Stop(decoy);
+                try
+                {
+                    CurlScripts.StopRecorded(record);
+                }
+                finally
+                {
+                    Stop(decoy);
+                }
             }
         }
 
@@ -353,13 +361,19 @@ namespace XMAT.Tests.Replay
 
                 Assert.True(run.ExitCode == 0, run.ToString());
                 Assert.True(run.Output.Contains("xmat-interrupted Stopped 1", StringComparison.Ordinal), run.ToString());
-                Assert.False(IsRunning(send.ProcessId), "The script's own child is still running.");
+                Assert.False(CurlScripts.IsAlive(send), "The script's own child is still running.");
                 Assert.False(decoy.HasExited, "An unrelated process was stopped.");
             }
             finally
             {
-                CurlScripts.StopRecorded(record);
-                Stop(decoy);
+                try
+                {
+                    CurlScripts.StopRecorded(record);
+                }
+                finally
+                {
+                    Stop(decoy);
+                }
             }
         }
 
@@ -389,6 +403,93 @@ namespace XMAT.Tests.Replay
             Assert.True(run.Environment.ContainsKey("XMAT_SECRET_CANARY"));
             Assert.Null(run.Environment["XMAT_SECRET_CANARY"]);
             Assert.Equal(Environment.GetEnvironmentVariable("SystemRoot"), run.Environment["SystemRoot"]);
+        }
+
+        // A record names a process by its id and creation time. A record that gives a running xmat-echo.exe's id with
+        // another creation time, as the record of an earlier process whose id Windows gave to this one would, stops
+        // nothing and does not count it as running; the record that this process wrote itself stops it.
+        [Fact]
+        public async Task StopRecorded_StopsOnlyTheProcessThatItsRecordNames()
+        {
+            string folder = Path.Join(_folder, "decoy");
+            using Process decoy = StartDecoy(folder);
+            try
+            {
+                string record = CurlScripts.RecordOf(folder);
+                EchoRun own = await WaitForRecordAsync(record);
+                JsonObject line = JsonNode.Parse(File.ReadAllLines(record)[0]).AsObject();
+                line["created"] = own.Created - 1;
+                string stale = Path.Join(_folder, "stale-record.jsonl");
+                File.WriteAllText(stale, line.ToJsonString() + "\n");
+                EchoRun other = Assert.Single(CurlScripts.ReadEcho(stale));
+
+                CurlScripts.StopRecorded(stale);
+
+                Assert.Equal(decoy.Id, own.ProcessId);
+                Assert.False(decoy.WaitForExit(500), "A record of another process with this id stopped it.");
+                Assert.True(CurlScripts.IsAlive(own));
+                Assert.False(CurlScripts.IsAlive(other));
+
+                CurlScripts.StopRecorded(record);
+
+                Assert.True(decoy.WaitForExit(30_000), "The record that this process wrote did not stop it.");
+                Assert.False(CurlScripts.IsAlive(own));
+            }
+            finally
+            {
+                Stop(decoy);
+            }
+        }
+
+        // A recorded process that has not exited once it was stopped is an error that names it, raised only after every
+        // record has been tried, so such a process leaves none of the others running.
+        [Fact]
+        public async Task StopRecorded_TriesEveryRecord_ThenThrowsForOneThatDidNotExit()
+        {
+            using Process first = StartDecoy(Path.Join(_folder, "first"));
+            using Process second = StartDecoy(Path.Join(_folder, "second"));
+            try
+            {
+                EchoRun firstRun = await WaitForRecordAsync(CurlScripts.RecordOf(Path.Join(_folder, "first")));
+                EchoRun secondRun = await WaitForRecordAsync(CurlScripts.RecordOf(Path.Join(_folder, "second")));
+                string records = Path.Join(_folder, "records.jsonl");
+                File.WriteAllLines(
+                    records,
+                    new[] { "first", "second" }.Select(name => File.ReadAllLines(CurlScripts.RecordOf(Path.Join(_folder, name)))[0]));
+                int calls = 0;
+
+                InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => CurlScripts.StopRecorded(
+                    records,
+                    (_, _) =>
+                    {
+                        // The first stop does nothing; the second stops its process.
+                        if (++calls == 2)
+                        {
+                            second.Kill();
+                            second.WaitForExit();
+                        }
+
+                        return true;
+                    },
+                    100));
+
+                Assert.Equal(2, calls);
+                Assert.Contains($"process {first.Id}:", error.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain($"process {second.Id}:", error.Message, StringComparison.Ordinal);
+                Assert.True(CurlScripts.IsAlive(firstRun));
+                Assert.False(CurlScripts.IsAlive(secondRun));
+            }
+            finally
+            {
+                try
+                {
+                    Stop(first);
+                }
+                finally
+                {
+                    Stop(second);
+                }
+            }
         }
 
         // T6: a server that closes the connection at once is curl's own failure: the script's result is curl's nonzero
@@ -644,6 +745,33 @@ namespace XMAT.Tests.Replay
             }
         }
 
+        // The first run in record, once xmat-echo.exe has written it.
+        private static async Task<EchoRun> WaitForRecordAsync(string record)
+        {
+            var elapsed = Stopwatch.StartNew();
+            while (true)
+            {
+                try
+                {
+                    if (CurlScripts.ReadEcho(record) is { Count: > 0 } runs)
+                    {
+                        return runs[0];
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or JsonException)
+                {
+                    // Still being written.
+                }
+
+                if (elapsed.Elapsed > TimeSpan.FromSeconds(60))
+                {
+                    throw new TimeoutException("xmat-echo.exe did not write its record.");
+                }
+
+                await Task.Delay(20);
+            }
+        }
+
         // A PowerShell script that runs command in a runspace of its own with $global:LASTEXITCODE set to 0, waits until
         // xmat-echo.exe records the send, stops that pipeline as Ctrl+C would, and writes the pipeline's state and the
         // runspace's $global:LASTEXITCODE afterwards.
@@ -686,19 +814,6 @@ namespace XMAT.Tests.Replay
                 "    $xmatRunspace.Dispose()",
                 "}",
                 string.Empty);
-
-        private static bool IsRunning(int processId)
-        {
-            try
-            {
-                using Process process = Process.GetProcessById(processId);
-                return !process.HasExited;
-            }
-            catch (ArgumentException)
-            {
-                return false;
-            }
-        }
 
         // A GET whose arguments take exactly bound on the command line, with filler made of these characters.
         private static CurlRequest AtBudget(long bound, string filler)

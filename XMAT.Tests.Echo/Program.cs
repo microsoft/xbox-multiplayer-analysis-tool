@@ -20,9 +20,10 @@ namespace XMAT.Tests.Echo
     //   unicode  - whether that answer lists the Unicode feature, true by default;
     //   mode     - "read" (the default) reads stdin to its end and exits 0; "hold" closes its stdin without reading and
     //              keeps running until it is stopped.
-    // A record holds its kind (probe or send), process id, arguments as .NET read them, arguments as the Windows
-    // command-line parser reads them, the raw command line, the names of its environment variables with the values of
-    // the system folders only (RecordedValues), and for a send, the stdin bytes' length and SHA-256.
+    // A record holds its kind (probe or send), process id and creation time (a FILETIME, which with the id names this
+    // process alone, since Windows can give the id to another process once this one is gone), arguments as .NET read them,
+    // arguments as the Windows command-line parser reads them, the raw command line, the names of its environment variables
+    // with the values of the system folders only (RecordedValues), and for a send, the stdin bytes' length and SHA-256.
     internal static class Program
     {
         private const int StdInputHandle = -10;
@@ -49,6 +50,7 @@ namespace XMAT.Tests.Echo
             {
                 ["kind"] = probe ? "probe" : "send",
                 ["pid"] = Environment.ProcessId,
+                ["created"] = CreationTime(),
                 ["args"] = args,
                 ["nativeArgs"] = NativeArguments(),
                 ["commandLine"] = Marshal.PtrToStringUni(NativeMethods.GetCommandLineW()),
@@ -106,6 +108,10 @@ namespace XMAT.Tests.Echo
             }
         }
 
+        // This process's creation time as Windows keeps it; 0 if it cannot be read, which no running process has.
+        private static long CreationTime() =>
+            NativeMethods.GetProcessTimes(NativeMethods.GetCurrentProcess(), out long created, out _, out _, out _) ? created : 0;
+
         private static void Append(string path, Dictionary<string, object> entry)
         {
             string line = JsonSerializer.Serialize(entry) + "\n";
@@ -140,6 +146,13 @@ namespace XMAT.Tests.Echo
             [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
             [return: MarshalAs(UnmanagedType.Bool)]
             internal static extern bool CloseHandle(IntPtr handle);
+
+            [DllImport("kernel32.dll", ExactSpelling = true)]
+            internal static extern IntPtr GetCurrentProcess();
+
+            [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
         }
     }
 }

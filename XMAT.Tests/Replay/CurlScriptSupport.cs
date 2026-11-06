@@ -6,9 +6,11 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Win32.SafeHandles;
 using XMAT.Operations.Replay;
 using XMAT.Tests.HeadlessParity;
 
@@ -122,31 +124,66 @@ namespace XMAT.Tests.Replay
         }
 
         // Stops each xmat-echo.exe that the record lists and that still runs, so that a test that fails never leaves one
-        // behind, held or orphaned.
-        internal static void StopRecorded(string record)
+        // behind, held or orphaned, and throws, once it has tried them all, if one of them has not exited. A process is the
+        // one that the record names only if its creation time matches: the handle that checks it is the handle that stops
+        // it and waits for its exit, so an id that Windows gave to another process, another xmat-echo.exe included, never
+        // stops that process.
+        internal static void StopRecorded(string record) => StopRecorded(record, NativeMethods.TerminateProcess, 30_000);
+
+        // StopRecorded, with the call that stops a process and the time that a process then has to exit.
+        internal static void StopRecorded(string record, Func<SafeProcessHandle, uint, bool> terminate, uint exitMilliseconds)
         {
+            var running = new List<string>();
             foreach (EchoRun run in ReadEcho(record))
             {
-                try
+                using SafeProcessHandle handle = OpenRecorded(run, NativeMethods.ProcessTerminate | NativeMethods.Synchronize);
+                if (handle == null)
                 {
-                    using Process process = Process.GetProcessById(run.ProcessId);
-                    if (process.ProcessName.Equals("xmat-echo", StringComparison.OrdinalIgnoreCase) && !process.HasExited)
-                    {
-                        process.Kill();
-                        process.WaitForExit();
-                    }
+                    continue;
                 }
-                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+
+                // Stopping a process that has exited already fails, and waiting for it then returns at once.
+                int terminateError = terminate(handle, 1) ? 0 : Marshal.GetLastWin32Error();
+                uint wait = NativeMethods.WaitForSingleObject(handle, exitMilliseconds);
+                if (wait != NativeMethods.WaitObject0)
                 {
-                    // It is gone already.
+                    int waitError = wait == NativeMethods.WaitFailed ? Marshal.GetLastWin32Error() : 0;
+                    running.Add($"process {run.ProcessId}: wait result 0x{wait:X} (error {waitError}), terminate error {terminateError}");
                 }
             }
+
+            if (running.Count > 0)
+            {
+                throw new InvalidOperationException("Recorded xmat-echo.exe processes did not exit: " + string.Join("; ", running) + ".");
+            }
+        }
+
+        // Whether the process that the record names still runs: false once it has exited, also when its id now names
+        // another process.
+        internal static bool IsAlive(EchoRun run)
+        {
+            using SafeProcessHandle handle = OpenRecorded(run, NativeMethods.Synchronize);
+            return handle != null && NativeMethods.WaitForSingleObject(handle, 0) == NativeMethods.WaitTimeout;
+        }
+
+        // The process that run names, opened with access and kept open by the caller: null when no process has its id,
+        // or when the process that has it was created at another time.
+        private static SafeProcessHandle OpenRecorded(EchoRun run, uint access)
+        {
+            SafeProcessHandle handle = NativeMethods.OpenProcess(access | NativeMethods.ProcessQueryLimitedInformation, false, run.ProcessId);
+            if (!handle.IsInvalid && NativeMethods.GetProcessTimes(handle, out long created, out _, out _, out _) && created == run.Created)
+            {
+                return handle;
+            }
+
+            handle.Dispose();
+            return null;
         }
 
         // Writes xmat-echo.json in folder, for xmat-echo.exe started there, and returns the record file's path.
         internal static string ConfigureEcho(string folder, string version = "8.21.0", bool unicode = true, string mode = "read")
         {
-            string record = Path.Join(folder, "echo-record.jsonl");
+            string record = RecordOf(folder);
             File.WriteAllText(
                 Path.Join(folder, "xmat-echo.json"),
                 JsonSerializer.Serialize(new { record, version, unicode, mode }));
@@ -158,6 +195,9 @@ namespace XMAT.Tests.Replay
             File.Exists(record)
                 ? File.ReadAllLines(record).Where(line => line.Length > 0).Select(line => new EchoRun(JsonDocument.Parse(line).RootElement)).ToList()
                 : Array.Empty<EchoRun>();
+
+        // The record file of xmat-echo.exe started in folder.
+        internal static string RecordOf(string folder) => Path.Join(folder, "echo-record.jsonl");
 
         private static string FindPwsh()
         {
@@ -171,6 +211,31 @@ namespace XMAT.Tests.Replay
 
             string installed = Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe");
             return File.Exists(installed) ? installed : null;
+        }
+
+        private static class NativeMethods
+        {
+            internal const uint ProcessTerminate = 0x0001;
+            internal const uint ProcessQueryLimitedInformation = 0x1000;
+            internal const uint Synchronize = 0x00100000;
+            internal const uint WaitObject0 = 0;
+            internal const uint WaitTimeout = 0x102;
+            internal const uint WaitFailed = 0xFFFFFFFF;
+
+            [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+            internal static extern SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int processId);
+
+            [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool GetProcessTimes(
+                SafeProcessHandle process, out long creation, out long exit, out long kernel, out long user);
+
+            [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool TerminateProcess(SafeProcessHandle process, uint exitCode);
+
+            [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+            internal static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
         }
     }
 
@@ -186,6 +251,7 @@ namespace XMAT.Tests.Replay
         {
             Kind = root.GetProperty("kind").GetString();
             ProcessId = root.GetProperty("pid").GetInt32();
+            Created = root.GetProperty("created").GetInt64();
             Arguments = root.GetProperty("args").EnumerateArray().Select(value => value.GetString()).ToList();
             NativeArguments = root.GetProperty("nativeArgs").EnumerateArray().Select(value => value.GetString()).ToList();
             CommandLine = root.GetProperty("commandLine").GetString();
@@ -198,6 +264,9 @@ namespace XMAT.Tests.Replay
         internal string Kind { get; }
 
         internal int ProcessId { get; }
+
+        // The process's creation time (a FILETIME), which with ProcessId names it alone.
+        internal long Created { get; }
 
         internal IReadOnlyList<string> Arguments { get; }
 
