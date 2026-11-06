@@ -527,7 +527,10 @@ response, or without one when the request failed or timed out. **Replay of** in 
 request details shows where it comes from: the tab and request number of the captured
 request, or that the request was composed from scratch. This link is kept in memory
 only. You can inspect and analyze replays like captured traffic, and edit and resend
-them.
+them. Each row's `Host` header, host, and port are the ones that XMAT sent, in ASCII:
+an international host name in its IDN (punycode) form, such as `xn--bcher-kva.example`,
+an IPv6 address in brackets without its zone, and the port only when it is not the
+scheme's default.
 
 When you cancel a replay, the requests already recorded stay in the tab, and XMAT tells
 you how many there are. The request that was being sent when you cancelled is not
@@ -553,6 +556,15 @@ captures and exports never show it as an empty body. A request whose body was no
 is never sent again, from the GUI or with `xmat replay`. After the replay, XMAT tells
 you how many bodies were not kept. Close the tab to make room for new bodies: the next
 replay starts a new one.
+
+A send whose response is larger than the response size limit, 16 MiB, also gets its
+row, with the status and headers but no body, since the body never came. Its note says
+that the response body was not kept, and its `X-XMAT-Response-Body-Not-Kept` header
+gives the size that the response declared in `Content-Length`, which XMAT did not
+check, or `unknown` when it declared none, as a chunked response does, so the row never
+looks like an empty response, also in saved captures and exports. As for a body that
+did not fit, the body preview says that the body was not kept, and a replay of the row
+with **Reissue and verify** counts it as not verified.
 
 While a replay or a send from the composer is in progress, XMAT does not load, import,
 save, or export captures, analyze, start a capture, or close tabs; **Cancel replay**

@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace XMAT.Operations.Replay
@@ -76,6 +77,26 @@ namespace XMAT.Operations.Replay
             WriteTo(bytes);
             return bytes.ToArray();
         }
+
+        // The size that the message declared for its body (Content-Length), as a decimal, never checked against the body:
+        // a response over the send's size limit comes without its body (ReplayOutcome.TooLarge), and this is all that is
+        // known of it. UnknownLength when the message declared none that is a size.
+        internal string DeclaredLength()
+        {
+            foreach (KeyValuePair<string, string> header in ContentHeaders.Concat(Headers))
+            {
+                if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                {
+                    return long.TryParse(header.Value, NumberStyles.None, CultureInfo.InvariantCulture, out long length)
+                        ? length.ToString(CultureInfo.InvariantCulture)
+                        : UnknownLength;
+                }
+            }
+
+            return UnknownLength;
+        }
+
+        internal const string UnknownLength = "unknown";
 
         // "HTTP/1.1", or "HTTP/2" when the minor version is 0, as the proxy shows versions.
         internal static string FormatVersion(Version version) =>

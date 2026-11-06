@@ -265,10 +265,12 @@ namespace XMAT.WebServiceCapture
         }
 
         // A capture row for one send: the request as XMAT built it and the response, with no status when none came, and
-        // without the bodies that the tab does not keep, which a header in the head and the row's note account for. The
-        // note also says how a send with the composer's transport options went (TransportNote), from what the operation
-        // recorded for it (sent), never from the composer's current controls, and, for a verified send, its verdict and
-        // whether the tab kept its verification differences (VerifyNote), which the row keeps with it (verification).
+        // without the bodies that the tab does not keep, which a header in the head and the row's note account for: a body
+        // over what is left of the tab's budget, and a response body over the send's response size limit, which never came
+        // (TooLarge). The note also says how a send with the composer's transport options went (TransportNote), from what
+        // the operation recorded for it (sent), never from the composer's current controls, and, for a verified send, its
+        // verdict and whether the tab kept its verification differences (VerifyNote), which the row keeps with it
+        // (verification). The row's host and port are the URL's authority as it was sent (ReplayAuthority).
         internal static ProxyConnectionModel ToRow(
             long number,
             ReplayProvenance provenance,
@@ -287,10 +289,13 @@ namespace XMAT.WebServiceCapture
             byte[] responseBody = response?.Body ?? Array.Empty<byte>();
             bool requestOmitted = !keepRequestBody && requestBody.Length != 0;
             bool responseOmitted = !keepResponseBody && responseBody.Length != 0;
+            bool responseTooLarge = exchange.Outcome == ReplayOutcome.TooLarge && response != null;
             string requestHead = Head(
-                request, requestOmitted ? RequestReplayDraft.RequestBodyNotKeptHeader : null, requestBody.LongLength);
+                request, requestOmitted ? RequestReplayDraft.RequestBodyNotKeptHeader : null, Bytes(requestBody.LongLength));
             string responseHead = Head(
-                response, responseOmitted ? RequestReplayDraft.ResponseBodyNotKeptHeader : null, responseBody.LongLength);
+                response,
+                responseOmitted || responseTooLarge ? RequestReplayDraft.ResponseBodyNotKeptHeader : null,
+                responseTooLarge ? response.DeclaredLength() : Bytes(responseBody.LongLength));
             long budgetMiB = bodyBudgetBytes / (1024 * 1024);
             string bodiesNote = (requestOmitted, responseOmitted) switch
             {
@@ -302,15 +307,20 @@ namespace XMAT.WebServiceCapture
                     "REPLAY_NOTE_RESPONSE_BODY", responseBody.LongLength, budgetMiB),
                 _ => null,
             };
+            string tooLargeNote = responseTooLarge
+                ? Localization.GetLocalizedString("REPLAY_NOTE_RESPONSE_TOO_LARGE")
+                : null;
             string note = string.Join(
-                "\n", new[] { bodiesNote, TransportNote(sent), VerifyNote(verification) }.Where(line => line != null));
+                "\n",
+                new[] { bodiesNote, tooLargeNote, TransportNote(sent), VerifyNote(verification) }
+                    .Where(line => line != null));
             return new ProxyConnectionModel(
                 number,
                 exchange.StatusCode == 0 ? string.Empty : exchange.StatusCode.ToString(CultureInfo.InvariantCulture),
                 exchange.Started,
                 exchange.Duration,
                 uri?.Scheme ?? string.Empty,
-                uri?.Authority ?? string.Empty,
+                uri == null ? string.Empty : ReplayAuthority.Ascii(uri),
                 request?.StartLine.Split(' ')[0] ?? string.Empty,
                 uri?.PathAndQuery ?? string.Empty,
                 requestHead,
@@ -461,8 +471,9 @@ namespace XMAT.WebServiceCapture
             (row.RequestBody?.LongLength ?? 0) + (row.ResponseBody?.LongLength ?? 0);
 
         // The start line and header lines, as captures store them, then the empty line that ends the head; notKeptHeader,
-        // when a body was not kept, adds that header with the body's size in bytes.
-        private static string Head(ReplayMessage message, string notKeptHeader, long notKeptBytes)
+        // when a body was not kept, adds that header with notKeptValue: the body's size in bytes, or what the response
+        // declared it to be.
+        private static string Head(ReplayMessage message, string notKeptHeader, string notKeptValue)
         {
             if (message == null)
             {
@@ -477,12 +488,13 @@ namespace XMAT.WebServiceCapture
 
             if (notKeptHeader != null)
             {
-                head.Append(notKeptHeader).Append(": ")
-                    .Append(notKeptBytes.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+                head.Append(notKeptHeader).Append(": ").Append(notKeptValue).Append("\r\n");
             }
 
             return head.Append("\r\n").ToString();
         }
+
+        private static string Bytes(long count) => count.ToString(CultureInfo.InvariantCulture);
     }
 
     // One run's hold on the Replays tab: the recorder that adds the run's rows, and the capture-data operation that keeps
