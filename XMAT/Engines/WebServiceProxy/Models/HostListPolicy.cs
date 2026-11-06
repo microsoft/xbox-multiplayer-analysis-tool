@@ -97,6 +97,31 @@ namespace XMAT.WebServiceCapture.Models
             return host?.Trim();
         }
 
+        internal static bool IsSupportedTargetScheme(string scheme) =>
+            string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(scheme, "ws", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(scheme, "wss", StringComparison.OrdinalIgnoreCase);
+
+        internal static string DestinationHost(Uri uri)
+        {
+            try
+            {
+                string host = uri?.HostNameType == UriHostNameType.IPv6 ? uri.Host : uri?.IdnHost;
+                return string.IsNullOrEmpty(host) ? null : MatchCandidate(host);
+            }
+            catch (UriFormatException)
+            {
+                return null;
+            }
+        }
+
+        internal static HostMatchCandidates LiteralHostCandidates(string host)
+        {
+            string candidate = MatchCandidate(host) ?? string.Empty;
+            return new HostMatchCandidates(candidate, null, null, null);
+        }
+
         internal static Regex CreatePattern(string entry) =>
             new("^" + Regex.Escape(entry).Replace("\\*", ".*") + "$",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
@@ -108,51 +133,33 @@ namespace XMAT.WebServiceCapture.Models
             string candidate = MatchCandidate(host) ?? string.Empty;
             string matchingPath = path;
             string alternateHost = null;
-            if (!string.IsNullOrEmpty(path))
+            if (!string.IsNullOrEmpty(path) && Uri.TryCreate(path, UriKind.Absolute, out Uri absolute))
             {
-                if (Uri.TryCreate(path, UriKind.Absolute, out Uri absolute))
+                if (IsSupportedTargetScheme(absolute.Scheme))
                 {
-                    if (absolute.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
-                        absolute.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-                    {
-                        matchingPath = absolute.PathAndQuery;
-                        string absoluteHost = MatchCandidate(absolute.Host);
-                        if (!string.Equals(candidate, absoluteHost, StringComparison.OrdinalIgnoreCase))
-                        {
-                            alternateHost = absoluteHost;
-                        }
-                    }
+                    matchingPath = absolute.PathAndQuery;
+                    alternateHost = DestinationHost(absolute);
                 }
-                else
+            }
+            else
+            {
+                if (TryCreateCanonicalUri(candidate, path, out Uri supplied))
                 {
-                    try
+                    if (!string.IsNullOrEmpty(path))
                     {
-                        string localPath = path;
-                        string extra = string.Empty;
-                        if (localPath.Contains('?'))
-                        {
-                            string[] parts = localPath.Split('?', 2);
-                            localPath = parts[0];
-                            extra = "?" + parts[1];
-                        }
-                        else if (localPath.Contains('#'))
-                        {
-                            string[] parts = localPath.Split('#', 2);
-                            localPath = parts[0];
-                            extra = "#" + parts[1];
-                        }
-                        matchingPath = new UriBuilder(
-                            Uri.UriSchemeHttp,
-                            "xmat.invalid",
-                            -1,
-                            localPath,
-                            extra).Uri.PathAndQuery;
+                        matchingPath = supplied.PathAndQuery;
                     }
-                    catch (UriFormatException)
-                    {
-                        // Keep the legacy literal candidate when a canonical URI cannot be constructed.
-                    }
+                    alternateHost = DestinationHost(supplied);
                 }
+                else if (!string.IsNullOrEmpty(path) &&
+                    TryCreateCanonicalUri("xmat.invalid", path, out Uri inert))
+                {
+                    matchingPath = inert.PathAndQuery;
+                }
+            }
+            if (string.Equals(candidate, alternateHost, StringComparison.OrdinalIgnoreCase))
+            {
+                alternateHost = null;
             }
             string normalizedPath = string.IsNullOrEmpty(matchingPath)
                 ? null
@@ -162,6 +169,39 @@ namespace XMAT.WebServiceCapture.Models
                 normalizedPath == null ? null : candidate + normalizedPath,
                 alternateHost,
                 alternateHost == null || normalizedPath == null ? null : alternateHost + normalizedPath);
+        }
+
+        private static bool TryCreateCanonicalUri(string host, string path, out Uri uri)
+        {
+            string localPath = path ?? string.Empty;
+            string extra = string.Empty;
+            if (localPath.Contains('?'))
+            {
+                string[] parts = localPath.Split('?', 2);
+                localPath = parts[0];
+                extra = "?" + parts[1];
+            }
+            else if (localPath.Contains('#'))
+            {
+                string[] parts = localPath.Split('#', 2);
+                localPath = parts[0];
+                extra = "#" + parts[1];
+            }
+            try
+            {
+                uri = new UriBuilder(
+                    Uri.UriSchemeHttp,
+                    host,
+                    -1,
+                    localPath,
+                    extra).Uri;
+                return true;
+            }
+            catch (UriFormatException)
+            {
+                uri = null;
+                return false;
+            }
         }
 
         internal static bool Matches(Regex pattern, HostMatchCandidates candidates) =>
