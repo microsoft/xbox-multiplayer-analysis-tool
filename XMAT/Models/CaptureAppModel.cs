@@ -137,6 +137,9 @@ namespace XMAT.Models
                 }
             }
         }
+
+        // The rows that this session's Replays tab recorded, which every composer's history shows; never saved.
+        internal ReplayHistory ReplayHistory { get; }
         internal bool IsAnyCaptureRunning
         {
             get
@@ -207,6 +210,7 @@ namespace XMAT.Models
         {
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
             PreferencesModel = new();
+            ReplayHistory = new ReplayHistory(this);
             _captureDeviceContexts.CollectionChanged += CaptureDeviceContexts_CollectionChanged;
 
             foreach (var context in _captureDeviceContexts)

@@ -178,6 +178,7 @@ namespace XMAT.WebServiceCapture
         private readonly Func<ReplayItemResult, ReplayProvenance> _provenanceOf;
         private readonly Func<bool> _isOpen;
         private readonly Action _stop;
+        private readonly Action<ProxyConnectionModel> _recorded;
         private long _retainedBodyBytes;
         private long _retainedVerifyDiffBytes;
         private long _lastNumber;
@@ -186,7 +187,8 @@ namespace XMAT.WebServiceCapture
         // Created on the UI thread, which onUiThread runs an action on synchronously, or not at all once it no longer takes
         // rows (UI types pass their dispatcher). isOpen says, on the UI thread, whether the tab still takes rows, and stop
         // ends the run once it does not. Replay rows are numbered after the rows the tab already has, whose bodies and
-        // verification differences count against the budgets.
+        // verification differences count against the budgets. recorded is told, on the UI thread, of each row once it is in
+        // the tab and counted, and never of a send that was not recorded (the composer's history, ReplayHistory).
         internal ReplayRecorder(
             WebServiceDeviceCaptureController controller,
             IDataTable table,
@@ -195,7 +197,8 @@ namespace XMAT.WebServiceCapture
             Func<bool> isOpen = null,
             Action stop = null,
             long bodyBudgetBytes = DefaultBodyBudgetBytes,
-            long verifyDiffBudgetBytes = VerifyDiffLimits.MaxRetainedBytes)
+            long verifyDiffBudgetBytes = VerifyDiffLimits.MaxRetainedBytes,
+            Action<ProxyConnectionModel> recorded = null)
         {
             _controller = controller ?? throw new ArgumentNullException(nameof(controller));
             _table = table;
@@ -203,6 +206,7 @@ namespace XMAT.WebServiceCapture
             _provenanceOf = provenanceOf ?? throw new ArgumentNullException(nameof(provenanceOf));
             _isOpen = isOpen ?? (() => true);
             _stop = stop;
+            _recorded = recorded;
             ArgumentOutOfRangeException.ThrowIfNegative(bodyBudgetBytes);
             ArgumentOutOfRangeException.ThrowIfNegative(verifyDiffBudgetBytes);
             BodyBudgetBytes = bodyBudgetBytes;
@@ -400,6 +404,7 @@ namespace XMAT.WebServiceCapture
             _lastNumber++;
             Recorded++;
             LastRecorded = row;
+            _recorded?.Invoke(row);
         }
 
         // A send's verdict, with the verification differences that came with that very verdict while they fit what is left
@@ -552,6 +557,9 @@ namespace XMAT.WebServiceCapture
         // XMAT is exiting without waiting for replays (CaptureAppModel.BeginShutdown).
         internal bool IsShuttingDown => _model.IsShuttingDown;
 
+        // The rows that this session's Replays tab recorded, which every composer's history shows.
+        internal ReplayHistory History => _model.ReplayHistory;
+
         // Starts recording one run, on the UI thread; null when XMAT is busy or shutting down (CanBegin). Until the
         // recording is disposed, closing XMAT cancels the run through cancellation and waits for the recording to end.
         // show selects the tab.
@@ -579,7 +587,8 @@ namespace XMAT.WebServiceCapture
                     () => !_model.IsShuttingDown && _model.CaptureDeviceContexts.Contains(destination),
                     cancellation.Cancel,
                     _bodyBudgetBytes,
-                    _verifyDiffBudgetBytes);
+                    _verifyDiffBudgetBytes,
+                    row => _model.ReplayHistory.Add(destination, row));
                 if (show)
                 {
                     _model.SelectedDeviceContext = destination;
@@ -605,17 +614,25 @@ namespace XMAT.WebServiceCapture
         {
             ArgumentNullException.ThrowIfNull(recording);
             ProxyConnectionModel row = recording.Recorder.LastRecorded;
-            if (row == null ||
-                recording.IsRevoked ||
-                _model.IsShuttingDown ||
-                !_model.CaptureDeviceContexts.Any(context => ReferenceEquals(context, recording.Destination)) ||
-                recording.Destination.CaptureController is not WebServiceDeviceCaptureController controller ||
+            return row != null && !recording.IsRevoked && TrySelect(recording.Destination, row);
+        }
+
+        // Selects row in tab, by reference, as Inspect session does: nothing is selected, and false returned, once XMAT is
+        // shutting down, or when tab is no longer one of the application's tabs or row no longer one of its rows. The tab's
+        // selection is cleared first, so a view that does not show the row selects nothing rather than keeping another row.
+        internal bool TrySelect(ICaptureDeviceContext tab, ProxyConnectionModel row)
+        {
+            ArgumentNullException.ThrowIfNull(tab);
+            ArgumentNullException.ThrowIfNull(row);
+            if (_model.IsShuttingDown ||
+                !_model.CaptureDeviceContexts.Any(context => ReferenceEquals(context, tab)) ||
+                tab.CaptureController is not WebServiceDeviceCaptureController controller ||
                 !controller.ProxyConnections.Any(connection => ReferenceEquals(connection, row)))
             {
                 return false;
             }
 
-            _model.SelectedDeviceContext = recording.Destination;
+            _model.SelectedDeviceContext = tab;
             controller.SelectedConnectionModel = null;
             controller.SelectedConnectionModel = row;
             return true;

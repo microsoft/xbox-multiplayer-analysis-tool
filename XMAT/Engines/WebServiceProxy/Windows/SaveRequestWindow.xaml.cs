@@ -3,11 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 using System;
-using System.Buffers;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
-using System.Text;
 using System.Windows;
 using XMAT.Operations.Replay;
 
@@ -22,58 +19,6 @@ namespace XMAT.WebServiceCapture
     // How to save a request: a template, or with its captured content; OriginChangeAllowed only when the user allowed that
     // content to be saved for a changed origin.
     internal sealed record RequestSaveChoice(RequestFileProfile Profile, bool OriginChangeAllowed = false);
-
-    // Text that comes from outside XMAT, such as a query parameter's name, which is whatever its URL decodes to, or a file's
-    // name, as a window shows it, so that it cannot break, hide or reorder the text around it. Each character that is not
-    // visible as itself, or that can change how text reads, is shown as \uXXXX, one per UTF-16 code unit: controls, line
-    // and paragraph separators, spaces other than ' ', format characters such as bidirectional controls and zero-width
-    // characters, combining marks, private-use and unassigned characters, and lone surrogates. Text longer than maxChars as
-    // shown is cut after a whole character or escape, and ends with an ellipsis.
-    internal static class UntrustedText
-    {
-        private const char Ellipsis = '\u2026';
-
-        internal static string Show(string text, int maxChars)
-        {
-            ArgumentNullException.ThrowIfNull(text);
-            ArgumentOutOfRangeException.ThrowIfNegative(maxChars);
-            var shown = new StringBuilder(Math.Min(text.Length, maxChars) + 1);
-            for (int index = 0; index < text.Length;)
-            {
-                OperationStatus status = Rune.DecodeFromUtf16(text.AsSpan(index), out Rune rune, out int used);
-                used = Math.Max(used, 1);
-                string piece = status == OperationStatus.Done && IsShownAsItself(rune)
-                    ? text.Substring(index, used)
-                    : Escaped(text.AsSpan(index, used));
-                if (shown.Length + piece.Length > maxChars)
-                {
-                    shown.Append(Ellipsis);
-                    break;
-                }
-
-                shown.Append(piece);
-                index += used;
-            }
-
-            return shown.ToString();
-        }
-
-        private static bool IsShownAsItself(Rune rune) =>
-            rune.Value == ' ' ||
-            Rune.GetUnicodeCategory(rune) is not (
-                UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.LineSeparator or
-                UnicodeCategory.ParagraphSeparator or UnicodeCategory.SpaceSeparator or UnicodeCategory.Surrogate or
-                UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned or UnicodeCategory.NonSpacingMark or
-                UnicodeCategory.EnclosingMark);
-
-        private static string Escaped(ReadOnlySpan<char> units)
-        {
-            var escaped = new StringBuilder(units.Length * 6);
-            foreach (char unit in units)
-                escaped.Append("\\u").Append(((int)unit).ToString("X4", CultureInfo.InvariantCulture));
-            return escaped.ToString();
-        }
-    }
 
     /// <summary>
     /// Asks how to save one request, every time: as a template, which keeps only its shape, unless the user includes its
