@@ -1066,6 +1066,52 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // Send refuses a form whose Content-Type the headers would drop first: also for a URL with '#', before the numbers are
+        // asked for, and before an endpoint that is not one either. Nothing is asked or sent, and no header changes.
+        [Fact]
+        public Task ANumberedFormsContentTypeRefusal_ComesBeforeItsNumbersAndItsEndpoint() => _application.RunAsync(async () =>
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            using var client = new RequestReplayClient();
+            var questions = new List<string>();
+            var window = new RequestComposerWindow(
+                Capture(server.Port, "POST"),
+                client,
+                message =>
+                {
+                    questions.Add(message);
+                    return true;
+                });
+            int ranges = 0;
+            window.ChooseSequence = () =>
+            {
+                ranges++;
+                return "1-2";
+            };
+            try
+            {
+                await UseAFormAsync(window);
+                var headers = Find<TextBox>(window, "HeadersBox");
+                headers.Text += "\r\nConnection: Content-Type";
+                string nominated = headers.Text;
+                Find<TextBox>(window, "UrlBox").Text = server.Origin + "/upload/#";
+                Find<CheckBox>(window, "ConnectToBox").IsChecked = true;
+                Find<TextBox>(window, "ConnectToText").Text = "not an endpoint";
+
+                await window.SendAsync();
+
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED"), Status(window));
+                Assert.Equal(0, ranges);
+                Assert.Empty(questions);
+                Assert.Empty(server.Requests);
+                Assert.Equal(nominated, headers.Text);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
         // Once the body is no longer a form, a Connection header that names Content-Type is the request's own, as always: Send
         // sends the request, Copy as cURL copies it, and Save as cURL script and Save request as go on to ask where.
         [Theory]

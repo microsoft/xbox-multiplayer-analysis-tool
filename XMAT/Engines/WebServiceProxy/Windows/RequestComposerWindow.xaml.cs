@@ -96,12 +96,12 @@ namespace XMAT.WebServiceCapture
         private int _historyGeneration;
         private bool _historyOpen;
 
-        // What the window is doing; it starts nothing else meanwhile. Preparing covers checking a send and asking the user
-        // about it, or asking which file to upload or open, whether to replace an edited request, or where and how to save
-        // it or a cURL script, and whether to export it, and the Build form dialog while it is open. ReadingFile covers
-        // reading a body or request file, or preparing a request that Load takes from the history, Checking making the
-        // editor's body into bytes for Use this body, checking a request before saving it, or preparing a cURL command or
-        // script, and WritingFile saving a request file or a cURL script.
+        // What the window is doing; it starts nothing else meanwhile. Preparing covers asking the user about a send, which
+        // numbers to send and whether to send it, or asking which file to upload or open, whether to replace an edited
+        // request, or where and how to save it or a cURL script, and whether to export it, and the Build form dialog while it
+        // is open. ReadingFile covers reading a body or request file, or preparing a request that Load takes from the
+        // history, Checking checking a send, making the editor's body into bytes for Use this body, checking a request before
+        // saving it, or preparing a cURL command or script, and WritingFile saving a request file or a cURL script.
         private enum ComposerState
         {
             Idle,
@@ -242,41 +242,78 @@ namespace XMAT.WebServiceCapture
 
         internal RequestReplayResult LastResult { get; private set; }
 
+        // Send. Everything that the run sends is fixed at its entry, on the UI thread and without parsing anything, before
+        // the user is asked anything (FrozenSend): the request, as a copy that later edits do not change, whether its body
+        // is a form that Build form made, the options, the transport as the controls hold it and where the request comes
+        // from. Checking it, which parses the headers, the body, the URL and the endpoint, runs off the UI thread
+        // (CheckSend); for a URL with '#', the user then chooses the numbers on the UI thread, and the run with them is
+        // checked off the UI thread too (CheckSequence), over the same request and the transport that the first check
+        // parsed, never the controls again. Cancel request or closing the window stops either check (RunSendCheckAsync).
+        // The one question for the whole run is worded from what the checks found; then the run is recorded and sent, and
+        // why the operation refused it, if it did, is worded off the UI thread too (RunRefusalText).
         internal async Task SendAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
 
-            // Everything that the run sends is fixed here, before the user is asked anything: the request, as a copy that
-            // later edits do not change, the options, the transport and where the request comes from. A form whose
-            // Content-Type the headers would drop is refused here, at the entry, because Send prepares its request
-            // synchronously, on the UI thread (DropsFormContentType).
             UpdateDraft();
-            if (DropsFormContentType())
-                return;
-            int maxRedirects = MaxRedirects;
+            RequestReplayDraft draft = _draft.WithUrl(_draft.Url);
+            var send = new FrozenSend(
+                draft,
+                _formSeed != null,
+                MaxRedirects,
+                SelectedHttpVersion,
+                ConnectToBox.IsChecked == true,
+                ConnectToText.Text,
+                draft.Url.Contains(ReplaySequence.Placeholder));
             bool inspect = InspectSessionBox.IsChecked == true;
             ReplayProvenance provenance = _provenance;
-            if (!TryReadTransport(out ReplayTransportOptions transport))
-            {
-                StatusText.Text = ErrorText(Localization.GetLocalizedString("COMPOSER_CONNECT_TO_INVALID"));
+            string shown = StatusText.Text;
+            RequestReplayClient client = _client;
+            Func<FrozenSend, CancellationToken, SendCheck> check =
+                PrepareSend ?? ((frozen, token) => CheckSend(frozen, client, token));
+            SendCheck found = await RunSendCheckAsync(token => check(send, token), shown);
+            if (found == null)
                 return;
+
+            if (send.Numbered)
+            {
+                ReplaySequence sequence = AskSequence();
+                if (sequence == null)
+                    return;
+                ReplayTransportOptions transport = found.Transport;
+                Func<FrozenSend, ReplaySequence, ReplayTransportOptions, CancellationToken, SendCheck> previewSequence =
+                    PreviewSequence ?? ((frozen, numbers, checkedTransport, token) =>
+                        CheckSequence(frozen, numbers, checkedTransport, client, token));
+                found = await RunSendCheckAsync(token => previewSequence(send, sequence, transport, token), shown);
+                if (found == null)
+                    return;
             }
 
-            ReplayPlanPreview plan;
-            bool confirmed;
-            _state = ComposerState.Preparing;
-            try
+            // One question for the whole run, about what was checked: what is typed or chosen afterwards changes nothing in
+            // it. The window parses nothing to ask it: the URL's origin that it names comes from the check.
+            ReplayPlanPreview plan = found.Plan;
+            int maxRedirects = send.MaxRedirects;
+            bool confirmed = false;
+            if (plan.UsesUnsafeMethod || plan.ChangesOrigin || plan.UsesConnectTo)
             {
-                plan = Prepare(maxRedirects, transport, out confirmed);
-            }
-            finally
-            {
-                EndState();
-            }
+                _state = ComposerState.Preparing;
+                try
+                {
+                    confirmed = _confirm(ConfirmationMessage(plan, maxRedirects, found.ConnectToOrigin));
+                }
+                catch (Exception exception) when (IsInputError(exception))
+                {
+                    ShowError(exception);
+                }
+                finally
+                {
+                    EndState();
+                }
 
-            if (plan == null || _closed)
-                return;
+                if (!confirmed || _closed)
+                    return;
+            }
 
             using var cancellation = new CancellationTokenSource();
             // The recording keeps the Replays tab from being closed or replaced until the run ends; closing XMAT cancels
@@ -305,15 +342,29 @@ namespace XMAT.WebServiceCapture
                         StatusText.Text = Localization.GetLocalizedString("COMPOSER_SENDING_SEQUENCE", plan.Sends, done);
                 });
             RequestReplayBatchResult sent = null;
+            string refusal = null;
+            Func<OperationDiagnostic, ReplayPlanPreview, string> explain = ExplainRunRefusal ?? RunRefusalText;
             try
             {
-                sent = await _client.SendPlanAsync(
-                    plan, maxRedirects, confirmed, cancellation.Token, recording?.Recorder, progress);
-            }
-            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
-            {
-                // The Replays tab could not take a send, which ended the run.
-                PublicUtilities.AppLog(LogLevel.ERROR, $"Composer send stopped: {exception.GetType().FullName}");
+                try
+                {
+                    sent = await _client.SendPlanAsync(
+                        plan, maxRedirects, confirmed, cancellation.Token, recording?.Recorder, progress);
+                }
+                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+                {
+                    // The Replays tab could not take a send, which ended the run.
+                    PublicUtilities.AppLog(LogLevel.ERROR, $"Composer send stopped: {exception.GetType().FullName}");
+                }
+
+                // Why the operation refused the run once it was sent, worded off the UI thread before the window shows it:
+                // for a sequence, building its widest request again says it (PlanError). The run has ended, so a cancel
+                // meanwhile changes nothing: the window says what the run did.
+                if (sent is { WasCancelled: false, Result.Succeeded: false })
+                {
+                    OperationDiagnostic diagnostic = FirstDiagnostic(sent.Result.Diagnostics);
+                    refusal = await Task.Run(() => explain(diagnostic, plan));
+                }
             }
             finally
             {
@@ -326,7 +377,7 @@ namespace XMAT.WebServiceCapture
                 return;
 
             bool cancelled = sent?.WasCancelled ?? cancellation.IsCancellationRequested;
-            ShowOutcome(plan, sent, recording, maxRedirects, cancelled);
+            ShowOutcome(plan, sent, refusal, recording, maxRedirects, cancelled);
             // Inspect session selects the last row that this run recorded, whatever the run's outcome: also when it failed
             // or the user cancelled it after some of its requests were recorded. A run that XMAT stopped, because it is
             // closing or exiting, or because the run's tab closed, selects nothing, also when the user had cancelled it
@@ -393,84 +444,235 @@ namespace XMAT.WebServiceCapture
         // FormContentTypeDropped.
         internal Func<bool, RequestReplayDraft, CancellationToken, bool> CheckFormContentType { get; set; }
 
+        // Test seams for Send, null in production: its first check, off the UI thread, by default CheckSend with the window's
+        // client; the check of a URL with '#' once the user chose its numbers, off the UI thread too, by default
+        // CheckSequence; and how the window words why the operation refused a run once it was sent, off the UI thread, by
+        // default RunRefusalText.
+        internal Func<FrozenSend, CancellationToken, SendCheck> PrepareSend { get; set; }
+
+        internal Func<FrozenSend, ReplaySequence, ReplayTransportOptions, CancellationToken, SendCheck> PreviewSequence
+        {
+            get;
+            set;
+        }
+
+        internal Func<OperationDiagnostic, ReplayPlanPreview, string> ExplainRunRefusal { get; set; }
+
         // The client that sends. The window disposes the client that it created once it is closed and no run uses it.
         internal RequestReplayClient Client => _client;
 
-        // The request to send, checked as sending it would check it and frozen with its transport, and whether the user gave
-        // the permission that it needs; null when nothing is to be sent: the input is invalid or still leaves out a part of
-        // its request file, the user cancelled or declined, or the window closed meanwhile. A '#' in the URL asks for a range
-        // and sends one request per number.
-        private ReplayPlanPreview Prepare(int maxRedirects, ReplayTransportOptions transport, out bool confirmed)
+        // What Send froze at its entry, on the UI thread, without parsing anything (SendAsync): the request, as a copy that
+        // later edits do not change, which shares the body's text or bytes, never changed in place; whether its body is a
+        // form that Build form made; the most redirects; the transport as the controls held it: the HTTP version, and
+        // whether Connect to another endpoint is on, with the endpoint as typed; and whether the URL has a '#', which numbers
+        // the requests. Both checks of Send read only this, and the client (CheckSend, CheckSequence).
+        internal sealed record FrozenSend(
+            RequestReplayDraft Draft,
+            bool Form,
+            int MaxRedirects,
+            ReplayHttpVersion HttpVersion,
+            bool ConnectTo,
+            string Endpoint,
+            bool Numbered);
+
+        // What a check of Send found: why nothing is sent, as the status says it (Refusal); otherwise the transport that it
+        // parsed and checked, which for a URL with '#' is the one that the check of its numbers takes (CheckSequence), and
+        // the plan that it previewed, if any, with the URL's origin that the question names when the plan connects to
+        // another endpoint (ConfirmationMessage).
+        internal sealed record SendCheck(
+            string Refusal, ReplayTransportOptions Transport, ReplayPlanPreview Plan, string ConnectToOrigin)
         {
-            confirmed = false;
-            // A part that a request file left out is never sent as the placeholder that the editors show for it.
-            if (_draft.Omissions.Any)
+            internal static SendCheck Refused(string refusal) => new(refusal, null, null, null);
+        }
+
+        // Runs a check of Send off the UI thread, as Checking: the window is busy and says that it checks the request, and
+        // Cancel request or closing the window stops the check (_checkingCancellation). The window releases its client only
+        // once the check has returned (EndState follows the await): the check may still be using it. A stopped check gives
+        // no result, and one that it gives once it was stopped is not used (Stopped). Null when nothing is to be sent: the
+        // check was stopped, which the status says unless the window closed, or it refused the request, which the status
+        // says in the check's words. Otherwise what it found, with the status as it was before the check (shown).
+        private async Task<SendCheck> RunSendCheckAsync(Func<CancellationToken, SendCheck> work, string shown)
+        {
+            using var checking = new CancellationTokenSource();
+            CancellationToken token = checking.Token;
+            _checkingCancellation = checking;
+            _state = ComposerState.Checking;
+            SetBusy(true);
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEND_CHECKING");
+            SendCheck found = null;
+            bool stopped;
+            try
             {
-                StatusText.Text = ErrorText(IncompleteText(_draft.Omissions));
+                found = await Task.Run(() => work(token), token);
+            }
+            catch (OperationCanceledException) when (checking.IsCancellationRequested)
+            {
+                // Cancelled, or the window closed: nothing is asked or sent.
+            }
+            finally
+            {
+                // A check that ended by the time that the user cancelled asks nothing and sends nothing either.
+                stopped = Stopped(checking, _checkingCancellation);
+                _checkingCancellation = null;
+                EndState();
+            }
+
+            if (_closed)
+                return null;
+            if (stopped)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEND_PREPARE_CANCELLED");
                 return null;
             }
 
+            StatusText.Text = found.Refusal ?? shown;
+            return found.Refusal == null ? found : null;
+        }
+
+        // The numbers for a URL with '#', which the user chooses on the UI thread, as Preparing, in a dialog that keeps them
+        // short; null when nothing is to be sent: the user cancelled, the window closed meanwhile, or the range is not one
+        // that a sequence can have, which the status says.
+        private ReplaySequence AskSequence()
+        {
+            string range = null;
+            _state = ComposerState.Preparing;
             try
             {
-                ReplaySequence sequence = null;
-                if (_draft.Url.Contains(ReplaySequence.Placeholder))
-                {
-                    if (!ReplaySequence.IsPathAndQueryTemplate(_draft.Url))
-                    {
-                        StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEQUENCE_INVALID");
-                        return null;
-                    }
-
-                    string range = (ChooseSequence ?? (() => SequenceRangeWindow.Ask(this)))();
-                    if (range == null || _closed)
-                        return null;
-                    if (!ReplaySequence.TryParse(range, out sequence))
-                    {
-                        StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEQUENCE_RANGE_INVALID");
-                        return null;
-                    }
-                }
-                else
-                {
-                    // Invalid input is reported, with what is wrong, before the user is asked anything.
-                    using var validated = _draft.CreateRequestToSend();
-                }
-
-                // The size of the run is checked before any number is put in the URL, and the transport with the request.
-                OperationResult<ReplayPlanPreview> preview = _client.Preview(
-                    sequence == null ? ReplaySource.FromDraft(_draft) : ReplaySource.FromTemplate(_draft, sequence),
-                    maxRedirects,
-                    transport);
-                if (!preview.Succeeded)
-                {
-                    StatusText.Text = ErrorText(PlanError(
-                        preview.Diagnostics.Count > 0 ? preview.Diagnostics[0] : null, _draft, sequence));
-                    return null;
-                }
-
-                // One question for the whole run, about what was checked: what is typed or chosen afterwards changes
-                // nothing in it.
-                ReplayPlanPreview plan = preview.Value;
-                if (plan.UsesUnsafeMethod || plan.ChangesOrigin || plan.UsesConnectTo)
-                {
-                    if (!_confirm(ConfirmationMessage(plan, maxRedirects)) || _closed)
-                        return null;
-                    confirmed = true;
-                }
-
-                return plan;
+                range = (ChooseSequence ?? (() => SequenceRangeWindow.Ask(this)))();
             }
             catch (Exception exception) when (IsInputError(exception))
             {
                 ShowError(exception);
+            }
+            finally
+            {
+                EndState();
+            }
+
+            if (range == null || _closed)
+                return null;
+            if (!ReplaySequence.TryParse(range, out ReplaySequence sequence))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEQUENCE_RANGE_INVALID");
                 return null;
             }
+
+            return sequence;
+        }
+
+        // Send's first check, off the UI thread, over what Send froze, in the order that its refusals keep: a form whose
+        // Content-Type the headers would drop (FormContentTypeDropped); the endpoint of Connect to another endpoint as typed
+        // (TryParseTransport); a part that a request file left out, which is never sent as the placeholder that the editors
+        // show for it; then, for a URL with '#', that only its path or query has one, with the transport that the check of
+        // its numbers takes once the user chose them (CheckSequence); otherwise that the request can be built, with what is
+        // wrong worded as building it says it, then the plan, as sending checks it (Previewed). Pure: it reads only what it
+        // is given, and the client, which makes an operation of its own for each check. The token is checked before each
+        // step and before the result is given, so a stopped check gives none. CreateRequestToSend and Preview take no
+        // token: a cancel that comes while either runs waits for it to return, as long as the request makes it.
+        internal static SendCheck CheckSend(FrozenSend send, RequestReplayClient client, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(send);
+            ArgumentNullException.ThrowIfNull(client);
+            if (FormContentTypeDropped(send.Form, send.Draft, cancellationToken))
+                return SendCheck.Refused(Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED"));
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryParseTransport(send.HttpVersion, send.ConnectTo, send.Endpoint, out ReplayTransportOptions transport))
+                return SendCheck.Refused(ErrorText(Localization.GetLocalizedString("COMPOSER_CONNECT_TO_INVALID")));
+            if (send.Draft.Omissions.Any)
+                return SendCheck.Refused(ErrorText(IncompleteText(send.Draft.Omissions)));
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (send.Numbered)
+                {
+                    if (!ReplaySequence.IsPathAndQueryTemplate(send.Draft.Url))
+                        return SendCheck.Refused(Localization.GetLocalizedString("COMPOSER_SEQUENCE_INVALID"));
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new SendCheck(null, transport, null, null);
+                }
+
+                using (send.Draft.CreateRequestToSend())
+                {
+                    // Invalid input is reported, with what is wrong, before the user is asked anything.
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                OperationResult<ReplayPlanPreview> preview =
+                    client.Preview(ReplaySource.FromDraft(send.Draft), send.MaxRedirects, transport);
+                return Previewed(preview, send.Draft, null, cancellationToken);
+            }
+            catch (Exception exception) when (IsInputError(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SendCheck.Refused(ErrorText(exception.Message));
+            }
+        }
+
+        // The run of a URL with '#' once the user chose its numbers, checked off the UI thread as sending checks it, over the
+        // request that Send froze and the transport that its first check parsed (CheckSend), never the controls as they are
+        // now: the size of the run before any number is put in the URL, then the widest request and the transport; what is
+        // wrong is worded as building the widest request says it (Previewed). Pure, with the checkpoints of CheckSend, and
+        // as it, no bound inside Preview.
+        internal static SendCheck CheckSequence(
+            FrozenSend send,
+            ReplaySequence sequence,
+            ReplayTransportOptions transport,
+            RequestReplayClient client,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(send);
+            ArgumentNullException.ThrowIfNull(sequence);
+            ArgumentNullException.ThrowIfNull(client);
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                OperationResult<ReplayPlanPreview> preview =
+                    client.Preview(ReplaySource.FromTemplate(send.Draft, sequence), send.MaxRedirects, transport);
+                return Previewed(preview, send.Draft, sequence, cancellationToken);
+            }
+            catch (Exception exception) when (IsInputError(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SendCheck.Refused(ErrorText(exception.Message));
+            }
+        }
+
+        // What a preview found, as Send uses it: why the plan is refused, worded here, off the UI thread, since for a sequence
+        // that builds the widest request again (PlanError); or the plan, with the URL's origin that the question names when
+        // it connects to another endpoint (Origin), so that the window parses nothing to ask.
+        private static SendCheck Previewed(
+            OperationResult<ReplayPlanPreview> preview,
+            RequestReplayDraft draft,
+            ReplaySequence sequence,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SendCheck found = preview.Succeeded
+                ? Planned(preview.Value)
+                : SendCheck.Refused(ErrorText(PlanError(FirstDiagnostic(preview.Diagnostics), draft, sequence)));
+            cancellationToken.ThrowIfCancellationRequested();
+            return found;
+        }
+
+        private static SendCheck Planned(ReplayPlanPreview plan) =>
+            new(null, plan.Transport, plan, plan.UsesConnectTo ? Origin(plan.Template.Url) : null);
+
+        private static OperationDiagnostic FirstDiagnostic(IReadOnlyList<OperationDiagnostic> diagnostics) =>
+            diagnostics.Count > 0 ? diagnostics[0] : null;
+
+        // Why the operation refused a run once it was sent, as the status says it: as PlanError words its first diagnostic,
+        // which for a sequence builds the widest request again. SendAsync runs it off the UI thread.
+        internal static string RunRefusalText(OperationDiagnostic diagnostic, ReplayPlanPreview plan)
+        {
+            ArgumentNullException.ThrowIfNull(plan);
+            return ErrorText(PlanError(diagnostic, plan.Template, plan.Sequence));
         }
 
         // Why the operation refused a run: what the composer says itself about Fiddler's control headers, the transport
         // options and a part that a request file left out; for a sequence whose request cannot be built, what building it
         // with the widest number says, as a single send says it; otherwise the operation's message, such as a run that is
-        // too large.
+        // too large. Building the widest request parses it, so this runs off the UI thread only (Previewed,
+        // RunRefusalText).
         private static string PlanError(OperationDiagnostic diagnostic, RequestReplayDraft draft, ReplaySequence sequence)
         {
             string explained = diagnostic?.Code switch
@@ -508,8 +710,9 @@ namespace XMAT.WebServiceCapture
 
         // The one confirmation of a run: how many requests, with which method and to where; that they may change server
         // data or send captured credentials to another origin; that they go to another endpoint than the address of the
-        // URL's host, which it names with the URL's origin; and that redirects, when followed, are more requests.
-        internal static string ConfirmationMessage(ReplayPlanPreview plan, int maxRedirects)
+        // URL's host, which it names with the URL's origin as the check of the run found it (connectToOrigin), so that
+        // nothing is parsed to ask; and that redirects, when followed, are more requests.
+        internal static string ConfirmationMessage(ReplayPlanPreview plan, int maxRedirects, string connectToOrigin)
         {
             ArgumentNullException.ThrowIfNull(plan);
             ReplaySequence sequence = plan.Sequence;
@@ -527,7 +730,7 @@ namespace XMAT.WebServiceCapture
             if (plan.UsesConnectTo)
             {
                 message += "\n\n" + Localization.GetLocalizedString(
-                    "COMPOSER_CONFIRM_CONNECT_TO", plan.Transport.ConnectTo.ToString(), Origin(plan.Template.Url));
+                    "COMPOSER_CONFIRM_CONNECT_TO", plan.Transport.ConnectTo.ToString(), connectToOrigin);
             }
 
             return maxRedirects == 0
@@ -535,14 +738,23 @@ namespace XMAT.WebServiceCapture
                 : message + "\n\n" + Localization.GetLocalizedString("COMPOSER_CONFIRM_REDIRECTS", maxRedirects);
         }
 
-        // A URL's scheme, host and port, as the confirmation names the origin of a request that goes to another endpoint.
+        // A URL's scheme, host and port, as the confirmation names the origin of a request that goes to another endpoint,
+        // found by the check of the run (Planned), and as Save request as names an origin that its content needs a
+        // permission for.
         private static string Origin(string url) =>
             Uri.TryCreate(url, UriKind.Absolute, out Uri uri) ? uri.GetLeftPart(UriPartial.Authority) : url;
 
-        // Says how the run went. One request shows its response and status, or why it has none; a sequence counts its
-        // requests and shows the last response. Then what the Replays tab did with the sends.
+        // Says how the run went, from what it did and the words that SendAsync found for them, never parsing anything. One
+        // request shows its response and status, or why it has none; a sequence counts its requests and shows the last
+        // response; a run that the operation refused says why (refusal, worded off the UI thread by RunRefusalText). Then
+        // what the Replays tab did with the sends.
         private void ShowOutcome(
-            ReplayPlanPreview plan, RequestReplayBatchResult sent, ReplayRecording recording, int maxRedirects, bool cancelled)
+            ReplayPlanPreview plan,
+            RequestReplayBatchResult sent,
+            string refusal,
+            ReplayRecording recording,
+            int maxRedirects,
+            bool cancelled)
         {
             if (sent == null)
             {
@@ -562,10 +774,8 @@ namespace XMAT.WebServiceCapture
 
             if (!sent.Result.Succeeded)
             {
-                IReadOnlyList<OperationDiagnostic> diagnostics = sent.Result.Diagnostics;
                 StatusText.Text = WithRecording(
-                    ErrorText(PlanError(diagnostics.Count > 0 ? diagnostics[0] : null, plan.Template, plan.Sequence)),
-                    recording);
+                    refusal ?? ErrorText(Localization.GetLocalizedString("COMPOSER_FAILED")), recording);
                 return;
             }
 
@@ -863,17 +1073,25 @@ namespace XMAT.WebServiceCapture
             HttpVersionBox.SelectedItem is ComboBoxItem { Tag: ReplayHttpVersion version } ? version : ReplayHttpVersion.Auto;
 
         // The transport that the controls choose now, or false when Connect to another endpoint is on with text that is not
-        // an IP address and port. A run sends with the transport that its preview checked, never the controls afterwards.
-        private bool TryReadTransport(out ReplayTransportOptions transport)
+        // an IP address and port (TryParseTransport). The cURL exports read it so; Send freezes the controls as they are and
+        // parses them off the UI thread (CheckSend). A run sends with the transport that its preview checked, never the
+        // controls afterwards.
+        private bool TryReadTransport(out ReplayTransportOptions transport) =>
+            TryParseTransport(SelectedHttpVersion, ConnectToBox.IsChecked == true, ConnectToText.Text, out transport);
+
+        // The transport from what the controls held: the HTTP version, and with Connect to another endpoint on, the endpoint
+        // as typed, trimmed and parsed (ReplayConnectTo.TryParse); false when that text is not an IP address and port. Pure.
+        private static bool TryParseTransport(
+            ReplayHttpVersion httpVersion, bool connectTo, string endpoint, out ReplayTransportOptions transport)
         {
             ReplayConnectTo target = null;
-            if (ConnectToBox.IsChecked == true && !ReplayConnectTo.TryParse(ConnectToText.Text.Trim(), out target))
+            if (connectTo && !ReplayConnectTo.TryParse(endpoint?.Trim(), out target))
             {
                 transport = null;
                 return false;
             }
 
-            transport = new ReplayTransportOptions(SelectedHttpVersion, target);
+            transport = new ReplayTransportOptions(httpVersion, target);
             return true;
         }
 
@@ -1066,24 +1284,13 @@ namespace XMAT.WebServiceCapture
             StatusText.Text = Localization.GetLocalizedString("COMPOSER_FORM_USED", _fileName, form.Body.LongLength);
         }
 
-        // Send's check, at its entry and on the UI thread, because Send prepares its request synchronously: while the body
-        // is a form that Build form made, a request whose Connection header nominates Content-Type is refused, with the reason
-        // in the status and no header changed (FormContentTypeDropped). Save request and both cURL exports make the same check
-        // off the UI thread, as the first step of their work, before any question or output (RefuseDroppedFormContentType).
-        private bool DropsFormContentType()
-        {
-            if (!FormContentTypeDropped(_formSeed != null, _draft, CancellationToken.None))
-                return false;
-            StatusText.Text = Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED");
-            return true;
-        }
-
         // Whether building this request would drop the Content-Type of a form that Build form made (form): its Connection
         // header nominates Content-Type (RequestReplayDraft.IsNominatedByConnection). Header text that is not valid is not
         // this refusal: the action refuses it in its own words. Pure: it reads only the request and the form flag that it is
         // given, which nothing changes meanwhile, and changes nothing, so it can parse header text of any length off the UI
-        // thread. The token is checked before the headers are parsed and again before the result is given: a cancelled
-        // check gives none.
+        // thread: Send's first check makes it first (CheckSend), and Save request and both cURL exports as the first step of
+        // their work (RefuseDroppedFormContentType), each before any question or output. The token is checked before the
+        // headers are parsed and again before the result is given: a cancelled check gives none.
         internal static bool FormContentTypeDropped(bool form, RequestReplayDraft draft, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(draft);

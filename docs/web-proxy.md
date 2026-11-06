@@ -191,6 +191,12 @@ response limit for each request. Cancelling or timing out cannot undo changes al
 processed by the server. To send the request outside XMAT, use **Copy as cURL** or
 **Save as cURL script** (see below).
 
+Before anything is asked or sent, the composer checks the request in the background, as
+it was when you clicked **Send**, and the status line says so. **Cancel request** stops
+the check: nothing is asked, sent, or recorded, and the status line says "Not sent:
+cancelled before sending." Closing the composer also stops the check: nothing is asked,
+sent, or recorded, and the closed composer says nothing further.
+
 To send a request that was never captured, select **Actions > Compose a New Request**.
 The composer opens with an empty GET request and works the same way.
 
@@ -303,10 +309,12 @@ number to its width: `http://example.com/#/?a=#` from `08` to `11` sends `/08/?a
 the body is sent as it is. Write `%23` for a literal `#` in the URL. A `#` in the
 scheme, host, or port is refused, so numbers never lead to other hosts.
 
-The requests are checked before anything is sent and go out one at a time, at most
-10,000 of them. When they need confirmation, one question covers them all and says how
-many there are. **Cancel request** stops before the next request: the requests already
-sent stay in the **XMAT Replays** tab. The composer shows the last response only.
+The requests are checked before anything is sent: the request first, then the run with
+the numbers that you chose, each in the background, which **Cancel request** stops. They
+go out one at a time, at most 10,000 of them. When they need confirmation, one question
+covers them all and says how many there are. **Cancel request** stops before the next
+request: the requests already sent stay in the **XMAT Replays** tab. The composer shows
+the last response only.
 
 ### Upload a body from a file
 

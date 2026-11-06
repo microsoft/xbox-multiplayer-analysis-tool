@@ -113,6 +113,8 @@
 	"COMPOSER_CLOSE": "Close",
 	"COMPOSER_READY": "Ready. Sending creates a separate response; it does not update captured traffic.",
 	"COMPOSER_SENDING": "Sending...",
+	"COMPOSER_SEND_CHECKING": "Checking the request...",
+	"COMPOSER_SEND_PREPARE_CANCELLED": "Not sent: cancelled before sending.",
 	"COMPOSER_COMPLETED": "HTTP {0} | {1} ms | {2} bytes",
 	"COMPOSER_CANCELLED": "Cancelled. The server may already have processed the request.",
 	"COMPOSER_CANCELLED_NOT_RECORDED": "Cancelled. The request may already have reached the server, which may have processed it; it is not recorded in the {0} tab.",
