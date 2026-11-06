@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Text;
 using System.Text.Json;
 using CaptureAnalysisEngine;
 using XMAT.DataAbstractionLayer;
@@ -342,6 +343,51 @@ namespace XMAT.Tests.Operations.Analysis
             Assert.Contains("\r\nX'Name: kept\r\n", Assert.Single(bounded.Records).RequestLineAndHeaders, StringComparison.Ordinal);
             Assert.Equal(OperationOutcome.Succeeded, analyzed.Outcome);
             Assert.Equal(1, Assert.Single(analyzed.Value.Summary.Devices).Consoles.Sum(console => console.Calls));
+        }
+
+        // A call whose time is unknown, such as a frame's without its metadata, cannot be placed among the calls that rules
+        // compare in time: it is not analyzed, and analysis goes on with the others, from records (the GUI) and from a file
+        // (xmat), where its time once failed the whole device.
+        [Fact]
+        public async Task ACallWithAnUnknownTime_IsNotAnalyzed_AndTheOthersAre()
+        {
+            using var directory = new TestDirectory();
+            ProxyConnectionModel unknown = ReadFrame(1, metadata: null);
+            ProxyConnectionModel known = ReadFrame(
+                2,
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?><Session SID=\"2\" BitFlags=\"0\">" +
+                "<SessionTimers ClientBeginRequest=\"2026-01-01T00:00:00.0000000Z\" " +
+                "ClientDoneResponse=\"2026-01-01T00:00:01.0000000Z\" />" +
+                "<SessionFlags><SessionFlag N=\"x-clientip\" V=\"10.0.0.1\" /></SessionFlags></Session>");
+            Assert.Equal((DateTime.MinValue, DateTimeKind.Unspecified), (unknown.RequestTime, unknown.RequestTime.Kind));
+            string path = System.IO.Path.Join(directory.Path, "unknown-time.saz");
+            FiddlerSazHandler.CreateSazFile(path, new[] { unknown, known });
+
+            OperationResult<AnalysisResult> fromRecords = await AnalyzeRecords(
+                new[] { unknown, known }.Select(
+                    (model, index) => (IDataRecord)AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(index + 1, model)),
+                System.IO.Path.Join(directory.Path, "records"));
+            OperationResult<AnalysisResult> fromFile = await AnalyzeFile(path, System.IO.Path.Join(directory.Path, "file"));
+
+            foreach (OperationResult<AnalysisResult> analyzed in new[] { fromRecords, fromFile })
+            {
+                Assert.Equal(OperationOutcome.Succeeded, analyzed.Outcome);
+                Assert.Equal(1, analyzed.Value.Summary.TotalCalls);
+            }
+        }
+
+        // An Xbox Live call read from a SAZ frame, with its metadata or without it.
+        private static ProxyConnectionModel ReadFrame(uint id, string metadata)
+        {
+            using var request = new MemoryStream(
+                Encoding.Latin1.GetBytes(
+                    "GET http://example.test/users/me HTTP/1.1\r\nHost: example.test\r\nUser-Agent: XboxServicesAPI\r\n\r\n"),
+                writable: false);
+            using var response = new MemoryStream(Encoding.Latin1.GetBytes("HTTP/1.1 200 OK\r\n\r\n"), writable: false);
+            using MemoryStream timers = metadata == null ? null : new MemoryStream(Encoding.UTF8.GetBytes(metadata), writable: false);
+            ProxyConnectionModel model = FiddlerSazHandler.FromFiddlerFrame(id, request, timers, response, out _);
+            Assert.NotNull(model);
+            return model;
         }
 
         private static Task<OperationResult<AnalysisResult>> AnalyzeFile(

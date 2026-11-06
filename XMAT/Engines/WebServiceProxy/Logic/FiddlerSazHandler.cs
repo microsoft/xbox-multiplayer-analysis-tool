@@ -255,8 +255,8 @@ namespace XMAT.WebServiceCapture
                     // Each timer is an instant: one with Z or an offset is exact, and one without, as XMAT's own export
                     // writes for a time of unspecified kind, is this machine's local time. The duration is the time between
                     // the two instants, whatever their offsets, and the request time is the first one in local time. A
-                    // timer that names no instant (ParseTimer) is no time: the request time stays unknown, and the
-                    // duration zero.
+                    // timer that was never set, or that names no instant this machine can show as a local time (ParseTimer),
+                    // is no time: the request time stays unknown, and the duration zero.
                     DateTimeOffset? begin = ParseTimer((string)sessionTimers.Attribute("ClientBeginRequest"));
                     DateTimeOffset? done = ParseTimer((string)sessionTimers.Attribute("ClientDoneResponse"));
                     if (begin != null)
@@ -620,17 +620,27 @@ namespace XMAT.WebServiceCapture
                     '?' or '=' or '{' or '}');
         }
 
-        // A timer as an instant, or null for one that DateTime reads but that names no instant: a time whose UTC falls outside
-        // years 1 to 9999, such as DateTime.MinValue, which XMAT's export writes without an offset for a time it does not
-        // know, read east of UTC. Anything else that is not a time throws, as DateTime.Parse did.
+        // A timer as an instant, or null for one that names no time this machine can keep. A time without an offset that reads
+        // as DateTime.MinValue is the unknown time: Fiddler writes it for a timer that was never set, and XMAT's export for a
+        // time it does not know, so it reads back as unknown in any time zone. A time that DateTime reads but that names no
+        // instant is no time either: one whose UTC falls outside years 1 to 9999. So is an instant that this machine cannot
+        // show as a local time: the model keeps local times, and DateTime would move such a time to its first or last value,
+        // as it does the first hours of the year 1 west of UTC, so the request time and the end would no longer name the
+        // instants. Anything else that is not a time throws, as DateTime.Parse did.
         private static DateTimeOffset? ParseTimer(string value)
         {
-            if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out DateTimeOffset instant))
+            bool isTime = DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime clock);
+            if (isTime && clock.Kind == DateTimeKind.Unspecified && clock == DateTime.MinValue)
             {
-                return instant;
+                return null;
             }
 
-            if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+            if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out DateTimeOffset instant))
+            {
+                return instant.LocalDateTime.ToUniversalTime() == instant.UtcDateTime ? instant : null;
+            }
+
+            if (isTime)
             {
                 return null;
             }

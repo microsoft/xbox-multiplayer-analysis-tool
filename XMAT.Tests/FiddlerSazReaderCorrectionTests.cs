@@ -331,14 +331,13 @@ namespace XMAT.Tests
             Assert.Equal(TimeSpan.Zero, record.Duration);
         }
 
-        // A time without an offset that this machine's zone cannot hold: DateTime.MinValue east of UTC, which XMAT's export
-        // writes for a time it does not know, and the last moment of year 9999 west of it. In UTC every time is an instant,
-        // which the output says.
+        // A time without an offset that this machine's zone cannot hold: the first moments of the year 1 east of UTC, and the
+        // last moment of year 9999 west of it. In UTC every time is an instant, which the output says.
         [Fact]
         public void ATimeWithoutAnOffset_ThatThisZoneCannotHold_IsNoTime()
         {
             string text =
-                TimeZoneInfo.Local.GetUtcOffset(DateTime.MinValue) > TimeSpan.Zero ? "0001-01-01T00:00:00.00000" :
+                TimeZoneInfo.Local.GetUtcOffset(DateTime.MinValue) > TimeSpan.Zero ? "0001-01-01T00:00:00.00001" :
                 TimeZoneInfo.Local.GetUtcOffset(DateTime.MaxValue) < TimeSpan.Zero ? "9999-12-31T23:59:59.99999" :
                 null;
             _output.WriteLine(
@@ -357,20 +356,112 @@ namespace XMAT.Tests
             Assert.Equal(TimeSpan.Zero, record.Duration);
         }
 
-        // XMAT's export writes a time it does not know as DateTime.MinValue without an offset, which reads back as unknown in
-        // any zone; an import never fails on it.
+        // A time that XMAT does not know, DateTime.MinValue of no kind, as a frame without its metadata has, stays unknown in
+        // any zone through every writer and reader of the pair of timers: the capture table and its reload, the analysis
+        // records, and the SAZ export and the sanitized one read back by the import, which never fails on it. Analysis
+        // leaves out the call it was analyzing while its time was known, rather than failing. The table once kept the
+        // unknown time's UTC, which reads back as a known time: later in the year 1 east of UTC, where the timeline showed it.
         [Fact]
-        public void AnUnknownTime_ExportedByXmat_ReadsBackUnknown()
+        public void AnUnknownTime_StaysUnknown_ThroughEveryWriterAndReader()
         {
             using var request = new MemoryStream(
-                Encoding.Latin1.GetBytes("GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\n\r\n"), writable: false);
-            ProxyConnectionModel unknown = FiddlerSazHandler.FromFiddlerFrame(1, request, null, null, out _);
-            Assert.Equal(DateTime.MinValue, unknown.RequestTime);
+                Encoding.Latin1.GetBytes("GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\nUser-Agent: XboxServicesAPI\r\n\r\n"),
+                writable: false);
+            using var response = new MemoryStream(Encoding.Latin1.GetBytes("HTTP/1.1 200 OK\r\n\r\n"), writable: false);
+            ProxyConnectionModel unknown = FiddlerSazHandler.FromFiddlerFrame(1, request, null, response, out _);
+            AssertUnknown(unknown);
 
-            ProxyConnectionModel again = SaveAndRead(unknown, sanitized: false);
+            ProxyConnectionModel reloaded = ParseTimers(
+                "2026-01-01T00:00:00.0000000Z", "2026-01-01T00:00:01.0000000Z", "User-Agent: XboxServicesAPI\r\n");
+            Assert.NotNull(WebServiceCaptureRecordConverter.Convert(AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(1, reloaded)));
+            object[] row = unknown.ToDataTableValues("device");
+            Reload(row, into: reloaded);
+            AssertUnknown(reloaded);
 
-            Assert.Equal(DateTime.MinValue.Ticks, again.RequestTime.Ticks);
-            Assert.Equal(TimeSpan.Zero, again.Duration);
+            AnalyzeCaptureOperation.AnalysisDataRecord analysis = AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(1, reloaded);
+            Assert.Equal((string)row[3], analysis.Str(WebServiceCaptureMethod.FieldKey_RequestTimestamp));
+            Assert.Equal((string)row[4], analysis.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp));
+            Assert.Null(WebServiceCaptureRecordConverter.Convert(analysis));
+
+            foreach (bool sanitized in new[] { false, true })
+            {
+                AssertUnknown(SaveAndRead(unknown, sanitized));
+            }
+        }
+
+        // A time without an offset at the very start of the year 1 is the unknown time in any zone: Fiddler writes it for a
+        // timer that was never set, with or without digits of a second, and XMAT's export for a time it does not know. In
+        // UTC and west of it, it once read as a known time, the first instant this zone can show, which a duration ran from.
+        [Theory]
+        [InlineData("0001-01-01T00:00:00")]
+        [InlineData("0001-01-01T00:00:00.0000000")]
+        [InlineData("0001-01-01T00:00:00.00000")]
+        public void AnUnsetTimer_IsTheUnknownTime(string unset)
+        {
+            AssertUnknown(ParseTimers(unset, unset));
+            AssertUnknown(ParseTimers(unset, "2026-01-01T00:00:01.0000000Z"));
+
+            ProxyConnectionModel begun = ParseTimers("2026-01-01T00:00:00.0000000Z", unset);
+            Assert.Equal(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), begun.RequestTime.ToUniversalTime());
+            Assert.Equal(TimeSpan.Zero, begun.Duration);
+        }
+
+        // Only the very start of the year 1 is the unknown time: a tick later is a time like any other, kept where this zone
+        // can hold it, which a zone east of UTC cannot, as the output says.
+        [Fact]
+        public void ATickAfterAnUnsetTimer_IsATime()
+        {
+            bool held = TimeZoneInfo.Local.GetUtcOffset(DateTime.MinValue) <= TimeSpan.Zero;
+            _output.WriteLine($"{TimeZoneInfo.Local.Id}: assertion {(held ? "ran" : "did not run")}.");
+            if (!held)
+            {
+                return;
+            }
+
+            ProxyConnectionModel record = ParseTimers("0001-01-01T00:00:00.0000001", "0001-01-01T00:00:01.0000001");
+
+            Assert.Equal((DateTime.MinValue.AddTicks(1), DateTimeKind.Local), (record.RequestTime, record.RequestTime.Kind));
+            Assert.Equal(TimeSpan.FromSeconds(1), record.Duration);
+        }
+
+        // A call's time is a FILETIME, which starts in 1601: a call whose time is unknown or earlier is not analyzed, rather
+        // than failing the analysis, whether the capture table keeps the unknown time as it does now or as it once did, as a
+        // UTC in the year 1; the first instant of 1601 is analyzed. A time without an offset is placed as FILETIME reads it,
+        // as UTC, so every zone reads these alike; a zone with an offset would show a time read as local instead.
+        [Theory]
+        [InlineData("0001-01-01T00:00:00.0000000", false)]
+        [InlineData("0001-01-01T08:00:00.0000000Z", false)]
+        [InlineData("0001-01-01T00:00:00.0000000Z", false)]
+        [InlineData("1600-12-31T23:59:59.9999999Z", false)]
+        [InlineData("1600-12-31T23:59:59.9999999", false)]
+        [InlineData("1601-01-01T00:00:00.0000000Z", true)]
+        [InlineData("1601-01-01T00:00:00.0000000", true)]
+        public void ACallBeforeTheFirstFileTime_IsNotAnalyzed(string requestTimestamp, bool analyzed)
+        {
+            ServiceCallItem call = WebServiceCaptureRecordConverter.Convert(new Row(new Dictionary<string, string>
+            {
+                [WebServiceCaptureMethod.FieldKey_RequestTimestamp] = requestTimestamp,
+                [WebServiceCaptureMethod.FieldKey_ResponseTimestamp] = requestTimestamp,
+                [WebServiceCaptureMethod.FieldKey_RequestScheme] = "http",
+                [WebServiceCaptureMethod.FieldKey_RequestHost] = "example.test",
+                [WebServiceCaptureMethod.FieldKey_RequestPort] = "80",
+                [WebServiceCaptureMethod.FieldKey_RequestMethod] = "GET",
+                [WebServiceCaptureMethod.FieldKey_RequestPath] = "/",
+                [WebServiceCaptureMethod.FieldKey_RequestStatus] = "200",
+                [WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders] =
+                    "GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\nUser-Agent: XboxServicesAPI\r\n\r\n",
+                [WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders] = "HTTP/1.1 200 OK\r\n\r\n",
+            }));
+
+            if (analyzed)
+            {
+                Assert.NotNull(call);
+                Assert.Equal(0UL, call.ReqTimeUTC);
+            }
+            else
+            {
+                Assert.Null(call);
+            }
         }
 
         // Text that is no time at all is still refused, as DateTime.Parse refused it.
@@ -380,6 +471,155 @@ namespace XMAT.Tests
         public void ATimerThatIsNoTimeAtAll_IsRefused(string begin, string done)
         {
             Assert.Throws<FormatException>(() => ParseTimers(begin, done));
+        }
+
+        // An instant that this machine cannot show as a local time, which DateTime would move to its first or last value, is
+        // no time: the request time stays unknown when it is the first timer, the duration zero when it is either, and every
+        // writer and reader of the pair keeps the times it has. Whether each timer is such an instant is worked out here from
+        // this machine's offset at it, not by the round trip that the reader uses; the first hours of the year 1 are such
+        // instants west of UTC, the last hours of the year 9999 east of it, and none in UTC, which the output says.
+        [Theory]
+        [InlineData("0001-01-01T00:00:00.0000000Z", "9999-12-31T23:59:59.9999999Z")]
+        [InlineData("2026-01-01T00:00:00.0000000Z", "0001-01-01T00:00:00.0000000Z")]
+        [InlineData("9999-12-31T23:59:59.9999999Z", "9999-12-31T23:59:59.9999999Z")]
+        [InlineData("2026-01-01T00:00:00.0000000Z", "9999-12-31T23:59:59.9999999Z")]
+        public void AnInstantThatThisMachineCannotShowAsALocalTime_IsNoTime(string beginText, string doneText)
+        {
+            DateTimeOffset begin = DateTimeOffset.Parse(beginText, CultureInfo.InvariantCulture);
+            DateTimeOffset done = DateTimeOffset.Parse(doneText, CultureInfo.InvariantCulture);
+            bool beginHeld = HeldAsLocal(begin);
+            bool doneHeld = HeldAsLocal(done);
+            _output.WriteLine(
+                $"{TimeZoneInfo.Local.Id}: the first timer {(beginHeld ? "is" : "is not")} a local time here, the second " +
+                $"{(doneHeld ? "is" : "is not")}.");
+
+            ProxyConnectionModel read = ParseTimers(beginText, doneText);
+
+            if (beginHeld)
+            {
+                Assert.Equal(DateTimeKind.Local, read.RequestTime.Kind);
+                Assert.Equal(begin.UtcDateTime, read.RequestTime.ToUniversalTime());
+            }
+            else
+            {
+                Assert.Equal(DateTime.MinValue, read.RequestTime);
+                Assert.Equal(DateTimeKind.Unspecified, read.RequestTime.Kind);
+            }
+
+            bool bothHeld = beginHeld && doneHeld;
+            Assert.Equal(bothHeld ? done - begin : TimeSpan.Zero, read.Duration);
+            DateTime end = read.ResponseDoneTime;
+            if (bothHeld)
+            {
+                Assert.Equal(done.UtcDateTime, end.ToUniversalTime());
+            }
+            else
+            {
+                Assert.Equal((read.RequestTime, read.RequestTime.Kind), (end, end.Kind));
+            }
+
+            object[] row = read.ToDataTableValues("device");
+            var reloaded = new ProxyConnectionModel(1, 1, 1);
+            reloaded.UpdateFromDataRecord(new Row(new Dictionary<string, string>
+            {
+                [WebServiceCaptureMethod.FieldKey_RequestTimestamp] = (string)row[3],
+                [WebServiceCaptureMethod.FieldKey_ResponseTimestamp] = (string)row[4],
+            }));
+            Assert.Equal(read.Duration, reloaded.Duration);
+            Assert.Equal(read.ResponseDoneTime.ToUniversalTime(), reloaded.ResponseDoneTime.ToUniversalTime());
+            if (beginHeld)
+            {
+                Assert.Equal(begin.UtcDateTime, reloaded.RequestTime.ToUniversalTime());
+            }
+            else
+            {
+                AssertUnknown(reloaded);
+            }
+
+            AnalyzeCaptureOperation.AnalysisDataRecord analysis = AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(1, read);
+            Assert.Equal((string)row[3], analysis.Str(WebServiceCaptureMethod.FieldKey_RequestTimestamp));
+            Assert.Equal((string)row[4], analysis.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp));
+
+            foreach (bool sanitized in new[] { false, true })
+            {
+                ProxyConnectionModel again = SaveAndRead(read, sanitized);
+                if (beginHeld)
+                {
+                    Assert.Equal(Fiddler(begin).UtcDateTime, again.RequestTime.ToUniversalTime());
+                    Assert.Equal(bothHeld ? Fiddler(done) - Fiddler(begin) : TimeSpan.Zero, again.Duration);
+                }
+                else
+                {
+                    AssertUnknown(again);
+                }
+            }
+        }
+
+        // The first instant that this machine can show as a local time, which it shows as DateTime.MinValue, is kept exactly,
+        // and the instant a tick before it is no time; likewise the last, shown as DateTime.MaxValue, and a tick after it. The
+        // first exists only west of UTC and the last only east of it, which the output says.
+        [Fact]
+        public void TheFirstAndLastInstantsThisMachineCanShow_AreKept_AndTheNextAreNot()
+        {
+            TimeSpan offsetAtFirst = TimeZoneInfo.Local.GetUtcOffset(DateTime.MinValue);
+            TimeSpan offsetAtLast = TimeZoneInfo.Local.GetUtcOffset(DateTime.MaxValue);
+            _output.WriteLine(
+                $"{TimeZoneInfo.Local.Id}: first instant assertion {(offsetAtFirst < TimeSpan.Zero ? "ran" : "did not run")}, " +
+                $"last instant assertion {(offsetAtLast > TimeSpan.Zero ? "ran" : "did not run")}.");
+            if (offsetAtFirst < TimeSpan.Zero)
+            {
+                var first = new DateTimeOffset(DateTime.MinValue.Ticks - offsetAtFirst.Ticks, TimeSpan.Zero);
+                ProxyConnectionModel kept = ParseTimers(Iso(first), Iso(first));
+                Assert.Equal(DateTimeKind.Local, kept.RequestTime.Kind);
+                Assert.Equal(DateTime.MinValue.Ticks, kept.RequestTime.Ticks);
+                Assert.Equal(first.UtcDateTime, kept.RequestTime.ToUniversalTime());
+                ProxyConnectionModel reloaded = Reload(kept.ToDataTableValues("device"));
+                Assert.Equal((DateTimeKind.Local, first.UtcDateTime), (reloaded.RequestTime.Kind, reloaded.RequestTime.ToUniversalTime()));
+
+                ProxyConnectionModel before = ParseTimers(Iso(first.AddTicks(-1)), Iso(first));
+                Assert.Equal(DateTimeKind.Unspecified, before.RequestTime.Kind);
+                Assert.Equal(TimeSpan.Zero, before.Duration);
+            }
+
+            if (offsetAtLast > TimeSpan.Zero)
+            {
+                var last = new DateTimeOffset(DateTime.MaxValue.Ticks - offsetAtLast.Ticks, TimeSpan.Zero);
+                ProxyConnectionModel kept = ParseTimers(Iso(last.AddHours(-1)), Iso(last));
+                Assert.Equal(TimeSpan.FromHours(1), kept.Duration);
+                Assert.Equal(DateTime.MaxValue.Ticks, kept.ResponseDoneTime.Ticks);
+
+                ProxyConnectionModel after = ParseTimers(Iso(last.AddHours(-1)), Iso(last.AddTicks(1)));
+                Assert.Equal(last.AddHours(-1).UtcDateTime, after.RequestTime.ToUniversalTime());
+                Assert.Equal(TimeSpan.Zero, after.Duration);
+            }
+        }
+
+        // Every instant around this machine's transitions, in the hour that its clock skips and the hour that it repeats too,
+        // is a local time here and is kept exactly: the check never makes a time unknown that the machine can show.
+        [Fact]
+        public void EveryInstantAroundThisMachinesTransitions_IsKeptExactly()
+        {
+            var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            int ran = 0;
+            for (int count = 0; count < 2 && NextLocalTransition(start) is DateTimeOffset transition; count++)
+            {
+                for (int step = -12; step <= 12; step++)
+                {
+                    DateTimeOffset instant = transition.AddMinutes(15 * step);
+                    ProxyConnectionModel record = ParseTimers(Iso(instant), Iso(instant.AddSeconds(1)));
+                    Assert.Equal(DateTimeKind.Local, record.RequestTime.Kind);
+                    Assert.Equal(instant.UtcDateTime, record.RequestTime.ToUniversalTime());
+                    Assert.Equal(TimeSpan.FromSeconds(1), record.Duration);
+                }
+
+                ran++;
+                start = transition.AddMinutes(1);
+            }
+
+            _output.WriteLine(
+                ran == 0
+                    ? $"Assertion did not run: {TimeZoneInfo.Local.Id} has no transition in two years."
+                    : $"Assertion ran around {ran} transitions of {TimeZoneInfo.Local.Id}.");
         }
 
         internal static IEnumerable<string> CorpusLines()
@@ -450,7 +690,7 @@ namespace XMAT.Tests
 
         // The first instant after start at which this machine's zone changes its offset, to the minute; null when it does
         // not change within two years.
-        private static DateTimeOffset? NextLocalTransition(DateTimeOffset start)
+        internal static DateTimeOffset? NextLocalTransition(DateTimeOffset start)
         {
             TimeSpan offset = TimeZoneInfo.Local.GetUtcOffset(start);
             for (DateTimeOffset hour = start.AddHours(1); hour < start.AddYears(2); hour = hour.AddHours(1))
@@ -479,6 +719,18 @@ namespace XMAT.Tests
 
         private static string Iso(DateTimeOffset instant) => instant.UtcDateTime.ToString("o", CultureInfo.InvariantCulture);
 
+        // Whether this machine can show the instant as a local time: its offset there keeps it within DateTime's range.
+        private static bool HeldAsLocal(DateTimeOffset instant)
+        {
+            long local = instant.UtcTicks + TimeZoneInfo.Local.GetUtcOffset(instant).Ticks;
+            return local >= DateTime.MinValue.Ticks && local <= DateTime.MaxValue.Ticks;
+        }
+
+        // The instant as a Fiddler archive keeps it: XMAT's export writes five digits of a second, and offsets are whole
+        // minutes, so the instant loses the rest of its ticks.
+        private static DateTimeOffset Fiddler(DateTimeOffset instant) =>
+            new(instant.UtcTicks - (instant.UtcTicks % 100), TimeSpan.Zero);
+
         // A request time in local time at begin, a duration from begin to done, and an end at done in local time too.
         private static void AssertTimes(ProxyConnectionModel record, DateTimeOffset begin, DateTimeOffset done)
         {
@@ -487,6 +739,26 @@ namespace XMAT.Tests
             Assert.Equal(done - begin, record.Duration);
             Assert.Equal(DateTimeKind.Local, record.ResponseDoneTime.Kind);
             Assert.Equal(done.UtcDateTime, record.ResponseDoneTime.ToUniversalTime());
+        }
+
+        // The unknown time: DateTime.MinValue of no kind, which ends when it starts.
+        private static void AssertUnknown(ProxyConnectionModel record)
+        {
+            Assert.Equal((DateTime.MinValue, DateTimeKind.Unspecified), (record.RequestTime, record.RequestTime.Kind));
+            Assert.Equal(TimeSpan.Zero, record.Duration);
+            Assert.Equal((DateTime.MinValue, DateTimeKind.Unspecified), (record.ResponseDoneTime, record.ResponseDoneTime.Kind));
+        }
+
+        // A capture table row's times read back into a model, as a saved capture loads them.
+        private static ProxyConnectionModel Reload(object[] row, ProxyConnectionModel into = null)
+        {
+            ProxyConnectionModel model = into ?? new ProxyConnectionModel(1, 1, 1);
+            model.UpdateFromDataRecord(new Row(new Dictionary<string, string>
+            {
+                [WebServiceCaptureMethod.FieldKey_RequestTimestamp] = (string)row[3],
+                [WebServiceCaptureMethod.FieldKey_ResponseTimestamp] = (string)row[4],
+            }));
+            return model;
         }
 
         // The record saved by the SAZ export, or by the sanitized one, and read back by the GUI's import.

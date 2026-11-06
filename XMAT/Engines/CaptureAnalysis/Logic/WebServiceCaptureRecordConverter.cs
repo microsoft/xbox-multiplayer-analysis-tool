@@ -71,6 +71,14 @@ namespace XMAT.XboxLiveCaptureAnalysis
             }
 
             var requestTime = DateTime.Parse(requestTimestamp);
+            // A call's time is a FILETIME (ReqTimeUTC), which starts in 1601. A request whose time is unknown or earlier
+            // than that cannot be placed among the calls that rules compare in time, so like a request without its times it
+            // is not analyzed, rather than failing the whole analysis.
+            if (!ProxyConnectionModel.IsPlaced(requestTime))
+            {
+                return null;
+            }
+
             // The time between the two instants, never between their local clock readings, which differ by an hour across
             // a daylight saving change.
             var duration = ProxyConnectionModel.Elapsed(requestTime, DateTime.Parse(responseTimestamp));

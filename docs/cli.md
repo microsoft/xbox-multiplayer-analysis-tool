@@ -93,7 +93,9 @@ xmat --version
   the GUI's Block and Bypass actions do not apply to it. A frame whose non-empty request line or status line has no
   second field (the URL or the status code) is skipped like an incomplete frame, one without its request or its
   metadata, with the warning `analysis.input.incomplete-frame`. The other frames are still analyzed; when no frame is
-  left, there is nothing to analyze (`analysis.no-data`, exit code 3) and nothing is published.
+  left, there is nothing to analyze (`analysis.no-data`, exit code 3) and nothing is published. A request whose time is
+  unknown, such as a timer that Fiddler never set, or earlier than 1601 is read but not analyzed, as the rules compare
+  calls by their time.
 - Before hashing or reading an XMAT capture, xmat opens the same guarded file identity that SQLite reads immutable.
   A `-journal`, `-wal` or `-shm` file or a WAL-mode database is refused as
   `analysis.input.live-database`; a location for which Windows cannot provide a normalized final path is refused as

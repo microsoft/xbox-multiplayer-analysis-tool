@@ -454,10 +454,19 @@ namespace XMAT.WebServiceCapture.Models
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
         }
 
+        // A time as the capture table and analysis records keep it: its instant in UTC, in the round-trip format. An unknown
+        // time (DateTime.MinValue of no kind) names no instant: it is kept as UnknownTimeText, which reads back as unknown in
+        // any time zone, where its UTC would be read back east of UTC as a known time later in the year 1.
         public static string ToDateTimeString(DateTime dt)
         {
-            return dt.ToUniversalTime().ToString("o");
+            return dt.Kind == DateTimeKind.Unspecified && dt == DateTime.MinValue
+                ? UnknownTimeText
+                : dt.ToUniversalTime().ToString("o");
         }
+
+        // DateTime.MinValue in the round-trip format, without an offset, so DateTime.Parse reads it as DateTime.MinValue of no
+        // kind, the unknown time.
+        internal const string UnknownTimeText = "0001-01-01T00:00:00.0000000";
 
         // When the response ended, in RequestTime's kind (EndOf).
         internal DateTime ResponseDoneTime => EndOf(RequestTime, Duration);
@@ -471,5 +480,19 @@ namespace XMAT.WebServiceCapture.Models
         // The time from start to end, the inverse of EndOf: the time between their instants, unless start has no kind.
         internal static TimeSpan Elapsed(DateTime start, DateTime end) =>
             start.Kind == DateTimeKind.Unspecified ? end - start : end.ToUniversalTime() - start.ToUniversalTime();
+
+        // The instant that a time names, in UTC, to order and measure times by: a local time is converted, keeping which of
+        // a repeated hour it is, and a UTC time is its instant. A time of no kind names none and is used as it is.
+        internal static DateTime InstantOf(DateTime time) =>
+            time.Kind == DateTimeKind.Unspecified ? time : time.ToUniversalTime();
+
+        // The first instant at which a request is placed among others in time, by analysis, which keeps it as a FILETIME
+        // that starts then, and on the timeline. No request was made earlier: an unknown time is earlier, and so is the year 1,
+        // in which XMAT once kept the unknown time as a UTC that reads back as a known time east of UTC.
+        internal static readonly DateTime FirstPlacedInstant = new(1601, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        // Whether a request made at this time is placed among others in time (FirstPlacedInstant). A time of no kind is
+        // compared as it is, as UTC, which is how DateTime.ToFileTimeUtc reads it too.
+        internal static bool IsPlaced(DateTime time) => InstantOf(time) >= FirstPlacedInstant;
     }
 }

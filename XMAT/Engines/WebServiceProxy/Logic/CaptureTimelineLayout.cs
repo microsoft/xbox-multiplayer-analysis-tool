@@ -8,6 +8,10 @@ using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
 {
+    // Lays out a capture's requests on a timeline by the instants they name (ProxyConnectionModel.InstantOf): their order,
+    // where each bar starts and where it ends, so a bar is as long as its request took and the gaps between bars are the
+    // time that passed, also across a daylight saving change. Origin and each row's Start stay the local times shown. Only
+    // a request that has a time to place it at is laid out (ProxyConnectionModel.IsPlaced), as analysis places it.
     internal sealed class CaptureTimelineLayout
     {
         internal const double RowHeight = 16;
@@ -19,9 +23,9 @@ namespace XMAT.WebServiceCapture
         private static readonly double[] TickIntervals =
             { 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 30000, 60000 };
         private static readonly IComparer<Entry> EntryOrder = Comparer<Entry>.Create(
-            (left, right) => Compare(left.Start, left.Sequence, right.Start, right.Sequence));
+            (left, right) => Compare(left.At, left.Sequence, right.At, right.Sequence));
         private static readonly IComparer<HostGroup> GroupOrder = Comparer<HostGroup>.Create(
-            (left, right) => Compare(left.Rows[0].Start, left.Sequence, right.Rows[0].Start, right.Sequence));
+            (left, right) => Compare(left.Rows[0].At, left.Sequence, right.Rows[0].At, right.Sequence));
         private readonly Dictionary<ProxyConnectionModel, Entry> _entries = new(ReferenceEqualityComparer.Instance);
         private readonly List<Entry> _rows = new();
         private readonly SortedSet<(DateTime End, long Sequence)> _ends = new();
@@ -33,9 +37,12 @@ namespace XMAT.WebServiceCapture
 
         internal int Count => _rows.Count;
         internal DateTime Origin => Count == 0 ? DateTime.MinValue : _rows[0].Start;
-        internal double SpanMilliseconds => Count == 0 ? 1 : Math.Max((_ends.Max.End - Origin).TotalMilliseconds, 1);
+        internal double SpanMilliseconds => Count == 0 ? 1 : Math.Max((_ends.Max.End - OriginAt).TotalMilliseconds, 1);
         internal double Width => Math.Max(SpanMilliseconds * 0.5, 200);
         internal double Scale => Width / SpanMilliseconds;
+
+        // The instant of the first row, which every bar is measured from.
+        private DateTime OriginAt => Count == 0 ? DateTime.MinValue : _rows[0].At;
 
         internal readonly record struct Row(
             ProxyConnectionModel Model, string Host, double Top,
@@ -85,7 +92,7 @@ namespace XMAT.WebServiceCapture
                 return false;
             }
 
-            var reorder = entry.Start != model.RequestTime || entry.Host != model.Host;
+            var reorder = entry.At != ProxyConnectionModel.InstantOf(model.RequestTime) || entry.Host != model.Host;
             if (entry.IsValid)
             {
                 if (reorder)
@@ -177,7 +184,7 @@ namespace XMAT.WebServiceCapture
         }
 
         internal (double Left, double Width) GetBarBounds(Row row) =>
-            ((row.Start - Origin).TotalMilliseconds * Scale,
+            ((ProxyConnectionModel.InstantOf(row.Start) - OriginAt).TotalMilliseconds * Scale,
                 Math.Max(row.Duration.TotalMilliseconds * Scale, MinimumBarWidth));
 
         private static void AddVisibleRows(List<Entry> rows, double origin, double top, double bottom, List<Row> result)
@@ -215,9 +222,9 @@ namespace XMAT.WebServiceCapture
             }
             else
             {
-                var first = group.Rows[0].Start;
+                var first = group.Rows[0].At;
                 Insert(group.Rows, entry, EntryOrder);
-                if (group.Rows[0].Start != first)
+                if (group.Rows[0].At != first)
                 {
                     ReorderGroup(group);
                 }
@@ -234,7 +241,7 @@ namespace XMAT.WebServiceCapture
             _ends.Remove((entry.End, entry.Sequence));
             var key = new HostKey(entry.Host);
             var group = _hosts[key];
-            var first = group.Rows[0].Start;
+            var first = group.Rows[0].At;
             group.Rows.RemoveAt(group.Rows.BinarySearch(entry, EntryOrder));
             if (group.Rows.Count == 0)
             {
@@ -242,7 +249,7 @@ namespace XMAT.WebServiceCapture
                 _groups.RemoveAt(group.Index);
                 RebuildGroups();
             }
-            else if (group.Rows[0].Start != first)
+            else if (group.Rows[0].At != first)
             {
                 ReorderGroup(group);
             }
@@ -292,13 +299,16 @@ namespace XMAT.WebServiceCapture
             internal long Sequence { get; }
             internal long Version { get; private set; }
             internal DateTime Start { get; private set; }
+
+            // The instant that Start names, which the layout orders and measures by; End is the instant the request ended.
+            internal DateTime At { get; private set; }
             internal TimeSpan Duration { get; private set; }
             internal string Host { get; private set; }
             private string Status { get; set; }
             private string Method { get; set; }
             private string Path { get; set; }
-            internal bool IsValid => Start != DateTime.MinValue;
-            internal DateTime End => Start + Duration;
+            internal bool IsValid => At >= ProxyConnectionModel.FirstPlacedInstant;
+            internal DateTime End => At + Duration;
 
             internal Entry(ProxyConnectionModel model, long sequence)
             {
@@ -308,12 +318,14 @@ namespace XMAT.WebServiceCapture
             }
 
             internal bool Matches(ProxyConnectionModel model) =>
-                Start == model.RequestTime && Duration == model.Duration && Host == model.Host &&
+                Start == model.RequestTime && At == ProxyConnectionModel.InstantOf(model.RequestTime) &&
+                Duration == model.Duration && Host == model.Host &&
                 Status == model.Status && Method == model.Method && Path == model.Path;
 
             internal void Refresh()
             {
                 Start = Model.RequestTime;
+                At = ProxyConnectionModel.InstantOf(Start);
                 Duration = Model.Duration;
                 Host = Model.Host;
                 Status = Model.Status;

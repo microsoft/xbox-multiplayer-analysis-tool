@@ -67,8 +67,13 @@ XMAT checks capture files before reading them and never changes them:
   with its values joined by commas. A time with an offset or `Z` is read as that
   instant; one without, as XMAT's own exports write it, is this PC's local time. A
   duration is the time between two instants, also across a daylight saving change, and
-  exports keep it. A time that names no instant, such as an unknown time that XMAT
-  exports as the year 1, read in a time zone east of UTC, is read as unknown.
+  exports keep it. A time is read as unknown when it is the start of the year 1 without
+  an offset, which Fiddler writes for a timer it never set and XMAT's exports for a time
+  they do not know, or when it names no instant this PC can show as a local time, such
+  as the first hours of the year 1 in UTC, read in a time zone west of UTC. An unknown
+  time stays unknown when the capture is saved, exported or reloaded. Analysis and the
+  timeline leave out a request whose time is unknown or earlier than 1601, which
+  includes the year-1 times that earlier versions of XMAT saved for unknown times.
 
 ## Export a sanitized capture
 
