@@ -162,6 +162,14 @@ namespace XMAT.WebServiceCapture
             HeadersLabel.Content = Localization.GetLocalizedString("COMPOSER_HEADERS");
             BodyLabel.Content = Localization.GetLocalizedString("COMPOSER_BODY");
             BodyBox.ToolTip = Localization.GetLocalizedString("COMPOSER_BODY_HINT");
+            // Each field of the request, and the HTTP version, has its own name for automation, as its label reads without
+            // the access key: a TextBox or ComboBox takes no name from a Label's Target, and the name that LabeledBy gives
+            // exists only once something has made the label's automation peer, which a screen reader that starts at the
+            // focused field has not.
+            AutomationProperties.SetName(MethodBox, Localization.GetLocalizedString("COMPOSER_METHOD_FIELD"));
+            AutomationProperties.SetName(UrlBox, Localization.GetLocalizedString("COMPOSER_URL_FIELD"));
+            AutomationProperties.SetName(HeadersBox, Localization.GetLocalizedString("COMPOSER_HEADERS_FIELD"));
+            AutomationProperties.SetName(BodyBox, Localization.GetLocalizedString("COMPOSER_BODY_FIELD"));
             Base64Box.Content = Localization.GetLocalizedString("COMPOSER_BASE64");
             UploadFileButton.Content = Localization.GetLocalizedString("COMPOSER_UPLOAD_FILE");
             UploadFileButton.ToolTip = Localization.GetLocalizedString("COMPOSER_UPLOAD_FILE_HINT");
@@ -176,6 +184,7 @@ namespace XMAT.WebServiceCapture
             InspectSessionBox.ToolTip = Localization.GetLocalizedString("COMPOSER_INSPECT_SESSION_HINT");
             HttpVersionLabel.Content = Localization.GetLocalizedString("COMPOSER_HTTP_VERSION");
             HttpVersionBox.ToolTip = Localization.GetLocalizedString("COMPOSER_HTTP_VERSION_HINT");
+            AutomationProperties.SetName(HttpVersionBox, Localization.GetLocalizedString("COMPOSER_HTTP_VERSION_FIELD"));
             ConnectToBox.Content = Localization.GetLocalizedString("COMPOSER_CONNECT_TO");
             ConnectToBox.ToolTip = Localization.GetLocalizedString("COMPOSER_CONNECT_TO_HINT");
             ConnectToText.ToolTip = Localization.GetLocalizedString("COMPOSER_CONNECT_TO_HINT");

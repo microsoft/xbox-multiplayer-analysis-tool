@@ -19,8 +19,10 @@
       </Grid.RowDefinitions>
       <Label x:Name="StartLabel" Target="{Binding ElementName=StartBox}"/>
       <Label x:Name="EndLabel" Grid.Column="2" Target="{Binding ElementName=EndBox}"/>
-      <TextBox x:Name="StartBox" Grid.Row="1" VerticalContentAlignment="Center" TextChanged="Range_TextChanged"/>
-      <TextBox x:Name="EndBox" Grid.Row="1" Grid.Column="2" VerticalContentAlignment="Center" TextChanged="Range_TextChanged"/>
+      <TextBox x:Name="StartBox" Grid.Row="1" VerticalContentAlignment="Center" TextChanged="Range_TextChanged"
+               AutomationProperties.LabeledBy="{Binding ElementName=StartLabel}"/>
+      <TextBox x:Name="EndBox" Grid.Row="1" Grid.Column="2" VerticalContentAlignment="Center" TextChanged="Range_TextChanged"
+               AutomationProperties.LabeledBy="{Binding ElementName=EndLabel}"/>
     </Grid>
     <TextBlock x:Name="CountText" Margin="0,10,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
