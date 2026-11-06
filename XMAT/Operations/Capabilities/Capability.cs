@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace XMAT.Operations.Capabilities
 {
@@ -19,7 +20,7 @@ namespace XMAT.Operations.Capabilities
         GuiOnly,
     }
 
-    // A user-facing capability: how the GUI reaches it, the operation that implements it and its command line.
+    // A user-facing capability: how the GUI reaches it, the operation that implements it and its command lines.
     internal sealed record Capability(
         string Id,
         string Title,
@@ -32,6 +33,13 @@ namespace XMAT.Operations.Capabilities
         IReadOnlyList<string> GuiEntryPoints)
     {
         public IReadOnlyList<string> GuiEntryPoints { get; init; } = GuiEntryPoints ?? Array.Empty<string>();
+
+        // Command lines of other commands that provide the same capability, such as export's process selectors.
+        public IReadOnlyList<string> AdditionalCliRoutes { get; init; } = Array.Empty<string>();
+
+        // Every command line: the primary one, then the additional ones.
+        internal IEnumerable<string> CliRoutes =>
+            CliRoute == null ? AdditionalCliRoutes : AdditionalCliRoutes.Prepend(CliRoute);
 
         internal static Capability Supported(
             string id, string title, string slice, string cli, string operation = null, string[] gui = null) =>

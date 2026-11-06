@@ -188,7 +188,8 @@ namespace XMAT.Tests
             Assert.Equal(OperationOutcome.Succeeded, gui.Outcome);
             Assert.Equal(rows, XmatExportTests.RequestNumbers(guiOutput));
             Assert.Null(parsed.Error?.Code);
-            Assert.Equal(CliExitCodes.Success, cli.ExitCode);
+            CliReport completed = Assert.IsType<CliReport>(cli);
+            Assert.Equal(CliExitCodes.Success, completed.ExitCode);
             Assert.Equal(rows, XmatExportTests.RequestNumbers(cliOutput));
         }
 

@@ -113,8 +113,12 @@ xmat --version
 - `xmat export` writes the sessions that its selectors choose to a new `FILE`, through the operation that the GUI's
   exports use: an XMAT capture (`.xmatcap`, with the original rows, ids and any extra columns), a Fiddler archive
   (`.saz`) or, only with `--format sanitized-saz`, a sanitized Fiddler archive. The format otherwise follows `FILE`'s
-  extension, and one that does not agree with it is a usage error. It reads `INPUT` like `analyze`, with the same
-  limits, and never changes it. `--process` and `--exclude-process` work as for `analyze`; `--host` and
+  extension, and one that does not agree with it is a usage error. It reads `INPUT` with `analyze`'s reader and
+  limits and never changes it, but equal limits do not mean equal codes: the reader's diagnostics keep their
+  `analysis.*` codes, except that an input over a limit is `export.input.limit`, and session data that cannot be
+  exported is `export.input.invalid-http` (an HTTP message that a sanitized archive cannot rewrite) or
+  `export.input.invalid-body` (a stored body or value that is not valid data), all with exit code 3. `--process`
+  and `--exclude-process` work as for `analyze`; `--host` and
   `--exclude-host` take a host or host/path pattern (as the Block and Bypass lists do, the default `--host-mode glob`)
   or, with `--host-mode exact`, the host exactly as the capture list shows it; `--status` and `--method` take exact
   values. Each of these is repeatable, and a session must match every option that was given and no exclusion; glob
@@ -122,9 +126,11 @@ xmat --version
   methods are literal sets of any size. An empty `--status=`, `--method=` or exact `--host=` selects the sessions
   shown without one, and `--match-none` selects nothing, so the JSON shows the counts without writing a file. xmat
   never replaces a file: an existing `FILE`, or `FILE` naming the input, is a conflict (`export.output.exists`,
-  `export.output.is-source`, exit code 5). The file is staged privately, in a folder next to it that only the current
-  user can open, and published whole with that access, or not at all when the run fails or is cancelled. Where Windows
-  cannot restrict access to that folder (storage without Windows permissions, such as FAT drives or some network
+  `export.output.is-source`, exit code 5), and so is a destination that another program keeps locked while xmat
+  publishes (`export.output.locked`). The file is staged privately, in a folder next to it that only the current
+  user can open, and published whole with that access. Failure or cancellation before publication leaves no output;
+  a cleanup failure after publication exits with code 7 and can still report `export.output.published` as `true`. Where
+  Windows cannot restrict access to that folder (storage without Windows permissions, such as FAT drives or some network
   shares), xmat publishes nothing (`export.output.unprotected`, exit code 6). A selection with no session to write
   publishes nothing (`export.no-eligible-rows`, exit code 3). An `.xmatcap` export also publishes nothing
   (`export.write.failed`, exit code 6) when its staged file, in the folder next to `FILE`, would have a path longer
@@ -236,7 +242,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
 | 3 | Invalid input or nothing to analyze or export: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, the process selectors leave no session, or `export` has no session to write |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
-| 5 | Conflict: `--out` already exists, or `export`'s `--out` names the input |
+| 5 | Conflict: `--out` already exists, or `export`'s `--out` names the input or is locked by another program (`export.output.locked`) |
 | 6 | The operation failed, for example the output could not be written, or `--out` is on storage without Windows permissions (`cli.output.unprotected`; `export.output.unprotected` for `export`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
@@ -286,7 +292,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Block or bypass hosts during capture (`capture.host-lists`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Capture this PC (`capture.local-pc`) | (not available yet) | Planned (S6, XMAT-021) |
 | Capture low-level network traces (`capture.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
-| Filter captured sessions by client process (`capture.process-filter`) | `xmat analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S9) |
+| Filter captured sessions by client process (`capture.process-filter`) | `xmat analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...`<br>`xmat export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S9) |
 | Run capture scripts (`capture.scripts`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Stop a running capture (`capture.stop`) | (not available yet) | Planned (S5, XMAT-021) |
 | Record WebSocket handshakes and report observed frames without their payloads (`capture.websocket-handshakes`) | (not available yet) | Planned (S4, XMAT-021) |

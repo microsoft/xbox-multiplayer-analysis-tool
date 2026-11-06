@@ -41,13 +41,18 @@ namespace XMAT.Cli
             return report;
         }
 
+        // The command's own command lines only: a capability that several commands provide lists each under its command.
         internal static CliCommandHelp Describe(string command)
         {
             IReadOnlyList<Capability> capabilities = CliCatalog.CapabilitiesOf(command);
             return new CliCommandHelp(
                 command,
                 CliCommandHelp.SupportedStatus,
-                capabilities.Select(capability => capability.CliRoute).Distinct(StringComparer.Ordinal).ToList(),
+                capabilities
+                    .SelectMany(capability => capability.CliRoutes)
+                    .Where(route => CliCatalog.CommandOf(route) == command)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList(),
                 capabilities.Select(capability => capability.Id).ToList());
         }
 

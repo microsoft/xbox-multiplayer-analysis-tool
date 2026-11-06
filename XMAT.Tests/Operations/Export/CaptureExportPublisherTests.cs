@@ -257,8 +257,20 @@ namespace XMAT.Tests.Operations.Export
             string destination = directory.PathOf("retry.xmatcap");
             using var cancellation = new CancellationTokenSource();
             FileStream blocker = null;
+            var moves = 0;
             var writes = 0;
-            var publisher = new CaptureExportPublisher();
+            var publisher = new CaptureExportPublisher
+            {
+                MoveFile = (source, target, overwrite) =>
+                {
+                    moves++;
+                    if (mode == "transient" && moves == 1)
+                    {
+                        throw new IOException("injected sharing violation", 32);
+                    }
+                    File.Move(source, target, overwrite);
+                },
+            };
             Task<PublishedCapture> publish = publisher.PublishAsync(
                 destination,
                 replaceExisting: true,
@@ -273,7 +285,10 @@ namespace XMAT.Tests.Operations.Export
                     {
                         File.WriteAllText(destination, "old");
                     }
-                    blocker = new FileStream(blocked, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                    if (mode != "transient")
+                    {
+                        blocker = new FileStream(blocked, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                    }
                     return mode == "cleanup"
                         ? Task.FromException(new IOException("injected write failure"))
                         : Task.CompletedTask;
@@ -284,12 +299,11 @@ namespace XMAT.Tests.Operations.Export
             {
                 if (mode == "transient")
                 {
-                    await Task.Delay(150);
-                    blocker.Dispose();
-                    blocker = null;
                     PublishedCapture result = await publish;
+                    Assert.Equal(2, moves);
                     Assert.Equal("complete", File.ReadAllText(destination));
                     Assert.True(result.Protected);
+                    Assert.Equal(new[] { destination }, Directory.GetFileSystemEntries(directory.Root));
                 }
                 else if (mode == "cancel")
                 {

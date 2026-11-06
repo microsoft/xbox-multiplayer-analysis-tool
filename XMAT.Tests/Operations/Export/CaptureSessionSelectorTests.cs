@@ -236,10 +236,12 @@ namespace XMAT.Tests.Operations.Export
                 CaptureSelectionValidator.Validate(selection);
 
             Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
-            Assert.Equal(hosts, result.Value.Host.Include.Value);
-            Assert.Equal(hosts, result.Value.Host.Exclude);
-            Assert.Equal(selection.Statuses, result.Value.Statuses);
-            Assert.Equal(selection.Methods, result.Value.Methods);
+            CaptureSelectionSpec value = Assert.IsType<CaptureSelectionSpec>(result.Value);
+            ImmutableArray<string> include = Assert.IsType<ImmutableArray<string>>(value.Host.Include);
+            Assert.Equal(hosts, include);
+            Assert.Equal(hosts, value.Host.Exclude);
+            Assert.Equal(selection.Statuses, value.Statuses);
+            Assert.Equal(selection.Methods, value.Methods);
         }
 
         private static ProcessFilterSpec Spec(IEnumerable<string> include, IEnumerable<string> exclude = null) =>

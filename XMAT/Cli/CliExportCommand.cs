@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.Operations;
@@ -23,6 +24,7 @@ namespace XMAT.Cli
             IOperation<ExportCaptureRequest, ExportCaptureResult> operation = null)
         {
             var report = new CliReport(CliCommands.Export, runId) { Export = CliExportReport.From(request) };
+            CaptureExportFormat format = request.Format ?? throw new InvalidOperationException("Export format was not parsed.");
             operation ??= new ExportCaptureSessionsOperation();
             OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
                 new ExportCaptureRequest(
@@ -30,7 +32,7 @@ namespace XMAT.Cli
                     null,
                     request.DeviceId,
                     request.Selection,
-                    request.Format.Value,
+                    format,
                     request.Output,
                     ReplaceExisting: false,
                     report.Export.Limits.ToAnalysisLimits(),
@@ -44,26 +46,7 @@ namespace XMAT.Cli
                 return report;
             }
 
-            bool failed = result.Outcome != OperationOutcome.Succeeded;
-            foreach (OperationDiagnostic diagnostic in result.Diagnostics)
-            {
-                if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
-                {
-                    report.Warnings.Add(diagnostic);
-                }
-                else if (diagnostic.Severity == OperationDiagnosticSeverity.Error || failed)
-                {
-                    report.Errors.Add(diagnostic);
-                }
-            }
-
-            report.SetExitCode(CliExitCodes.FromOutcome(result.Outcome));
-            if (failed && report.Errors.Count == 0)
-            {
-                report.Errors.Add(new OperationDiagnostic(
-                    "cli.export.failed", OperationDiagnosticSeverity.Error, "The export did not complete; nothing was published."));
-            }
-
+            report.ApplyOutcome(result, "cli.export.failed", "The export did not complete; nothing was published.");
             if (result.Outcome == OperationOutcome.CleanupFailed)
             {
                 report.CleanupState = CliCleanupStates.Failed;

@@ -147,7 +147,9 @@ Captures HTTP/HTTPS traffic by acting as a forward proxy. Supports Xbox developm
 
 **Data storage:** `WebProxyConnections` table with request/response metadata (timestamps, headers, bodies, status codes, client IP) and, for traffic from a PC, the client process (image name, PID, start time and status).
 
-**Process filter:** each capture tab can hide sessions by client process (`ProcessFilterSpec`). The filter only changes what the grid and timeline show; the proxy still forwards and records every session. The GUI, opt-in filtered analysis and `xmat analyze --process/--exclude-process` share one matcher (`ProcessFilter`) and `FilterCaptureSessionsOperation`, which also counts the included, hidden and unknown sessions.
+**Process filter:** each capture tab can hide sessions by client process (`ProcessFilterSpec`). The filter only changes what the grid and timeline show; the proxy still forwards and records every session. The GUI, opt-in filtered analysis, exports and the `--process`/`--exclude-process` options of `xmat analyze` and `xmat export` share one matcher (`ProcessFilter`) and `FilterCaptureSessionsOperation`, which also counts the included, hidden and unknown sessions.
+
+**Export:** File > Export, File > Export Sanitized, the capture list's Export Selected and Export Visible (`CaptureExportWorkflow`) and `xmat export` are adapters of one `ExportCaptureSessionsOperation`. It reads a frozen snapshot of the capture tab or, for `xmat export`, the input file through `CaptureInputReader`, the reader that analysis uses; selects the sessions with `CaptureSessionSelector` (process, host, status and method); stages the XMATCAP, SAZ or sanitized SAZ file next to the destination with private access unless a GUI user explicitly accepts storage without Windows permissions; and publishes it, with its SHA-256, by one atomic move. Failure or cancellation before publication leaves no output; staging cleanup can fail after a successful publication. `xmat export` never replaces an existing file.
 
 ### NetworkTrace Engine
 
