@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows;
@@ -942,6 +943,39 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // G12. Closing the menu, or the window with the menu open, aborts the rebuild that a change queued before the
+        // dispatcher runs it: that very operation is aborted, not left queued for its own checks to stop once it runs, so it
+        // no longer keeps the closed window alive. The closed menu stays empty, and the window is collected.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public Task ClosingTheMenuOrTheWindow_AbortsTheQueuedRebuild_SoTheWindowIsCollected(bool closeWindow) => _application.RunAsync(async () =>
+        {
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            ReplayRecordingTarget target = Recording(model);
+            try
+            {
+                Record(target, Exchange(9, "/first"));
+
+                (DispatcherOperationStatus queued, DispatcherOperationStatus closed, ContextMenu menu, WeakReference window) =
+                    QueueRebuildThenClose(target, closeWindow);
+
+                Assert.Equal(DispatcherOperationStatus.Pending, queued);
+                Assert.Equal(DispatcherOperationStatus.Aborted, closed);
+                await SettleAsync();
+                Assert.Empty(menu.Items);
+
+                // The menu would keep its window alive.
+                menu = null;
+                await CollectAsync(window);
+                Assert.False(window.IsAlive);
+            }
+            finally
+            {
+                await RemoveAllAsync(model);
+            }
+        });
+
         // A composer whose history menu was open, closed in either order with its menu; only a weak reference to it is
         // returned, so that the caller keeps nothing of it.
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -958,6 +992,40 @@ namespace XMAT.Tests.Replay
 
             window.Close();
             return new WeakReference(window);
+        }
+
+        // A composer whose open history menu has a rebuild queued, by a row recorded on the UI thread, and that is closed
+        // before the dispatcher runs it: by closing the menu, then the window, or by closing the window with the menu open.
+        // Returns the status of that very rebuild while queued and once closed, and the menu, which the caller lets go of
+        // before it collects; the window only by a weak reference, and the rebuild not at all, which would keep it alive.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static (DispatcherOperationStatus Queued, DispatcherOperationStatus Closed, ContextMenu Menu, WeakReference Window)
+            QueueRebuildThenClose(ReplayRecordingTarget target, bool closeWindow)
+        {
+            var window = RequestComposerWindow.ForNewRequest(confirm: NoQuestion, recording: target);
+            window.OpenHistoryView();
+            Record(target, Exchange(9, "/queued"));
+            DispatcherOperation rebuild = Assert.IsAssignableFrom<DispatcherOperation>(
+                typeof(RequestComposerWindow)
+                    .GetField("_historyRebuild", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .GetValue(window));
+            DispatcherOperationStatus queued = rebuild.Status;
+            if (closeWindow)
+            {
+                window.Close();
+            }
+            else
+            {
+                window.CloseHistoryView();
+            }
+
+            DispatcherOperationStatus closed = rebuild.Status;
+            if (!closeWindow)
+            {
+                window.Close();
+            }
+
+            return (queued, closed, Find<ContextMenu>(window, "HistoryMenu"), new WeakReference(window));
         }
 
         // Records sends in the model's Replays tab, as Replay and the composer do, which puts each in the history; their rows.

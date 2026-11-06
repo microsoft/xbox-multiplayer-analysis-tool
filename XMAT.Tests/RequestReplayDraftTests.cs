@@ -399,6 +399,31 @@ namespace XMAT.Tests
                 () => RequestReplayDraft.FromCapture(capture, 64, cancellation.Token)));
         }
 
+        // H12: a draft cancelled before it starts stops before its body is decoded. Malformed chunked framing, which
+        // decoding refuses, gives OperationCanceledException, not FormatException, and a large chunked body is never
+        // decoded.
+        [Fact]
+        public void FromCapture_WithABound_StopsWhenCancelled_BeforeDecodingTheBody()
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            ProxyConnectionModel malformed = ImportedCapture("/", "4\r\nWiki\r\nZ\r\n\r\n"u8.ToArray(), "Transfer-Encoding: chunked\r\n");
+
+            Assert.Throws<OperationCanceledException>(() => RequestReplayDraft.FromCapture(malformed, 64, cancellation.Token));
+
+            byte[] decoded = Encoding.ASCII.GetBytes(new string('c', 4 * 1024 * 1024));
+            byte[] framed = [.. Encoding.ASCII.GetBytes($"{decoded.Length:X}\r\n"), .. decoded, .. "\r\n0\r\n\r\n"u8];
+            ProxyConnectionModel large = ImportedCapture("/", framed, "Transfer-Encoding: chunked\r\n");
+            Assert.Throws<OperationCanceledException>(() => RequestReplayDraft.FromCapture(large, 64, cancellation.Token));
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            Assert.Throws<OperationCanceledException>(() => RequestReplayDraft.FromCapture(large, 64, cancellation.Token));
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.True(allocated < 1024 * 1024, $"A cancelled draft allocated {allocated} bytes.");
+            Assert.Equal(framed, large.RequestBody);
+        }
+
         // H10: the authority that a preview shows is the one that FromCapture sends to: the port only when it is not the
         // scheme's default, and an IPv6 host in brackets.
         [Theory]
