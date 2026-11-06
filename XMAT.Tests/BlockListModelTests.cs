@@ -158,19 +158,20 @@ namespace XMAT.Tests
         }
 
         [Theory]
-        [InlineData("0177.0.0.1")]
-        [InlineData("127.1")]
-        [InlineData("2130706433")]
-        [InlineData("0x7f.0.0.1")]
-        public void IsBlocked_PathlessNumericHostUsesAliasWithoutInventingPath(string host)
+        [InlineData("0177.0.0.1", null)]
+        [InlineData("127.1", null)]
+        [InlineData("2130706433", null)]
+        [InlineData("0x7f.0.0.1", null)]
+        [InlineData("0177.0.0.1", "x.example:443")]
+        public void IsBlocked_NumericHostUsesAliasWithoutInventingPath(string host, string path)
         {
             var hostOnly = new BlockListModel();
             hostOnly.Add("127.0.0.1");
             var pathOnly = new BlockListModel();
             pathOnly.Add("127.0.0.1/*");
 
-            Assert.False(pathOnly.IsBlocked(host));
-            Assert.True(hostOnly.IsBlocked(host));
+            Assert.False(pathOnly.IsBlocked(host, path));
+            Assert.True(hostOnly.IsBlocked(host, path));
         }
 
         [Fact]

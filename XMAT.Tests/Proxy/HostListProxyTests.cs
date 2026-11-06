@@ -496,6 +496,36 @@ namespace XMAT.Tests.Proxy
             Assert.All(connects, row => Assert.Equal("443", row.Str(WebServiceCaptureMethod.FieldKey_RequestPort)));
         }
 
+        [Fact]
+        public async Task ConnectBlockUsesNumericClaimedHostBeforeLiteralBypass()
+        {
+            var policy = new HostListPolicy();
+            Assert.True(policy.BypassList.Add("*")); Assert.True(policy.BlockList.Add("127.0.0.1"));
+            using var blockedOrigin = new TcpListener(IPAddress.Loopback, 0);
+            using var allowedOrigin = new TcpListener(IPAddress.IPv6Any, 0);
+            blockedOrigin.Start(); allowedOrigin.Server.DualMode = true; allowedOrigin.Start();
+            int blockedPort = ((IPEndPoint)blockedOrigin.LocalEndpoint).Port,
+                allowedPort = ((IPEndPoint)allowedOrigin.LocalEndpoint).Port;
+            await using var capture = await PolicyCapture.StartAsync(policy, "connect-numeric-host");
+
+            string blocked = await SendRawAsync(capture.ProxyPort,
+                $"CONNECT localhost:{blockedPort} HTTP/1.1\r\nHost: 0177.0.0.1:{blockedPort}\r\n\r\n");
+            string allowed = await SendRawAsync(
+                capture.ProxyPort,
+                $"CONNECT localhost:{allowedPort} HTTP/1.1\r\nHost: localhost:{allowedPort}\r\n\r\n",
+                async () => (await allowedOrigin.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(10))).Dispose());
+            await capture.DrainCallbacksAsync();
+
+            Assert.Contains("200 Connection Established", allowed);
+            IReadOnlyList<IDataRecord> connects = capture.Records("CONNECT").OrderBy(row => row.RowId).ToList();
+            Assert.Equal(new[] { $"localhost:{blockedPort}", $"localhost:{allowedPort}" },
+                connects.Select(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath)));
+            Assert.Equal(new[] { "0177.0.0.1", "localhost" },
+                connects.Select(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestHost)));
+            Assert.DoesNotContain("200 Connection Established", blocked);
+            Assert.False(blockedOrigin.Pending());
+        }
+
         // Plain HTTP keeps the client's DNS spelling for scripts, capture rows and forwarding.
         [Fact]
         public async Task PlainHttpHostSpelling_ReachesScriptsCaptureRowsAndForwarding()
@@ -648,7 +678,7 @@ namespace XMAT.Tests.Proxy
             });
         }
 
-        private static async Task<string> SendRawAsync(int proxyPort, string request)
+        private static async Task<string> SendRawAsync(int proxyPort, string request, Func<Task> whileOpen = null)
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             using var client = new TcpClient();
@@ -677,6 +707,7 @@ namespace XMAT.Tests.Proxy
             {
                 // The rejected connection may be reset or held open; only what was sent matters.
             }
+            if (whileOpen != null) await whileOpen();
             return Encoding.ASCII.GetString(response.ToArray());
         }
 
