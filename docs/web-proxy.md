@@ -315,7 +315,65 @@ is read once, when you choose it: later changes to it are not sent, and the comp
 keeps only its bytes and its name. Headers such as `Content-Type` are not changed.
 **Clear body** removes the uploaded body. A file that cannot be read leaves the body as
 it was, and so does **Cancel request** during the upload. Fiddler's `<@INCLUDE@>` tokens
-and multipart forms are not supported: such text is sent as typed, and no file is read.
+are not supported: such text is sent as typed, and no file is read. To send a
+`multipart/form-data` form, use **Build form** (see below).
+
+### Build a multipart form
+
+**Build form...** builds the body as a `multipart/form-data` form (RFC 7578) from text
+and file parts, in the order that you list them, the same way as `xmat` with `--form`.
+It opens a dialog that shows the request's method, which a form never changes; for GET
+and HEAD, which usually have no body, the dialog says so. Add the parts, then select
+**Use form**; **Close** or Esc changes nothing.
+
+- **Parts.** **Add text part** adds the name, type, and value as typed; **Add file
+  part...** adds the name and type with the bytes of a file that you pick. **Remove**,
+  **Move up**, and **Move down** edit the list. Names can repeat; a form has at most 128
+  parts and 64 MiB. A name has 1 to 256 printable ASCII characters, and a type, which
+  is optional, is a media type such as `text/plain; charset=utf-8`; each one is
+  checked as you type it. A file part without a type is sent as
+  `application/octet-stream`, and a text part without one has no `Content-Type`.
+- **Text** is sent as UTF-8, without a byte order mark, with its line breaks as typed.
+  A type never changes that, so a `charset` in it must be UTF-8. Text that is not valid
+  Unicode is refused when you select **Use form**. Text that starts with `@` or holds
+  `<@INCLUDE@>` is sent as typed: only **Add file part** reads a file.
+- **Files** are read once, when you add them, in the background: later changes to a
+  file are not sent, and the composer keeps only its bytes and its name, never its
+  folder. A file that does not fit in what is left of 64 MiB is refused before it is
+  read. The file name is sent with each non-ASCII byte of its UTF-8, and each `%`,
+  percent-encoded, such as `%25` for `%`; a server may or may not decode it.
+- **Use form** builds the form in the background and puts it in the composer: the
+  body, shown only by its number of parts and size, and its `Content-Type`,
+  `multipart/form-data; boundary=` with a random boundary, in the headers in place of
+  every `Content-Type` line. The other headers keep their names, values, and order, one
+  `Name: value` per line. `Content-Length` is set when the request is sent; a
+  `Content-Encoding` header is not changed, so remove it unless the form is encoded
+  that way. Nothing is sent.
+- **When it fails.** **Use form** changes nothing, and says why, when the form would be
+  larger than 64 MiB, a text is not valid, the composer's headers are not valid, or a
+  `Connection` header names `Content-Type`, which would drop the form's `Content-Type`
+  from the request. **Cancel** stops reading a file or building the form, and changes
+  nothing either. After a failure or **Cancel**, the parts stay in the dialog to try
+  again, and files are not read again.
+- **Closing.** Closing the dialog also stops reading a file or building the form, and
+  discards what you changed in the dialog since you last selected **Use form**: the
+  composer keeps the form that it last took, if any, and **Build form** opens with that
+  form's parts. Closing the composer closes the dialog and releases the form's parts.
+- **An edit, not a new request.** The method, the URL, the transport options,
+  **Inspect session**, the response, and the parts that a request file left out stay
+  as they are: a form does not supply a left-out body or headers, so select **Use this
+  body** and **Use these headers** afterward. **Open request** and **Load** ask before
+  they replace a request with a form.
+- **Editing it again.** While the body is still that form, **Build form** opens with its
+  parts, and files are not read again. Editing the method, the URL, or the headers
+  keeps them, and does not build the form again. Any other body forgets them: **Upload
+  File**, **Clear body**, **Empty body**, **Open request**, **Load**, and a dragged
+  request, and so does closing the composer. **Use this body** keeps them.
+- **Before it is sent or saved.** While the body is a form, **Send**, **Copy as cURL**,
+  **Save as cURL script**, and **Save request as** refuse when a `Connection` header
+  names `Content-Type`, and change no header: remove `Content-Type` from it first.
+  Otherwise the form is sent, exported, and saved as its exact bytes, like an uploaded
+  file.
 
 ### Drag a request into the composer
 

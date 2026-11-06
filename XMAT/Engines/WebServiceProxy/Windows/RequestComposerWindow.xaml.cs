@@ -28,7 +28,7 @@ namespace XMAT.WebServiceCapture
     /// latest response separately from capture. Every send is also recorded in the Replays tab. A request can also be opened
     /// from a request file and saved as one, without sending it, and exported for curl, without sending it: copied as a
     /// command or saved as a script. A request that the Replays tab recorded in this session can be loaded again from the
-    /// history.
+    /// history. Its body can be built as a multipart form, from text and file parts (MultipartFormWindow).
     /// </summary>
     public partial class RequestComposerWindow : Window
     {
@@ -71,12 +71,18 @@ namespace XMAT.WebServiceCapture
         private CancellationTokenSource _cancelledByUser;
 
         // A body that the editor does not hold, as its exact bytes; where it comes from as the window shows it; and the key
-        // of the text that shows it (ShowBody): a file uploaded for the body, by its name, or a body that is larger than the
-        // editor shows, of a request file, by its name, or of a row of the Replays tab that Load took it from, by the tab's
-        // name and the row's number. Null while the editor holds the body.
+        // of the text that shows it (ShowBody): a file uploaded for the body, by its name, a form that Build form made, by its
+        // number of parts, or a body that is larger than the editor shows, of a request file, by its name, or of a row of the
+        // Replays tab that Load took it from, by the tab's name and the row's number. Null while the editor holds the body.
         private byte[] _fileBody;
         private string _fileName;
         private string _fileBodyKey;
+
+        // The parts that Build form made the body from, to build the form from again, kept only while the body is still that
+        // form: every other body forgets them, and so does closing the window. They hold no file's path. And the Build form
+        // dialog while it is open.
+        private IReadOnlyList<MultipartPart> _formSeed;
+        private MultipartFormWindow _formDialog;
 
         // The request as it was loaded, with the transport options as the window, the last request file or the last Load
         // set them (EditorState), to tell whether the user has edited them since.
@@ -92,10 +98,10 @@ namespace XMAT.WebServiceCapture
 
         // What the window is doing; it starts nothing else meanwhile. Preparing covers checking a send and asking the user
         // about it, or asking which file to upload or open, whether to replace an edited request, or where and how to save
-        // it or a cURL script, and whether to export it. ReadingFile covers reading a body or request file, or preparing a
-        // request that Load takes from the history, Checking making the editor's body into bytes for Use this body,
-        // checking a request before saving it, or preparing a cURL command or script, and WritingFile saving a request file
-        // or a cURL script.
+        // it or a cURL script, and whether to export it, and the Build form dialog while it is open. ReadingFile covers
+        // reading a body or request file, or preparing a request that Load takes from the history, Checking making the
+        // editor's body into bytes for Use this body, checking a request before saving it, or preparing a cURL command or
+        // script, and WritingFile saving a request file or a cURL script.
         private enum ComposerState
         {
             Idle,
@@ -159,6 +165,8 @@ namespace XMAT.WebServiceCapture
             Base64Box.Content = Localization.GetLocalizedString("COMPOSER_BASE64");
             UploadFileButton.Content = Localization.GetLocalizedString("COMPOSER_UPLOAD_FILE");
             UploadFileButton.ToolTip = Localization.GetLocalizedString("COMPOSER_UPLOAD_FILE_HINT");
+            BuildFormButton.Content = Localization.GetLocalizedString("COMPOSER_BUILD_FORM");
+            BuildFormButton.ToolTip = Localization.GetLocalizedString("COMPOSER_BUILD_FORM_HINT");
             ClearBodyButton.Content = Localization.GetLocalizedString("COMPOSER_CLEAR_BODY");
             FollowRedirectsBox.Content = Localization.GetLocalizedString("COMPOSER_FOLLOW_REDIRECTS");
             FollowRedirectsBox.ToolTip = Localization.GetLocalizedString("COMPOSER_FOLLOW_REDIRECTS_HINT");
@@ -233,6 +241,8 @@ namespace XMAT.WebServiceCapture
             // Everything that the run sends is fixed here, before the user is asked anything: the request, as a copy that
             // later edits do not change, the options, the transport and where the request comes from.
             UpdateDraft();
+            if (DropsFormContentType())
+                return;
             int maxRedirects = MaxRedirects;
             bool inspect = InspectSessionBox.IsChecked == true;
             ReplayProvenance provenance = _provenance;
@@ -363,6 +373,9 @@ namespace XMAT.WebServiceCapture
         // Test seam: how Load makes a row of the Replays tab into a request, off the UI thread, by default
         // RequestReplayDraft.FromCapture, which keeps a body larger than the editor shows as its exact bytes.
         internal Func<ProxyConnectionModel, int, CancellationToken, RequestReplayDraft> PrepareHistoryDraft { get; set; }
+
+        // Test seam: how Build form shows its dialog, by default modally, owned by the window (ShowOwnedFormDialog).
+        internal Action<MultipartFormWindow> ShowFormDialog { get; set; }
 
         // The client that sends. The window disposes the client that it created once it is closed and no run uses it.
         internal RequestReplayClient Client => _client;
@@ -661,6 +674,9 @@ namespace XMAT.WebServiceCapture
         {
             _closed = true;
             StopWork();
+            // Build form ends with the window: its dialog closes, which stops its work, and the form's parts are released.
+            _formDialog?.Close();
+            _formSeed = null;
             // The history view ends with the window: its subscription, its queued rebuild and its items do not outlive it.
             HistoryMenu.IsOpen = false;
             CloseHistoryView();
@@ -708,9 +724,10 @@ namespace XMAT.WebServiceCapture
         }
 
         // Shows a request in the editors as loaded: the one that the window opened with, or one dropped on it, opened from a
-        // request file, with what that file left out, or loaded from the history. heldBody is a body larger than the editor
-        // shows (MaxShownBodyBytes), which the draft keeps as these exact bytes; source is where it comes from as the window
-        // shows it, and heldBodyKey the key of the text that shows it (ShowBody).
+        // request file, with what that file left out, or loaded from the history; the parts of a form that the body was are
+        // forgotten. heldBody is a body larger than the editor shows (MaxShownBodyBytes), which the draft keeps as these
+        // exact bytes; source is where it comes from as the window shows it, and heldBodyKey the key of the text that shows
+        // it (ShowBody).
         private void LoadDraft(
             RequestReplayDraft draft,
             ReplayProvenance provenance,
@@ -725,6 +742,7 @@ namespace XMAT.WebServiceCapture
             _fileBody = heldBody;
             _fileName = heldBody == null ? null : source;
             _fileBodyKey = heldBody == null ? null : heldBodyKey;
+            _formSeed = null;
             MethodBox.Text = draft.Method;
             UrlBox.Text = draft.Url;
             HeadersBox.Text = draft.HeadersText;
@@ -954,19 +972,21 @@ namespace XMAT.WebServiceCapture
                 _fileBody = read.Body;
                 _fileName = name;
                 _fileBodyKey = "COMPOSER_BODY_FILE";
+                _formSeed = null;
                 ShowBody();
                 StatusText.Text = Localization.GetLocalizedString("COMPOSER_UPLOADED", name, read.Body.LongLength);
             }
         }
 
-        // Clear body: an empty text body, in place of a body held as bytes, from an uploaded file or a request file, or of
-        // the text in the editor. It does not supply a body that a request file left out: Empty body does.
+        // Clear body: an empty text body, in place of a body held as bytes, from an uploaded file, a form or a request file,
+        // or of the text in the editor. It does not supply a body that a request file left out: Empty body does.
         internal void ClearBody()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
             _fileBody = null;
             _fileName = null;
+            _formSeed = null;
             _draft.BodyText = "";
             _draft.BodyIsBase64 = false;
             ShowBody();
@@ -981,6 +1001,79 @@ namespace XMAT.WebServiceCapture
                 CheckFileExists = true,
             };
             return dialog.ShowDialog(this) == true ? dialog.FileName : null;
+        }
+
+        // Build form: opens the dialog that builds a multipart form for the body (MultipartFormWindow), modal and owned by the
+        // window, with the parts of the form that the body still is, if any, or none. There, Use form changes the header
+        // text, the body and the parts in one step (CommitForm); nothing else that the dialog does changes the request. The
+        // window does nothing else until the dialog closes, and closing the window closes it.
+        internal void BuildForm()
+        {
+            if (_state != ComposerState.Idle || _closed)
+                return;
+            var dialog = new MultipartFormWindow(MethodBox.Text, _formSeed, () => HeadersBox.Text, CommitForm);
+            _formDialog = dialog;
+            _state = ComposerState.Preparing;
+            dialog.Closed += FormDialog_Closed;
+            (ShowFormDialog ?? ShowOwnedFormDialog)(dialog);
+        }
+
+        private void ShowOwnedFormDialog(MultipartFormWindow dialog)
+        {
+            dialog.Owner = this;
+            dialog.ShowDialog();
+        }
+
+        private void FormDialog_Closed(object sender, EventArgs e)
+        {
+            _formDialog = null;
+            EndState();
+        }
+
+        // Use form, in the dialog: the window takes the form in one step: the header text as the dialog prepared it, with the
+        // form's Content-Type in place of every Content-Type line; the body, which the window holds as the form's exact bytes
+        // and shows by its parts and size, as it does an uploaded file; and the parts, to build the form from again. It is an
+        // edit, not a load (LoadDraft): the method, the URL, the transport options, Inspect session, the response, where the
+        // request comes from and its origin stay as they are, and so do the parts that a request file left out, which only
+        // their own buttons supply. Open request and Load then ask before they replace the request.
+        private void CommitForm(MultipartFormBody form, string headersText)
+        {
+            HeadersBox.Text = headersText;
+            _draft.SetBodyBytes(form.Body);
+            _fileBody = form.Body;
+            _fileName = form.Parts.Count == 1
+                ? Localization.GetLocalizedString("COMPOSER_FORM_ONE_PART")
+                : Localization.GetLocalizedString("COMPOSER_FORM_PARTS", form.Parts.Count);
+            _fileBodyKey = "COMPOSER_BODY_FORM";
+            _formSeed = form.Parts;
+            ShowBody();
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_FORM_USED", _fileName, form.Body.LongLength);
+        }
+
+        // Whether the form's Content-Type would be lost: while the body is a form that Build form made, a Connection header
+        // that names Content-Type makes the request drop it when the request is built (RequestReplayDraft.
+        // IsNominatedByConnection). Send and Save request check this as they start; both cURL exports keep their availability
+        // and transport checks first (TryFreezeForCurl), then check this. Each refuses before any question, send or output,
+        // says why, and changes no header. Header text that is not valid is left to the action, which refuses it in its own
+        // words.
+        private bool DropsFormContentType()
+        {
+            if (_formSeed == null)
+                return false;
+            IReadOnlyList<KeyValuePair<string, string>> headers;
+            try
+            {
+                headers = _draft.GetHeaders();
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
+
+            if (!RequestReplayDraft.IsNominatedByConnection(headers, "Content-Type"))
+                return false;
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED");
+            return true;
         }
 
         // Open request: loads a request file in place of the request in the editors, after asking when the user has edited
@@ -1238,6 +1331,7 @@ namespace XMAT.WebServiceCapture
             {
                 _fileBody = null;
                 _fileName = null;
+                _formSeed = null;
                 _draft.CompleteBody(Array.Empty<byte>());
                 _draft.SetBodyFormat(false);
                 ShowBody();
@@ -1349,13 +1443,16 @@ namespace XMAT.WebServiceCapture
         // the request was captured or loaded for. The file is written off the UI thread too, privately and never in place
         // of another file. The window is busy while it checks or writes, and closing it or Cancel request stops either: a
         // check stopped even once it ended asks nothing and saves nothing. The request in the editors is never changed,
-        // whatever happens.
+        // whatever happens. A form whose Content-Type the headers would drop is not saved, as a template either
+        // (DropsFormContentType).
         internal async Task SaveRequestAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
 
             UpdateDraft();
+            if (DropsFormContentType())
+                return;
             RequestReplayDraft draft = _draft.WithUrl(_draft.Url);
             ReplayHttpVersion httpVersion = SelectedHttpVersion;
             Func<RequestReplayDraft, CancellationToken, RequestFileRecognized> inspect =
@@ -2160,7 +2257,8 @@ namespace XMAT.WebServiceCapture
 
         // Fixes what a cURL export exports, from the editors and options as they are now: a copy of the draft that later
         // edits do not change, which shares the body's text or bytes, never changed in place, with the transport and the
-        // most redirects. False, with the reason in the status, when the export is not available (CurlUnavailableText).
+        // most redirects. False, with the reason in the status, when the export is not available (CurlUnavailableText), or
+        // would lose a form's Content-Type (DropsFormContentType).
         private bool TryFreezeForCurl(
             bool copying, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects)
         {
@@ -2175,6 +2273,8 @@ namespace XMAT.WebServiceCapture
             }
 
             UpdateDraft();
+            if (DropsFormContentType())
+                return false;
             draft = _draft.WithUrl(_draft.Url);
             redirects = MaxRedirects;
             return true;
@@ -2241,6 +2341,7 @@ namespace XMAT.WebServiceCapture
 
         private async void Send_Click(object sender, RoutedEventArgs e) => await SendAsync();
         private async void UploadFile_Click(object sender, RoutedEventArgs e) => await UploadBodyAsync();
+        private void BuildForm_Click(object sender, RoutedEventArgs e) => BuildForm();
         private async void OpenRequest_Click(object sender, RoutedEventArgs e) => await OpenRequestAsync();
         private async void SaveRequest_Click(object sender, RoutedEventArgs e) => await SaveRequestAsync();
         private void ClearBody_Click(object sender, RoutedEventArgs e) => ClearBody();
@@ -2282,8 +2383,8 @@ namespace XMAT.WebServiceCapture
         // parts that a request file left out and that are not supplied yet, edited since the request was loaded; and the
         // transport options, changed from those that the window, the last request file or the last Load set, also before a
         // drop, which keeps them. Supplying a part is an edit, even as the empty part that the editor already showed. A body
-        // that the window holds as bytes, an uploaded file's or a large one from a request file or the Replays tab, is
-        // compared by reference: it is the same bytes until another upload or Clear body.
+        // that the window holds as bytes, an uploaded file's, a form's, or a large one from a request file or the Replays tab,
+        // is compared by reference: it is the same bytes until another upload, form or Clear body.
         private sealed record EditorState(
             string Method, string Url, string Headers, string Body, bool Base64, byte[] FileBody,
             RequestOmissions Omissions, TransportState Transport);

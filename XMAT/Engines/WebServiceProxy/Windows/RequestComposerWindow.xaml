@@ -71,6 +71,7 @@
         <DockPanel Grid.Row="4" Margin="0,6,0,0">
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
             <Button x:Name="UploadFileButton" Margin="4,0" Padding="8,2" Click="UploadFile_Click"/>
+          <Button x:Name="BuildFormButton" Margin="4,0" Padding="8,2" Click="BuildForm_Click"/>
             <Button x:Name="ClearBodyButton" Margin="4,0" Padding="8,2" Click="ClearBody_Click"/>
             <CheckBox x:Name="Base64Box" Margin="8,0,0,0" VerticalAlignment="Center"
                       Checked="BodyFormat_Changed" Unchecked="BodyFormat_Changed"/>

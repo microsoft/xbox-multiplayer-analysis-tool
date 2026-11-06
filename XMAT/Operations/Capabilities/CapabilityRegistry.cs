@@ -33,6 +33,7 @@ namespace XMAT.Operations.Capabilities
         private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
         private const string SequenceRangeXaml = "Engines/WebServiceProxy/Windows/SequenceRangeWindow.xaml";
         private const string VerifyDiffXaml = "Engines/WebServiceProxy/Windows/VerifyDiffWindow.xaml";
+        private const string MultipartFormXaml = "Engines/WebServiceProxy/Windows/MultipartFormWindow.xaml";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
@@ -213,6 +214,16 @@ namespace XMAT.Operations.Capabilities
                     Click(ComposerXaml, "CancelSend_Click"),
                     Click(ComposerXaml, "UploadFile_Click"),
                     Click(ComposerXaml, "ClearBody_Click"),
+                    // Build form: a multipart body, made by the same builder as --form (MultipartForm).
+                    Click(ComposerXaml, "BuildForm_Click"),
+                    Window("XMAT.WebServiceCapture.MultipartFormWindow"),
+                    Click(MultipartFormXaml, "AddText_Click"),
+                    Click(MultipartFormXaml, "AddFile_Click"),
+                    Click(MultipartFormXaml, "RemovePart_Click"),
+                    Click(MultipartFormXaml, "MoveUp_Click"),
+                    Click(MultipartFormXaml, "MoveDown_Click"),
+                    Click(MultipartFormXaml, "UseForm_Click"),
+                    Click(MultipartFormXaml, "CancelWork_Click"),
                     Click(ComposerXaml, "Close_Click"),
                     Command(ProxyCommandsPrefix + "ViewVerifyDiff"),
                     Window("XMAT.WebServiceCapture.VerifyDiffWindow"),
