@@ -188,6 +188,56 @@ namespace XMAT.Tests.Proxy
             Assert.Equal(blockedAttempts.Count + blockedPlainRequests.Count + 1, requests.Count);
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task PlainHttpPathBlock_UsesCanonicalRawTargetAndEitherAuthority(bool bypass)
+        {
+            var policy = new HostListPolicy();
+            Assert.True(policy.BlockList.Add("127.0.0.1/private/*"));
+            if (bypass)
+            {
+                Assert.True(policy.BypassList.Add("127.0.0.1"));
+                Assert.True(policy.BypassList.Add("claimed.example"));
+            }
+            await using var origin = await LoopbackOrigin.StartAsync();
+            await using var capture = await PolicyCapture.StartAsync(policy, bypass ? "canonical-bypass" : "canonical");
+            string authority = $"127.0.0.1:{origin.Port}";
+            string[] blockedTargets =
+            [
+                "/public/../private/dot?token=1",
+                "/%70rivate/encoded?token=2",
+                $"http://{authority}/private/authority?token=3",
+            ];
+            string[] hosts = [authority, authority, $"claimed.example:{origin.Port}"];
+            var blockedResponses = new List<string>();
+            for (var index = 0; index < blockedTargets.Length; index++)
+            {
+                blockedResponses.Add(await SendRawAsync(
+                    capture.ProxyPort,
+                    $"GET {blockedTargets[index]} HTTP/1.1\r\nHost: {hosts[index]}\r\nConnection: close\r\n\r\n"));
+            }
+            const string allowedTarget = "/public/allowed?token=ok";
+            string allowed = await SendRawAsync(
+                capture.ProxyPort,
+                $"GET {allowedTarget} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
+            await capture.DrainCallbacksAsync();
+
+            Assert.All(blockedResponses, response => Assert.Equal(string.Empty, response));
+            Assert.Matches(@"^HTTP/\d(\.\d)? 200\b", allowed);
+            Assert.Equal(new[] { allowedTarget }, origin.Requests.Select(request => request.Path));
+            IReadOnlyList<IDataRecord> requests = capture.Records("GET").OrderBy(row => row.RowId).ToList();
+            Assert.Equal(
+                blockedTargets.Append(allowedTarget),
+                requests.Select(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath)));
+            Assert.Equal(
+                new[] { "127.0.0.1", "127.0.0.1", "claimed.example", "127.0.0.1" },
+                requests.Select(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestHost)));
+            Assert.All(requests.Take(3), row =>
+                Assert.True(string.IsNullOrEmpty(row.Str(WebServiceCaptureMethod.FieldKey_RequestStatus))));
+            Assert.False(string.IsNullOrEmpty(requests[^1].Str(WebServiceCaptureMethod.FieldKey_RequestStatus)));
+        }
+
         [Fact]
         public async Task RequestAwaitingAScript_IsBlockedByAnEditMadeDuringTheAwait()
         {
