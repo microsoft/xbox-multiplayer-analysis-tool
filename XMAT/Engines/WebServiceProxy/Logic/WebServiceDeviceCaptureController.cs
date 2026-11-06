@@ -807,7 +807,7 @@ namespace XMAT.WebServiceCapture
                 return;
 
             IDataset dataset = dataTable.Dataset;
-            try
+            using (dataset as IDisposable)
             {
                 IFieldDefinition[] fields = dataset.FieldDefs.ToArray();
                 foreach (var fiddlerProxyConnectionModel in ProxyConnections)
@@ -816,10 +816,6 @@ namespace XMAT.WebServiceCapture
                     fiddlerProxyConnectionModel.RecordRowId = dataTable.AddRow(
                         fiddlerProxyConnectionModel.ToDataTableValues(deviceName, fields));
                 }
-            }
-            finally
-            {
-                (dataset as IDisposable)?.Dispose();
             }
         }
 

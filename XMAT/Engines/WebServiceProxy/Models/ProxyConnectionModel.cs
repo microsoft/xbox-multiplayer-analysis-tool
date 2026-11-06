@@ -318,13 +318,9 @@ namespace XMAT.WebServiceCapture.Models
         {
             ArgumentNullException.ThrowIfNull(dataTable);
             IDataset dataset = dataTable.Dataset;
-            try
+            using (dataset as IDisposable)
             {
                 return ToDataTableValues(deviceName, dataset.FieldDefs);
-            }
-            finally
-            {
-                (dataset as IDisposable)?.Dispose();
             }
         }
 

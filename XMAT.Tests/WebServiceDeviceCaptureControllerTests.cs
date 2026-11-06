@@ -876,13 +876,9 @@ namespace XMAT.Tests
             }
 
             Exception failure;
-            try
+            using (callback)
             {
                 failure = await Record.ExceptionAsync(() => controller.StopProxyAsync());
-            }
-            finally
-            {
-                callback?.Dispose();
             }
 
             Assert.NotNull(failure);
