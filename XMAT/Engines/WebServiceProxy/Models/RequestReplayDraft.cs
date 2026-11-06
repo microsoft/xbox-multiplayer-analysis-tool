@@ -269,12 +269,7 @@ namespace XMAT.WebServiceCapture
             }
 
             // Connection can nominate additional hop-by-hop headers beyond the standard fixed list.
-            var connectionHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var header in headers.Where(h => h.Key.Equals("Connection", StringComparison.OrdinalIgnoreCase)))
-            {
-                foreach (string name in header.Value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-                    connectionHeaders.Add(name);
-            }
+            HashSet<string> connectionHeaders = ConnectionNominations(headers);
 
             var request = new ClientRequest { Method = Method, BodyBytes = body };
             foreach (var header in headers)
@@ -357,15 +352,42 @@ namespace XMAT.WebServiceCapture
         }
 
         // Replaces every header with this name by a single line, in place of the first one, or appends it.
-        internal void SetHeader(string name, string value)
+        internal void SetHeader(string name, string value) => HeadersText = SetHeaderIn(HeadersText, name, value);
+
+        // SetHeader's edit of header text, which it returns without changing anything: FormatException when the text or
+        // the line is not a valid header.
+        internal static string SetHeaderIn(string headersText, string name, string value)
         {
             ValidateHeader(name, value ?? "");
-            var headers = ParseHeaders();
+            var headers = ParseHeaders(headersText);
             int index = headers.FindIndex(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase));
             headers.RemoveAll(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase));
             headers.Insert(index < 0 ? headers.Count : index, new(name, (value ?? "").Trim(' ', '\t')));
-            HeadersText = FormatHeaders(headers);
+            return FormatHeaders(headers);
         }
+
+        // The names, in any case, that the Connection lines of these headers nominate: building the request drops every
+        // header with one of them (CreateRequest).
+        internal static HashSet<string> ConnectionNominations(IEnumerable<KeyValuePair<string, string>> headers)
+        {
+            var nominated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var header in headers.Where(h => h.Key.Equals("Connection", StringComparison.OrdinalIgnoreCase)))
+            {
+                foreach (string name in header.Value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                    nominated.Add(name);
+            }
+
+            return nominated;
+        }
+
+        // Whether a Connection line of these headers nominates this name, so that building the request drops it.
+        internal static bool IsNominatedByConnection(IEnumerable<KeyValuePair<string, string>> headers, string name) =>
+            ConnectionNominations(headers).Contains(name);
+
+        // Header text as the draft reads it: name and value pairs, in order; FormatException when a line is not a valid
+        // header.
+        internal static IReadOnlyList<KeyValuePair<string, string>> ParseHeaderText(string headersText) =>
+            ParseHeaders(headersText);
 
         internal void RemoveHeader(string name)
         {
@@ -634,7 +656,7 @@ namespace XMAT.WebServiceCapture
             return result;
         }
 
-        private static bool IsTokenCharacter(char c) =>
+        internal static bool IsTokenCharacter(char c) =>
             char.IsAsciiLetterOrDigit(c) || "!#$%&'*+-.^_`|~".Contains(c);
     }
 }

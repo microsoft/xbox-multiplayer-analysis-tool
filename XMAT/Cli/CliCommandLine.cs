@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
@@ -44,7 +45,8 @@ namespace XMAT.Cli
     // text (replay and save-request) and Sequence the --sequence text (compose only), both already validated. RequestFile
     // is a request file to start from (compose and save-request); ClearHeaders and EmptyBody complete what such a file left
     // out; HttpVersionSet says whether --http-version was given, which then wins over a file's version. IncludeSensitive
-    // saves captured content (save-request only).
+    // saves captured content (save-request only). Form is the multipart form of --form, --form-string and --form-type, in
+    // command-line order, or null; its files are read when the run starts (CliRequestBody).
     internal sealed record CliReplay(
         string Selection = null,
         int Repeat = 1,
@@ -71,9 +73,20 @@ namespace XMAT.Cli
         bool ClearHeaders = false,
         bool EmptyBody = false,
         bool HttpVersionSet = false,
-        bool IncludeSensitive = false)
+        bool IncludeSensitive = false,
+        IReadOnlyList<CliFormPart> Form = null)
     {
         internal static CliReplay Default { get; } = new();
+    }
+
+    // A part of a multipart form, as --form, --form-string and --form-type give it: a text part has its Value, a file part
+    // the Path that --form NAME=@PATH named, read when the run starts; MediaType is null unless --form-type gave one.
+    internal sealed record CliFormPart(string Name, string Value, string Path, string MediaType)
+    {
+        internal bool IsFile => Path != null;
+
+        // The name that a file part is sent with: the file's own name, never its folder.
+        internal string FileName => IsFile ? System.IO.Path.GetFileName(Path) : null;
     }
 
     // A parsed request, or a data-free usage error (exit code 2).
@@ -119,6 +132,9 @@ namespace XMAT.Cli
         internal const string ClearHeadersSwitch = "--clear-headers";
         internal const string EmptyBodySwitch = "--empty-body";
         internal const string IncludeSensitiveSwitch = "--include-sensitive";
+        internal const string FormOption = "--form";
+        internal const string FormStringOption = "--form-string";
+        internal const string FormTypeOption = "--form-type";
 
         internal const string HttpVersionMessage = "--http-version takes auto, 1.1 or 2.";
 
@@ -179,6 +195,9 @@ namespace XMAT.Cli
             FollowRedirectsOption.Name,
             HttpVersionOption,
             ConnectToOption,
+            FormOption,
+            FormStringOption,
+            FormTypeOption,
         };
 
         private static readonly HashSet<string> ComposeCommandOptions = new(
@@ -199,7 +218,10 @@ namespace XMAT.Cli
             }),
             StringComparer.Ordinal);
 
-        private static readonly HashSet<string> RepeatableOptions = new(StringComparer.Ordinal) { HeaderOption, RemoveHeaderOption };
+        private static readonly HashSet<string> RepeatableOptions = new(StringComparer.Ordinal)
+        {
+            HeaderOption, RemoveHeaderOption, FormOption, FormStringOption, FormTypeOption,
+        };
 
         // compose has no captured origin to change, and replay never follows a redirect to another origin, so only replay
         // takes --allow-origin-change, and compose only with --request-file, whose URL is the origin. Both take
@@ -240,6 +262,9 @@ namespace XMAT.Cli
             RemoveHeaderOption,
             BodyFileOption,
             HttpVersionOption,
+            FormOption,
+            FormStringOption,
+            FormTypeOption,
             CliLimits.InputOption,
             CliLimits.DataOption,
             CliLimits.RecordOption,
@@ -560,6 +585,12 @@ namespace XMAT.Cli
                 return error;
             }
 
+            error = ReadForm(command, arguments, replay.Headers, removeHeaders, out List<CliFormPart> form);
+            if (error != null)
+            {
+                return error;
+            }
+
             return CliParseResult.Success(new CliRequest(
                 command,
                 Input: arguments.Positionals[0],
@@ -572,6 +603,7 @@ namespace XMAT.Cli
                     Origin = origin,
                     RemoveHeaders = removeHeaders,
                     Unconditional = arguments.Switches.Contains(UnconditionalSwitch),
+                    Form = form,
 
                     // --verify-diff verifies too, and also writes how each verified response differs.
                     Verify = arguments.Switches.Contains(VerifySwitch) || arguments.Switches.Contains(VerifyDiffSwitch),
@@ -634,6 +666,12 @@ namespace XMAT.Cli
             }
 
             error = ReadRemoveHeaders(command, arguments, out List<string> removeHeaders);
+            if (error != null)
+            {
+                return error;
+            }
+
+            error = ReadForm(command, arguments, replay.Headers, removeHeaders, out List<CliFormPart> form);
             return error ?? CliParseResult.Success(new CliRequest(
                 command,
                 Output: output,
@@ -643,6 +681,7 @@ namespace XMAT.Cli
                     RemoveHeaders = removeHeaders,
                     ClearHeaders = arguments.Switches.Contains(ClearHeadersSwitch),
                     EmptyBody = arguments.Switches.Contains(EmptyBodySwitch),
+                    Form = form,
                 }));
         }
 
@@ -817,6 +856,12 @@ namespace XMAT.Cli
                 return error;
             }
 
+            error = ReadForm(command, arguments, headers, removeHeaders, out List<CliFormPart> form);
+            if (error != null)
+            {
+                return error;
+            }
+
             arguments.Options.TryGetValue(BodyFileOption, out string bodyFile);
             return CliParseResult.Success(new CliRequest(
                 command,
@@ -838,7 +883,8 @@ namespace XMAT.Cli
                     ClearHeaders: Has(arguments, ClearHeadersSwitch),
                     EmptyBody: Has(arguments, EmptyBodySwitch),
                     HttpVersionSet: arguments.Options.ContainsKey(HttpVersionOption),
-                    IncludeSensitive: Has(arguments, IncludeSensitiveSwitch))));
+                    IncludeSensitive: Has(arguments, IncludeSensitiveSwitch),
+                    Form: form)));
         }
 
         // Whether the command line gave an option, a repeated option or a switch.
@@ -851,6 +897,109 @@ namespace XMAT.Cli
                 ? CliParseResult.UsageError(
                     command, "cli.usage.conflicting-options", "--body-file and --empty-body cannot be used together.")
                 : null;
+
+        internal const string FormSyntaxMessage =
+            "--form takes NAME=VALUE or NAME=@FILE, and --form-string takes NAME=VALUE; NAME is 1 to 256 printable ASCII " +
+                "characters.";
+
+        internal const string FormFileMessage =
+            "--form NAME=@FILE needs a FILE whose own name is 1 to 255 characters of well-formed Unicode without control " +
+                "characters.";
+
+        internal const string FormTypeMessage =
+            "--form-type takes N=TYPE: a part number from 1 to the number of --form and --form-string parts, given once, " +
+                "and a media type such as text/plain.";
+
+        // The multipart form of --form, --form-string and --form-type, in command-line order; null when there is none. Only
+        // the syntax, names, file names and types are checked here, and nothing is read: the files and the size are the
+        // run's (CliRequestBody). A form makes the body and its Content-Type, so it takes no other body or Content-Type edit.
+        private static CliParseResult ReadForm(
+            string command,
+            CliArguments arguments,
+            IReadOnlyList<KeyValuePair<string, string>> headers,
+            IReadOnlyList<string> removeHeaders,
+            out List<CliFormPart> form)
+        {
+            form = null;
+            var parts = new List<CliFormPart>();
+            foreach (KeyValuePair<string, string> option in arguments.OrderedValues(FormOption, FormStringOption))
+            {
+                int separator = option.Value.IndexOf('=');
+                string name = separator < 0 ? null : option.Value[..separator];
+                if (!MultipartForm.IsValidName(name))
+                {
+                    return CliParseResult.UsageError(command, "cli.usage.invalid-value", FormSyntaxMessage);
+                }
+
+                string value = option.Value[(separator + 1)..];
+                if (option.Key == FormOption && value.StartsWith('@'))
+                {
+                    string path = value[1..];
+                    if (path.Length == 0 || !MultipartForm.IsValidFileName(System.IO.Path.GetFileName(path)))
+                    {
+                        return CliParseResult.UsageError(command, "cli.usage.invalid-value", FormFileMessage);
+                    }
+
+                    parts.Add(new CliFormPart(name, null, path, null));
+                }
+                else
+                {
+                    parts.Add(new CliFormPart(name, value, null, null));
+                }
+            }
+
+            IReadOnlyList<string> types = arguments.RepeatedValues(FormTypeOption);
+            if (parts.Count == 0)
+            {
+                return types.Count == 0
+                    ? null
+                    : CliParseResult.UsageError(
+                        command, "cli.usage.missing-option", "--form-type needs --form or --form-string parts to apply to.");
+            }
+
+            if (parts.Count > MultipartForm.MaxParts)
+            {
+                return CliParseResult.UsageError(
+                    command, "cli.usage.invalid-value", "A form can have at most 128 parts, --form and --form-string together.");
+            }
+
+            foreach (string text in types)
+            {
+                int separator = text.IndexOf('=');
+                if (separator <= 0 ||
+                    !int.TryParse(text.AsSpan(0, separator), NumberStyles.None, CultureInfo.InvariantCulture, out int number) ||
+                    number < 1 || number > parts.Count || parts[number - 1].MediaType != null ||
+                    !MultipartForm.IsValidMediaType(text[(separator + 1)..]))
+                {
+                    return CliParseResult.UsageError(command, "cli.usage.invalid-value", FormTypeMessage);
+                }
+
+                parts[number - 1] = parts[number - 1] with { MediaType = text[(separator + 1)..] };
+            }
+
+            if (Has(arguments, BodyFileOption) || Has(arguments, EmptyBodySwitch))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.conflicting-options",
+                    "--form and --form-string make the body, so they cannot be used with --body-file or --empty-body.");
+            }
+
+            if ((headers ?? Array.Empty<KeyValuePair<string, string>>()).Any(header => IsContentType(header.Key)) ||
+                (removeHeaders ?? Array.Empty<string>()).Any(IsContentType))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.conflicting-options",
+                    "A form makes its own Content-Type, so --header Content-Type and --remove-header Content-Type cannot be " +
+                        "used with --form or --form-string.");
+            }
+
+            form = parts;
+            return null;
+        }
+
+        private static bool IsContentType(string name) => string.Equals(name, "Content-Type", StringComparison.OrdinalIgnoreCase);
 
         private static CliParseResult ReadRemoveHeaders(string command, CliArguments arguments, out List<string> removeHeaders)
         {
@@ -1066,6 +1215,9 @@ namespace XMAT.Cli
     {
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.Ordinal);
 
+        // Every repeatable option's value, in command-line order across names.
+        private readonly List<KeyValuePair<string, string>> _ordered = new();
+
         internal Dictionary<string, string> Options { get; } = new(StringComparer.Ordinal);
 
         internal HashSet<string> Switches { get; } = new(StringComparer.Ordinal);
@@ -1077,6 +1229,10 @@ namespace XMAT.Cli
         // The values of a repeatable option, in the order given.
         internal IReadOnlyList<string> RepeatedValues(string name) =>
             _repeated.TryGetValue(name, out List<string> values) ? values : Array.Empty<string>();
+
+        // The values of these repeatable options, with their names, in the order given across all of them.
+        internal IEnumerable<KeyValuePair<string, string>> OrderedValues(params string[] names) =>
+            _ordered.Where(pair => Array.IndexOf(names, pair.Key) >= 0);
 
         // Returns null when the arguments are valid, otherwise the usage error. allowedOptions lists every option that
         // takes a value, repeatable ones included.
@@ -1170,6 +1326,7 @@ namespace XMAT.Cli
                     }
 
                     values.Add(value);
+                    _ordered.Add(new(name, value));
                     continue;
                 }
 

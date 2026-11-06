@@ -198,7 +198,7 @@ namespace XMAT.Operations.Capabilities
                 "request.replay", "Replay captured requests, as captured or edited", "S9",
                 cli: "replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
                     "[--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
-                    "[--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] " +
+                    "[--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] " +
                     "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] " +
                     "[--max-data-mib N] [--max-record-mib N] [--max-records N]",
@@ -222,7 +222,7 @@ namespace XMAT.Operations.Capabilities
                 "request.compose", "Compose and send a new request", "S9",
                 cli: "compose --url URL | --request-file FILE --out DIR [--sequence START-END] [--method METHOD] " +
                     "[--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] " +
-                    "[--empty-body] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
+                    "[--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] " +
                     "[--allow-origin-change] [--allow-connect-to]",
                 operation: ReplayOperation,
@@ -240,7 +240,7 @@ namespace XMAT.Operations.Capabilities
                 "request.save", "Save requests as request files, without sending them", "S9",
                 cli: "save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] " +
                     "[--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] " +
-                    "[--body-file FILE] [--empty-body] [--unconditional] [--http-version auto|1.1|2] [--include-sensitive] " +
+                    "[--body-file FILE] [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto|1.1|2] [--include-sensitive] " +
                     "[--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
                 operation: ReplayOperation,
                 gui: new[]
@@ -259,7 +259,7 @@ namespace XMAT.Operations.Capabilities
                 "request.curl", "Export requests as cURL scripts for PowerShell 7, without sending them", "S9",
                 cli: "curl INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--include-sensitive] " +
                     "[--device ID] [--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... " +
-                    "[--clear-headers] [--body-file FILE] [--empty-body] [--unconditional] [--http-version auto|1.1] " +
+                    "[--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto|1.1] " +
                     "[--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
                 operation: ReplayOperation,
                 gui: new[]

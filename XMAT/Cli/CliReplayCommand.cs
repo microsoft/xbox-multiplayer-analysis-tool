@@ -40,29 +40,24 @@ namespace XMAT.Cli
                 Replay = new CliReplayReport(request.Replay, fromCapture ? request.Limits ?? CliLimits.Default : null),
             };
 
-            // The body file is read before anything is reserved or sent; its path and content never reach the output. A
-            // larger file than ReplayBodyFile.MaxBytes (64 MiB) is refused with exit code 3.
-            byte[] body = null;
-            if (request.Replay.BodyFile != null)
+            // The body is made before anything is reserved or sent: the --body-file, or the --form files, are read, and their
+            // paths and contents never reach the output. A larger file than ReplayBodyFile.MaxBytes (64 MiB), or a form
+            // larger than that, is refused with exit code 3 (CliRequestBody).
+            CliRequestBody prepared;
+            try
             {
-                ReplayBodyRead read;
-                try
+                (prepared, CliFailure bodyFailure) =
+                    await CliRequestBody.PrepareAsync(request.Replay, cancellationToken).ConfigureAwait(false);
+                if (bodyFailure != null)
                 {
-                    read = await ReplayBodyFile.ReadAsync(request.Replay.BodyFile, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    report.Cancel();
+                    report.Fail(bodyFailure.ExitCode, bodyFailure.Code, bodyFailure.Message);
                     return report;
                 }
-
-                if (!read.Succeeded)
-                {
-                    report.Fail(CliExitCodes.InvalidInput, read.Code, BodyFileMessage(read.Code));
-                    return report;
-                }
-
-                body = read.Body;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                report.Cancel();
+                return report;
             }
 
             // A request file (compose --request-file) is read next, as untrusted data: only its kind and SHA-256 reach the
@@ -128,7 +123,7 @@ namespace XMAT.Cli
                 await CliStagedRun.CompleteAsync(
                     report,
                     output,
-                    token => SendAsync(request, body, file, output, report, token),
+                    token => SendAsync(request, prepared, file, output, report, token),
                     null,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -188,7 +183,7 @@ namespace XMAT.Cli
         // why).
         private static async Task<IReadOnlyList<CliStagedFile>> SendAsync(
             CliRequest request,
-            byte[] body,
+            CliRequestBody prepared,
             RequestFileReadResult file,
             CliOutputFolder output,
             CliReport report,
@@ -198,7 +193,7 @@ namespace XMAT.Cli
             // folder and never the GUI's folder under %APPDATA%.
             HeadlessStorage.Configure(output.WorkPath);
             OperationResult<ReplayResult> result = await new ReplayOperation().ExecuteAsync(
-                CreateRequest(request, body, file?.Content, new FileSink(output, report.Replay)),
+                CreateRequest(request, prepared, file?.Content, new FileSink(output, report.Replay)),
                 OperationContext.None,
                 cancellationToken).ConfigureAwait(false);
             Apply(report, result);
@@ -221,7 +216,7 @@ namespace XMAT.Cli
         }
 
         private static ReplayRequest CreateRequest(
-            CliRequest request, byte[] body, RequestFileContent file, IReplayExchangeSink sink)
+            CliRequest request, CliRequestBody prepared, RequestFileContent file, IReplayExchangeSink sink)
         {
             CliReplay replay = request.Replay;
 
@@ -260,7 +255,8 @@ namespace XMAT.Cli
                         Method: replay.Method,
                         SetHeaders: replay.Headers,
                         RemoveHeaders: replay.RemoveHeaders,
-                        Body: replay.EmptyBody ? Array.Empty<byte>() : body,
+                        Body: replay.EmptyBody ? Array.Empty<byte>() : prepared.Body,
+                        Form: prepared.Form,
                         ClearHeaders: replay.ClearHeaders),
                     sink);
             }
@@ -279,7 +275,8 @@ namespace XMAT.Cli
                     Method: replay.Method,
                     SetHeaders: replay.Headers,
                     RemoveHeaders: replay.RemoveHeaders,
-                    Body: body,
+                    Body: prepared.Body,
+                    Form: prepared.Form,
                     Unconditional: replay.Unconditional),
                 sink);
         }
