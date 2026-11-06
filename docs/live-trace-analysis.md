@@ -85,9 +85,10 @@ body JSON. Reducing unnecessary service calls helps avoid throttling and reduces
 bandwidth, service load, and latency.
 
 Request-number buttons open the capture tab that the analysis read, never another tab
-with the same name. Once that tab is closed, or its sessions are deleted, cleared or
-reloaded, the analysis says that its results are historical and the buttons are
-disabled; analyze the capture again to link to its current sessions.
+with the same name. A button is disabled while that tab has no request, or more than one,
+with its number. Once that tab is closed, or its sessions are deleted, cleared or reloaded,
+the analysis says that its results are historical and the buttons are disabled; analyze
+the capture again to link to its current sessions.
 
 ## Read the Statistics report
 

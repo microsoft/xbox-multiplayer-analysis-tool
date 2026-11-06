@@ -59,26 +59,40 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         private void GoToId_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            e.CanExecute = AnalyzedSource(out _) != null;
+            e.CanExecute = ResolveSession(e.Parameter).HasValue;
             e.Handled = true;
         }
 
-        // Resolves the analyzed tab before selecting it, then selects the request with that ID.
+        // Resolves the analyzed tab and its only session with that request ID before selecting either; otherwise changes nothing.
         private void GoToEndpoint_Id(object sender, ExecutedRoutedEventArgs e)
         {
-            if (AnalyzedSource(out CaptureAppModel app) is not
-                    { CaptureController: WebServiceDeviceCaptureController controller } context ||
-                !int.TryParse(e.Parameter?.ToString(), out int requestId))
+            if (ResolveSession(e.Parameter) is not { } target)
             {
                 return;
             }
 
-            app.SelectedDeviceContext = context;
-            ProxyConnectionModel model = controller.ProxyConnections.ById(requestId);
-            if (model != null && model != controller.SelectedConnectionModel)
+            target.App.SelectedDeviceContext = target.Context;
+            if (target.Model != target.Controller.SelectedConnectionModel)
             {
-                controller.SelectedConnectionModel = model;
+                target.Controller.SelectedConnectionModel = target.Model;
             }
+        }
+
+        private (
+            CaptureAppModel App,
+            ICaptureDeviceContext Context,
+            WebServiceDeviceCaptureController Controller,
+            ProxyConnectionModel Model)? ResolveSession(object parameter)
+        {
+            if (!int.TryParse(parameter?.ToString(), out int requestId) ||
+                AnalyzedSource(out CaptureAppModel app) is not
+                    { CaptureController: WebServiceDeviceCaptureController sourceController } source ||
+                sourceController.ProxyConnections.ById(requestId) is not { } sourceModel)
+            {
+                return null;
+            }
+
+            return (app, source, sourceController, sourceModel);
         }
 
         private void GoToEndpoint_Executed(object sender, RoutedEventArgs e)
