@@ -65,7 +65,7 @@ namespace XMAT.Tests
             Assert.True(Raise("WebProxy_ReceivedWebRequestAsync",
                 new HttpRequestEventArgs { ConnectionID = number, Timestamp = DateTime.Now, Request = request, ProcessContext = client }));
             Assert.True(status == null || Respond(number, status));
-            return Controller.ProxyConnections.Single(row => row.RequestNumber == number);
+            return Controller.ProxyConnections.Last(row => row.RequestNumber == number);
         }
 
         // The response to request NUMBER, as the proxy reports it; returns whether the proxy forwards it.
