@@ -283,9 +283,10 @@ namespace XMAT.Tests
             {
                 var opened = new WebServiceDeviceCaptureController(ProcessCaptures.Device, DeviceType.LocalPC, true);
                 opened.LoadCaptureDataset(file.TableByName(WebServiceCaptureMethod.TableName).Dataset);
+                var openedTab = new TestCaptureContext(opened, ProcessCaptures.Device, readOnly: true, DeviceType.LocalPC);
                 using var imported = new LiveCaptureTab(readOnly: true);
                 imported.Add(1);
-                foreach (ICaptureDeviceContext tab in new ICaptureDeviceContext[] { new OpenedTab(opened), imported })
+                foreach (ICaptureDeviceContext tab in new ICaptureDeviceContext[] { openedTab, imported })
                 {
                     (_, DataGrid grid, RecordingDeleteDialogs dialogs) = Show(window, tab);
                     var row = grid.Items.Cast<ProxyConnectionModel>().First();
@@ -405,17 +406,6 @@ namespace XMAT.Tests
             }
 
             public Task ShowDeleteNoticeAsync(string message) { Notices.Add(message); return Task.CompletedTask; }
-        }
-
-        private sealed class OpenedTab(IDeviceCaptureController controller) : ICaptureDeviceContext
-        {
-            public DeviceType DeviceType => DeviceType.LocalPC;
-            public CaptureType CaptureType => CaptureType.WebProxy;
-            public string DeviceName => ProcessCaptures.Device;
-            public bool IsSelected { get; set; }
-            public bool IsReadOnly { get; set; } = true;
-            public System.Drawing.Color DeviceColor { get; set; }
-            public IDeviceCaptureController CaptureController { get; } = controller;
         }
     }
 }

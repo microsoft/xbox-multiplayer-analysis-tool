@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.WebSockets;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
@@ -199,6 +200,7 @@ namespace XMAT.Tests
 
         private sealed class RaceHarness : IDisposable
         {
+            private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(5);
             private readonly SqLtDatabase _database = new();
             private readonly IDataTable _table;
             private readonly AsyncOperationTracker _callbacks;
@@ -353,11 +355,27 @@ namespace XMAT.Tests
 
             public void Dispose()
             {
-                _callbacks.StopAcceptingAndWaitAsync().GetAwaiter().GetResult();
-                Task drain = _queue.CompleteAndDrainAsync();
-                Pump();
-                drain.GetAwaiter().GetResult();
-                _database.Dispose();
+                ExceptionDispatchInfo failure = null;
+                foreach (Func<Task> step in new Func<Task>[] { _callbacks.StopAcceptingAndWaitAsync, _queue.CompleteAndDrainAsync })
+                {
+                    try
+                    {
+                        WpfTestHost.Complete(step(), CompletionTimeout);
+                    }
+                    catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+                    {
+                        failure ??= ExceptionDispatchInfo.Capture(exception);
+                    }
+                }
+                try
+                {
+                    _database.Dispose();
+                }
+                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+                {
+                    failure ??= ExceptionDispatchInfo.Capture(exception);
+                }
+                failure?.Throw();
             }
 
             private IDataRecord Record(long number, long connectionId) =>
@@ -371,7 +389,7 @@ namespace XMAT.Tests
                 Task<bool> task = (Task<bool>)typeof(WebServiceDeviceCaptureController)
                     .GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)
                     .Invoke(Controller, [args, CancellationToken.None]);
-                return task.GetAwaiter().GetResult();
+                return WpfTestHost.Complete(task, CompletionTimeout);
             }
 
             private void Invoke(string method, EventArgs args) =>
