@@ -136,7 +136,8 @@ namespace XMAT.Operations.Export
                     validated.Value,
                     process,
                     request.DeviceId,
-                    snapshot.IsLive);
+                    snapshot.IsLive,
+                    cancellationToken);
                 if (!selection.Succeeded)
                 {
                     return new OperationResult<ExportCaptureResult>(
@@ -152,6 +153,7 @@ namespace XMAT.Operations.Export
                     ProcessScope = selected.ProcessScope,
                 };
                 context.Progress.Report(new OperationProgress(SelectPhase, 1));
+                cancellationToken.ThrowIfCancellationRequested();
                 if (selected.Counts.Eligible == 0)
                 {
                     return Failure(
