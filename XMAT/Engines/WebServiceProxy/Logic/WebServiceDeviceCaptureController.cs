@@ -1811,7 +1811,7 @@ namespace XMAT.WebServiceCapture
                 // Check if this is an absolute-form URI (e.g., GET http://example.com/path HTTP/1.1)
                 if (Uri.TryCreate(path, UriKind.Absolute, out Uri absoluteUri))
                 {
-                    host = absoluteUri.Host;
+                    host = HostListEntry.DestinationHost(absoluteUri);
                     path = absoluteUri.PathAndQuery;
                 }
                 // Otherwise, assume CONNECT request where Path is the "host:port" authority

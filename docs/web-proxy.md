@@ -213,7 +213,7 @@ changes, including **Clear All**, affect every capture.
 1. Right-click a host in the connections list, a timeline bar or By Host label, or
    an analysis Per Endpoint summary row or details header.
 2. Add or remove that exact host. **Remove** appears only for an existing exact entry;
-   the menu notes any wildcard that still matches.
+   the menu notes any other entry that still matches.
 3. Use **Actions > Manage Host Lists...** to open the editors even without a selected capture.
 
 The menu key acts on the focused row, not the selected row.
@@ -235,9 +235,12 @@ The menu key acts on the focused row, not the selected row.
 - Entries containing `*` or `/` are glob patterns, such as `example.com/api/*`.
   A colon in a pattern is literal, not a port filter.
 - Path patterns compare the path and query as the proxy forwards them, after its URL
-  normalization (`/public/../private/x` becomes `/private/x`). When a request names its
-  target (`GET http://host/path`), a Block entry matches either that host or the Host
-  header. Captured requests are still shown and exported as received.
+  normalization (`/public/../private/x` becomes `/private/x`).
+- A Block entry matches the Host header, or the host the proxy connects to in network
+  spelling: the target's host when a request names one (`GET http://host/path`), else
+  the Host header, with IDN names in `xn--` form and IPv4 in dotted decimal
+  (`Host: 0177.0.0.1` also matches `127.0.0.1`). Bypass entries ignore these spellings.
+  Captured requests are still shown and exported as received.
 - Write IPv6 patterns without brackets, such as `2001:db8::*` or `::1/api/*`.
   A bracketed IPv6 pattern is accepted but never matches, including one that matched
   HTTP/2 traffic in earlier versions.

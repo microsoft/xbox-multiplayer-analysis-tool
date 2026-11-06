@@ -17,6 +17,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.Extensions.Hosting;
 using XMAT.Operations.Processes;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -341,6 +342,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
                 var ub = new UriBuilder(request.Scheme, request.Host, request.Port, path, query);
                 uri = ub.Uri;
+            }
+            if (!HostListEntry.IsSupportedTargetScheme(uri.Scheme))
+            {
+                _logger.Log(connectionID, LogLevel.WARN, "Client request used an unsupported target scheme.");
+                return;
             }
 
             if (WebSocketProxy.IsWebSocketUpgrade(request))

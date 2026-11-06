@@ -42,7 +42,7 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return false;
 
-            return _patterns.Matches(HostListEntry.MatchCandidates(host));
+            return _patterns.Matches(HostListEntry.LiteralHostCandidates(host));
         }
 
         /// <summary>
@@ -53,7 +53,7 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return Array.Empty<string>();
 
-            return _patterns.MatchingPatterns(HostListEntry.MatchCandidates(host));
+            return _patterns.MatchingPatterns(HostListEntry.LiteralHostCandidates(host));
         }
     }
 }

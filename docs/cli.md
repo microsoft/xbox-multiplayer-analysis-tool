@@ -122,8 +122,10 @@ xmat --version
   `--exclude-host` take a host or host/path pattern (as the Block and Bypass lists do, the default `--host-mode glob`)
   or, with `--host-mode exact`, the host exactly as the capture list shows it; `--status` and `--method` take exact
   values. A glob compares the host and, for a pattern with a path, the path and query as the proxy forwards them
-  (canonical: `/a/../b` is `/b`); for an absolute target (`GET http://host/path`), either the captured Host or the
-  target's host can match. Exported rows keep their captured values. Each of these is repeatable, and a session must
+  (canonical: `/a/../b` is `/b`). Either the captured Host or the host the proxy connects to can match, the latter in
+  its network spelling: the target's host for an absolute target (`GET http://host/path`), otherwise the Host, with
+  IDN names in `xn--` form and IPv4 in dotted decimal (`0177.0.0.1` also matches `127.0.0.1`). Exact mode ignores
+  these spellings, and exported rows keep their captured values. Each of these is repeatable, and a session must
   match every option that was given and no exclusion; glob
   hosts, like process selectors, are limited to 64 values of 260 characters each, while exact hosts, statuses and
   methods are literal sets of any size. An empty `--status=`, `--method=` or exact `--host=` selects the sessions
