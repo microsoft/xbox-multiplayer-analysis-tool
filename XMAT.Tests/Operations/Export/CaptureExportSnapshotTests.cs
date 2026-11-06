@@ -109,25 +109,33 @@ namespace XMAT.Tests.Operations.Export
         {
             using var database = new SqLtDatabase();
             database.Initialize();
-            IDataTable table = database.CreateTable(
+            var probe = new ExportReadProbe(database.CreateTable(
                 WebServiceCaptureMethod.TableName,
-                WebProxyCaptureSchema.CreateFields());
+                WebProxyCaptureSchema.CreateFields()));
+            IDataTable table = probe;
             var controller = Controller(table);
-            var batches = new List<(int Rows, long Bytes)>();
-            controller.ExportReadBatchObserver = (rows, bytes) => batches.Add((rows, bytes));
             _ = Add(controller, table, 1, complete: true, responseBodyBytes: 24 * 1024 * 1024 + 1);
-            for (var index = 2; index <= 65; index++)
+            for (var index = 2; index <= 66; index++)
+            {
+                _ = Add(controller, table, index, complete: true);
+            }
+            for (var index = 67; index <= 130; index++)
             {
                 _ = Add(controller, table, index, complete: true, responseBodyBytes: 256 * 1024);
             }
-            using ICaptureExportSnapshot snapshot = new RelabeledSnapshot(
+            probe.Reset();
+            using var snapshot = new RelabeledSnapshot(
                 controller.CreateExportSnapshot("d1"),
-                "xmatcap");
+                "xmatcap",
+                probe);
+            Assert.All(probe.Reads, read => Assert.True(read.IsMetadata));
+            Assert.Contains(probe.Reads, read => read.Route == ExportReadRoute.DataRecordsWhen);
             CaptureExportChunk first = snapshot.ReadChunk(
                 snapshot.Sessions.Select(session => session.Key).ToArray(),
                 CancellationToken.None);
             Assert.Single(first.ConsumedKeys);
             Assert.Single(first.Rows);
+            snapshot.Reads.Clear();
             var writer = new RecordingExportWriter();
             var operation = new ExportCaptureSessionsOperation
             {
@@ -151,16 +159,35 @@ namespace XMAT.Tests.Operations.Export
 
             Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
             Assert.Equal("xmatcap", snapshot.InputKind);
-            Assert.Equal(65, writer.Rows.Count);
-            Assert.NotEmpty(batches);
-            Assert.Contains(batches, batch =>
-                batch.Rows == 1 && batch.Bytes > AnalysisLimits.Default.MaxEntryBytes);
-            Assert.All(batches.Where(batch => batch.Rows > 1), batch =>
+            Assert.Equal(130, writer.Rows.Count);
+            Assert.All(snapshot.Reads, AssertBoundedPayloadRead);
+            Assert.Contains(snapshot.Reads, read =>
+                read.Chunk.Rows.Count == 1 &&
+                ReadBytes(read.Chunk) > AnalysisLimits.Default.MaxEntryBytes);
+            Assert.Contains(snapshot.Reads, read =>
+                read.Chunk.Rows.Count == 64 &&
+                read.Reads.Sum(request => request.Materialized) == 64);
+            Assert.All(snapshot.Reads.Where(read => read.Chunk.Rows.Count > 1), read =>
             {
-                Assert.InRange(batch.Rows, 1, 64);
-                Assert.InRange(batch.Bytes, 1, 8 * 1024 * 1024);
+                Assert.InRange(read.Chunk.Rows.Count, 1, 64);
+                Assert.InRange(ReadBytes(read.Chunk), 1, 8 * 1024 * 1024);
             });
         }
+
+        private static void AssertBoundedPayloadRead(ObservedRead read)
+        {
+            Assert.All(read.Reads, request =>
+            {
+                Assert.False(request.IsMetadata);
+                Assert.Equal(ExportReadRoute.DataRecordsFromLimited, request.Route);
+                Assert.Equal((int?)1, request.Limit);
+            });
+            int materialized = read.Reads.Sum(request => request.Materialized);
+            Assert.InRange(materialized, read.Chunk.Rows.Count, read.Chunk.Rows.Count + 1);
+        }
+
+        private static long ReadBytes(CaptureExportChunk chunk) =>
+            chunk.Rows.Sum(row => CaptureRawValues.Measure(row.Values));
 
         private static WebServiceDeviceCaptureController Controller(IDataTable table)
         {
@@ -202,17 +229,24 @@ namespace XMAT.Tests.Operations.Export
             long rowId = table.AddRow(
                 WebProxyCaptureSchema.Fields.Select(field => values[field.Name]).ToArray());
             IDataRecord record = Assert.Single(
-                table.Dataset.DataRecords,
+                table.Dataset.DataRecordsFrom(rowId, 1),
                 candidate => candidate.RowId == rowId);
             ProxyConnectionModel model = controller.ProxyConnections.AddFromDataRecord(record, false, Key(rowId));
             model.SetClientProcess(Process());
             return model;
         }
 
+        private sealed record ObservedRead(
+            CaptureExportChunk Chunk,
+            IReadOnlyList<ExportReadRequest> Reads);
+
         private sealed class RelabeledSnapshot(
             ICaptureExportSnapshot inner,
-            string inputKind) : ICaptureExportSnapshot
+            string inputKind,
+            ExportReadProbe probe) : ICaptureExportSnapshot
         {
+            internal List<ObservedRead> Reads { get; } = new();
+
             public IReadOnlyList<SqLtSchemaColumn> CaptureFields => inner.CaptureFields;
             public IReadOnlyList<SqLtSchemaColumn> DeviceFields => inner.DeviceFields;
             public IReadOnlyDictionary<string, RawExportRow> DeviceDescriptors => inner.DeviceDescriptors;
@@ -223,8 +257,14 @@ namespace XMAT.Tests.Operations.Export
             public string InputSha256 => inner.InputSha256;
             public CaptureExportChunk ReadChunk(
                 IReadOnlyList<CaptureRowKey> keys,
-                CancellationToken cancellationToken) =>
-                inner.ReadChunk(keys, cancellationToken);
+                CancellationToken cancellationToken)
+            {
+                probe.Reset();
+                CaptureExportChunk chunk = inner.ReadChunk(keys, cancellationToken);
+                Reads.Add(new ObservedRead(chunk, probe.Reads));
+                return chunk;
+            }
+
             public void ValidateDestination(string path) => inner.ValidateDestination(path);
             public void Dispose() => inner.Dispose();
         }
