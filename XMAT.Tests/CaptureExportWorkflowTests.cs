@@ -407,17 +407,13 @@ namespace XMAT.Tests
 
             public async ValueTask DisposeAsync()
             {
-                try
+                using (_directory)
+                using (_database)
                 {
                     while (_app.CaptureDeviceContexts.Count != 0)
                     {
                         await _app.RemoveDeviceContextAsync(_app.CaptureDeviceContexts[^1]);
                     }
-                }
-                finally
-                {
-                    _database.Dispose();
-                    _directory.Dispose();
                 }
             }
         }
