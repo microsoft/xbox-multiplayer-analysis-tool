@@ -217,13 +217,9 @@ namespace XMAT.Operations.Export
             var processSessions = candidates
                 .Select(session => new CaptureSessionRef(session.Key, session.DeviceId, session.Process))
                 .ToList();
-            OperationResult<FilterCaptureSessionsResult> processResult = new FilterCaptureSessionsOperation()
-                .ExecuteAsync(
-                    new FilterCaptureSessionsRequest(processSessions, canonical.Process),
-                    OperationContext.None,
-                    CancellationToken.None)
-                .GetAwaiter()
-                .GetResult();
+            OperationResult<FilterCaptureSessionsResult> processResult = FilterCaptureSessionsOperation.Select(
+                new FilterCaptureSessionsRequest(processSessions, canonical.Process),
+                CancellationToken.None);
             if (!processResult.Succeeded)
             {
                 return new OperationResult<CaptureSessionSelection>(

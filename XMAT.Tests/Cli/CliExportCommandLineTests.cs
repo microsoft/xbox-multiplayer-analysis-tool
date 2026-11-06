@@ -6,6 +6,7 @@ using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using XMAT.Cli;
+using XMAT.Operations;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
@@ -97,7 +98,8 @@ namespace XMAT.Tests.Cli
             string json = Encoding.UTF8.GetString(CliJson.Serialize(CliReport.ForParseError("run", parsed)));
 
             Assert.Equal(code, parsed.Error?.Code);
-            Assert.DoesNotContain("pfcanary", parsed.Error.Message + json, StringComparison.Ordinal);
+            OperationDiagnostic error = Assert.IsType<OperationDiagnostic>(parsed.Error);
+            Assert.DoesNotContain("pfcanary", error.Message + json, StringComparison.Ordinal);
         }
 
         // xmat export never publishes where it cannot restrict access to the file: exit 6, export.output.unprotected, and

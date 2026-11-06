@@ -240,8 +240,8 @@ namespace XMAT.WebServiceCapture
                 : null;
             var frozen = new Dictionary<CaptureRowKey, FrozenExportRow>();
             var sessions = new List<CaptureExportSession>();
-            IDataset freezeDataset = ownsDataset
-                ? _dataTable.Subset(
+            IDataset freezeDataset = ownsDataset && _dataTable is { } table
+                ? table.Subset(
                     WebServiceCaptureMethod.FieldKey_DeviceName,
                     WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
                     WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders)

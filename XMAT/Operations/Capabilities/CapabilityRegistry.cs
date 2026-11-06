@@ -166,9 +166,9 @@ namespace XMAT.Operations.Capabilities
                     Command("XMAT.NetworkTrace.NetworkTraceCommands.StartStopCapture"),
                     EnumValue(CaptureTypeEnum, "NetworkTrace"),
                 }),
-            // Hides sessions from view and selects the sessions to analyze; it never changes what the proxy forwards or
-            // records. The editor's buttons, the proxy commands that the row and timeline menus run, and the analyzer
-            // window's opt-in all use the same selection.
+            // Hides sessions from view and selects the sessions to analyze or export; it never changes what the proxy
+            // forwards or records. The editor's buttons, the proxy commands that the row and timeline menus run, and the
+            // analyzer window's opt-in all use the same selection.
             Capability.Supported(
                 "capture.process-filter", "Filter captured sessions by client process", "S9",
                 cli: "analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...",
@@ -183,7 +183,11 @@ namespace XMAT.Operations.Capabilities
                     Command(ProxyCommandsPrefix + "ShowAllProcesses"),
                     Command(AppCommandsPrefix + "AnalyzeCaptures"),
                     Window("XMAT.CaptureAnalyzerWindow"),
-                }),
+                }) with
+            {
+                AdditionalCliRoutes =
+                    new[] { "export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]..." },
+            },
             Capability.Planned(
                 "capture.scripts", "Run capture scripts", "S8a", Owner,
                 gui: new[]

@@ -147,10 +147,9 @@ namespace XMAT.Tests.Cli
         {
             foreach (Capability capability in CapabilityRegistry.All.Where(item => item.Status == CapabilityStatus.Supported))
             {
-                string command = CliCatalog.CommandOf(capability.CliRoute);
-                Assert.True(
+                Assert.All(capability.CliRoutes.Select(CliCatalog.CommandOf), command => Assert.True(
                     CliCatalog.IsImplemented(command),
-                    $"{capability.Id} is Supported, but xmat has no {command} command. Add it under XMAT/Cli.");
+                    $"{capability.Id} is Supported, but xmat has no {command} command. Add it under XMAT/Cli."));
             }
         }
 
@@ -174,9 +173,11 @@ namespace XMAT.Tests.Cli
             Assert.Equal(
                 new[] { CliCommands.Analyze, CliCommands.Doctor, CliCommands.Export },
                 report.Commands.Select(command => command.Name));
-            foreach (Capability capability in CapabilityRegistry.All.Where(item => item.Status == CapabilityStatus.Supported))
+            foreach (string route in CapabilityRegistry.All
+                .Where(item => item.Status == CapabilityStatus.Supported)
+                .SelectMany(item => item.CliRoutes))
             {
-                Assert.Contains("  xmat " + capability.CliRoute, report.HumanLines);
+                Assert.Contains("  xmat " + route, report.HumanLines);
             }
         }
 

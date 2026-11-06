@@ -160,6 +160,31 @@ namespace XMAT.Cli
             }
         }
 
+        // Reports an operation's diagnostics in their order: warnings as warnings; errors, and on failure every other
+        // diagnostic, as errors. Maps the outcome to the exit code and, when a failure gave no error, adds the command's
+        // own fallback error.
+        internal void ApplyOutcome<T>(OperationResult<T> result, string fallbackCode, string fallbackMessage)
+        {
+            bool failed = !result.Succeeded;
+            foreach (OperationDiagnostic diagnostic in result.Diagnostics)
+            {
+                if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
+                {
+                    Warnings.Add(diagnostic);
+                }
+                else if (diagnostic.Severity == OperationDiagnosticSeverity.Error || failed)
+                {
+                    Errors.Add(diagnostic);
+                }
+            }
+
+            SetExitCode(CliExitCodes.FromOutcome(result.Outcome));
+            if (failed && Errors.Count == 0)
+            {
+                Errors.Add(new OperationDiagnostic(fallbackCode, OperationDiagnosticSeverity.Error, fallbackMessage));
+            }
+        }
+
         internal static CliReport ForParseError(string runId, CliParseResult parsed)
         {
             var report = new CliReport(parsed.Command, runId) { ExitCode = CliExitCodes.Usage };
