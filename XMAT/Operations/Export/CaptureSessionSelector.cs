@@ -354,7 +354,7 @@ namespace XMAT.Operations.Export
 
             private static bool MatchesAny(
                 Regex[] patterns,
-                (string Host, string HostAndPath) candidates) =>
+                HostMatchCandidates candidates) =>
                 patterns != null && patterns.Any(pattern => HostListEntry.Matches(pattern, candidates));
         }
 

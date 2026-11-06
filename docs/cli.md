@@ -121,7 +121,10 @@ xmat --version
   and `--exclude-process` work as for `analyze`; `--host` and
   `--exclude-host` take a host or host/path pattern (as the Block and Bypass lists do, the default `--host-mode glob`)
   or, with `--host-mode exact`, the host exactly as the capture list shows it; `--status` and `--method` take exact
-  values. Each of these is repeatable, and a session must match every option that was given and no exclusion; glob
+  values. A glob compares the host and, for a pattern with a path, the path and query as the proxy forwards them
+  (canonical: `/a/../b` is `/b`); for an absolute target (`GET http://host/path`), either the captured Host or the
+  target's host can match. Exported rows keep their captured values. Each of these is repeatable, and a session must
+  match every option that was given and no exclusion; glob
   hosts, like process selectors, are limited to 64 values of 260 characters each, while exact hosts, statuses and
   methods are literal sets of any size. An empty `--status=`, `--method=` or exact `--host=` selects the sessions
   shown without one, and `--match-none` selects nothing, so the JSON shows the counts without writing a file. xmat

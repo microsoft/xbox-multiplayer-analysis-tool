@@ -73,11 +73,11 @@ namespace XMAT.WebServiceCapture.Models
             }
         }
 
-        internal bool Matches((string Host, string HostAndPath) candidates) =>
+        internal bool Matches(HostMatchCandidates candidates) =>
             Snapshot().Select(GetRegex)
                 .Any(regex => HostListEntry.Matches(regex, candidates));
 
-        internal IReadOnlyList<string> MatchingPatterns((string Host, string HostAndPath) candidates) =>
+        internal IReadOnlyList<string> MatchingPatterns(HostMatchCandidates candidates) =>
             Snapshot().Where(pattern => HostListEntry.Matches(GetRegex(pattern), candidates))
                 .ToList();
 
