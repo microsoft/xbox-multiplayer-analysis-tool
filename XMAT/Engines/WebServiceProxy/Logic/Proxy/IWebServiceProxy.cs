@@ -36,6 +36,10 @@ namespace XMAT.WebServiceCapture.Proxy
 
         Task StopProxyAsync(IProgress<WebProxyStopProgress> progress = null);
 
+        Task RecheckSslConnectionsAsync(
+            Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> policy,
+            CancellationToken cancellationToken = default);
+
         void Reset();
     }
 }

@@ -35,6 +35,8 @@ namespace XMAT.Scripting
         private string _compilationMessage;
         private long _activationVersion;
 
+        internal Func<Func<bool>, Task> EnabledAsync { get; set; }
+
         public string DisplayName { get; private set; }
         public string Description { get; private set; }
         public string Filename { get => _filename; set { _filename = value; RaisePropertyChange(); } }
@@ -235,6 +237,16 @@ namespace XMAT.Scripting
             RaisePropertyChange(nameof(IsCompiling));
             RaisePropertyChange(nameof(IsEnabled));
             RaiseCompilationStatusChanged();
+            if (result == ScriptActivationResult.Enabled && EnabledAsync != null)
+            {
+                await EnabledAsync(() =>
+                {
+                    lock (_syncRoot)
+                    {
+                        return _isEnabled && activationVersion == _activationVersion;
+                    }
+                });
+            }
             return result;
         }
 

@@ -874,6 +874,10 @@ namespace XMAT.Tests
             public Task StopProxyAsync(IProgress<WebProxyStopProgress> progress = null)
                 => _stopThrows ? Task.FromException(new InvalidOperationException("cleanup failed")) : Task.CompletedTask;
 
+            public Task RecheckSslConnectionsAsync(
+                Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> policy,
+                CancellationToken cancellationToken = default) => Task.CompletedTask;
+
             public void Reset()
             {
             }

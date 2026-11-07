@@ -84,6 +84,12 @@ namespace XMAT.WebServiceCapture.Proxy
         internal Exception FaultException { get; private set; }
 
         private readonly ConcurrentDictionary<int, byte> _openConnections = new();
+        private readonly ConcurrentDictionary<Guid, ActiveSslConnection> _sslConnections = new();
+
+        private sealed record ActiveSslConnection(
+            SslConnectionRequestEventArgs Request,
+            Action Abort,
+            CancellationToken Cancellation);
 
         private readonly Logger _logger = new();
         private static bool _isInitialized = false;
@@ -696,6 +702,99 @@ namespace XMAT.WebServiceCapture.Proxy
             return args.AcceptConnection &&
                 _cts?.IsCancellationRequested != true &&
                 !cancellationToken.IsCancellationRequested;
+        }
+
+        internal Guid TrackSslConnection(
+            int connectionID,
+            string clientIP,
+            ClientRequest request,
+            Action abort,
+            CancellationToken cancellationToken)
+        {
+            var args = new SslConnectionRequestEventArgs
+            {
+                ConnectionID = connectionID,
+                Timestamp = DateTime.Now,
+                ClientIP = clientIP,
+                Request = CopyConnectRequest(request),
+                AcceptConnection = true
+            };
+            Guid registration = Guid.NewGuid();
+            if (!_sslConnections.TryAdd(
+                registration,
+                new ActiveSslConnection(args, abort, cancellationToken)))
+            {
+                throw new InvalidOperationException("The SSL connection registration already exists.");
+            }
+            return registration;
+        }
+
+        internal void UntrackSslConnection(Guid registration) =>
+            _sslConnections.TryRemove(registration, out _);
+
+        public Task RecheckSslConnectionsAsync(
+            Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> policy,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(policy);
+            // Registration precedes the initial policy check. A connection is either in
+            // this snapshot or checks the newly enabled script as a new CONNECT.
+            return Parallel.ForEachAsync(
+                _sslConnections.ToArray(),
+                cancellationToken,
+                async (entry, token) =>
+                {
+                    ActiveSslConnection connection = entry.Value;
+                    if (connection.Cancellation.IsCancellationRequested)
+                        return;
+
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                        token, connection.Cancellation);
+                    var args = new SslConnectionRequestEventArgs
+                    {
+                        ConnectionID = connection.Request.ConnectionID,
+                        Timestamp = connection.Request.Timestamp,
+                        ClientIP = connection.Request.ClientIP,
+                        Request = CopyConnectRequest(connection.Request.Request),
+                        AcceptConnection = true
+                    };
+                    bool accepted = await policy(args, linked.Token).ConfigureAwait(false);
+                    if (!accepted && !linked.IsCancellationRequested &&
+                        _sslConnections.TryGetValue(entry.Key, out var current) &&
+                        ReferenceEquals(current, connection))
+                    {
+                        _logger.Log(connection.Request.ConnectionID, LogLevel.INFO,
+                            "Disconnecting active SSL connection rejected by the enabled script.");
+                        connection.Abort();
+                    }
+                });
+        }
+
+        private static ClientRequest CopyConnectRequest(ClientRequest request)
+        {
+            var copy = new ClientRequest
+            {
+                RequestNumber = request.RequestNumber,
+                Version = request.Version,
+                StreamId = request.StreamId,
+                Scheme = request.Scheme,
+                Host = request.Host,
+                Port = request.Port,
+                Method = request.Method,
+                Path = request.Path,
+                BodyBytes = request.BodyBytes == null ? null : (byte[])request.BodyBytes.Clone()
+            };
+            foreach (KeyValuePair<string, IEnumerable<string>> header in request.Headers)
+            {
+                foreach (string value in header.Value)
+                    copy.Headers.Add(header.Key, value);
+            }
+            foreach (KeyValuePair<string, IEnumerable<string>> header in request.ContentHeaders)
+            {
+                foreach (string value in header.Value)
+                    copy.ContentHeaders.Add(header.Key, value);
+            }
+            return copy;
         }
 
         internal void RaiseCompletedSslConnectionRequest(int connectionID, ClientRequest request)
