@@ -151,6 +151,8 @@ Captures HTTP/HTTPS traffic by acting as a forward proxy. Supports Xbox developm
 
 **Export:** File > Export, File > Export Sanitized, the capture list's Export Selected and Export Visible (`CaptureExportWorkflow`) and `xmat export` are adapters of one `ExportCaptureSessionsOperation`. It reads a frozen snapshot of the capture tab or, for `xmat export`, the input file through `CaptureInputReader`, the reader that analysis uses; selects the sessions with `CaptureSessionSelector` (process, host, status and method); stages the XMATCAP, SAZ or sanitized SAZ file next to the destination with private access unless a GUI user explicitly accepts storage without Windows permissions; and publishes it, with its SHA-256, by one atomic move. Failure or cancellation before publication leaves no output; staging cleanup can fail after a successful publication. `xmat export` never replaces an existing file.
 
+**Delete:** only the GUI deletes sessions: `capture.delete-sessions` is the capability registry's one policy exception, with no command line or operation. The capture list's Delete and Shift+Delete freeze the exact visible sessions before the confirmation; `CaptureAppModel.TryDeleteSessions` then runs the deletion as a capture data operation, which never overlaps saving, exporting, importing or analysis, and read-only tabs cannot delete. `WebServiceDeviceCaptureController.DeleteSessions` removes only frozen sessions that are still current and visible, by row id through `IExactCaptureRowDelete`, from the writable capture database, which enables SQLite `secure_delete`. It then changes the capture's source stamp and retires the deleted row keys in `CaptureRowRegistry`, so the proxy still forwards a deleted in-flight session but its later callbacks record nothing.
+
 ### NetworkTrace Engine
 
 Captures low-level network packets from Windows and Xbox devices using ETW (Event Tracing for Windows).
@@ -213,6 +215,8 @@ JSON ──► WebView2 HTML rendering   # Displayed in UI
 `XR049Rule` checks JSON objects for a top-level `activity` property, skipping empty request bodies and non-object JSON values. Malformed JSON is recorded as a per-call warning in the exported rule results, and scanning continues with subsequent calls.
 
 **Reports:** `PerEndpointReport`, `CallReport`, `StatsReport`, `CertWarningReport` — rendered as HTML via WebView2.
+
+**Session links:** an analysis keeps the `CaptureSourceStamp` of the capture tab it read. Its session links open only the tab whose current stamp matches (`CaptureAppModel.ResolveCaptureSource`), never one with the same name; deleting, clearing or reloading sessions changes the stamp and closing the tab removes it, so the analysis becomes historical and its links are disabled.
 
 ## Data Flow
 

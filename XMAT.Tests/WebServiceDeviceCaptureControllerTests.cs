@@ -1378,7 +1378,8 @@ namespace XMAT.Tests
                             ProcessContext = process,
                         });
                 IDataRecord row = Assert.Single(table.Dataset.DataRecords);
-                bool keyed = registry.TryGet(process, request.RequestNumber, out CaptureRowKey key);
+                bool keyed = registry.Lookup(process, request.RequestNumber, out CaptureRowKey key) ==
+                    CaptureRowLookup.Current;
                 ClientProcessInfo recorded = ClientProcessRecordCodec.Read(row);
 
                 Assert.True(

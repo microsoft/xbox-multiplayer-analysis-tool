@@ -111,6 +111,101 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void Retire_IsAuthoritativeAcrossReusedRowIdsAndLateResolution()
+        {
+            var applied = new List<(CaptureRowKey Key, ClientProcessInfo Process)>();
+            var registry = Registry(applied);
+            Guid run = Guid.NewGuid();
+            ClientProcessContext connection = Connection(run, 1009);
+            registry.StartRun(run);
+            CaptureRowKey deleted = Register(registry, connection, requestToken: 15, rowId: 1);
+            Assert.True(registry.TryGetOrCreateStream(connection, requestToken: 15, out CaptureRowKey stream));
+            Assert.Equal(deleted, stream);
+            var olderTwin = new CaptureRowKey(
+                deleted.SourceId,
+                deleted.Generation - 1,
+                deleted.RowId,
+                deleted.Incarnation);
+            var foreignTwin = new CaptureRowKey(
+                Guid.NewGuid(),
+                deleted.Generation,
+                deleted.RowId,
+                deleted.Incarnation);
+
+            registry.Retire([deleted, olderTwin, foreignTwin]);
+            CaptureRowKey survivor = Register(registry, connection, requestToken: 16, rowId: 1);
+            registry.Resolve(connection, Local("late.exe", 109));
+            var deletedWrite = false;
+            var survivorWrite = false;
+
+            Assert.Equal(CaptureRowLookup.Retired, registry.Lookup(deleted));
+            Assert.Equal(CaptureRowLookup.Current, registry.Lookup(survivor));
+            Assert.Equal(CaptureRowLookup.Missing, registry.Lookup(olderTwin));
+            Assert.Equal(CaptureRowLookup.Missing, registry.Lookup(foreignTwin));
+            Assert.Equal(
+                CaptureRowLookup.Retired,
+                registry.Lookup(connection, 15, out CaptureRowKey retiredRequest));
+            Assert.Equal(deleted, retiredRequest);
+            Assert.False(registry.TryGetOrCreateStream(connection, 15, out _));
+            Assert.False(registry.TryUpdate(run, deleted, () => deletedWrite = true));
+            Assert.True(registry.TryUpdate(run, survivor, () => survivorWrite = true));
+            Assert.False(deletedWrite);
+            Assert.True(survivorWrite);
+            Assert.DoesNotContain(applied, item => item.Key == deleted);
+            Assert.Contains(applied, item => item.Key == survivor);
+
+            registry.CloseStream(connection, 15);
+            Assert.False(registry.TryGetOrCreateStream(connection, 15, out _));
+            Assert.True(registry.TryGetOrCreateStream(connection, 16, out CaptureRowKey survivingStream));
+            Assert.Equal(survivor, survivingStream);
+            registry.CloseConnection(connection);
+            Assert.Equal(CaptureRowLookup.Retired, registry.Lookup(connection, 15, out _));
+            registry.FinishRun(run);
+
+            Assert.Equal(CaptureRowLookup.Missing, registry.Lookup(deleted));
+        }
+
+        [Fact]
+        public void Retire_RequestVisitsScaleWithVictimsAndPreserveUnrelatedRows()
+        {
+            var applied = new List<(CaptureRowKey Key, ClientProcessInfo Process)>();
+            var registry = Registry(applied);
+            Guid run = Guid.NewGuid();
+            ClientProcessContext first = Connection(run, 1020);
+            ClientProcessContext second = Connection(run, 1021);
+            registry.StartRun(run);
+            var firstKeys = new List<CaptureRowKey>();
+            var secondKeys = new List<CaptureRowKey>();
+            for (var index = 0; index < 1000; index++)
+            {
+                firstKeys.Add(Register(registry, first, index + 1, index + 1));
+                secondKeys.Add(Register(registry, second, index + 1, index + 1001));
+            }
+            CaptureRowKey[] retired = firstKeys.Take(5).Concat(secondKeys.Take(5)).ToArray();
+            CaptureRowKey firstUnaffected = firstKeys[^1];
+            CaptureRowKey secondUnaffected = secondKeys[^1];
+            var visits = 0;
+            registry.VisitObserver = (kind, count) =>
+            {
+                if (kind == "requests")
+                {
+                    visits += count;
+                }
+            };
+
+            registry.Retire(retired);
+            first.Publish(Local("first.exe", 1020));
+            second.Publish(Local("second.exe", 1021));
+
+            Assert.All(retired, key => Assert.Equal(CaptureRowLookup.Retired, registry.Lookup(key)));
+            Assert.Equal(CaptureRowLookup.Current, registry.Lookup(firstUnaffected));
+            Assert.Equal(CaptureRowLookup.Current, registry.Lookup(secondUnaffected));
+            Assert.Contains(applied, item => item.Key == firstUnaffected && item.Process.Name == "first.exe");
+            Assert.Contains(applied, item => item.Key == secondUnaffected && item.Process.Name == "second.exe");
+            Assert.Equal(retired.Length, visits);
+        }
+
+        [Fact]
         public void Register_SeededIdentityDoesNotReapplyTheValueAlreadyInserted()
         {
             var applied = new List<(CaptureRowKey Key, ClientProcessInfo Process)>();
@@ -153,6 +248,48 @@ namespace XMAT.Tests
 
             Assert.Equal(ClientProcessInfo.NotRecorded, catchUp);
             Assert.Equal((key, resolved), Assert.Single(applied));
+        }
+
+        [Fact]
+        public void RegisterFallback_ReusesDuplicateRequestWithoutSubscribingForResolution()
+        {
+            var applied = new List<(CaptureRowKey Key, ClientProcessInfo Process)>();
+            var registry = Registry(applied);
+            Guid run = Guid.NewGuid();
+            ClientProcessContext connection = Connection(run, 1018);
+            registry.StartRun(run);
+
+            CaptureRowKey first = registry.RegisterFallback(
+                connection,
+                requestToken: 27,
+                rowId: 58,
+                ClientProcessInfo.NotRecorded,
+                out ClientProcessInfo firstCatchUp);
+            CaptureRowKey duplicate = registry.RegisterFallback(
+                connection,
+                requestToken: 27,
+                rowId: 59,
+                ClientProcessInfo.NotRecorded,
+                out ClientProcessInfo duplicateCatchUp);
+            ClientProcessInfo resolved = Local("fallback.exe", 118);
+
+            connection.Publish(resolved);
+
+            Assert.Equal(first, duplicate);
+            Assert.Equal(ClientProcessInfo.NotRecorded, firstCatchUp);
+            Assert.Equal(ClientProcessInfo.NotRecorded, duplicateCatchUp);
+            Assert.Equal(
+                CaptureRowLookup.Current,
+                registry.Lookup(connection, 27, out CaptureRowKey requestKey));
+            Assert.Equal(first, requestKey);
+            Assert.Equal(
+                CaptureRowLookup.Missing,
+                registry.Lookup(first with { RowId = 59, Incarnation = first.Incarnation + 1 }));
+            Assert.Empty(applied);
+
+            registry.ApplyFallback(first, resolved);
+
+            Assert.Equal((first, resolved), Assert.Single(applied));
         }
 
         [Fact]
@@ -233,6 +370,9 @@ namespace XMAT.Tests
             ClientProcessContext connection = Connection(run, 1015);
             registry.StartRun(run);
             CaptureRowKey old = Register(registry, connection, requestToken: 25, rowId: 55);
+            CaptureRowKey deleted = Register(registry, connection, requestToken: 26, rowId: 56);
+            Assert.True(registry.TryGetOrCreateStream(connection, 26, out _));
+            registry.Retire([deleted]);
 
             registry.AdvanceGeneration();
             bool associated = registry.TryGetOrCreateStream(connection, 25, out CaptureRowKey current);
@@ -242,6 +382,7 @@ namespace XMAT.Tests
             Assert.NotEqual(default, current);
             Assert.NotEqual(old.Generation, current.Generation);
             Assert.True(registry.IsCurrent(current));
+            Assert.False(registry.TryGetOrCreateStream(connection, 26, out _));
         }
 
         [Fact]
@@ -285,7 +426,7 @@ namespace XMAT.Tests
                 1017,
                 57);
 
-            ForceCollection();
+            GcTestSupport.ForceCollection();
 
             Assert.True(registry.IsCurrent(key));
             Assert.False(reference.TryGetTarget(out _));
@@ -309,7 +450,7 @@ namespace XMAT.Tests
                 registry.AdvanceGeneration();
             }
 
-            ForceCollection();
+            GcTestSupport.ForceCollection();
 
             Assert.All(references, reference => Assert.False(reference.TryGetTarget(out _)));
         }
@@ -505,11 +646,5 @@ namespace XMAT.Tests
             return (reference, key);
         }
 
-        private static void ForceCollection()
-        {
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-        }
     }
 }

@@ -30,7 +30,8 @@ Every capability that is not purely presentation must also work without the GUI,
   explain why in the pull request.
 - Classify every new GUI entry point in `XMAT/Operations/Capabilities/CapabilityRegistry.cs`: routed commands, XAML
   `Command`, `Click` and `CommandBinding` entries, dialog windows, device and capture types, script events, analyzers
-  and preferences. `GuiOnly` is only for presentation, such as layout, themes and navigation inside a view.
+  and preferences. `GuiOnly` is only for presentation, such as layout, themes and navigation inside a view; the rare
+  capability that stays in the GUI by decision is a `PolicyException` (see [Parity Exceptions](#parity-exceptions)).
 - Operations never show dialogs or use `System.Windows.Application.Current`, a `Dispatcher`, `CommandManager` or
   `PublicUtilities.SafeInvoke`. They report through `OperationResult`, `OperationContext.Progress` and diagnostics,
   and the adapters decide how to present them. Code under `XMAT.Operations` and `XMAT.Cli` never declares WPF types
@@ -79,9 +80,9 @@ Analysis operations accept files through `AnalysisInput.FromFile(...)` and in-ap
 adapter should use the same input seam rather than adding another analysis path.
 
 Add or update capabilities in `XMAT/Operations/Capabilities/CapabilityRegistry.cs`. The current statuses are
-`Supported`, `Planned` and `GuiOnly`, and the tests in `XMAT.Tests/HeadlessParity` fail when GUI commands or other entry
-points are unclassified. `Supported` currently describes command-line availability. A different surface records its
-own availability instead of treating command-line support as that surface's contract.
+`Supported`, `Planned`, `GuiOnly` and `PolicyException`, and the tests in `XMAT.Tests/HeadlessParity` fail when GUI
+commands or other entry points are unclassified. `Supported` currently describes command-line availability. A
+different surface records its own availability instead of treating command-line support as that surface's contract.
 
 For a companion console executable, follow the existing `xmat.exe` pattern: keep the host project small, reference the
 shared XMAT assembly, add the project to the solution, copy its executable and runtime files beside the GUI during
@@ -105,6 +106,11 @@ packaging, and run a smoke command from the assembled artifact in `.github/workf
   data, or changes devices or traffic, is not `GuiOnly`.
 - `Planned` needs the slice and owner that will deliver the capability, and the pull request explains why it is not
   headless yet.
+- `PolicyException` keeps a capability in the GUI by a reviewed decision, not for presentation: deleting sessions from
+  a capture (`capture.delete-sessions`) stays a confirmed, irreversible GUI action, and headless runs export the
+  sessions to keep instead. The entry needs its slice, an owner, a reason that starts with `Policy exception:` and its
+  GUI entry points, and has no command line or operation. The tests accept only the capabilities on their reviewed
+  list; adding one needs a reviewer's explicit approval and the reason in the pull request.
 - `ForbiddenCallBaseline.txt` only shrinks. Adding a line to it, or a reviewed exception to the headless bans in
   `XMAT.Tests/HeadlessParity/HeadlessBans.cs`, needs a reviewer's explicit approval and the reason in the pull
   request.

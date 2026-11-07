@@ -18,6 +18,10 @@ namespace XMAT.Operations.Capabilities
 
         // Presentation only (layout, themes, navigation inside a view); there is nothing to run headless.
         GuiOnly,
+
+        // A reviewed exception to headless parity: GUI only by policy, not presentation. Slice and Owner say who owns
+        // the decision and Reason, which starts "Policy exception:", says why it has no command line.
+        PolicyException,
     }
 
     // A user-facing capability: how the GUI reaches it, the operation that implements it and its command lines.
@@ -51,5 +55,10 @@ namespace XMAT.Operations.Capabilities
 
         internal static Capability GuiOnly(string id, string title, string reason, string[] gui = null) =>
             new(id, title, CapabilityStatus.GuiOnly, null, null, reason, null, null, gui);
+
+        // Policy exceptions have no command line or operation.
+        internal static Capability PolicyException(
+            string id, string title, string slice, string owner, string reason, string[] gui) =>
+            new(id, title, CapabilityStatus.PolicyException, slice, owner, reason, null, null, gui);
     }
 }

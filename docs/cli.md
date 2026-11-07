@@ -221,8 +221,9 @@ and `counts` is `null`. `summary.json` holds `schema` (`xmat-analysis/1`), `comm
 `input`, `limits`, `processFilter`, `devices` and `totals`, and the run's `warnings`. Instead of the analysis fields,
 `doctor` reports `target`, `checks` (each with its `id`, `status` and, when it failed, its `code`), `environment`
 (`framework`, the .NET runtime, and `architecture`, the process architecture such as `x64`) and `capabilities` (each
-with its `id`, `status` and `slice`); `help` reports `commands`, each with its `name`, `status` (`supported`), `usage`
-and `capabilities` (the ids of the capabilities that the command provides); and `--version` reports `version`.
+with its `id`, `status` (`supported`, `planned`, `guiOnly` or `policyException`) and `slice`); `help` reports
+`commands`, each with its `name`, `status` (`supported`), `usage` and `capabilities` (the ids of the capabilities that
+the command provides); and `--version` reports `version`.
 
 `export` reports an `export` block and keeps `artifacts` empty: `format`; `input` (`kind` and `sha256`); `limits`;
 `selection`, which counts instead of repeating the values: `device`, `host` (`mode`, and how many `include` and
@@ -271,9 +272,10 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 
 The capability registry (`XMAT/Operations/Capabilities/CapabilityRegistry.cs`) classifies every GUI entry point as
 **Supported** (available in `xmat.exe`), **Planned** (with the delivery slice and its owner; it has no command line
-until it is available) or **GUI only** (presentation only). Tests fail when a GUI command, dialog, device or capture
-type, analyzer or preference is not classified, when non-UI code starts using GUI-only APIs such as message boxes or
-the dispatcher, or when the table below no longer matches the registry. See
+until it is available), **GUI only** (presentation only) or **GUI only by policy** (a reviewed exception with its
+slice, owner and reason; today only deleting sessions, which stays a confirmed GUI action). Tests fail when a GUI
+command, dialog, device or capture type, analyzer or preference is not classified, when non-UI code starts using
+GUI-only APIs such as message boxes or the dispatcher, or when the table below no longer matches the registry. See
 [Headless Parity](../CONTRIBUTING.md#headless-parity) in CONTRIBUTING.md. The first capture slice (S4) keeps WebSocket
 handshakes and reports the frames it observed without their payloads; archiving the payloads is planned separately.
 
@@ -293,6 +295,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Save captures (.xmatcap) (`capture-file.save-xmatcap`) | (not available yet) | Planned (S5, XMAT-021) |
 | Choose the device and capture method (`capture.add-device`) | (not available yet) | Planned (S5, XMAT-021) |
 | Clear captured data (`capture.clear`) | (not available yet) | Planned (S8a, XMAT-021) |
+| Delete sessions from a capture (`capture.delete-sessions`) | (none) | GUI only by policy (S11, XMAT). Policy exception: deleting captured sessions is irreversible, so it stays a confirmed action in the capture list; headless runs export the sessions to keep instead |
 | Capture an explicit-proxy (generic) device (`capture.generic`) | (not available yet) | Planned (S5, XMAT-021) |
 | Block or bypass hosts during capture (`capture.host-lists`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Capture this PC (`capture.local-pc`) | (not available yet) | Planned (S6, XMAT-021) |

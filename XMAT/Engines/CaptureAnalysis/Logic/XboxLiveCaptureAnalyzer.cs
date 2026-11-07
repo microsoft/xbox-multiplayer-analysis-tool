@@ -113,6 +113,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
             analysisResultsModel.OutputDirectory =
                 analysisRunStorageDirectory;
             analysisResultsModel.SourceCaptureName = controller.DeviceName;
+            analysisResultsModel.SourceStamp = controller.SourceStamp;
             var progress = new Progress<OperationProgress>(update =>
             {
                 if (TryGetProcessStep(update.Phase, out var processStep))
@@ -168,6 +169,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
                     report);
                 if (model != null && model.Show)
                 {
+                    model.SourceStamp = analysisResultsModel.SourceStamp;
                     analysisResultsModel.Reports.Add(model);
                 }
             }
