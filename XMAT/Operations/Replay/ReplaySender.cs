@@ -350,7 +350,9 @@ namespace XMAT.Operations.Replay
             return Uri.TryCreate(current, location, out Uri target) && target.IsAbsoluteUri ? target : null;
         }
 
-        // Null when the redirect may be followed; otherwise the code that says why not.
+        // Null when the redirect may be followed; otherwise the code that says why not. Redirect admission requires both the
+        // legacy authority comparison and equality of scheme, canonical IDN host and effective port
+        // (ReplayAuthority.SameOrigin); failed canonicalization never authorizes a redirect.
         private static string CheckRedirect(Uri from, Uri to)
         {
             if (to == null || (to.Scheme != Uri.UriSchemeHttp && to.Scheme != Uri.UriSchemeHttps) ||
@@ -364,14 +366,8 @@ namespace XMAT.Operations.Replay
                 return RedirectInsecureCode;
             }
 
-            return SameOrigin(from, to) ? null : RedirectOriginChangeCode;
+            return ReplayAuthority.SameOrigin(from, to) ? null : RedirectOriginChangeCode;
         }
-
-        private static bool SameOrigin(Uri first, Uri second) =>
-            string.Equals(
-                first.GetLeftPart(UriPartial.Authority),
-                second.GetLeftPart(UriPartial.Authority),
-                StringComparison.OrdinalIgnoreCase);
 
         // As browsers and HttpClient do, 303 makes the next request a GET (a HEAD stays a HEAD) without the body, and 301
         // and 302 turn a POST into a GET without the body; otherwise the method and body go to the same-origin target. The

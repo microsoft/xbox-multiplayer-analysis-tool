@@ -70,6 +70,47 @@ namespace XMAT.Tests.Replay
             handler.SslOptions.CertificateChainPolicy = policy;
         }
 
+        // A server certificate with exactly these names: a common name, DNS names and IP addresses in its subject
+        // alternative names (none at all when both are empty), for the given extended key usage, signed by the root or by
+        // issuer, an intermediate certificate authority with its private key.
+        internal X509Certificate2 IssueServer(
+            string commonName,
+            IReadOnlyList<string> dnsNames,
+            IReadOnlyList<IPAddress> addresses = null,
+            string extendedKeyUsage = ServerAuthenticationOid,
+            X509Certificate2 issuer = null)
+        {
+            using RSA key = RSA.Create(2048);
+            var request = new CertificateRequest("CN=" + commonName, key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            if (dnsNames.Count + (addresses?.Count ?? 0) > 0)
+            {
+                var names = new SubjectAlternativeNameBuilder();
+                foreach (string dnsName in dnsNames)
+                {
+                    names.AddDnsName(dnsName);
+                }
+
+                foreach (IPAddress address in addresses ?? Array.Empty<IPAddress>())
+                {
+                    names.AddIpAddress(address);
+                }
+
+                request.CertificateExtensions.Add(names.Build());
+            }
+
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(
+                X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, false));
+            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
+                new OidCollection { new Oid(extendedKeyUsage) }, false));
+            using X509Certificate2 issued = request.Create(
+                issuer ?? Root, DateTimeOffset.UtcNow.AddMinutes(-30), DateTimeOffset.UtcNow.AddMinutes(30), RandomNumberGenerator.GetBytes(8));
+            using X509Certificate2 withKey = issued.CopyWithPrivateKey(key);
+            return X509CertificateLoader.LoadPkcs12(withKey.Export(X509ContentType.Pfx), null, X509KeyStorageFlags.Exportable);
+        }
+
+        internal const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
+
         public void Dispose()
         {
             Root.Dispose();

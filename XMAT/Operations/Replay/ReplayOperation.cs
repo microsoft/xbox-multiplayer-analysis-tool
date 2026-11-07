@@ -743,10 +743,10 @@ namespace XMAT.Operations.Replay
                         "host; nothing was sent.");
             }
 
-            if (drafts.Select(draft => new Uri(draft.Url).GetLeftPart(UriPartial.Authority))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Skip(1)
-                .Any())
+            // One origin (ReplayAuthority.SameOrigin): every request's is the first's. A request whose host has no canonical
+            // form is no origin, not even its own, so a run with one is refused rather than counted with another.
+            var first = new Uri(drafts.First().Url);
+            if (drafts.Any(draft => !ReplayAuthority.SameOrigin(first, new Uri(draft.Url))))
             {
                 throw new ReplayInputException(
                     ConnectToOriginCountCode,

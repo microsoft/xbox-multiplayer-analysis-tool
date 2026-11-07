@@ -199,6 +199,12 @@ xmat --version
   one usable `Location`. With `--follow-redirects 0`, a redirect is the result as it is, without a code; otherwise a
   redirect that is not followed is the result, with the code `replay.redirect.origin-change`,
   `replay.redirect.insecure`, `replay.redirect.unsupported` or `replay.redirect.limit`.
+- Wherever xmat compares origins (a redirect, a changed origin, the requests of a `--connect-to` run), two URLs are of
+  one origin when their schemes and ports are the same and so are their hosts, compared both as written, ignoring case,
+  and in their canonical ASCII (IDN) form. So `ασ.example` and `ας.example`, which differ only in a Greek final sigma,
+  are two origins, as DNS has them, and so are an IPv6 address with two zones, or with one zone written two ways, such
+  as `[fe80::1%25A]` and `[fe80::1%25a]`. A host that has no canonical form is of no origin: a redirect to it is not
+  followed, and a `--connect-to` run with it is refused (`replay.connect-to.origin-count`).
 - A request that carries one of Fiddler's control headers, `Fiddler-Host`, `X-OverrideHost`,
   `X-IgnoreCertCNMismatch` or `X-OverrideGateway`, is refused (`replay.request.control-header`): xmat never acts on
   a captured header, so a capture never chooses where its requests go or which certificate is accepted. Remove the

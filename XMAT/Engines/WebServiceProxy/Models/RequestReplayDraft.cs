@@ -28,7 +28,9 @@ namespace XMAT.WebServiceCapture
             "If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "If-Range"
         };
 
-        private string _originalAuthority;
+        // The URL whose origin a change needs consent for (ChangesOrigin), kept whole: Uri's authority (GetLeftPart) drops
+        // an IPv6 zone, which comparing origins keeps (ReplayAuthority.SameOrigin).
+        private Uri _origin;
         private string _bodyText = "";
 
         // The exact bytes that SetBodyBytes gave, shared rather than copied, so one large body can serve many drafts.
@@ -61,11 +63,10 @@ namespace XMAT.WebServiceCapture
 
         internal bool UsesUnsafeMethod => IsUnsafeMethod(Method);
 
-        // True when the URL no longer targets the origin the request was captured for, while it still carries the
-        // captured headers, such as credentials.
+        // True when the URL no longer targets the origin the request was captured for (ReplayAuthority.SameOrigin), while
+        // it still carries the captured headers, such as credentials.
         internal bool ChangesOrigin =>
-            _originalAuthority != null && Uri.TryCreate(Url, UriKind.Absolute, out var uri) &&
-            !string.Equals(_originalAuthority, uri.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase);
+            _origin != null && Uri.TryCreate(Url, UriKind.Absolute, out var uri) && !ReplayAuthority.SameOrigin(_origin, uri);
 
         // Even a safe method needs confirmation when captured credentials could reach a different origin.
         internal bool RequiresConfirmation => UsesUnsafeMethod || ChangesOrigin;
@@ -109,7 +110,7 @@ namespace XMAT.WebServiceCapture
             {
                 Method = capture.Method,
                 Url = url,
-                _originalAuthority = new Uri(url).GetLeftPart(UriPartial.Authority),
+                _origin = new Uri(url),
                 HeadersText = firstLineEnd < 0 ? "" : rawHeaders[(firstLineEnd + 1)..].TrimEnd('\r', '\n'),
             };
             if (body.LongLength > maxShownBodyBytes)
@@ -167,7 +168,7 @@ namespace XMAT.WebServiceCapture
             {
                 Method = content.Method ?? "",
                 Url = content.Url ?? "",
-                _originalAuthority = content.Url == null ? null : AuthorityOf(content.Url),
+                _origin = content.Url == null ? null : OriginOf(content.Url),
                 HeadersText = content.Headers == null ? "" : FormatHeaders(content.Headers),
                 Omissions = content.Omitted ?? throw new ArgumentException("The content has no omissions.", nameof(content)),
             };
@@ -204,10 +205,11 @@ namespace XMAT.WebServiceCapture
             return draft;
         }
 
-        // The scheme, host and port of an absolute URL, which may be a sequence template ('#' only in its path or query).
-        private static string AuthorityOf(string url) =>
+        // An absolute URL, which may be a sequence template ('#' only in its path or query), as the origin that a change
+        // needs consent for: only its scheme, host, with any IPv6 zone, and port are compared (ChangesOrigin).
+        private static Uri OriginOf(string url) =>
             Uri.TryCreate(url.Replace(ReplaySequence.Placeholder.ToString(), "0"), UriKind.Absolute, out Uri uri)
-                ? uri.GetLeftPart(UriPartial.Authority)
+                ? uri
                 : throw new ArgumentException("The URL is not an absolute URL.", nameof(url));
 
         private static byte[] GetCapturedBody(ProxyConnectionModel capture)
@@ -338,7 +340,7 @@ namespace XMAT.WebServiceCapture
                 BodyIsBase64 = BodyIsBase64,
                 _bodyText = _bodyText,
                 _sharedBody = _sharedBody,
-                _originalAuthority = _originalAuthority,
+                _origin = _origin,
                 Omissions = Omissions,
             };
 
@@ -422,7 +424,7 @@ namespace XMAT.WebServiceCapture
                     "Enter an absolute HTTP or HTTPS URL without embedded credentials, with a '#' only in its path or query.",
                     nameof(url));
             Url = url;
-            _originalAuthority ??= AuthorityOf(url);
+            _origin ??= OriginOf(url);
             Omissions = Omissions with { Url = false };
         }
 
