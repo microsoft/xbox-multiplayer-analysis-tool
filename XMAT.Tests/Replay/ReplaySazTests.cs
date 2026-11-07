@@ -7,6 +7,7 @@ using System.Text;
 using System.Xml.Linq;
 using XMAT.Operations.Capture;
 using XMAT.Operations.Replay;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -21,7 +22,7 @@ namespace XMAT.Tests.Replay
 
         public ReplaySazTests() => Directory.CreateDirectory(_directory);
 
-        public void Dispose() => Directory.Delete(_directory, recursive: true);
+        public void Dispose() => TestFolderCleanup.Delete(_directory);
 
         public static IEnumerable<object[]> Urls()
         {

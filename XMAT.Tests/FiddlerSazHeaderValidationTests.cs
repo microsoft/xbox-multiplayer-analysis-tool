@@ -692,9 +692,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -757,9 +755,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 

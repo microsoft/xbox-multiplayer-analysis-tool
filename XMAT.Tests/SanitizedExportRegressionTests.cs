@@ -12,6 +12,7 @@ using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -473,7 +474,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                Directory.Delete(directory, true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -553,7 +554,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                Directory.Delete(directory, true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 

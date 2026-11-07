@@ -9,6 +9,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using System.Text.RegularExpressions;
+using XMAT.Tests.Fixtures;
 
 namespace XMAT.Tests
 {
@@ -633,7 +634,7 @@ namespace XMAT.Tests
                 destinationParent,
                 exception.ResiduePath,
                 StringComparison.OrdinalIgnoreCase);
-            Directory.Delete(exception.ResiduePath, true);
+            TestFolderCleanup.Delete(exception.ResiduePath);
         }
 
         [Fact]
@@ -678,7 +679,8 @@ namespace XMAT.Tests
                 exception.InnerException?.Message);
             Assert.Equal(stagingPath, exception.ResiduePath);
             Assert.Equal(1, fileSystem.DeleteCallCount);
-            Directory.Delete(stagingPath, true);
+            Assert.True(Directory.Exists(stagingPath));
+            TestFolderCleanup.Delete(stagingPath);
         }
 
         [Fact]
@@ -1374,26 +1376,20 @@ namespace XMAT.Tests
                 "Could not reserve a unique analysis report fixture.");
         }
 
-        internal static void DeleteOwnedDirectory(string path)
-        {
-            if (!Directory.Exists(path))
-            {
-                return;
-            }
+        // Through TestFolderCleanup: the first attempt clears the read-only attributes that a test set, and every later one
+        // first removes the deny rules that a test added for the current user.
+        internal static void DeleteOwnedDirectory(string path) =>
+            TestFolderCleanup.Delete(
+                path,
+                attempt =>
+                {
+                    if (attempt > 1)
+                    {
+                        RemoveCurrentUserDenyRules(path);
+                    }
 
-            try
-            {
-                NormalizeFileAttributes(path);
-                Directory.Delete(path, true);
-            }
-            catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException)
-            {
-                RemoveCurrentUserDenyRules(path);
-                NormalizeFileAttributes(path);
-                Directory.Delete(path, true);
-            }
-        }
+                    NormalizeFileAttributes(path);
+                });
 
         private static string ResolveFixtureRoot(
             out string resolution)

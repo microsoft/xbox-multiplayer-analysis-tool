@@ -89,7 +89,7 @@ namespace XMAT.Tests
             {
                 analyzer.Shutdown();
                 await RemoveAllAsync(model);
-                Directory.Delete(directory, true);
+                TestFolderCleanup.Delete(directory);
             }
         });
 
@@ -135,7 +135,7 @@ namespace XMAT.Tests
             finally
             {
                 await RemoveAllAsync(model);
-                Directory.Delete(directory, true);
+                TestFolderCleanup.Delete(directory);
             }
         });
 
@@ -182,7 +182,7 @@ namespace XMAT.Tests
             finally
             {
                 await RemoveAllAsync(model);
-                Directory.Delete(directory, true);
+                TestFolderCleanup.Delete(directory);
             }
         });
 
