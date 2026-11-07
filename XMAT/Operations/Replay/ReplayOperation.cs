@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.ExceptionServices;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.Operations.Analysis;
@@ -19,10 +20,12 @@ namespace XMAT.Operations.Replay
     // Reissues captured requests, or sends a composed one, for the GUI and xmat.exe. Everything is checked before anything
     // is sent: the selection, the edits, every request's validity, how the requests may reach the server and the safety
     // policy, under which a method that can change server state, captured headers going to another origin, a connection
-    // to another endpoint than the URL's host, or sending through a proxy, needs the caller's permission. One failed check
-    // fails the run with InvalidInput and nothing is sent. Then every selected request is sent once per iteration, in
-    // order, or up to Parallelism at a time. Each send is a result whether it got a response or not, so a run that was not
-    // cancelled succeeds once every send is done.
+    // to another endpoint than the URL's host, sending through a proxy, or a client certificate, which only the one origin
+    // that the caller names may receive, needs the caller's permission. One failed check fails the run with InvalidInput
+    // and nothing is sent. Only then is a client certificate looked up and its key checked (ReplayCertificateResolver),
+    // which can refuse the run too. Then every selected request is sent once per iteration, in order, or up to
+    // Parallelism at a time. Each send is a result whether it got a response or not, so a run that was not cancelled
+    // succeeds once every send is done.
     internal sealed class ReplayOperation : IOperation<ReplayRequest, ReplayResult>
     {
         internal const string SkippedCode = "replay.request.skipped";
@@ -37,15 +40,27 @@ namespace XMAT.Operations.Replay
         internal const string ConnectToPolicyCode = "replay.policy.connect-to";
         internal const string ProxyConnectToCode = "replay.proxy.connect-to";
         internal const string ProxyPolicyCode = "replay.policy.proxy";
+        internal const string ClientCertificateProxyCode = "replay.client-cert.proxy";
+        internal const string ClientCertificateHttpsCode = "replay.client-cert.https-required";
+        internal const string ClientCertificateOriginInvalidCode = "replay.client-cert.origin-invalid";
+        internal const string ClientCertificateOriginCountCode = "replay.client-cert.origin-count";
+        internal const string ClientCertificatePolicyCode = "replay.policy.client-cert";
 
         // The sender of a run that connects to the URL's host; the GUI's composer passes one over its pooled connections.
         internal Func<ReplaySender> SenderFactory { get; set; } = static () => new ReplaySender();
 
         // The sender of a run whose transport is a setting of the handler (ReplayTransportOptions.NeedsOwnSender: a
-        // connect-to endpoint or a proxy): always one made for that run and disposed when it ends, so no pooled connection
-        // carries its requests, and none of its connections serve another run.
+        // connect-to endpoint, a proxy or a client certificate): always one made for that run and disposed when it ends,
+        // so no pooled connection carries its requests, and none of its connections serve another run.
         internal Func<ReplaySenderSetup, ReplaySender> OwnSenderFactory { get; set; } =
             static setup => new ReplaySender(setup);
+
+        // The native calls that resolve a run's client certificate; tests record or fail them.
+        internal IReplayCertificateNative CertificateNative { get; set; } = ReplayCertificateNative.Instance;
+
+        // Null except in tests: the trust of a run's own sender and of its client-certificate check, a new policy each time
+        // (ReplaySenderSetup.ChainPolicyFactory).
+        internal Func<X509ChainPolicy> ServerChainPolicyFactory { get; set; }
 
         internal Func<AnalyzeCaptureOperation> CaptureReaderFactory { get; set; } =
             static () => new AnalyzeCaptureOperation();
@@ -66,6 +81,7 @@ namespace XMAT.Operations.Replay
         {
             context ??= OperationContext.None;
             var diagnostics = new List<OperationDiagnostic>();
+            ReplayClientCredential credential = null;
             try
             {
                 if (request?.Source == null)
@@ -87,8 +103,18 @@ namespace XMAT.Operations.Replay
                     return prepared.Failure;
                 }
 
+                // Only after every check and consent: the client certificate, looked up and its key checked, before any
+                // sender exists. The run owns it until it ends, after its sender was disposed.
+                ReplayClientCertificate certificate = options.EffectiveTransport.ClientCertificate;
+                if (certificate != null)
+                {
+                    credential = await Task.Run(
+                        () => Resolve(certificate, options.AllowClientCertificate, cancellationToken),
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+
                 IReadOnlyList<ReplayItemResult> items = await RunAsync(
-                    prepared.Items, options, request.Sink, context, cancellationToken).ConfigureAwait(false);
+                    prepared.Items, options, credential, request.Sink, context, cancellationToken).ConfigureAwait(false);
                 return OperationResult<ReplayResult>.Success(
                     new ReplayResult(prepared.InputKind, prepared.InputSha256, items),
                     diagnostics);
@@ -115,6 +141,27 @@ namespace XMAT.Operations.Replay
                     "replay.internal",
                     OperationDiagnosticSeverity.Error,
                     "Replay could not be completed because of an internal failure.");
+            }
+            finally
+            {
+                credential?.Dispose();
+            }
+        }
+
+        // Stage 4 of the checks: the run's client certificate, resolved from the store after every consent was given, or
+        // the reason that it cannot be used.
+        private ReplayClientCredential Resolve(
+            ReplayClientCertificate certificate, ReplayCredentialOrigin origin, CancellationToken cancellationToken)
+        {
+            IReplayCertificateNative native = CertificateNative ??
+                throw new InvalidOperationException("The replay operation has no certificate access.");
+            try
+            {
+                return ReplayCertificateResolver.Resolve(native, certificate, origin, cancellationToken);
+            }
+            catch (ReplayClientCertificateException ex)
+            {
+                throw new ReplayInputException(ex.Code, ex.Message);
             }
         }
 
@@ -159,7 +206,8 @@ namespace XMAT.Operations.Replay
                     requests * options.Repeat,
                     widest.UsesUnsafeMethod,
                     widest.ChangesOrigin,
-                    transport));
+                    transport,
+                    transport.ClientCertificate == null ? null : CredentialOriginOf(widest)));
             }
             catch (ReplayInputException ex)
             {
@@ -702,11 +750,26 @@ namespace XMAT.Operations.Replay
                         "when supplied, User-Agent information that may identify the application/title, SDK or device. " +
                         "Sending through the proxy was not allowed; nothing was sent.");
             }
+
+            // The consent names the one origin that may receive the certificate, and it must be this run's: CheckTransport
+            // made the run's requests share one, which is never null, and no consent is ever a null origin's.
+            ReplayCredentialOrigin runOrigin = transport.ClientCertificate == null ? null : CredentialOriginOf(items[0].Draft);
+            if (transport.ClientCertificate != null &&
+                (options.AllowClientCertificate == null || runOrigin == null ||
+                    !options.AllowClientCertificate.Equals(runOrigin)))
+            {
+                throw new ReplayInputException(
+                    ClientCertificatePolicyCode,
+                    "A client certificate identifies you to the server that receives it, and XMAT sends it only to a " +
+                        "server whose certificate this PC accepts for the origin. Sending it to this run's origin was not " +
+                        "allowed; nothing was sent.");
+            }
         }
 
-        // How the requests may reach the server: a proxy chooses where it connects, so it cannot be combined with a
-        // connect-to endpoint; HTTP/2 only and a connect-to endpoint need HTTPS, so the server must prove that it is the
-        // URL's host; a connect-to endpoint serves one origin, and never an address that no request may go to.
+        // How the requests may reach the server, in this order: a proxy chooses where it connects, so it cannot be combined
+        // with a connect-to endpoint or a client certificate; HTTP/2 only and a connect-to endpoint need HTTPS, so the
+        // server must prove that it is the URL's host; a connect-to endpoint serves one origin, and never an address that
+        // no request may go to; a client certificate goes only over HTTPS, to one supported origin per run.
         private static void CheckTransport(IEnumerable<RequestReplayDraft> drafts, ReplayTransportOptions transport)
         {
             if (transport.Proxy != null && transport.ConnectTo != null)
@@ -717,18 +780,55 @@ namespace XMAT.Operations.Replay
                         "nothing was sent.");
             }
 
+            if (transport.Proxy != null && transport.ClientCertificate != null)
+            {
+                throw new ReplayInputException(
+                    ClientCertificateProxyCode, "A client certificate cannot be sent through a proxy; nothing was sent.");
+            }
+
             if (transport.HttpVersion == ReplayHttpVersion.Http2 && !drafts.All(IsHttps))
             {
                 throw new ReplayInputException(
                     Http2HttpsCode, "HTTP/2 only is supported for HTTPS URLs only; nothing was sent.");
             }
 
-            if (transport.ConnectTo == null)
+            if (transport.ConnectTo != null)
+            {
+                CheckConnectTo(drafts, transport.ConnectTo);
+            }
+
+            if (transport.ClientCertificate == null)
             {
                 return;
             }
 
-            if (transport.ConnectTo.IsDenied)
+            if (!drafts.All(IsHttps))
+            {
+                throw new ReplayInputException(
+                    ClientCertificateHttpsCode,
+                    "A client certificate is sent only to HTTPS URLs, so the server must prove that it is the URL's host; " +
+                        "nothing was sent.");
+            }
+
+            if (drafts.Any(draft => CredentialOriginOf(draft) == null))
+            {
+                throw new ReplayInputException(
+                    ClientCertificateOriginInvalidCode,
+                    "Client-certificate authentication requires a supported HTTPS origin; nothing was sent.");
+            }
+
+            if (drafts.Select(CredentialOriginOf).Distinct().Skip(1).Any())
+            {
+                throw new ReplayInputException(
+                    ClientCertificateOriginCountCode,
+                    "A client certificate is sent to one origin per run, and the requests of this run do not share one; " +
+                        "nothing was sent.");
+            }
+        }
+
+        private static void CheckConnectTo(IEnumerable<RequestReplayDraft> drafts, ReplayConnectTo connectTo)
+        {
+            if (connectTo.IsDenied)
             {
                 throw new ReplayInputException(
                     ConnectToDeniedCode,
@@ -756,6 +856,11 @@ namespace XMAT.Operations.Replay
 
         private static bool IsHttps(RequestReplayDraft draft) =>
             Uri.TryCreate(draft.Url, UriKind.Absolute, out Uri uri) && uri.Scheme == Uri.UriSchemeHttps;
+
+        // The origin that a request's credentials would go to, compared as the consent is (ReplayCredentialOrigin); null
+        // when the URL cannot have one.
+        private static ReplayCredentialOrigin CredentialOriginOf(RequestReplayDraft draft) =>
+            Uri.TryCreate(draft.Url, UriKind.Absolute, out Uri uri) ? ReplayCredentialOrigin.Of(uri) : null;
 
         // Building the request validates the method, URL, headers and body. A Fiddler control header is refused wherever it
         // is in the headers, also when Connection nominates it, which building the request drops without sending it.
@@ -800,6 +905,7 @@ namespace XMAT.Operations.Replay
         private async Task<IReadOnlyList<ReplayItemResult>> RunAsync(
             IReadOnlyList<ReplayItem> items,
             ReplayOptions options,
+            ReplayClientCredential credential,
             IReplayExchangeSink sink,
             OperationContext context,
             CancellationToken cancellationToken)
@@ -819,8 +925,11 @@ namespace XMAT.Operations.Replay
             int done = 0;
             ReplaySendOptions sendOptions = options.ToSendOptions();
             ReplayTransportOptions transport = options.EffectiveTransport;
+            cancellationToken.ThrowIfCancellationRequested();
             using ReplaySender sender =
-                (transport.NeedsOwnSender ? OwnSenderFactory(ReplaySenderSetup.For(transport)) : SenderFactory()) ??
+                (transport.NeedsOwnSender
+                    ? OwnSenderFactory(ReplaySenderSetup.For(transport, credential, ServerChainPolicyFactory))
+                    : SenderFactory()) ??
                 throw new InvalidOperationException("The replay sender factory returned no sender.");
             ReportProgress(context, 0, plan.Count);
             await Parallel.ForEachAsync(
@@ -865,7 +974,8 @@ namespace XMAT.Operations.Replay
                         step.Item.Sequence,
                         transport.TransportName,
                         transport.HttpVersionName,
-                        ReplayTransportOptions.ResponseVersionName(exchange.Version));
+                        ReplayTransportOptions.ResponseVersionName(exchange.Version),
+                        transport.ClientCertificate != null);
                     lock (gate)
                     {
                         token.ThrowIfCancellationRequested();

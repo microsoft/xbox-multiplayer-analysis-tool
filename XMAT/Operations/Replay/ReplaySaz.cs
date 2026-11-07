@@ -24,6 +24,8 @@ namespace XMAT.Operations.Replay
     // - The session's Id is the send's id, and its flags name the send: Flag* below, in that order, each value in the
     //   alphabet [0-9A-Za-z._:-] and at most 64 characters long, which ToSession checks. TransportFlag names a send that
     //   was not direct ("connect-to" or "proxy"), never its endpoint or proxy; a direct send has none.
+    //   ClientCertificateFlag ("true") marks a send that could offer a client certificate, never which one, nor whether a
+    //   server received it; a send without one has none.
     internal static class ReplaySaz
     {
         internal const string ClientIpFlag = "x-clientip";
@@ -35,6 +37,7 @@ namespace XMAT.Operations.Replay
         internal const string CodeFlag = "x-xmat-replay-code";
         internal const string RedirectsFlag = "x-xmat-replay-redirects";
         internal const string TransportFlag = "x-xmat-replay-transport";
+        internal const string ClientCertificateFlag = "x-xmat-replay-client-certificate-configured";
         internal const int MaxFlagChars = 64;
 
         // The session of one send; null for a send that recorded no request, which has nothing to save, as it has no
@@ -134,6 +137,11 @@ namespace XMAT.Operations.Replay
             if (result.Transport != ReplayTransportOptions.DirectName)
             {
                 flags.Add(new(TransportFlag, result.Transport));
+            }
+
+            if (result.ClientCertificateConfigured)
+            {
+                flags.Add(new(ClientCertificateFlag, "true"));
             }
 
             foreach (KeyValuePair<string, string> flag in flags)

@@ -138,21 +138,36 @@ namespace XMAT.Tests.Replay
             Assert.Equal("x-xmat-replay-outcome=failed", Flags(Archive((Result(1), With(exchange, outcome: ReplayOutcome.Failed, code: null, redirects: 0))), 1)[2]);
         }
 
-        // A send that was not direct says how it was sent, last, by its transport's name and never its endpoint or proxy; a
-        // direct send's flags are unchanged.
+        // A send that was not direct says how it was sent, by its transport's name and never its endpoint or proxy, and one
+        // that could offer a client certificate says so, last, never which one nor whether a server received it; a direct
+        // send's flags are unchanged.
         [Theory]
-        [InlineData(ReplayTransportOptions.DirectName, null)]
-        [InlineData(ReplayTransportOptions.ConnectToName, "x-xmat-replay-transport=connect-to")]
-        [InlineData(ReplayTransportOptions.ProxyName, "x-xmat-replay-transport=proxy")]
-        public void TheTransportFlag_NamesASendThatWasNotDirect(string transport, string flag)
+        [InlineData(ReplayTransportOptions.DirectName, false, null)]
+        [InlineData(ReplayTransportOptions.ConnectToName, false, "x-xmat-replay-transport=connect-to")]
+        [InlineData(ReplayTransportOptions.ProxyName, false, "x-xmat-replay-transport=proxy")]
+        [InlineData(ReplayTransportOptions.DirectName, true, null)]
+        [InlineData(ReplayTransportOptions.ConnectToName, true, "x-xmat-replay-transport=connect-to")]
+        public void TheTransportFlags_NameASendThatWasNotDirect_OrCouldOfferAClientCertificate(
+            string transport, bool clientCertificate, string flag)
         {
             ReplayExchange exchange = Exchange(
                 new Uri("http://example.test/"), "GET", new[] { Header("Host", "example.test") }, [], Response("HTTP/1.1 200 OK", Array.Empty<KeyValuePair<string, string>>(), []));
 
-            string[] flags = Flags(Archive((Result(1) with { Transport = transport }, exchange)), 1);
+            string[] flags = Flags(
+                Archive((Result(1) with { Transport = transport, ClientCertificateConfigured = clientCertificate }, exchange)), 1);
 
-            string[] direct = { "x-clientip=0.0.0.0", "x-xmat-replay-id=1", "x-xmat-replay-outcome=completed", "x-xmat-replay-redirects=0" };
-            Assert.Equal(flag == null ? direct : direct.Append(flag), flags);
+            IEnumerable<string> expected = new[] { "x-clientip=0.0.0.0", "x-xmat-replay-id=1", "x-xmat-replay-outcome=completed", "x-xmat-replay-redirects=0" };
+            if (flag != null)
+            {
+                expected = expected.Append(flag);
+            }
+
+            if (clientCertificate)
+            {
+                expected = expected.Append("x-xmat-replay-client-certificate-configured=true");
+            }
+
+            Assert.Equal(expected, flags);
         }
 
         // The command line's flags keep to their alphabet, so a value outside it is a bug that stops the run.

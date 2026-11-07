@@ -184,8 +184,11 @@ redirects are not followed unless you select **Follow same-origin redirects** (s
 below), and response cookies are not reused. **Captured headers, including credentials,
 are sent to the edited URL.** Host and Content-Length are regenerated, and
 connection-only headers are omitted. Methods other than exactly GET, HEAD, and OPTIONS,
-in capitals, require confirmation, as does changing the captured origin. CONNECT and
-WebSocket handshakes cannot be resent.
+in capitals, require confirmation, as does changing the captured origin. The question
+names the method, the URL, and any origin that it is about, each shortened when long
+and with any character that could hide or reorder text, such as a bidirectional
+control, shown as `\uXXXX`; the request is sent with the whole method and URL as you
+entered them. CONNECT and WebSocket handshakes cannot be resent.
 
 Use **Cancel request** to stop waiting. Sending has a 30-second timeout and a 16 MiB
 response limit for each request. Cancelling or timing out cannot undo changes already
@@ -238,13 +241,16 @@ send and says so; send again when it has finished.
 - **Upstream proxy** is off by default. It sends every request, and every redirect
   followed, through an HTTP proxy that you enter, as Fiddler's gateway does; see
   [Send through an upstream proxy](#send-through-an-upstream-proxy).
+- **Client certificate** is off by default. It offers a certificate from your Personal
+  certificate store to a server of the request's origin that asks for one; see
+  [Send a client certificate](#send-a-client-certificate).
 
 The options are fixed when you confirm or start a send: changing them while it runs, or
 while XMAT asks you about it, changes nothing for that send. In the **XMAT Replays**
 tab, a request sent with an HTTP version other than **Automatic**, with **Connect to
-another endpoint**, or with **Upstream proxy** has a note that says so, without the
-endpoint or the proxy, with the HTTP version requested and the one used. The note is
-kept in memory only.
+another endpoint**, with **Upstream proxy**, or with **Client certificate** has a note
+that says so, without the endpoint, the proxy, or the certificate, with the HTTP version
+requested and the one used. The note is kept in memory only.
 
 Fiddler's control headers `Fiddler-Host`, `X-OverrideHost`, `X-IgnoreCertCNMismatch`,
 and `X-OverrideGateway` are not applied, and XMAT does not send a request that has one:
@@ -296,6 +302,66 @@ be used together, since the proxy chooses where it connects.
   proxy. **Copy as cURL** and **Save as cURL script** are not available with it, since
   curl would send the request directly.
 
+### Send a client certificate
+
+**Client certificate** offers a certificate from your Personal certificate store, for
+example to test a service that authenticates its clients by their certificates, as
+Fiddler can. Client certificate: it is sent only to a server whose certificate this PC
+accepts for the origin, and identifies the user to that server.
+
+- **Choosing the certificate.** Select **Client certificate**, then open its list. XMAT
+  reads the list in the background each time that you open it, from your Personal store
+  opened read-only, and reads only each certificate's public data, never its private
+  key. The list shows only certificates that XMAT could offer: ones that say where their
+  private key is on this PC, valid for client authentication and digital signatures, not
+  a certificate authority's, and with an RSA or ECDSA key. Being listed does not mean
+  that the key can be used: XMAT checks that only when it sends. Each entry shows the
+  certificate's subject, its issuer, and when it expires, and its tooltip also its
+  thumbprint. An expired certificate, or one that is not valid yet, is marked so and can
+  still be offered: the server decides whether to accept it.
+- **Your confirmation.** Sending needs your confirmation, which names the origin, as
+  `https://HOST:PORT`, and the certificate, by its subject, issuer, validity, and
+  thumbprint (a long origin, subject, or issuer is shortened), together with any other
+  confirmation that the send needs. The send uses the certificate and the origin that
+  you confirmed: changing them while XMAT asks, or while the send runs, changes nothing
+  for that send.
+- **When the certificate leaves this PC.** Only over HTTPS, to one origin per send: the
+  scheme, host, and port of the URL. XMAT offers it only to a server of that origin that
+  asks for a certificate while it sets up TLS, and only after the server's own
+  certificate passes this PC's validation for the origin's host; a server that does not
+  ask receives none. XMAT never resumes an earlier TLS session for such a send, so each
+  connection checks the server again. With **Follow same-origin redirects**, redirects
+  are followed within that origin only.
+- **What is refused.** Before anything is asked or sent: an `http://` URL, a URL that is
+  not a supported HTTPS origin, and **Upstream proxy**, since a client certificate is
+  never sent through a proxy. Then, when you send, before anything is sent: a
+  certificate that is no longer in your Personal store or is there more than once, that
+  is a certificate authority's, that is not valid for client authentication or digital
+  signatures, whose key is neither an RSA nor an ECDSA key (a key restricted to RSA-PSS
+  counts as neither), that does not say where its private key is, or whose private key
+  cannot be used, and a store or certificate that cannot be read. The status line says
+  why, without naming the certificate; `xmat` gives the same refusals as codes (see
+  [Command line](cli.md)).
+- **No prompt from XMAT.** XMAT itself never asks for a PIN, a smart card, or your
+  consent. Before anything is sent, it opens the private key silently and checks it
+  with one signature, and refuses a key that cannot be used that way, such as one that
+  would need a PIN, a smart card, or your consent; nothing is sent then. It also
+  refuses keys that it cannot use silently: an ECDSA key in a CryptoAPI provider, and a
+  key in a CryptoAPI provider that cannot sign SHA-256, such as the older Microsoft
+  Enhanced Cryptographic Provider. During the TLS handshake, XMAT asks Windows to use
+  the key silently as well, which has not been verified for every key storage provider,
+  such as a smart card's: one could still ask, for example after a cached PIN expires.
+- **Never kept.** Dragging a request into the composer, **Open request**, and **Load**
+  turn **Client certificate** off and clear the certificate chosen, so they ask first
+  when you have changed it. Request files and the history never keep it, and the **XMAT
+  Replays** tab notes only that a certificate was configured, never which one or
+  whether it was sent. After the send, XMAT disposes its copy of the certificate; while
+  XMAT runs, the TLS layer of .NET and Windows in its process may still hold a
+  credential made for it, until that credential is evicted or XMAT exits; only a later
+  send that offers the same certificate, after your confirmation and the same checks,
+  can use it. **Copy as cURL** and **Save as cURL script** are not available with it:
+  XMAT never exports a certificate.
+
 ### Copy as cURL and Save as cURL script
 
 **Copy as cURL (PowerShell 7)** copies a command, and **Save as cURL script...** saves a
@@ -328,11 +394,10 @@ script can use them.
   exactly; with **Automatic**, curl chooses the version itself.
 - **When they are not available.** While a part that a request file left out is not
   supplied, for a numbered URL (see below), and with **Follow same-origin redirects**,
-  **HTTP/2 only**, **Connect to another endpoint**, or **Upstream proxy**: each button
-  says why. A request
-  with a Fiddler control header, a HEAD request with a body, or a URL and headers too
-  long for one command line are refused when you select either button, and the status
-  line says why.
+  **HTTP/2 only**, **Connect to another endpoint**, **Upstream proxy**, or **Client
+  certificate**: each button says why. A request with a Fiddler control header, a HEAD
+  request with a body, or a URL and headers too long for one command line are refused
+  when you select either button, and the status line says why.
 - **Another origin.** When the URL goes to another origin than the request was captured
   or loaded for, XMAT asks whether to export the request for that origin, which it
   names: every time, before asking about the content, and No by default. Declining
@@ -444,10 +509,10 @@ have edited the request in the composer, it asks before replacing it. A drop kee
 **HTTP version**, **Connect to another endpoint**, and **Follow same-origin redirects**
 as they are, so changing only those asks nothing here; opening a request file or loading
 a request from history still asks about them, since both reset them. A drop turns
-**Upstream proxy** off and clears its proxy, as both of those do, so it asks first when
-you have changed that option. Only requests dragged from XMAT can be dropped; text,
-links, and files are refused, and nothing can be dropped while the composer sends or
-reads a file.
+**Upstream proxy** and **Client certificate** off, clearing the proxy and the
+certificate chosen, as both of those do, so it asks first when you have changed either
+option. Only requests dragged from XMAT can be dropped; text, links, and files are
+refused, and nothing can be dropped while the composer sends or reads a file.
 
 ### Load a request from history
 
@@ -462,8 +527,9 @@ any character that could hide or reorder text shown as `\uXXXX`.
 - **Load** loads the request in place of the request in the editors, as **Edit and
   resend** would, clears the previous response, and sends nothing. It resets the
   transport options: **HTTP version** to **Automatic**, **Connect to another endpoint**
-  off, without an endpoint, **Upstream proxy** off, without a proxy, and **Follow
-  same-origin redirects** off, with *N* back to 10; **Inspect session** stays as it is.
+  off, without an endpoint, **Upstream proxy** off, without a proxy, **Client
+  certificate** off, without a certificate, and **Follow same-origin redirects** off,
+  with *N* back to 10; **Inspect session** stays as it is.
   If you have edited the request or changed these options, XMAT asks first, No by
   default. The request is prepared in the background: **Cancel request**, or closing
   the composer, stops it and loads nothing. A body larger than 64 KiB is kept as its
@@ -486,8 +552,8 @@ no permission: sending the request, and exporting it for curl, ask as they alway
 sending it, and **Open request** opens one in place of the request in the editors. A
 request file is JSON in XMAT's `xmat-request/1` format; XMAT suggests the extension
 `.xmat-request.json`. It holds one request and its **HTTP version**, and never **Connect
-to another endpoint**, **Upstream proxy**, **Follow same-origin redirects**, a range for
-a numbered URL, or any permission.
+to another endpoint**, **Upstream proxy**, **Client certificate**, **Follow same-origin
+redirects**, a range for a numbered URL, or any permission.
 
 - **A template by default.** Unless you include the captured content, the file is a
   template: it keeps only safe protocol structure, which is the method when it is a
@@ -506,7 +572,9 @@ a numbered URL, or any permission.
 - **Another origin needs its own permission.** When the URL goes to another origin than
   the request was captured or loaded for, saving it with its content needs a separate
   permission for that origin, since the file's URL becomes the origin that later changes
-  are checked against. Including the content never gives that permission.
+  are checked against. The question names that origin, shortened when long and with any
+  character that could hide or reorder text shown as `\uXXXX`; the file keeps the whole
+  URL. Including the content never gives that permission.
 - **Where files are saved.** XMAT first checks the request and finds the names it
   recognizes, without holding up the composer, then writes the file privately, for your
   account only, and gives it its name once it is complete: only on a local NTFS drive,
@@ -521,19 +589,20 @@ a numbered URL, or any permission.
   file leaves the request as it was. So does **Cancel request**, even if the file was
   read by then, and nothing is asked. Opening sets the **HTTP version** from the file,
   turns off **Connect to another endpoint**, clearing its endpoint, **Upstream proxy**,
-  clearing its proxy, and **Follow same-origin redirects**, with *N* back to 10, clears
-  the previous response, and sends nothing. Before it discards your edits, XMAT asks
-  whether to replace the current request: edits to the request since it was loaded,
-  even only supplying a part that its file left out, and changes to these transport
-  options from what the composer started with, the last opened file, or the last
-  request loaded from history set, including changes made before you dragged in a
-  request. Declining keeps everything as it was, and no answer is a permission to send.
-  Text in the file, such as Fiddler's `<@INCLUDE@>`, is used as it is, and no other
-  file is read. The composer shows only the file's name, never its folder, with any
-  character that could hide or reorder text shown as `\uXXXX`, and the **XMAT Replays**
-  tab records each send as coming from that file name. A file never grants a
-  permission: sending still asks for every confirmation that it needs, and the file's
-  URL is the origin that a changed URL is checked against.
+  clearing its proxy, **Client certificate**, clearing the certificate chosen, and
+  **Follow same-origin redirects**, with *N* back to 10, clears the previous response,
+  and sends nothing. Before it discards your edits, XMAT asks whether to replace the
+  current request: edits to the request since it was loaded, even only supplying a part
+  that its file left out, and changes to these transport options from what the composer
+  started with, the last opened file, or the last request loaded from history set,
+  including changes made before you dragged in a request. Declining keeps everything as
+  it was, and no answer is a permission to send. Text in the file, such as Fiddler's
+  `<@INCLUDE@>`, is used as it is, and no other file is read. The composer shows only
+  the file's name, never its folder, with any character that could hide or reorder text
+  shown as `\uXXXX`, and the **XMAT Replays** tab records each send as coming from that
+  file name. A file never grants a permission: sending still asks for every
+  confirmation that it needs, and the file's URL is the origin that a changed URL is
+  checked against.
 - **A large body is not shown.** The editor shows a body of at most 64 KiB from a
   request file. A larger body is kept as its exact bytes, which the composer sends and
   saves as they are, and shown only by the file's name and the body's size, never as

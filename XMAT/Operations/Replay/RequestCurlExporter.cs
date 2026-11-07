@@ -34,6 +34,7 @@ namespace XMAT.Operations.Replay
         Redirects,
         NumberedUrl,
         Proxy,
+        ClientCertificate,
     }
 
     internal sealed class CurlExportException : Exception
@@ -160,6 +161,11 @@ namespace XMAT.Operations.Replay
             if (transport.Proxy != null)
             {
                 throw Unsupported(CurlUnsupported.Proxy, "a proxy");
+            }
+
+            if (transport.ClientCertificate != null)
+            {
+                throw Unsupported(CurlUnsupported.ClientCertificate, "a client certificate");
             }
 
             if (followRedirects > 0)

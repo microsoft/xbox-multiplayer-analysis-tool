@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
@@ -423,6 +424,44 @@ namespace XMAT.Tests.Cli
                     .Where(path => !path.EndsWith(".saz", StringComparison.Ordinal))
                     .Select(File.ReadAllText));
             Assert.All(outputs, text => Assert.DoesNotContain("localhost", text, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // --client-cert needs --allow-client-cert naming the run's origin: without it, or for another origin, nothing is
+        // looked up or sent. With it, xmat reads the current user's Personal store, only reading it, and a thumbprint that no
+        // certificate there has is refused before anything is sent. Neither the output nor its errors name the thumbprint or
+        // the origin.
+        [Fact]
+        public async Task Compose_ClientCertificate_NeedsConsentForTheRunsOrigin_AndAnUnknownOneIsRefused()
+        {
+            using var directory = new CliTestDirectory();
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string thumbprint = RandomNumberGenerator.GetHexString(40);
+            string[] command = { "compose", "--url", $"https://localhost:{server.Port}/item", "--client-cert", thumbprint };
+
+            XmatRun unconsented = await XmatProcess.RunAsync(directory.Root, command.Concat(new[] { "--out", "a" }).ToArray());
+            XmatRun otherOrigin = await XmatProcess.RunAsync(
+                directory.Root, command.Concat(new[] { "--allow-client-cert", "https://localhost:1", "--out", "b" }).ToArray());
+            XmatRun unknown = await XmatProcess.RunAsync(
+                directory.Root, command.Concat(new[] { "--allow-client-cert", $"https://LOCALHOST:{server.Port}/", "--out", "c" }).ToArray());
+
+            CliAssert.ExitCode(3, unconsented);
+            CliAssert.ExitCode(3, otherOrigin);
+            CliAssert.ExitCode(3, unknown);
+            Assert.Equal(new[] { ReplayOperation.ClientCertificatePolicyCode }, unconsented.ErrorCodes());
+            Assert.Equal(new[] { ReplayOperation.ClientCertificatePolicyCode }, otherOrigin.ErrorCodes());
+            Assert.Equal(new[] { ReplayCertificateResolver.NotFoundCode }, unknown.ErrorCodes());
+            JsonElement options = unknown.Json().GetProperty("options");
+            Assert.Equal(
+                (true, true), (options.GetProperty("clientCertificate").GetBoolean(), options.GetProperty("allowClientCertificate").GetBoolean()));
+            Assert.Equal(0, server.Connections);
+            Assert.All(new[] { "a", "b", "c" }, name => Assert.False(Directory.Exists(Path.Join(directory.Root, name))));
+            Assert.All(
+                new[] { unconsented, otherOrigin, unknown }.SelectMany(run => new[] { run.Stdout, run.Stderr }),
+                text =>
+                {
+                    Assert.DoesNotContain(thumbprint, text, StringComparison.OrdinalIgnoreCase);
+                    Assert.DoesNotContain("localhost", text, StringComparison.OrdinalIgnoreCase);
+                });
         }
 
         // A --connect-to that is not an address and port, or an HTTP version that XMAT does not offer, is a usage error

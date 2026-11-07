@@ -75,6 +75,16 @@ XMAT checks capture files before reading them and never changes them:
   timeline leave out a request whose time is unknown or earlier than 1601, which
   includes the year-1 times that earlier versions of XMAT saved for unknown times.
 
+### Replays saved by xmat
+
+`xmat replay` and `xmat compose` with `--save-saz` also save their sends as
+`replays.saz`, which **Import** opens like any other `.SAZ`. Session flags name each
+send, as [Command line](cli.md) lists them. Two say how a send went out, never to
+what or with what: `x-xmat-replay-transport` (`connect-to` or `proxy`, never the
+endpoint or the proxy) for a send that was not direct, and
+`x-xmat-replay-client-certificate-configured` (`true`) for a send that could offer a
+client certificate, never which certificate or whether one was sent.
+
 ## Export a sanitized capture
 
 1. Stop all captures and select the web proxy capture to share.

@@ -22,11 +22,15 @@ namespace XMAT.Operations.Replay
     // How replay reaches the server, fixed for a whole run: the HTTP version to ask for and, optionally, either another
     // endpoint to connect to instead of the address of the URL's host (Fiddler's Fiddler-Host) or an upstream HTTP proxy
     // to send through (Fiddler's gateway). The URL, the Host header and the TLS server name and certificate check stay
-    // those of the URL. The operation refuses a run with both an endpoint and a proxy before anything is sent.
+    // those of the URL. The operation refuses a run with both an endpoint and a proxy before anything is sent. A client
+    // certificate, named by its thumbprint, is offered to a server that asks for one and that proves it is the run's
+    // consented origin (ReplayServerCertificateCheck); it is not a way to reach the server, so it does not change
+    // TransportName.
     internal sealed record ReplayTransportOptions(
         ReplayHttpVersion HttpVersion = ReplayHttpVersion.Auto,
         ReplayConnectTo ConnectTo = null,
-        ReplayProxy Proxy = null)
+        ReplayProxy Proxy = null,
+        ReplayClientCertificate ClientCertificate = null)
     {
         internal const string DirectName = "direct";
         internal const string ConnectToName = "connect-to";
@@ -35,12 +39,13 @@ namespace XMAT.Operations.Replay
 
         internal static ReplayTransportOptions Default { get; } = new();
 
-        internal bool IsDefault => HttpVersion == ReplayHttpVersion.Auto && ConnectTo == null && Proxy == null;
+        internal bool IsDefault =>
+            HttpVersion == ReplayHttpVersion.Auto && ConnectTo == null && Proxy == null && ClientCertificate == null;
 
-        // Whether the run needs a sender of its own, made for it and disposed when it ends: a connect-to endpoint or a proxy
-        // is a setting of the handler, so no pooled connection may carry the run's requests. The HTTP version is asked for
-        // per request, so it alone needs none.
-        internal bool NeedsOwnSender => ConnectTo != null || Proxy != null;
+        // Whether the run needs a sender of its own, made for it and disposed when it ends: a connect-to endpoint, a proxy
+        // and a client certificate are settings of the handler, so no pooled connection may carry the run's requests. The
+        // HTTP version is asked for per request, so it alone needs none.
+        internal bool NeedsOwnSender => ConnectTo != null || Proxy != null || ClientCertificate != null;
 
         // How a send was configured to reach the server, as replay reports it: "direct", "connect-to" or "proxy".
         internal string TransportName => ConnectTo != null ? ConnectToName : Proxy != null ? ProxyName : DirectName;
@@ -313,7 +318,7 @@ namespace XMAT.Operations.Replay
             Scheme + (_ipv6 ? "[" + Host + "]" : Host) + ":" + Port.ToString(CultureInfo.InvariantCulture);
 
         // Four decimal numbers of 0 to 255 without leading zeros. A host of digits and dots is an IPv4 address or nothing.
-        private static bool IsIPv4(string host)
+        internal static bool IsIPv4(string host)
         {
             string[] parts = host.Split('.');
             return parts.Length == 4 && parts.All(part => ReplayConnectTo.IsDecimal(part, 3, 255));

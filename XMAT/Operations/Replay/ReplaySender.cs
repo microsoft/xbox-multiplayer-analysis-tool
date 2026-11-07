@@ -11,7 +11,9 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.WebServiceCapture;
@@ -34,25 +36,43 @@ namespace XMAT.Operations.Replay
     }
 
     // What a sender's handler is made for (ReplaySender.CreateHandler): directly to the URL's host, to one connect-to
-    // endpoint, or through one proxy, never both of the last two.
-    internal sealed record ReplaySenderSetup(ReplayConnectTo ConnectTo = null, ReplayProxy Proxy = null)
+    // endpoint, or through one proxy, never both of the last two; and, for a run that may offer a client certificate, the
+    // resolved certificate (ReplayClientCredential's copy) and the one origin that may receive it, never with a proxy.
+    // ChainPolicyFactory is null except in tests: it gives the handler and its client-certificate check each a new chain
+    // policy, so they trust the same roots; null keeps the platform's validation.
+    internal sealed record ReplaySenderSetup(
+        ReplayConnectTo ConnectTo = null,
+        ReplayProxy Proxy = null,
+        X509Certificate2 ClientCertificate = null,
+        ReplayCredentialOrigin CredentialOrigin = null,
+        Func<X509ChainPolicy> ChainPolicyFactory = null)
     {
         internal static ReplaySenderSetup Direct { get; } = new();
 
-        internal static ReplaySenderSetup For(ReplayTransportOptions transport) =>
-            new((transport ?? throw new ArgumentNullException(nameof(transport))).ConnectTo, transport.Proxy);
+        internal static ReplaySenderSetup For(
+            ReplayTransportOptions transport,
+            ReplayClientCredential credential = null,
+            Func<X509ChainPolicy> chainPolicyFactory = null) =>
+            new(
+                (transport ?? throw new ArgumentNullException(nameof(transport))).ConnectTo,
+                transport.Proxy,
+                credential?.Certificate,
+                credential?.Origin,
+                chainPolicyFactory);
     }
 
     // The one way XMAT sends a replayed or composed request, for the GUI and xmat.exe alike. A replay goes through a proxy
     // only when its sender was made for one (so Local PC capture does not record it otherwise), never sends or keeps
     // cookies of its own, never answers an authentication challenge with the user's Windows credentials or a proxy's with
     // any, never decompresses (so inspectors see the bytes the server sent) and keeps the platform's certificate
-    // validation. Replay follows redirects itself, at most MaxRedirects of them, and only within the origin it sent to: a
-    // server never chooses where the request's headers and body go next, so a hop to another origin, from HTTPS to HTTP
-    // or to anything but HTTP and HTTPS is never followed. A sender made for a connect-to endpoint connects only there,
-    // and one made for a proxy sends only through it, for every request and redirect; neither falls back to the URL's
-    // host. Each hop is recorded, and a redirect built, from what replay put in the request before the HTTP stack sent it,
-    // never from what the stack added while sending.
+    // validation. It offers a client certificate only when its sender was made for one, and then only to a server that
+    // asks for one and proves, before the certificate is sent, that it is the one origin that may receive it. Replay
+    // follows redirects itself, at most MaxRedirects of them, and only within the origin it sent to: a server never chooses
+    // where the request's headers and body go next, so a hop to another origin, from HTTPS to HTTP or to anything but HTTP
+    // and HTTPS is never followed, nor, with a client certificate, a hop to any origin but the one that may receive it. A
+    // sender made for a connect-to endpoint connects only there, and one made for a proxy sends only through it, for every
+    // request and redirect; neither falls back to the URL's host. Each hop is recorded, and a redirect built, from what
+    // replay put in the request before the HTTP stack sent it, never from what the stack added while sending.
     internal sealed class ReplaySender : IDisposable
     {
         // Why a redirect was not followed; the redirect response is then the result.
@@ -103,13 +123,22 @@ namespace XMAT.Operations.Replay
         // Directly, the handler connects to the URL's host; for a connect-to endpoint, only to that endpoint; for a proxy,
         // only to the proxy (FixedProxy), never with proxy credentials, so a 407 is the result. Never the system's or the
         // environment's proxy. Credentials stay unset, so an NTLM or Negotiate challenge is the result, never answered with
-        // the user's Windows credentials.
+        // the user's Windows credentials. With a client certificate, nothing is offered up front (ClientCertificates stays
+        // unset) and TLS sessions are never resumed, so every connection makes a full handshake in which a server that
+        // asks for a certificate shows its own first: the certificate goes only to one that passes
+        // ReplayServerCertificateCheck for the consented origin.
         internal static SocketsHttpHandler CreateHandler(ReplaySenderSetup setup = null)
         {
             setup ??= ReplaySenderSetup.Direct;
             if (setup.ConnectTo != null && setup.Proxy != null)
             {
                 throw new ArgumentException("A sender connects to another endpoint or sends through a proxy, not both.", nameof(setup));
+            }
+
+            if (setup.ClientCertificate != null && (setup.Proxy != null || setup.CredentialOrigin == null))
+            {
+                throw new ArgumentException(
+                    "A client certificate needs the one origin that may receive it, and never goes through a proxy.", nameof(setup));
             }
 
             var handler = new SocketsHttpHandler
@@ -130,7 +159,47 @@ namespace XMAT.Operations.Replay
                 handler.ConnectCallback = ConnectOnlyTo(setup.ConnectTo);
             }
 
+            if (setup.ChainPolicyFactory != null)
+            {
+                handler.SslOptions.CertificateChainPolicy = setup.ChainPolicyFactory();
+            }
+
+            if (setup.ClientCertificate != null)
+            {
+                // Without a factory the check builds its chain as SslStream does without a policy: the handler's revocation
+                // mode, frozen here, the root excluded, the platform's trust (SslStream.Protocol.cs, VerifyRemoteCertificate).
+                SslClientAuthenticationOptions ssl = handler.SslOptions;
+                X509RevocationMode revocation = ssl.CertificateRevocationCheckMode;
+                var check = new ReplayServerCertificateCheck(
+                    setup.CredentialOrigin,
+                    setup.ChainPolicyFactory ?? (() => new X509ChainPolicy
+                    {
+                        RevocationMode = revocation,
+                        RevocationFlag = X509RevocationFlag.ExcludeRoot,
+                    }));
+                X509Certificate2 certificate = setup.ClientCertificate;
+                ssl.AllowTlsResume = false;
+                ssl.LocalCertificateSelectionCallback =
+                    (_, targetHost, _, remoteCertificate, _) => Offer(check, certificate, targetHost, remoteCertificate);
+            }
+
             return handler;
+        }
+
+        // The run's certificate when the server passes the check, and only a certificate that has its private key: given
+        // one without, SslStream would look for one with the same hash in the certificate stores and use that one's key
+        // as the store opens it. Otherwise, and on any failure, none.
+        private static X509Certificate Offer(
+            ReplayServerCertificateCheck check, X509Certificate2 certificate, string targetHost, X509Certificate remoteCertificate)
+        {
+            try
+            {
+                return check.Passes(targetHost, remoteCertificate) && certificate.HasPrivateKey ? certificate : null;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                return null;
+            }
         }
 
         // A response with any status code, a transport failure, a timeout and an oversized response are all results. Only
@@ -181,6 +250,11 @@ namespace XMAT.Operations.Replay
                     {
                         Uri location = ResolveLocation(hop.Uri, response.Headers.NonValidated);
                         stopCode = CheckRedirect(hop.Uri, location);
+                        if (stopCode == null && !MayReceiveCredentials(location))
+                        {
+                            stopCode = RedirectOriginChangeCode;
+                        }
+
                         if (stopCode == null && redirects >= options.MaxRedirects)
                         {
                             stopCode = RedirectLimitCode;
@@ -368,6 +442,13 @@ namespace XMAT.Operations.Replay
 
             return ReplayAuthority.SameOrigin(from, to) ? null : RedirectOriginChangeCode;
         }
+
+        // Credentialed runs additionally require equality with the frozen consented origin: a sender that may offer
+        // credentials follows a redirect only to the one origin that may receive them, compared as the consent compares
+        // origins (ReplayCredentialOrigin). CheckRedirect already holds each hop to the one before it, and a run's first
+        // hop is to that origin; this holds every hop to the origin itself.
+        private bool MayReceiveCredentials(Uri location) =>
+            _setup.CredentialOrigin == null || _setup.CredentialOrigin.Equals(ReplayCredentialOrigin.Of(location));
 
         // As browsers and HttpClient do, 303 makes the next request a GET (a HEAD stays a HEAD) without the body, and 301
         // and 302 turn a POST into a GET without the body; otherwise the method and body go to the same-origin target. The

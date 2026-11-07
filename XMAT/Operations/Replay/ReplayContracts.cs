@@ -109,7 +109,8 @@ namespace XMAT.Operations.Replay
     internal sealed record ReplayExport(string InputKind, string InputSha256, IReadOnlyList<ReplayExportItem> Items);
 
     // VerifyDiff also builds the differences of each verified send (VerifyDiffOperation) and hands them to the sink with its
-    // exchange (ReplayExchange.VerifyDiff), never in the result; it needs Verify.
+    // exchange (ReplayExchange.VerifyDiff), never in the result; it needs Verify. AllowClientCertificate is the one origin
+    // that the transport's client certificate may go to; the run must be to exactly that origin.
     internal sealed record ReplayOptions(
         int Repeat = 1,
         int Parallelism = 1,
@@ -122,7 +123,8 @@ namespace XMAT.Operations.Replay
         bool AllowConnectTo = false,
         ReplayTransportOptions Transport = null,
         bool VerifyDiff = false,
-        bool AllowProxy = false)
+        bool AllowProxy = false,
+        ReplayCredentialOrigin AllowClientCertificate = null)
     {
         internal const int MaxRepeat = 1000;
         internal const int MaxParallelism = 16;
@@ -179,20 +181,23 @@ namespace XMAT.Operations.Replay
     // What a composed request, or one per number of a sequence, would send (ReplayOperation.Preview). Template is a copy
     // of the draft that was checked, so later edits to that draft change nothing here; send it with ToSource and
     // Transport, which is how the plan was checked to reach the server. Sends counts every send, repeats included.
-    // UsesUnsafeMethod, ChangesOrigin, UsesConnectTo and UsesProxy say which consent the options must carry
-    // (AllowUnsafeMethods, AllowOriginChange, AllowConnectTo, AllowProxy) for the operation to send them; it checks them
-    // again when it runs.
+    // UsesUnsafeMethod, ChangesOrigin, UsesConnectTo, UsesProxy and UsesClientCertificate say which consent the options
+    // must carry (AllowUnsafeMethods, AllowOriginChange, AllowConnectTo, AllowProxy, and AllowClientCertificate naming
+    // CredentialOrigin, the one origin of the plan) for the operation to send them; it checks them again when it runs.
     internal sealed record ReplayPlanPreview(
         RequestReplayDraft Template,
         ReplaySequence Sequence,
         int Sends,
         bool UsesUnsafeMethod,
         bool ChangesOrigin,
-        ReplayTransportOptions Transport = null)
+        ReplayTransportOptions Transport = null,
+        ReplayCredentialOrigin CredentialOrigin = null)
     {
         internal bool UsesConnectTo => Transport?.ConnectTo != null;
 
         internal bool UsesProxy => Transport?.Proxy != null;
+
+        internal bool UsesClientCertificate => Transport?.ClientCertificate != null;
 
         internal ReplaySource ToSource() =>
             Sequence == null ? ReplaySource.FromDraft(Template) : ReplaySource.FromTemplate(Template, Sequence);
@@ -204,6 +209,8 @@ namespace XMAT.Operations.Replay
     // number that a sequence put in the URL, and null for other sources. Transport is how the send was configured to reach
     // the server ("direct", "connect-to" or "proxy"), HttpVersion the version it asked for ("auto", "1.1" or "2") and
     // ResponseVersion the version of the response that it got ("1.1" or "2"), null without a response.
+    // ClientCertificateConfigured says that the send could offer a client certificate, never that one was sent: a server
+    // that does not ask for one, or that fails the check, receives none.
     internal sealed record ReplayItemResult(
         int Id,
         string DeviceId,
@@ -220,7 +227,8 @@ namespace XMAT.Operations.Replay
         long? Sequence = null,
         string Transport = ReplayTransportOptions.DirectName,
         string HttpVersion = ReplayTransportOptions.AutoVersionName,
-        string ResponseVersion = null);
+        string ResponseVersion = null,
+        bool ClientCertificateConfigured = false);
 
     // InputKind and InputSha256 describe a capture file and are null for other sources.
     internal sealed record ReplayResult(string InputKind, string InputSha256, IReadOnlyList<ReplayItemResult> Items)

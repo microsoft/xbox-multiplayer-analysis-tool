@@ -235,6 +235,33 @@ namespace XMAT.Tests.Cli
             Assert.Equal(("cli.usage.invalid-value", CliCommandLine.ProxyMessage), (invalid.Error.Code, invalid.Error.Message));
         }
 
+        // compose and replay take --client-cert, a thumbprint kept in upper case, and --allow-client-cert, the one origin
+        // that may receive the certificate, kept in canonical form; each is read even without the other. A value that cannot
+        // be used is a usage error with one fixed message per option.
+        [Theory]
+        [InlineData("compose --url https://a.test/ --out r")]
+        [InlineData("replay a.saz --request 1 --out r")]
+        public void Parse_ReadsTheClientCertificateAndTheOriginThatMayReceiveIt(string commandLine)
+        {
+            const string Thumbprint = "0123456789abcdef0123456789abcdef01234567";
+            CliReplay both = CliCommandLine.Parse(Split(
+                commandLine + " --client-cert " + Thumbprint + " --allow-client-cert https://A.Test:8443/")).Request.Replay;
+            CliReplay certificateOnly = CliCommandLine.Parse(Split(commandLine + " --client-cert " + Thumbprint)).Request.Replay;
+            CliReplay consentOnly = CliCommandLine.Parse(Split(commandLine + " --allow-client-cert https://a.test")).Request.Replay;
+            CliReplay none = CliCommandLine.Parse(Split(commandLine)).Request.Replay;
+            CliParseResult badThumbprint = CliCommandLine.Parse(Split(commandLine + " --client-cert 0123"));
+            CliParseResult badOrigin = CliCommandLine.Parse(Split(commandLine + " --allow-client-cert http://a.test"));
+
+            Assert.Equal(
+                (Thumbprint.ToUpperInvariant(), "https://a.test:8443"),
+                (both.ClientCertificate.Thumbprint, both.AllowClientCertificate.ToString()));
+            Assert.Equal((Thumbprint.ToUpperInvariant(), (ReplayCredentialOrigin)null), (certificateOnly.ClientCertificate.Thumbprint, certificateOnly.AllowClientCertificate));
+            Assert.Equal(((ReplayClientCertificate)null, "https://a.test:443"), (consentOnly.ClientCertificate, consentOnly.AllowClientCertificate.ToString()));
+            Assert.Equal(((ReplayClientCertificate)null, (ReplayCredentialOrigin)null), (none.ClientCertificate, none.AllowClientCertificate));
+            Assert.Equal(("cli.usage.invalid-value", CliCommandLine.ClientCertMessage), (badThumbprint.Error.Code, badThumbprint.Error.Message));
+            Assert.Equal(("cli.usage.invalid-value", CliCommandLine.AllowClientCertMessage), (badOrigin.Error.Code, badOrigin.Error.Message));
+        }
+
         [Fact]
         public void Parse_ReadsComposeOptionsAndTheDefaults()
         {
@@ -311,6 +338,7 @@ namespace XMAT.Tests.Cli
             {
                 "--repeat 2", "--parallel 2", "--timeout 5", "--max-response-mib 16", "--follow-redirects 1",
                 "--connect-to 127.0.0.1:9", "--allow-connect-to", "--proxy http://127.0.0.1:9", "--allow-proxy",
+                "--client-cert 0123456789ABCDEF0123456789ABCDEF01234567", "--allow-client-cert https://a.test",
                 "--sequence 1-2", "--allow-unsafe-methods", "--verify", "--verify-diff", "--origin http://a.test",
             })
             {
@@ -363,6 +391,10 @@ namespace XMAT.Tests.Cli
         [InlineData(@"compose --url http://a.test/ --out results --proxy http://proxy.test/secret")]
         [InlineData(@"replay a.saz --request 1 --out results --proxy secret")]
         [InlineData(@"curl --url http://a.test/ --out results --include-sensitive --proxy http://secret.test")]
+        [InlineData(@"compose --url https://a.test/ --out results --client-cert secret0123456789ABCDEF0123456789ABCDEF")]
+        [InlineData(@"compose --url https://a.test/ --out results --allow-client-cert https://user:secret@a.test")]
+        [InlineData(@"replay a.saz --request 1 --out results --allow-client-cert https://a.test/secret")]
+        [InlineData(@"curl --url https://a.test/ --out results --include-sensitive --client-cert secret")]
         public void Parse_ErrorsNeverRepeatValues(string commandLine)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));
@@ -473,13 +505,15 @@ namespace XMAT.Tests.Cli
         }
 
         // The JSON of a replay holds numbers, ids, outcomes, codes and artifact paths only, and lists the files of each
-        // send only once they were published. It says that a run connected to another endpoint or went through a proxy,
-        // never which one.
+        // send only once they were published. It says that a run connected to another endpoint, went through a proxy or
+        // could offer a client certificate, and with whose consent, never which endpoint, proxy, certificate or origin.
         [Fact]
         public void ReplayJson_HoldsOnlyAllowListedFields()
         {
             Assert.True(ReplayConnectTo.TryParse("198.51.100.77:8443", out ReplayConnectTo endpoint));
             Assert.True(ReplayProxy.TryParse("http://secretproxy.test:3128", out ReplayProxy proxy));
+            Assert.True(ReplayClientCertificate.TryParse("ABCDEF0123456789ABCDEF0123456789ABCDEF01", out ReplayClientCertificate certificate));
+            Assert.True(ReplayCredentialOrigin.TryParse("https://secret-origin.test:9443", out ReplayCredentialOrigin origin));
             var report = new CliReport(CliCommands.Replay, "run")
             {
                 Replay = new CliReplayReport(
@@ -492,7 +526,9 @@ namespace XMAT.Tests.Cli
                         ConnectTo: endpoint,
                         AllowConnectTo: true,
                         Proxy: proxy,
-                        AllowProxy: true),
+                        AllowProxy: true,
+                        ClientCertificate: certificate,
+                        AllowClientCertificate: origin),
                     CliLimits.Default)
                 {
                     InputKind = "saz",
@@ -523,6 +559,8 @@ namespace XMAT.Tests.Cli
                 Assert.DoesNotContain("198.51.100.77", text, StringComparison.Ordinal);
                 Assert.DoesNotContain("8443", text, StringComparison.Ordinal);
                 Assert.DoesNotContain("3128", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("9443", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("ABCDEF0123", text, StringComparison.OrdinalIgnoreCase);
             }
 
             Assert.Equal(
@@ -530,10 +568,11 @@ namespace XMAT.Tests.Cli
                 summary.RootElement.EnumerateObject().Select(property => property.Name));
             JsonElement options = published.RootElement.GetProperty("options");
             Assert.Equal(
-                ("2", true, true, true, true),
+                ("2", true, true, true, true, true, true),
                 (options.GetProperty("httpVersion").GetString(), options.GetProperty("connectTo").GetBoolean(),
                     options.GetProperty("allowConnectTo").GetBoolean(), options.GetProperty("proxy").GetBoolean(),
-                    options.GetProperty("allowProxy").GetBoolean()));
+                    options.GetProperty("allowProxy").GetBoolean(), options.GetProperty("clientCertificate").GetBoolean(),
+                    options.GetProperty("allowClientCertificate").GetBoolean()));
             JsonElement[] replays = published.RootElement.GetProperty("replays").EnumerateArray().ToArray();
             Assert.Equal(
                 new[]
