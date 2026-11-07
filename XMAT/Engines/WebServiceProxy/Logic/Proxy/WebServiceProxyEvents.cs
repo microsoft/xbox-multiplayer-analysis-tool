@@ -12,6 +12,7 @@ namespace XMAT.WebServiceCapture.Proxy
         public int ConnectionID { get; set; }
         public string RemoteEndPoint { get; set; }
         public bool AcceptConnection { get; set; }
+        internal ClientProcessContext ProcessContext { get; set; }
     }
 
     public class SslConnectionRequestEventArgs : EventArgs
@@ -21,6 +22,7 @@ namespace XMAT.WebServiceCapture.Proxy
         public string ClientIP { get; set; }
         public ClientRequest Request { get; set; }
         public bool AcceptConnection { get; set; }
+        internal ClientProcessContext ProcessContext { get; set; }
     }
 
     public class SslConnectionCompletionEventArgs : EventArgs
@@ -28,6 +30,7 @@ namespace XMAT.WebServiceCapture.Proxy
         public DateTime Timestamp { get; set; }
         public int ConnectionID { get; set; }
         public ClientRequest Request { get; set; }
+        internal ClientProcessContext ProcessContext { get; set; }
     }
 
     public class ConnectionFailureEventArgs : EventArgs
@@ -35,6 +38,7 @@ namespace XMAT.WebServiceCapture.Proxy
         public DateTime Timestamp { get; set; }
         public int ConnectionID { get; set; }
         public Exception Exception { get; set; }
+        internal ClientProcessContext ProcessContext { get; set; }
     }
 
     public class HttpRequestEventArgs : EventArgs
@@ -43,6 +47,7 @@ namespace XMAT.WebServiceCapture.Proxy
         public int ConnectionID { get; set; }
         public ClientRequest Request { get; set; }
         public bool AcceptRequest { get; set; }
+        internal ClientProcessContext ProcessContext { get; set; }
     }
 
     public class HttpResponseEventArgs : EventArgs
@@ -52,11 +57,13 @@ namespace XMAT.WebServiceCapture.Proxy
         public ClientRequest Request { get; set; }
         public ServerResponse Response { get; set; }
         public bool SendResponse { get; set; }
+        internal ClientProcessContext ProcessContext { get; set; }
     }
 
     public class ConnectionClosedEventArgs : EventArgs
     {
         public DateTime Timestamp { get; set; }
         public int ConnectionID { get; set; }
+        internal ClientProcessContext ProcessContext { get; set; }
     }
 }

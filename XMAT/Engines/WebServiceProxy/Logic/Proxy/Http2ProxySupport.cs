@@ -174,15 +174,18 @@ namespace XMAT.WebServiceCapture.Proxy
     {
         internal InterceptedTunnelContext(
             int connectionId,
-            ClientRequest connectRequest)
+            ClientRequest connectRequest,
+            ClientProcessContext processContext = null)
         {
             ConnectionId = connectionId;
             ConnectRequest = connectRequest ??
                 throw new ArgumentNullException(nameof(connectRequest));
+            ProcessContext = processContext;
         }
 
         internal int ConnectionId { get; }
         internal ClientRequest ConnectRequest { get; }
+        internal ClientProcessContext ProcessContext { get; }
         private int _tlsCompleted;
 
         internal bool TryMarkTlsCompleted()
@@ -290,7 +293,8 @@ namespace XMAT.WebServiceCapture.Proxy
             if (!await _proxy.RaiseReceivedWebRequestAsync(
                 tunnel.ConnectionId,
                 clientRequest,
-                cancellationToken).ConfigureAwait(false))
+                cancellationToken,
+                tunnel.ProcessContext).ConfigureAwait(false))
             {
                 context.Abort();
                 return;
@@ -344,7 +348,8 @@ namespace XMAT.WebServiceCapture.Proxy
                     tunnel.ConnectionId,
                     clientRequest,
                     serverResponse,
-                    cancellationToken).ConfigureAwait(false))
+                    cancellationToken,
+                    tunnel.ProcessContext).ConfigureAwait(false))
                 {
                     context.Abort();
                     return;

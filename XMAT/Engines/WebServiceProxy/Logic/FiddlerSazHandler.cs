@@ -4,13 +4,16 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading;
+using System.Xml;
 using System.Xml.Linq;
+using XMAT.Operations.Processes;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -38,6 +41,11 @@ namespace XMAT.WebServiceCapture
         internal const int MaxHeaderLinesPerMessage = 16_384;
         internal const int MaxRawHeaderBytesPerMessage = 16 * 1024 * 1024;
         private const int EntryReadBufferBytes = 64 * 1024;
+
+        // Fiddler's process flag ("name:pid") and XMAT's flags for the process start time and attribution state.
+        internal const string ProcessInfoFlag = "x-ProcessInfo";
+        internal const string ProcessStartTimeFlag = "x-xmat-clientprocess-starttime";
+        internal const string ProcessStatusFlag = "x-xmat-clientprocess-status";
 
         enum EntryType
         {
@@ -237,6 +245,7 @@ namespace XMAT.WebServiceCapture
             }
 
             // Read the frame metadata (###_m.xml)
+            ClientProcessInfo clientProcess = ClientProcessInfo.NotRecorded;
             if (metadataStream != null)
             {
                 RewindIfSeekable(metadataStream);
@@ -260,16 +269,38 @@ namespace XMAT.WebServiceCapture
 
                     var sessionFlags = xmldata.Element("Session").Element("SessionFlags");
 
+                    var clientIPRead = false;
+                    string processInfo = null;
+                    string processStartTime = null;
+                    string processStatus = null;
                     foreach (var flag in sessionFlags.Descendants())
                     {
-                        if ((string)flag.Attribute("N") == "x-clientip")
+                        var flagName = (string)flag.Attribute("N");
+                        if (flagName == "x-clientip")
                         {
-                            // CLIENT IP
-                            clientIP = (string)flag.Attribute("V");
-                            clientIP = clientIP.Substring(clientIP.LastIndexOf(':') + 1);
-                            break;
+                            if (!clientIPRead)
+                            {
+                                // CLIENT IP
+                                clientIP = (string)flag.Attribute("V");
+                                clientIP = clientIP.Substring(clientIP.LastIndexOf(':') + 1);
+                                clientIPRead = true;
+                            }
+                        }
+                        else if (string.Equals(flagName, ProcessInfoFlag, StringComparison.OrdinalIgnoreCase))
+                        {
+                            processInfo ??= (string)flag.Attribute("V") ?? string.Empty;
+                        }
+                        else if (string.Equals(flagName, ProcessStartTimeFlag, StringComparison.OrdinalIgnoreCase))
+                        {
+                            processStartTime ??= (string)flag.Attribute("V");
+                        }
+                        else if (string.Equals(flagName, ProcessStatusFlag, StringComparison.OrdinalIgnoreCase))
+                        {
+                            processStatus ??= (string)flag.Attribute("V");
                         }
                     }
+
+                    clientProcess = ReadClientProcess(processInfo, processStartTime, processStatus);
                 }
             }
 
@@ -287,8 +318,61 @@ namespace XMAT.WebServiceCapture
                 responseHeaders,
                 responseBody,
                 clientIP);
+            model.SetClientProcess(clientProcess);
 
             return model;
+        }
+
+        // Fiddler's x-ProcessInfo holds "name:pid". A last ':' starts the id only when a positive number follows it, so a
+        // drive path without an id stays a name. The shared codec keeps the name's spelling but only its image name,
+        // and anything else leaves the session without process information. A file never shows that a process ran on
+        // this PC, so every identity it holds is imported.
+        private static ClientProcessInfo ReadClientProcess(string processInfo, string startTime, string status)
+        {
+            if (string.IsNullOrEmpty(processInfo))
+            {
+                return status?.Trim() switch
+                {
+                    "remote" => new ClientProcessInfo(string.Empty, 0, null, ClientProcessStatus.Remote),
+                    "unresolved" => new ClientProcessInfo(string.Empty, 0, null, ClientProcessStatus.Unresolved),
+                    _ => ClientProcessInfo.NotRecorded,
+                };
+            }
+
+            string name = processInfo;
+            long processId = 0;
+            int separator = processInfo.LastIndexOf(':');
+            if (separator >= 0 && TryParseProcessId(processInfo.AsSpan(separator + 1), out long suffix))
+            {
+                name = processInfo.Substring(0, separator);
+                processId = suffix;
+            }
+
+            // A start time that cannot be read is dropped; the identity stays.
+            string start = DateTimeOffset.TryParse(
+                startTime,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal,
+                out DateTimeOffset started)
+                ? started.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture)
+                : string.Empty;
+            return ClientProcessRecordCodec.FromValues(
+                name,
+                processId,
+                start,
+                ClientProcessRecordCodec.StatusToken(ClientProcessStatus.Imported));
+        }
+
+        private static bool TryParseProcessId(ReadOnlySpan<char> text, out long processId)
+        {
+            processId = 0;
+            if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int value) || value <= 0)
+            {
+                return false;
+            }
+
+            processId = value;
+            return true;
         }
 
         public static ProxyConnectionsCollection ImportSazFile(
@@ -611,6 +695,7 @@ namespace XMAT.WebServiceCapture
 
                 var metaData = new FiddlerMetaData(record.RecordRowId);
                 metaData.SetClientIP(record.ClientIP);
+                metaData.SetClientProcess(record.ClientProcess);
                 metaData.ClientBeginRequest = record.RequestTime;
                 metaData.ClientDoneResponse = record.RequestTime + record.Duration;
                 AddMetaEntry(archive, record.RequestNumber, metaData);
@@ -653,6 +738,12 @@ namespace XMAT.WebServiceCapture
                         };
                         metadata.SetClientIP("0.0.0.0");
                         if (!string.IsNullOrEmpty(record.ClientIP) && record.ClientIP != "0.0.0.0")
+                        {
+                            sanitizer.Summary.RedactedValues++;
+                        }
+                        // The process metadata is never written; its omission counts once for each session that the
+                        // ordinary export would give any of it.
+                        if (FiddlerMetaData.HasProcessMetadata(record.ClientProcess))
                         {
                             sanitizer.Summary.RedactedValues++;
                         }
@@ -732,7 +823,7 @@ namespace XMAT.WebServiceCapture
                 // NOTE: this is very *close* to ISO8601, which would require
                 // to just call .ToString("o") but ... Fiddler only uses 5 decimal
                 // places after the seconds rather than 7.
-                return dateTime.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss.fffffK");
+                return dateTime.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss.fffffK", CultureInfo.InvariantCulture);
             }
 
             public FiddlerMetaData(Int64 sid, Int64 bitflags = DefaultFiddlerBitFlags)
@@ -747,40 +838,100 @@ namespace XMAT.WebServiceCapture
                 SessionFlags["x-clientip"] = clientIP;
             }
 
+            // Whether SetClientProcess writes any process flag: the identity, with its start time, or the attribution
+            // state.
+            internal static bool HasProcessMetadata(ClientProcessInfo process) =>
+                !ProcessFilter.IsUnknown(process) ||
+                ClientProcessRecordCodec.StatusToken(process?.Status ?? ClientProcessStatus.NotRecorded).Length != 0;
+
+            // Writes Fiddler's "name:pid", the start time and the attribution state. A session without process
+            // information gets no flag, and a pending lookup is never written.
+            public void SetClientProcess(ClientProcessInfo process)
+            {
+                if (!ProcessFilter.IsUnknown(process))
+                {
+                    SessionFlags[ProcessInfoFlag] = process.ProcessId > 0
+                        ? process.Name + ":" + process.ProcessId.ToString(CultureInfo.InvariantCulture)
+                        : process.Name;
+                    if (process.StartTimeUtc is DateTimeOffset started)
+                    {
+                        SessionFlags[ProcessStartTimeFlag] =
+                            started.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
+                    }
+                }
+
+                string status = ClientProcessRecordCodec.StatusToken(
+                    process?.Status ?? ClientProcessStatus.NotRecorded);
+                if (status.Length != 0)
+                {
+                    SessionFlags[ProcessStatusFlag] = status;
+                }
+            }
+
+            // Built with the XML APIs, so every value stays data whatever characters it holds.
             public string ToXmlString()
             {
-                StringBuilder sb = new();
-                sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-                sb.AppendLine($"<Session SID=\"{SID}\" BitFlags=\"{BitFlags}\">");
+                string requested = DateTimeFormat(ClientBeginRequest);
+                string responded = DateTimeFormat(ClientDoneResponse);
+                var session = new XElement(
+                    "Session",
+                    new XAttribute("SID", SID),
+                    new XAttribute("BitFlags", BitFlags),
+                    new XElement(
+                        "SessionTimers",
+                        new XAttribute("ClientConnected", requested),
+                        new XAttribute("ClientBeginRequest", requested),
+                        new XAttribute("GotRequestHeaders", requested),
+                        new XAttribute("ClientDoneRequest", requested),
+                        new XAttribute("GatewayTime", "0"),
+                        new XAttribute("DNSTime", "0"),
+                        new XAttribute("TCPConnectTime", "0"),
+                        new XAttribute("HTTPSHandshakeTime", "0"),
+                        new XAttribute("ServerConnected", responded),
+                        new XAttribute("FiddlerBeginRequest", responded),
+                        new XAttribute("ServerGotRequest", responded),
+                        new XAttribute("ServerBeginResponse", responded),
+                        new XAttribute("GotResponseHeaders", responded),
+                        new XAttribute("ServerDoneResponse", responded),
+                        new XAttribute("ClientBeginResponse", responded),
+                        new XAttribute("ClientDoneResponse", responded)),
+                    new XElement(
+                        "SessionFlags",
+                        SessionFlags.Select(sessionFlag => new XElement(
+                            "SessionFlag",
+                            new XAttribute("N", XmlText(sessionFlag.Key)),
+                            new XAttribute("V", XmlText(sessionFlag.Value))))));
+                return "<?xml version=\"1.0\" encoding=\"utf-8\"?>" + Environment.NewLine + session;
+            }
 
-                sb.Append("<SessionTimers ");
-                sb.Append($"ClientConnected=\"{DateTimeFormat(ClientBeginRequest)}\" ");
-                sb.Append($"ClientBeginRequest=\"{DateTimeFormat(ClientBeginRequest)}\" ");
-                sb.Append($"GotRequestHeaders=\"{DateTimeFormat(ClientBeginRequest)}\" ");
-                sb.Append($"ClientDoneRequest=\"{DateTimeFormat(ClientBeginRequest)}\" ");
-                sb.Append("GatewayTime=\"0\" ");
-                sb.Append("DNSTime=\"0\" ");
-                sb.Append("TCPConnectTime=\"0\" ");
-                sb.Append("HTTPSHandshakeTime=\"0\" ");
-                sb.Append($"ServerConnected=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"FiddlerBeginRequest=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"ServerGotRequest=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"ServerBeginResponse=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"GotResponseHeaders=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"ServerDoneResponse=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"ClientBeginResponse=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"ClientDoneResponse=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append("/>");
-
-                sb.AppendLine();
-                sb.AppendLine($"  <SessionFlags>");
-                foreach (var sessionFlag in SessionFlags)
+            // XML 1.0 cannot hold some control characters even escaped; they are dropped rather than failing the export.
+            private static string XmlText(string value)
+            {
+                if (string.IsNullOrEmpty(value))
                 {
-                    sb.AppendLine($"    <SessionFlag N=\"{sessionFlag.Key}\" V=\"{sessionFlag.Value}\" />");
+                    return string.Empty;
                 }
-                sb.AppendLine($"  </SessionFlags>");
-                sb.AppendLine($"</Session>");
-                return sb.ToString();
+
+                StringBuilder text = null;
+                for (int index = 0; index < value.Length; index++)
+                {
+                    char current = value[index];
+                    if (XmlConvert.IsXmlChar(current))
+                    {
+                        text?.Append(current);
+                    }
+                    else if (index + 1 < value.Length && XmlConvert.IsXmlSurrogatePair(value[index + 1], current))
+                    {
+                        text?.Append(current).Append(value[index + 1]);
+                        index++;
+                    }
+                    else
+                    {
+                        text ??= new StringBuilder(value, 0, index, value.Length);
+                    }
+                }
+
+                return text?.ToString() ?? value;
             }
         }
     }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using XMAT.Operations.Processes;
 
 namespace XMAT.SharedInterfaces
 {
@@ -11,5 +12,8 @@ namespace XMAT.SharedInterfaces
         Int64 Id { get; }
         bool IsProcessing { get; }
         object AnalysisData { get; set; }
+
+        // The client-process selectors fixed when the run starts; empty analyzes every session.
+        ProcessFilterSpec ProcessFilter { get; }
     }
 }

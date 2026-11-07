@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.Tests
 {
@@ -55,6 +57,95 @@ namespace XMAT.Tests
             Assert.Null(ProcessSnapshot.Parse(buffer, length));
         }
 
+        [Fact]
+        public void ParseIdentities_ReadsCreationTimeAndPinnedImageName()
+        {
+            const int NameOffset = Entry + 16;
+            const string Name = "protected.exe";
+            var buffer = new byte[NameOffset + (Name.Length * sizeof(char))];
+            GCHandle pin = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+            try
+            {
+                IntPtr address = pin.AddrOfPinnedObject();
+                WriteIdentityEntry(
+                    buffer,
+                    address,
+                    processId: 44,
+                    creationFileTime: DateTimeOffset.Parse("2026-11-03T19:00:00.0000000+00:00",
+                        System.Globalization.CultureInfo.InvariantCulture).ToFileTime(),
+                    Name,
+                    NameOffset);
+
+                IReadOnlyDictionary<int, ProcessIdentityData> identities = ProcessSnapshot.ParseIdentities(
+                    buffer,
+                    buffer.Length,
+                    address);
+
+                ProcessIdentityData identity = Assert.Single(identities).Value;
+                Assert.Equal(44, identity.ProcessId);
+                Assert.Equal(Name, identity.Name);
+                Assert.Equal(
+                    DateTimeOffset.Parse(
+                        "2026-11-03T19:00:00.0000000+00:00",
+                        System.Globalization.CultureInfo.InvariantCulture),
+                    identity.StartTimeUtc);
+            }
+            finally
+            {
+                pin.Free();
+            }
+        }
+
+        [Theory]
+        [InlineData("pointer before buffer")]
+        [InlineData("pointer after buffer")]
+        [InlineData("odd name length")]
+        [InlineData("length exceeds maximum")]
+        [InlineData("name extends past buffer")]
+        public void ParseIdentities_RejectsUnsafeUnicodeString(string malformation)
+        {
+            const int NameOffset = Entry + 16;
+            var buffer = new byte[NameOffset + 32];
+            GCHandle pin = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+            try
+            {
+                IntPtr address = pin.AddrOfPinnedObject();
+                WriteIdentityEntry(buffer, address, 45, DateTimeOffset.UtcNow.ToFileTime(), "safe.exe", NameOffset);
+                Span<byte> entry = buffer.AsSpan(0, Entry);
+                switch (malformation)
+                {
+                    case "pointer before buffer":
+                        WritePointer(entry, IntPtr.Subtract(address, 2));
+                        break;
+                    case "pointer after buffer":
+                        WritePointer(entry, IntPtr.Add(address, buffer.Length + 2));
+                        break;
+                    case "odd name length":
+                        BinaryPrimitives.WriteUInt16LittleEndian(entry.Slice(ProcessSnapshot.ImageNameLengthOffset), 3);
+                        break;
+                    case "length exceeds maximum":
+                        BinaryPrimitives.WriteUInt16LittleEndian(
+                            entry.Slice(ProcessSnapshot.ImageNameMaximumLengthOffset),
+                            2);
+                        break;
+                    default:
+                        BinaryPrimitives.WriteUInt16LittleEndian(
+                            entry.Slice(ProcessSnapshot.ImageNameLengthOffset),
+                            64);
+                        BinaryPrimitives.WriteUInt16LittleEndian(
+                            entry.Slice(ProcessSnapshot.ImageNameMaximumLengthOffset),
+                            64);
+                        break;
+                }
+
+                Assert.Null(ProcessSnapshot.ParseIdentities(buffer, buffer.Length, address));
+            }
+            finally
+            {
+                pin.Free();
+            }
+        }
+
         // `size` bytes with x64 entries at the given offsets, each with its NextEntryOffset, creation time and ID.
         private static byte[] Entries(int size, params (int Offset, uint Next, long Created, ulong Id)[] entries)
         {
@@ -67,6 +158,33 @@ namespace XMAT.Tests
                 BinaryPrimitives.WriteUInt64LittleEndian(entry.Slice(ProcessSnapshot.ProcessIdOffset), id);
             }
             return buffer;
+        }
+
+        private static void WriteIdentityEntry(
+            byte[] buffer,
+            IntPtr address,
+            int processId,
+            long creationFileTime,
+            string name,
+            int nameOffset)
+        {
+            Span<byte> entry = buffer.AsSpan(0, Entry);
+            BinaryPrimitives.WriteInt64LittleEndian(entry.Slice(ProcessSnapshot.CreateTimeOffset), creationFileTime);
+            BinaryPrimitives.WriteUInt64LittleEndian(entry.Slice(ProcessSnapshot.ProcessIdOffset), (ulong)processId);
+            ushort nameBytes = checked((ushort)(name.Length * sizeof(char)));
+            BinaryPrimitives.WriteUInt16LittleEndian(entry.Slice(ProcessSnapshot.ImageNameLengthOffset), nameBytes);
+            BinaryPrimitives.WriteUInt16LittleEndian(
+                entry.Slice(ProcessSnapshot.ImageNameMaximumLengthOffset),
+                nameBytes);
+            WritePointer(entry, IntPtr.Add(address, nameOffset));
+            MemoryMarshal.AsBytes(name.AsSpan()).CopyTo(buffer.AsSpan(nameOffset, nameBytes));
+        }
+
+        private static void WritePointer(Span<byte> entry, IntPtr pointer)
+        {
+            BinaryPrimitives.WriteUInt64LittleEndian(
+                entry.Slice(ProcessSnapshot.ImageNamePointerOffset),
+                unchecked((ulong)pointer.ToInt64()));
         }
     }
 }

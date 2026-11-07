@@ -97,8 +97,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private int _availableConnectionId;
         private int _availableRequestId;
+        private Guid _runId = Guid.NewGuid();
 
         internal BypassListModel BypassList { get; set; }
+        internal ClientProcessResolver ProcessResolver { get; set; } = ClientProcessResolverHost.Shared;
+        internal Guid RunId => _runId;
 
         BypassListModel IWebServiceProxy.BypassList
         {
@@ -126,6 +129,7 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             _availableConnectionId = 999;
             _availableRequestId = 0;
+            _runId = Guid.NewGuid();
         }
 
         // Upstream handler shared by production and tests. Cookies are disabled so a
@@ -376,7 +380,8 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 RaiseCompletedSslConnectionRequest(
                     tunnel.ConnectionId,
-                    tunnel.ConnectRequest);
+                    tunnel.ConnectRequest,
+                    tunnel.ProcessContext);
             }
 
             // Prefer SNI, but CONNECT still supplies the destination for clients
@@ -640,7 +645,10 @@ namespace XMAT.WebServiceCapture.Proxy
             return Interlocked.Increment(ref _availableRequestId);
         }
 
-        internal bool RaiseReceivedInitialConnection(int connectionID, string remoteEndPoint)
+        internal bool RaiseReceivedInitialConnection(
+            int connectionID,
+            string remoteEndPoint,
+            ClientProcessContext processContext = null)
         {
             if (_cts?.IsCancellationRequested == true)
             {
@@ -652,7 +660,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 ConnectionID = connectionID,
                 Timestamp = DateTime.Now,
                 RemoteEndPoint = remoteEndPoint,
-                AcceptConnection = true
+                AcceptConnection = true,
+                ProcessContext = processContext,
             };
 
             ReceivedInitialConnection?.Invoke(this, args);
@@ -668,7 +677,8 @@ namespace XMAT.WebServiceCapture.Proxy
             int connectionID,
             string clientIP,
             ClientRequest request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ClientProcessContext processContext = null)
         {
             if (_cts?.IsCancellationRequested == true || cancellationToken.IsCancellationRequested)
             {
@@ -681,7 +691,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 Timestamp = DateTime.Now,
                 ClientIP = clientIP,
                 Request = request,
-                AcceptConnection = true
+                AcceptConnection = true,
+                ProcessContext = processContext,
             };
 
             bool observersAccepted = InvokeVetoObservers(
@@ -698,32 +709,41 @@ namespace XMAT.WebServiceCapture.Proxy
                 !cancellationToken.IsCancellationRequested;
         }
 
-        internal void RaiseCompletedSslConnectionRequest(int connectionID, ClientRequest request)
+        internal void RaiseCompletedSslConnectionRequest(
+            int connectionID,
+            ClientRequest request,
+            ClientProcessContext processContext = null)
         {
             CompletedSslConnectionRequest?.Invoke(this,
                 new SslConnectionCompletionEventArgs
                 {
                     ConnectionID = connectionID,
                     Timestamp = DateTime.Now,
-                    Request = request
+                    Request = request,
+                    ProcessContext = processContext,
                 });
         }
 
-        internal void RaiseFailedSslConnectionRequest(int connectionID, Exception ex)
+        internal void RaiseFailedSslConnectionRequest(
+            int connectionID,
+            Exception ex,
+            ClientProcessContext processContext = null)
         {
             FailedSslConnectionRequest?.Invoke(this,
                 new ConnectionFailureEventArgs
                 {
                     ConnectionID = connectionID,
                     Timestamp = DateTime.Now,
-                    Exception = ex
+                    Exception = ex,
+                    ProcessContext = processContext,
                 });
         }
 
         internal async Task<bool> RaiseReceivedWebRequestAsync(
             int connectionID,
             ClientRequest request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ClientProcessContext processContext = null)
         {
             if (_cts?.IsCancellationRequested == true || cancellationToken.IsCancellationRequested)
             {
@@ -735,7 +755,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 ConnectionID = connectionID,
                 Timestamp = DateTime.Now,
                 Request = request,
-                AcceptRequest = true
+                AcceptRequest = true,
+                ProcessContext = processContext,
             };
 
             bool observersAccepted = InvokeVetoObservers(
@@ -756,7 +777,8 @@ namespace XMAT.WebServiceCapture.Proxy
             int connectionID,
             ClientRequest request,
             ServerResponse response,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ClientProcessContext processContext = null)
         {
             if (_cts?.IsCancellationRequested == true || cancellationToken.IsCancellationRequested)
             {
@@ -769,7 +791,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 Timestamp = DateTime.Now,
                 Request = request,
                 Response = response,
-                SendResponse = true
+                SendResponse = true,
+                ProcessContext = processContext,
             };
 
             bool observersAccepted = InvokeVetoObservers(
@@ -806,14 +829,15 @@ namespace XMAT.WebServiceCapture.Proxy
             return accepted;
         }
 
-        internal void RaiseConnectionClosed(int connectionID)
+        internal void RaiseConnectionClosed(int connectionID, ClientProcessContext processContext = null)
         {
             _openConnections.TryRemove(connectionID, out _);
             ConnectionClosed?.Invoke(this,
                 new ConnectionClosedEventArgs
                 {
                     ConnectionID = connectionID,
-                    Timestamp = DateTime.Now
+                    Timestamp = DateTime.Now,
+                    ProcessContext = processContext,
                 });
         }
 

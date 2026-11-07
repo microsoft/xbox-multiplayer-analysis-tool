@@ -6,6 +6,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Net.WebSockets;
 using System.Text;
+using XMAT.Operations.Captures;
 using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.WebServiceCapture.Models
@@ -15,6 +16,7 @@ namespace XMAT.WebServiceCapture.Models
         public DateTime Timestamp { get; }
         public int ConnectionID { get; }
         public int RequestNumber { get; }
+        public CaptureRowKey RowKey { get; }
         public bool FromHost { get; }
         public string Direction => FromHost ? "Server \u2192 Client" : "Client \u2192 Server";
         public string MessageType { get; }
@@ -34,6 +36,7 @@ namespace XMAT.WebServiceCapture.Models
             Timestamp = args.Timestamp;
             ConnectionID = args.ConnectionID;
             RequestNumber = args.RequestNumber;
+            RowKey = args.RowKey;
             FromHost = args.FromHost;
             MessageType = args.MessageType switch
             {

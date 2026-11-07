@@ -16,6 +16,7 @@
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="booleanToVisibilityConverter" />
         <local:ProxyStatusIsErrorConverter x:Key="proxyStatusIsErrorConverter" />
+        <local:ProcessDisplayConverter x:Key="processDisplayConverter" />
         <Style x:Key="CenterGridHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
         </Style>
@@ -32,6 +33,9 @@
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DisableDevice}"    Executed="DisableDevice_Executed"    CanExecute="Disable_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}" Executed="StartStopCapture_Executed" CanExecute="StartStopCapture_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CheckDevice}" Executed="CheckDevice_Executed" CanExecute="CheckDevice_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ShowOnlyProcess}"  Executed="ProcessFilterCommand_Executed" CanExecute="ProcessFilterCommand_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.HideProcess}"      Executed="ProcessFilterCommand_Executed" CanExecute="ProcessFilterCommand_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ShowAllProcesses}" Executed="ProcessFilterCommand_Executed" CanExecute="ProcessFilterCommand_CanExecute"/>
     </UserControl.CommandBindings>
 
     <Grid>
@@ -115,6 +119,32 @@
                 <app:CheckBoxFilters x:Name="StatusFilters" FilterDesc="Status" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.StatusFilterList}"/>
                 <app:CheckBoxFilters x:Name="HostFilters"   FilterDesc="Host"   FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.HostFilterList}"/>
                 <app:CheckBoxFilters x:Name="MethodFilters" FilterDesc="Method" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.MethodFilterList}"/>
+                <!-- The process filter only hides rows; the proxy still forwards and records every session. -->
+                <ToggleButton x:Name="ProcessFilterButton" Height="20" Padding="6,0" Margin="0,0,10,0" VerticalAlignment="Center"
+                              IsChecked="{Binding IsOpen, ElementName=ProcessFilterPopup, Mode=TwoWay}" Content="Process"/>
+                <Popup x:Name="ProcessFilterPopup" PlacementTarget="{Binding ElementName=ProcessFilterButton}" Placement="Bottom"
+                       StaysOpen="False" AllowsTransparency="False">
+                    <Border Background="{DynamicResource WindowBackgroundBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                            TextElement.Foreground="{DynamicResource PrimaryForegroundBrush}"
+                            BorderThickness="1" Padding="8">
+                        <StackPanel Width="340">
+                            <TextBlock x:Name="ProcessIncludeLabel" Text="Show only" FontWeight="SemiBold"/>
+                            <TextBox x:Name="ProcessIncludeText" Margin="0,2,0,6" Padding="2"/>
+                            <TextBlock x:Name="ProcessExcludeLabel" Text="Hide" FontWeight="SemiBold"/>
+                            <TextBox x:Name="ProcessExcludeText" Margin="0,2,0,6" Padding="2"/>
+                            <TextBlock x:Name="ProcessFilterHelp" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                            <TextBlock x:Name="ProcessFilterError" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,6"
+                                       Visibility="Collapsed"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="HideSvchostButton" Padding="8,2" Margin="0,0,6,0" Click="HideSvchost_Click">Hide svchost.exe</Button>
+                                <Button x:Name="ApplyProcessFilterButton" Padding="8,2" Click="ApplyProcessFilter_Click">Apply</Button>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+                <TextBlock x:Name="ProcessFilterIndicator" VerticalAlignment="Center" Margin="0,0,6,0" Visibility="Collapsed"/>
+                <Button x:Name="ShowAllProcessesButton" Height="20" Padding="6,0" VerticalAlignment="Center" Visibility="Collapsed"
+                        Click="ShowAllProcesses_Click">Show all processes</Button>
             </StackPanel>
         </StackPanel>
 
@@ -123,14 +153,15 @@
                                    ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
                                    IsCaptureRunning="{Binding CaptureController.IsRunning, Mode=OneWay}"
                                    HostListPolicy="{Binding CaptureController.HostListPolicy, Mode=OneWay}"
+                                   ProcessFilter="{Binding CaptureController.ProcessFilter, Mode=OneWay}"
                                    SelectedItem="{Binding CaptureController.SelectedConnectionModel}"/>
 
         <GridSplitter Grid.Row="3" Height="4" HorizontalAlignment="Stretch" VerticalAlignment="Center" ResizeDirection="Rows"/>
 
+        <!-- The code-behind gives the grid its own view of CaptureController.ProxyConnections. -->
         <DataGrid x:Name="ConnectionList" Grid.Row="4"
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   d:ItemsSource="{d:SampleData}" 
-                  ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"
                   ContextMenuOpening="ConnectionList_ContextMenuOpening"
                   AutoGenerateColumns="False" GridLinesVisibility="None" ScrollViewer.ScrollChanged="ConnectionList_ScrollChanged">
@@ -140,6 +171,14 @@
                 <DataGridTextColumn Header="METHOD" Binding="{Binding Method}"        Width="70"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
                 <DataGridTextColumn Header="SCHEME" Binding="{Binding Scheme}"        Width="70"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
                 <DataGridTextColumn Header="HOST"   Binding="{Binding Host}"          Width="200" HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
+                <DataGridTextColumn Header="PROCESS" Width="140" SortMemberPath="ClientProcess.Name" HeaderStyle="{StaticResource CenterGridHeaderStyle}">
+                    <DataGridTextColumn.Binding>
+                        <MultiBinding Converter="{StaticResource processDisplayConverter}" Mode="OneWay">
+                            <Binding Path="ClientProcess" />
+                            <Binding Path="IsProcessResolving" />
+                        </MultiBinding>
+                    </DataGridTextColumn.Binding>
+                </DataGridTextColumn>
                 <DataGridTextColumn Header="PATH"   Binding="{Binding Path}"          Width="*"   HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
             </DataGrid.Columns>
             <DataGrid.RowStyle>

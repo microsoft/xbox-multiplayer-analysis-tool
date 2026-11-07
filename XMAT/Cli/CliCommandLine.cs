@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using XMAT.Operations;
+using XMAT.Operations.Processes;
 
 namespace XMAT.Cli
 {
@@ -27,7 +28,8 @@ namespace XMAT.Cli
         bool FailOnFindings = false,
         string Target = null,
         string Topic = null,
-        CliLimits Limits = null);
+        CliLimits Limits = null,
+        ProcessFilterSpec ProcessFilter = null);
 
     // A parsed request, or a data-free usage error (exit code 2).
     internal sealed record CliParseResult(CliRequest Request, string Command, OperationDiagnostic Error)
@@ -48,6 +50,8 @@ namespace XMAT.Cli
         internal const string OutOption = "--out";
         internal const string DeviceOption = "--device";
         internal const string FailOnOption = "--fail-on";
+        internal const string ProcessOption = "--process";
+        internal const string ExcludeProcessOption = "--exclude-process";
         internal const string ForOption = "--for";
         internal const string VersionSwitch = "--version";
         internal const string FindingsValue = "findings";
@@ -56,6 +60,11 @@ namespace XMAT.Cli
         internal const string UnknownCommandMessage = "Unknown command. Run xmat help for the commands.";
         internal const string UnknownOptionMessage = "Unknown option. Run xmat help for the options.";
         internal const string UnknownTargetMessage = "Unknown doctor target. Run xmat help doctor for the targets.";
+
+        // A selector can be a path or another value that must not be repeated, so the message never names it.
+        internal const string InvalidProcessSelectorMessage =
+            "--process and --exclude-process take an image name such as game*.exe (* and ? are wildcards, .exe is " +
+            "optional) or a process id, each at most 260 characters and at most 64 of each option.";
 
         private static readonly HashSet<string> AnalyzeOptions = new(StringComparer.Ordinal)
         {
@@ -66,6 +75,15 @@ namespace XMAT.Cli
             CliLimits.DataOption,
             CliLimits.RecordOption,
             CliLimits.RecordsOption,
+            ProcessOption,
+            ExcludeProcessOption,
+        };
+
+        // The only options that may be given more than once; each value adds a selector.
+        private static readonly HashSet<string> RepeatableAnalyzeOptions = new(StringComparer.Ordinal)
+        {
+            ProcessOption,
+            ExcludeProcessOption,
         };
 
         private static readonly HashSet<string> DoctorOptions = new(StringComparer.Ordinal) { ForOption };
@@ -138,7 +156,7 @@ namespace XMAT.Cli
         {
             const string command = CliCommands.Analyze;
             var arguments = new CliArguments();
-            CliParseResult error = arguments.Read(args, command, AnalyzeOptions);
+            CliParseResult error = arguments.Read(args, command, AnalyzeOptions, RepeatableAnalyzeOptions);
             if (error != null)
             {
                 return error;
@@ -187,13 +205,28 @@ namespace XMAT.Cli
                 return CliParseResult.UsageError(command, "cli.usage.invalid-value", CliLimits.RecordOverDataMessage);
             }
 
+            ProcessFilterSpec processFilter = null;
+            if (arguments.RepeatedOptions.Count != 0)
+            {
+                OperationResult<ProcessFilterSpec> selectors = ProcessFilter.Parse(
+                    arguments.ValuesOf(ProcessOption),
+                    arguments.ValuesOf(ExcludeProcessOption));
+                if (!selectors.Succeeded || selectors.Value == null)
+                {
+                    return CliParseResult.UsageError(command, "cli.usage.invalid-value", InvalidProcessSelectorMessage);
+                }
+
+                processFilter = selectors.Value;
+            }
+
             return CliParseResult.Success(new CliRequest(
                 command,
                 Input: arguments.Positionals[0],
                 Output: output,
                 DeviceId: deviceId,
                 FailOnFindings: failOnFindings,
-                Limits: limits));
+                Limits: limits,
+                ProcessFilter: processFilter));
         }
 
         private static CliParseResult ParseDoctor(IReadOnlyList<string> args)
@@ -249,18 +282,29 @@ namespace XMAT.Cli
         }
     }
 
-    // The options (--name VALUE or --name=VALUE, each at most once), positional arguments and help switches that follow
-    // a command. "--" ends the options, so an INPUT that starts with '-' can still be named.
+    // The options (--name VALUE or --name=VALUE, each at most once unless the command makes it repeatable), positional
+    // arguments and help switches that follow a command. "--" ends the options, so an INPUT that starts with '-' can still
+    // be named.
     internal sealed class CliArguments
     {
         internal Dictionary<string, string> Options { get; } = new(StringComparer.Ordinal);
+
+        // The values of the repeatable options that were given, in command-line order.
+        internal Dictionary<string, List<string>> RepeatedOptions { get; } = new(StringComparer.Ordinal);
 
         internal List<string> Positionals { get; } = new();
 
         internal bool HelpRequested { get; private set; }
 
+        internal IReadOnlyList<string> ValuesOf(string option) =>
+            RepeatedOptions.TryGetValue(option, out List<string> values) ? values : Array.Empty<string>();
+
         // Returns null when the arguments are valid, otherwise the usage error.
-        internal CliParseResult Read(IReadOnlyList<string> args, string command, IReadOnlySet<string> allowedOptions)
+        internal CliParseResult Read(
+            IReadOnlyList<string> args,
+            string command,
+            IReadOnlySet<string> allowedOptions,
+            IReadOnlySet<string> repeatableOptions = null)
         {
             bool onlyPositionals = false;
             for (int index = 1; index < args.Count; index++)
@@ -319,6 +363,18 @@ namespace XMAT.Cli
                 if (value.Length == 0)
                 {
                     return CliParseResult.UsageError(command, "cli.usage.missing-value", $"The {name} option needs a value.");
+                }
+
+                if (repeatableOptions != null && repeatableOptions.Contains(name))
+                {
+                    if (!RepeatedOptions.TryGetValue(name, out List<string> values))
+                    {
+                        values = new List<string>();
+                        RepeatedOptions.Add(name, values);
+                    }
+
+                    values.Add(value);
+                    continue;
                 }
 
                 if (!Options.TryAdd(name, value))
