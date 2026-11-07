@@ -97,7 +97,7 @@ namespace XMAT.Tests
             record.SetClientProcess(imported.ClientProcess);
             string path = Path.Join(_directory, "reexported.saz");
 
-            FiddlerSazHandler.CreateSazFile(path, new[] { record });
+            SazArchive.Write(path, new[] { record });
 
             Assert.Equal(exported, FlagsOf(path).GetValueOrDefault(ProcessInfoFlag));
             string all = string.Join("\n", ProcessCaptures.Entries(path).Values.Select(Encoding.UTF8.GetString));
@@ -152,7 +152,7 @@ namespace XMAT.Tests
             record.SetClientProcess(new ClientProcessInfo("Game.exe", 1234, Started, ClientProcessStatus.Local));
             string path = Path.Join(_directory, "process.saz");
 
-            FiddlerSazHandler.CreateSazFile(path, new[] { record });
+            SazArchive.Write(path, new[] { record });
 
             Dictionary<string, string> flags = FlagsOf(path);
             Assert.Equal("Game.exe:1234", flags.GetValueOrDefault(ProcessInfoFlag));
@@ -165,17 +165,18 @@ namespace XMAT.Tests
                 imported.ClientProcess);
         }
 
-        // Every XML-special character stays data: the metadata parses and each value reads back exactly.
+        // Every XML-special character stays data: the client address holds all five and a valid image name holds & and '.
+        // The metadata parses and each value reads back exactly.
         [Fact]
         public void Export_EscapesProcessNamesAndClientIpsInWellFormedMetadata()
         {
             const string clientIp = "R&D \"lab\" <pc> 'x'";
-            const string name = "R&D's <tool> \"x\".exe";
+            const string name = "R&D's tool.exe";
             ProxyConnectionModel record = ProcessCaptures.ExportRecord(1, clientIp);
             record.SetClientProcess(new ClientProcessInfo(name, 77, null, ClientProcessStatus.Local));
             string path = Path.Join(_directory, "escaped.saz");
 
-            FiddlerSazHandler.CreateSazFile(path, new[] { record });
+            SazArchive.Write(path, new[] { record });
 
             IReadOnlyList<KeyValuePair<string, string>> flags =
                 ProcessCaptures.SessionFlags(ProcessCaptures.Entries(path)["raw/1_m.xml"]);
@@ -192,11 +193,12 @@ namespace XMAT.Tests
             ProxyConnectionModel record = ProcessCaptures.ExportRecord(1, forged);
             string path = Path.Join(_directory, "forged.saz");
 
-            FiddlerSazHandler.CreateSazFile(path, new[] { record });
+            SazArchive.Write(path, new[] { record });
 
-            KeyValuePair<string, string> flag = Assert.Single(
-                ProcessCaptures.SessionFlags(ProcessCaptures.Entries(path)["raw/1_m.xml"]));
-            Assert.Equal(new KeyValuePair<string, string>("x-clientip", forged), flag);
+            IReadOnlyList<KeyValuePair<string, string>> flags =
+                ProcessCaptures.SessionFlags(ProcessCaptures.Entries(path)["raw/1_m.xml"]);
+            Assert.Contains(new KeyValuePair<string, string>("x-clientip", forged), flags);
+            Assert.DoesNotContain(flags, flag => IsProcessFlag(flag.Key));
             ProxyConnectionModel imported = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
             Assert.Equal(ClientProcessInfo.NotRecorded, imported.ClientProcess);
         }
@@ -211,7 +213,7 @@ namespace XMAT.Tests
             record.SetClientProcess(new ClientProcessInfo(name, processId, null, ClientProcessStatus.Local));
             string path = Path.Join(_directory, "partial.saz");
 
-            FiddlerSazHandler.CreateSazFile(path, new[] { record });
+            SazArchive.Write(path, new[] { record });
 
             ProxyConnectionModel imported = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
             Assert.Equal(
@@ -228,7 +230,7 @@ namespace XMAT.Tests
             record.SetClientProcess(new ClientProcessInfo(string.Empty, 0, null, status));
             string path = Path.Join(_directory, "status.saz");
 
-            FiddlerSazHandler.CreateSazFile(path, new[] { record });
+            SazArchive.Write(path, new[] { record });
 
             Dictionary<string, string> flags = FlagsOf(path);
             Assert.False(flags.ContainsKey(ProcessInfoFlag));
@@ -243,9 +245,9 @@ namespace XMAT.Tests
             ProxyConnectionModel record = ProcessCaptures.ExportRecord(1);
             string path = Path.Join(_directory, "unknown.saz");
 
-            FiddlerSazHandler.CreateSazFile(path, new[] { record });
+            SazArchive.Write(path, new[] { record });
 
-            Assert.Equal(new[] { "x-clientip" }, FlagsOf(path).Keys);
+            Assert.DoesNotContain(FlagsOf(path).Keys, IsProcessFlag);
         }
 
         [Fact]
@@ -258,10 +260,8 @@ namespace XMAT.Tests
             string plainPath = Path.Join(_directory, "plain-sanitized.saz");
             string identifiedPath = Path.Join(_directory, "identified-sanitized.saz");
 
-            SanitizedExportSummary baseline = FiddlerSazHandler.CreateSanitizedSazFile(plainPath, new[] { plain });
-            SanitizedExportSummary summary = FiddlerSazHandler.CreateSanitizedSazFile(
-                identifiedPath,
-                new[] { identified });
+            SanitizedExportSummary baseline = SazArchive.Write(plainPath, new[] { plain }, sanitized: true);
+            SanitizedExportSummary summary = SazArchive.Write(identifiedPath, new[] { identified }, sanitized: true);
 
             Dictionary<string, byte[]> entries = ProcessCaptures.Entries(identifiedPath);
             string all = string.Join("\n", entries.Values.Select(Encoding.UTF8.GetString));
@@ -295,11 +295,11 @@ namespace XMAT.Tests
             string ordinaryPath = Path.Join(_directory, "ordinary.saz");
             string baselinePath = Path.Join(_directory, "baseline-sanitized.saz");
             string sanitizedPath = Path.Join(_directory, "status-sanitized.saz");
-            FiddlerSazHandler.CreateSazFile(ordinaryPath, new[] { record });
+            SazArchive.Write(ordinaryPath, new[] { record });
             Assert.Equal(written, FlagsOf(ordinaryPath).Keys.Any(IsProcessFlag));
 
-            SanitizedExportSummary baseline = FiddlerSazHandler.CreateSanitizedSazFile(baselinePath, new[] { plain });
-            SanitizedExportSummary summary = FiddlerSazHandler.CreateSanitizedSazFile(sanitizedPath, new[] { record });
+            SanitizedExportSummary baseline = SazArchive.Write(baselinePath, new[] { plain }, sanitized: true);
+            SanitizedExportSummary summary = SazArchive.Write(sanitizedPath, new[] { record }, sanitized: true);
 
             Assert.DoesNotContain(FlagsOf(sanitizedPath).Keys, IsProcessFlag);
             Assert.Equal(baseline.RedactedValues + (written ? 1 : 0), summary.RedactedValues);

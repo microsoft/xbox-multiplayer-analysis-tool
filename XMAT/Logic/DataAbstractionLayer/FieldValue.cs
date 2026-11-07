@@ -16,13 +16,12 @@ namespace XMAT.DataAbstractionLayer
 
         internal static object GetFieldValue(
             SqliteDataReader reader,
+            object stored,
             IFieldDefinition fieldDefinition)
         {
             ArgumentNullException.ThrowIfNull(reader);
             ArgumentNullException.ThrowIfNull(fieldDefinition);
-            int columnIndex =
-                fieldDefinition.ColumnIndex;
-            if (reader.IsDBNull(columnIndex))
+            if (stored == null)
             {
                 if (!fieldDefinition.IsExtension)
                 {
@@ -33,7 +32,6 @@ namespace XMAT.DataAbstractionLayer
             }
             if (fieldDefinition.IsExtension)
             {
-                object stored = reader.GetValue(columnIndex);
                 return fieldDefinition.ValueType switch
                 {
                     FieldValueType.Integer when stored is long => stored,
@@ -45,10 +43,10 @@ namespace XMAT.DataAbstractionLayer
             switch (fieldDefinition.ValueType)
             {
                 case FieldValueType.Integer:
-                    return reader.GetInt64(columnIndex);
+                    return stored is long ? stored : reader.GetInt64(fieldDefinition.ColumnIndex);
 
                 case FieldValueType.String:
-                    return reader.GetString(columnIndex);
+                    return stored is string ? stored : reader.GetString(fieldDefinition.ColumnIndex);
 
                 default:
                     throw new InvalidOperationException("need value type method for unsupported type.");

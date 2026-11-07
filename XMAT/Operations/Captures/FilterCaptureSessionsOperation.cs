@@ -50,11 +50,18 @@ namespace XMAT.Operations.Captures
                         OperationDiagnosticSeverity.Error,
                         "A process selector is invalid."));
             }
+            return SelectCompiled(request.Sessions, filter, cancellationToken);
+        }
 
-            var included = new List<CaptureRowKey>(request.Sessions.Count);
+        internal static OperationResult<FilterCaptureSessionsResult> SelectCompiled(
+            IReadOnlyList<CaptureSessionRef> sessions,
+            ProcessFilter filter,
+            CancellationToken cancellationToken)
+        {
+            var included = new List<CaptureRowKey>(sessions.Count);
             var deviceTotals = new Dictionary<string, MutableCounts>(StringComparer.Ordinal);
             var total = new MutableCounts();
-            foreach (CaptureSessionRef session in request.Sessions)
+            foreach (CaptureSessionRef session in sessions)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (session == null || string.IsNullOrEmpty(session.DeviceId))

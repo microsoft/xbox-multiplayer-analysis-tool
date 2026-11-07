@@ -17,7 +17,8 @@ namespace XMAT.DataAbstractionLayer
     internal class SqLtDataRecord :
         IDataRecord,
         IOptionalTypedDataRecord,
-        INullableDataRecord
+        INullableDataRecord,
+        IRawDataRecord
     {
         public int RowId { get; private set; }
 
@@ -41,10 +42,9 @@ namespace XMAT.DataAbstractionLayer
         // Only an extension column can hold NULL; reading one yields null text or a zero integer.
         public bool IsNull(string fieldName)
         {
-            return _fieldDefs.TryGetValue(
-                    fieldName,
-                    out IFieldDefinition fieldDef) &&
-                _fieldValues[fieldDef.ColumnIndex] == null;
+            return _rawValues != null &&
+                _rawValues.TryGetValue(fieldName, out object value) &&
+                value == null;
         }
 
         public string Str(string fieldName)
@@ -87,7 +87,25 @@ namespace XMAT.DataAbstractionLayer
             return true;
         }
 
-        internal SqLtDataRecord(SqliteDataReader recordReader, IDictionary<string, IFieldDefinition> fieldDefs)
+        public bool TryReadRaw(string name, out object value)
+        {
+            if (_rawValues != null && _rawValues.TryGetValue(name, out value))
+            {
+                return true;
+            }
+            if (_fieldDefs.TryGetValue(name, out IFieldDefinition fieldDefinition) &&
+                _fieldValues.TryGetValue(fieldDefinition.ColumnIndex, out value))
+            {
+                return true;
+            }
+            value = null;
+            return false;
+        }
+
+        internal SqLtDataRecord(
+            SqliteDataReader recordReader,
+            IDictionary<string, IFieldDefinition> fieldDefs,
+            IReadOnlySet<string> untypedColumns = null)
         {
             RowId = recordReader.GetInt32(0);
 
@@ -96,13 +114,21 @@ namespace XMAT.DataAbstractionLayer
 
             foreach (var fieldDef in _fieldDefs)
             {
-                _fieldValues[fieldDef.Value.ColumnIndex] = FieldValue.GetFieldValue(
-                    recordReader,
-                    fieldDef.Value);
+                object stored = recordReader.GetValue(fieldDef.Value.ColumnIndex);
+                object rawValue = stored == DBNull.Value ? null : stored;
+                object typedValue = untypedColumns?.Contains(fieldDef.Key) == true
+                    ? rawValue as string
+                    : FieldValue.GetFieldValue(recordReader, rawValue, fieldDef.Value);
+                _fieldValues[fieldDef.Value.ColumnIndex] = typedValue;
+                if (rawValue == null || !ReferenceEquals(rawValue, typedValue))
+                {
+                    (_rawValues ??= new Dictionary<string, object>(StringComparer.Ordinal))[fieldDef.Key] = rawValue;
+                }
             }
         }
 
         private IDictionary<string, IFieldDefinition> _fieldDefs;
         private IDictionary<int, object> _fieldValues;
+        private readonly IDictionary<string, object> _rawValues;
     }
 }

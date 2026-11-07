@@ -919,7 +919,7 @@ namespace XMAT.Tests
             }
         }
 
-        private static CaptureConnectionView View(WebServiceDeviceCaptureController controller)
+        internal static CaptureConnectionView View(WebServiceDeviceCaptureController controller)
         {
             var view = new CaptureConnectionView { AutoScroll = false };
             ConnectionList(view).IsSynchronizedWithCurrentItem = false;
@@ -928,7 +928,7 @@ namespace XMAT.Tests
         }
 
         // The designed size: in the small default test window the grid has no row viewport.
-        private static void ShowCaptureView(Window window, CaptureConnectionView view)
+        internal static void ShowCaptureView(Window window, CaptureConnectionView view)
         {
             window.Width = 1280;
             window.Height = 720;
@@ -959,7 +959,7 @@ namespace XMAT.Tests
             return changes;
         }
 
-        private static DataGridRow Container(DataGrid grid, object item)
+        internal static DataGridRow Container(DataGrid grid, object item)
         {
             grid.ScrollIntoView(item);
             WpfTestHost.Pump();
@@ -1121,7 +1121,7 @@ namespace XMAT.Tests
 
         // The right-click route, as HostListUiTests opens it: ContextMenuOpening bubbles from the clicked element, then
         // the menu of the first element on the route that owns one opens for that owner.
-        private static ContextMenu Open(FrameworkElement clicked)
+        internal static ContextMenu Open(FrameworkElement clicked)
         {
             ConstructorInfo constructor = typeof(ContextMenuEventArgs).GetConstructor(
                 BindingFlags.Instance | BindingFlags.NonPublic,

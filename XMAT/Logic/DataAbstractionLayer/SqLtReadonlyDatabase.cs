@@ -396,7 +396,8 @@ namespace XMAT.DataAbstractionLayer
                     new SqLtReadonlyDataTable(
                         _connection,
                         table.SqliteName,
-                        fields));
+                        fields,
+                        table.Columns));
             }
         }
 

@@ -7,6 +7,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using XMAT.Cli;
+using XMAT.Operations;
 
 namespace XMAT.Tests.Cli
 {
@@ -277,6 +278,63 @@ namespace XMAT.Tests.Cli
             Assert.Empty(report.Artifacts);
             Assert.Equal(CliCleanupStates.Completed, report.CleanupState);
             Assert.Empty(directory.Entries());
+        }
+
+        [Fact]
+        public async Task PrivateFolder_IsPrivateAndHasExactlyOneOwner()
+        {
+            using var directory = new CliTestDirectory();
+            string parentPath = Path.Join(directory.Root, "broad");
+            Directory.CreateDirectory(parentPath);
+            var parent = new DirectoryInfo(parentPath);
+            DirectorySecurity security = parent.GetAccessControl();
+            security.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                FileSystemRights.ReadAndExecute,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            parent.SetAccessControl(security);
+            string privatePath = Path.Join(parentPath, "private");
+
+            PrivateFolder.Create(privatePath);
+
+            Assert.True(PrivateFolder.IsPrivate(privatePath));
+            string sentinel = Path.Join(privatePath, "sentinel.txt");
+            File.WriteAllText(sentinel, "keep");
+            Assert.Throws<IOException>(() => PrivateFolder.Create(privatePath));
+            Assert.Equal("keep", File.ReadAllText(sentinel));
+
+            string concurrentPath = Path.Join(parentPath, "concurrent");
+            using var barrier = new Barrier(9);
+            Task<bool>[] creators = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                try
+                {
+                    PrivateFolder.Create(concurrentPath);
+                    return true;
+                }
+                catch (IOException)
+                {
+                    return false;
+                }
+            })).ToArray();
+            barrier.SignalAndWait();
+            bool[] owners = await Task.WhenAll(creators);
+            Assert.Single(owners, owner => owner);
+            Assert.True(PrivateFolder.IsPrivate(concurrentPath));
+        }
+
+        [Fact]
+        public void PrivateFolder_UsesExtendedLengthNativePaths()
+        {
+            Assert.Equal(@"\\?\C:\a\b", PrivateFolder.NativePath(@"C:\a\b"));
+            Assert.Equal(@"\\?\UNC\server\share\x", PrivateFolder.NativePath(@"\\server\share\x"));
+            Assert.Equal(@"\\?\C:\x", PrivateFolder.NativePath(@"\\?\C:\x"));
+            Assert.Equal(@"\\.\x", PrivateFolder.NativePath(@"\\.\x"));
+            string relative = Path.Join("relative", "x");
+            Assert.Equal(@"\\?\" + Path.GetFullPath(relative), PrivateFolder.NativePath(relative));
         }
 
         // A report that cannot be serialized (here a null warning, which also breaks the text on standard error) is replaced

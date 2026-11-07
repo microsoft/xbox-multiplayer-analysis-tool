@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -18,6 +19,7 @@ using System.Windows.Threading;
 using XMAT.Models;
 using XMAT.Operations;
 using XMAT.Operations.Captures;
+using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
@@ -90,6 +92,30 @@ namespace XMAT.WebServiceCapture
         // The shared selection that picks and counts the rows a new process filter shows; tests substitute it.
         internal Func<FilterCaptureSessionsRequest, CancellationToken, OperationResult<FilterCaptureSessionsResult>>
             ProcessSelection { get; set; } = FilterCaptureSessionsOperation.Select;
+
+        // The sessions that an export from this list covers: the visible ones follow every active filter (the Status, Host
+        // and Method checkboxes as exact values, and the process filter); selectedOnly also keeps only the selected rows.
+        internal CaptureSelectionSpec ExportSelection(bool selectedOnly) =>
+            new(
+                _attachedController?.ProcessFilter ?? ProcessFilterSpec.Empty,
+                new HostSelection(
+                    HostMatchMode.Exact, CheckedValues(HostFilters, _attachedController?.HostFilterList), ImmutableArray<string>.Empty),
+                CheckedValues(StatusFilters, _attachedController?.StatusFilterList),
+                CheckedValues(MethodFilters, _attachedController?.MethodFilterList),
+                selectedOnly
+                    ? ConnectionList.SelectedItems.OfType<ProxyConnectionModel>().Select(row => row.RowKey).ToImmutableHashSet()
+                    : null,
+                false);
+
+        // The values that an enabled checkbox filter shows: like CaptureFilterIndex, the first item of a value decides.
+        private static ImmutableArray<string>? CheckedValues(CheckBoxFilters filter, IEnumerable<CheckedListItem> items) =>
+            filter.IsFilterEnabled
+                ? (items ?? Enumerable.Empty<CheckedListItem>())
+                    .GroupBy(item => item.Text ?? string.Empty, StringComparer.Ordinal)
+                    .Where(values => values.First().IsChecked)
+                    .Select(values => values.Key)
+                    .ToImmutableArray()
+                : null;
 
         public CaptureConnectionView()
         {
@@ -1334,6 +1360,39 @@ namespace XMAT.WebServiceCapture
                 row.Item as ProxyConnectionModel,
                 controller.ProcessFilter,
                 row);
+            row.ContextMenu.Items.Add(new Separator());
+            row.ContextMenu.Items.Add(ExportItem("WEBCAP_EXPORT_SELECTED", WebServiceProxyCommands.ExportSelectedSessions, row));
+            row.ContextMenu.Items.Add(ExportItem("WEBCAP_EXPORT_VISIBLE", WebServiceProxyCommands.ExportVisibleSessions, row));
+        }
+
+        private static MenuItem ExportItem(string header, RoutedCommand command, IInputElement target) =>
+            new() { Header = Localization.GetLocalizedString(header), CommandTarget = target, Command = command };
+
+        private void ExportSessions_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = _attachedController != null && CaptureAppModel.AppModel.CanModifyCaptureData &&
+                (e.Command == WebServiceProxyCommands.ExportSelectedSessions
+                    ? ConnectionList.SelectedItems.Count
+                    : ConnectionList.Items.Count) != 0;
+            e.Handled = true;
+        }
+
+        private async void ExportSessions_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (!TryGetCaptureContext(DataContext, out ICaptureDeviceContext tab, out _) ||
+                Window.GetWindow(this) is not ICaptureExportDialogService dialogs)
+            {
+                return;
+            }
+
+            // Selectors typed in the process filter editor and not applied yet are part of what the list will show.
+            if (_processEditTimer.IsEnabled)
+            {
+                ApplyProcessEditor();
+            }
+
+            CaptureSelectionSpec selection = ExportSelection(e.Command == WebServiceProxyCommands.ExportSelectedSessions);
+            await CaptureExportWorkflow.For(dialogs).RunAsync(CaptureAppModel.AppModel, tab, selection, sanitizedOnly: false);
         }
 
         internal static bool TryGetCaptureContext(

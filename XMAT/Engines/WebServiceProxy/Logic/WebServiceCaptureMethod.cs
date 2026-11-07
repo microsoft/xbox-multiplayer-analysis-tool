@@ -164,7 +164,8 @@ namespace XMAT.WebServiceCapture
                     SkippedIncompleteFrames:
                         import.SkippedIncompleteFrames,
                     SkippedMalformedHeaderLines:
-                        import.SkippedMalformedHeaderLines);
+                        import.SkippedMalformedHeaderLines,
+                    Source: import.Source);
             });
 
             captureController.PrepareForActiveCaptureData();
@@ -172,6 +173,9 @@ namespace XMAT.WebServiceCapture
             captureController.HostFilterList = imported.HostFilters;
             captureController.StatusFilterList = imported.StatusFilters;
             captureController.MethodFilterList = imported.MethodFilters;
+            LoadedCaptureDatabaseRegistry.AssignImported(
+                captureController,
+                imported.Source);
             TryNotifyCaptureReplacement(
                 () => captureController.SetImportNotice(
                     imported.SkippedIncompleteFrames > 0 ||
@@ -219,22 +223,6 @@ namespace XMAT.WebServiceCapture
                     PublicUtilities.AppLog(LogLevel.ERROR, message);
                 }
             }
-        }
-
-        public void ExportToFiddler(string toFilePath)
-        {
-            var list = new List<ProxyConnectionModel>();
-            if (WebProxyConnectionsTable != null)
-            {
-                var records = WebProxyConnectionsTable.Dataset.DataRecords;
-                foreach (var record in records)
-                {
-                    var m = new ProxyConnectionModel(record);
-                    list.Add(m);
-                }
-            }
-
-            FiddlerSazHandler.CreateSazFile(toFilePath, list);
         }
     }
 }

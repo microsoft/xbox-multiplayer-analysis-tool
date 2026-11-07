@@ -747,6 +747,7 @@ namespace XMAT.Tests
         {
             using var certificate = CreateCertificate();
             var proxy = new WebServiceProxy();
+            proxy.Reset();
             var registry = new InterceptedTunnelRegistry();
             var upstreamHandler = new RecordingHandler
             {
@@ -1646,6 +1647,55 @@ namespace XMAT.Tests
                 Assert.Single(originConnections);
                 Assert.Equal(batchSize * batches, streamIds.Count);
             });
+        }
+
+        [Fact]
+        public async Task InterceptedUnsupportedWebSocketTarget_AbortsBeforeDispatch()
+        {
+            using var certificate = CreateCertificate();
+            var proxy = new WebServiceProxy();
+            var registry = new InterceptedTunnelRegistry();
+            var upstream = new RecordingHandler();
+            using var upstreamClient = new HttpClient(upstream);
+            var application = new InterceptedProxyApplication(proxy, upstreamClient, registry);
+            (string Path, bool Upgrade) observed = default;
+            await using var intercepted = new InterceptedHttpHost(
+                (_, _) => certificate,
+                context =>
+                {
+                    observed = (context.Request.Path.Value, context.WebSockets.IsWebSocketRequest);
+                    registry.Register(context.Connection.RemotePort, new InterceptedTunnelContext(1000, new ClientRequest()));
+                    return application.InvokeAsync(context);
+                });
+            await intercepted.StartAsync(CancellationToken.None);
+            using var client = new HttpClient(new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+            }) { Timeout = TimeSpan.FromSeconds(5) };
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"https://127.0.0.1:{intercepted.Port}//0.0.0.0/x");
+            request.Headers.TryAddWithoutValidation("Upgrade", "websocket");
+            request.Headers.TryAddWithoutValidation("Connection", "Upgrade");
+            request.Headers.TryAddWithoutValidation("Sec-WebSocket-Version", "13");
+            request.Headers.TryAddWithoutValidation("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==");
+            HttpResponseMessage response = null;
+            Exception failure = await Record.ExceptionAsync(async () =>
+            {
+                response = await client.SendAsync(request);
+            });
+            HttpStatusCode? responseStatus = response?.StatusCode;
+            response?.Dispose();
+
+            Assert.Equal("//0.0.0.0/x", observed.Path);
+            Assert.True(observed.Upgrade);
+            Assert.Null(upstream.Request);
+            if (responseStatus.HasValue)
+            {
+                Assert.Equal(HttpStatusCode.BadGateway, responseStatus.Value);
+            }
+            Assert.Null(responseStatus);
+            Assert.IsAssignableFrom<HttpRequestException>(failure);
         }
 
         // A server that refuses the WebSocket upgrade (for example 401 for an expired token)

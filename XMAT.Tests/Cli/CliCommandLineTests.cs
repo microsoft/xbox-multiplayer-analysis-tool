@@ -56,6 +56,32 @@ namespace XMAT.Tests.Cli
             Assert.Equal("failed", report.Status);
         }
 
+        // With several problems, the first in the parser's order is reported: INPUT, --out and --device, then analyze's
+        // --fail-on or export's format and --host-mode, the limits, the process selectors and export's other selectors.
+        // The missing INPUT and --out messages keep each command's wording.
+        [Theory]
+        [InlineData("analyze --device 1 --fail-on x --max-records 0", "missing-argument", "analyze needs the INPUT")]
+        [InlineData("analyze a b --device 1", "unexpected-argument", "analyze takes a single INPUT")]
+        [InlineData("analyze a --device 1 --fail-on x", "missing-option", "analyze needs --out DIR")]
+        [InlineData("analyze a --out o --device 1 --fail-on x", "invalid-value", "--device")]
+        [InlineData("analyze a --out o --fail-on x --max-records 0", "invalid-value", "--fail-on")]
+        [InlineData("analyze a --out o --max-records 0 --process a/b", "invalid-value", "--max-records")]
+        [InlineData("export --device 1 --host-mode x", "missing-argument", "export takes a single INPUT")]
+        [InlineData("export a b --device 1", "unexpected-argument", "export takes a single INPUT")]
+        [InlineData("export a --device 1 --host-mode x", "missing-option", "export needs --out FILE")]
+        [InlineData("export a --out o.txt --device 1", "invalid-value", "--device")]
+        [InlineData("export a --out o.txt --host-mode x", "invalid-value", "--out must")]
+        [InlineData("export a --out o.saz --host-mode x --max-records 0", "invalid-value", "--host-mode")]
+        [InlineData("export a --out o.saz --max-records 0 --process a/b", "invalid-value", "--max-records")]
+        [InlineData("export a --out o.saz --process a/b --host=", "invalid-value", "--process")]
+        public void Parse_ReportsTheFirstProblemInValidationOrder(string commandLine, string code, string message)
+        {
+            OperationDiagnostic error = Assert.IsType<OperationDiagnostic>(CliCommandLine.Parse(Split(commandLine)).Error);
+
+            Assert.Equal("cli.usage." + code, error.Code);
+            Assert.StartsWith(message, error.Message, StringComparison.Ordinal);
+        }
+
         [Fact]
         public void Parse_ReadsAnalyzeOptionsInEitherForm()
         {
@@ -85,6 +111,7 @@ namespace XMAT.Tests.Cli
         [InlineData("--help doctor", "doctor")]
         [InlineData("analyze --help", "analyze")]
         [InlineData("doctor -?", "doctor")]
+        [InlineData("export --help --device 1", "export")]
         public void Parse_RecognizesHelp(string commandLine, string topic)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));
@@ -147,10 +174,9 @@ namespace XMAT.Tests.Cli
         {
             foreach (Capability capability in CapabilityRegistry.All.Where(item => item.Status == CapabilityStatus.Supported))
             {
-                string command = CliCatalog.CommandOf(capability.CliRoute);
-                Assert.True(
+                Assert.All(capability.CliRoutes.Select(CliCatalog.CommandOf), command => Assert.True(
                     CliCatalog.IsImplemented(command),
-                    $"{capability.Id} is Supported, but xmat has no {command} command. Add it under XMAT/Cli.");
+                    $"{capability.Id} is Supported, but xmat has no {command} command. Add it under XMAT/Cli."));
             }
         }
 
@@ -171,11 +197,34 @@ namespace XMAT.Tests.Cli
         {
             CliReport report = CliHelp.Create("run", topic: null);
 
-            Assert.Equal(new[] { CliCommands.Analyze, CliCommands.Doctor }, report.Commands.Select(command => command.Name));
-            foreach (Capability capability in CapabilityRegistry.All.Where(item => item.Status == CapabilityStatus.Supported))
+            Assert.Equal(
+                new[] { CliCommands.Analyze, CliCommands.Doctor, CliCommands.Export },
+                report.Commands.Select(command => command.Name));
+            foreach (string route in CapabilityRegistry.All
+                .Where(item => item.Status == CapabilityStatus.Supported)
+                .SelectMany(item => item.CliRoutes))
             {
-                Assert.Contains("  xmat " + capability.CliRoute, report.HumanLines);
+                Assert.Contains("  xmat " + route, report.HumanLines);
             }
+        }
+
+        // export selects sessions by process as analyze does, so both list capture.process-filter, each with only its
+        // own command lines: export's help gains an export command line, and analyze's help is unchanged.
+        [Fact]
+        public void Help_ListsProcessFilteringUnderEachCommandWithItsOwnCommandLines()
+        {
+            CliCommandHelp export = CliHelp.Describe(CliCommands.Export);
+            CliCommandHelp analyze = CliHelp.Describe(CliCommands.Analyze);
+
+            Assert.Contains("capture.process-filter", export.Capabilities);
+            Assert.Contains(
+                "export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...", export.Usage);
+            Assert.All(export.Usage, usage => Assert.Equal(CliCommands.Export, CliCatalog.CommandOf(usage)));
+            Assert.Equal(
+                new[] { "analysis.xbox-live", "capture-file.import-saz", "capture-file.read-xmatcap", "capture.process-filter" },
+                analyze.Capabilities);
+            Assert.Equal(
+                CliCatalog.CapabilitiesOf(CliCommands.Analyze).Select(item => item.CliRoute), analyze.Usage);
         }
 
         [Theory]

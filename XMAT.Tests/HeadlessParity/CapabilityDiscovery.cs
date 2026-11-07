@@ -36,7 +36,6 @@ namespace XMAT.Tests.HeadlessParity
             typeof(CaptureType),
             typeof(WebServiceCaptureScriptableEventType),
             typeof(ImportType),
-            typeof(ExportType),
         };
 
         internal static IReadOnlyCollection<string> DiscoverProduct()

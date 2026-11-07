@@ -15,6 +15,10 @@ both. Other capabilities move over time; the [capability table](#what-runs-headl
 ```
 xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N]
              [--max-record-mib N] [--max-records N] [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...
+xmat export INPUT --out FILE [--format xmatcap|saz|sanitized-saz] [--device ID] [--process NAME_OR_PID]...
+            [--exclude-process NAME_OR_PID]... [--host PATTERN]... [--exclude-host PATTERN]...
+            [--host-mode glob|exact] [--status VALUE]... [--method VALUE]... [--match-none]
+            [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]
 xmat doctor --for analyze
 xmat help [COMMAND]
 xmat --version
@@ -106,6 +110,36 @@ xmat --version
   64 selectors for one option are usage errors (`cli.usage.invalid-value`, exit code 2) whose message never repeats the
   value; the other options still take one value (`cli.usage.duplicate-option`). When the selectors leave no session,
   there is nothing to analyze (`analysis.no-data`, exit code 3), and the JSON output still reports the counts.
+- `xmat export` writes the sessions that its selectors choose to a new `FILE`, through the operation that the GUI's
+  exports use: an XMAT capture (`.xmatcap`, with the original rows, ids and any extra columns), a Fiddler archive
+  (`.saz`) or, only with `--format sanitized-saz`, a sanitized Fiddler archive. The format otherwise follows `FILE`'s
+  extension, and one that does not agree with it is a usage error. It reads `INPUT` with `analyze`'s reader and
+  limits and never changes it, but equal limits do not mean equal codes: the reader's diagnostics keep their
+  `analysis.*` codes, except that an input over a limit is `export.input.limit`, and session data that cannot be
+  exported is `export.input.invalid-http` (an HTTP message that a sanitized archive cannot rewrite) or
+  `export.input.invalid-body` (a stored body or value that is not valid data), all with exit code 3. `--process`
+  and `--exclude-process` work as for `analyze`; `--host` and
+  `--exclude-host` take a host or host/path pattern (as the Block and Bypass lists do, the default `--host-mode glob`)
+  or, with `--host-mode exact`, the host exactly as the capture list shows it; `--status` and `--method` take exact
+  values. A glob compares the host and, for a pattern with a path, the path and query as the proxy forwards them
+  (canonical: `/a/../b` is `/b`). Either the captured Host or the host the proxy connects to can match, the latter in
+  its network spelling: the target's host for an absolute target (`GET http://host/path`), otherwise the Host, with
+  IDN names in `xn--` form and IPv4 in dotted decimal (`0177.0.0.1` also matches `127.0.0.1`). Exact mode ignores
+  these spellings, and exported rows keep their captured values. Each of these is repeatable, and a session must
+  match every option that was given and no exclusion; glob
+  hosts, like process selectors, are limited to 64 values of 260 characters each, while exact hosts, statuses and
+  methods are literal sets of any size. An empty `--status=`, `--method=` or exact `--host=` selects the sessions
+  shown without one, and `--match-none` selects nothing, so the JSON shows the counts without writing a file. xmat
+  never replaces a file: an existing `FILE`, or `FILE` naming the input, is a conflict (`export.output.exists`,
+  `export.output.is-source`, exit code 5), and so is a destination that another program keeps locked while xmat
+  publishes (`export.output.locked`). The file is staged privately, in a folder next to it that only the current
+  user can open, and published whole with that access. Failure or cancellation before publication leaves no output;
+  a cleanup failure after publication exits with code 7 and can still report `export.output.published` as `true`. Where
+  Windows cannot restrict access to that folder (storage without Windows permissions, such as FAT drives or some network
+  shares), xmat publishes nothing (`export.output.unprotected`, exit code 6). A selection with no session to write
+  publishes nothing (`export.no-eligible-rows`, exit code 3). An `.xmatcap` export also publishes nothing
+  (`export.write.failed`, exit code 6) when its staged file, in the folder next to `FILE`, would have a path longer
+  than Windows' 260-character limit; choose a shorter folder. `.saz` outputs are not affected.
 - Exact rule evaluation has one work and live-memory budget shared across all selected devices, consoles, endpoints
   and rules, and never samples, truncates or publishes partial findings. Analysis uses safety budgets, not a fixed
   duration limit. In testing, one regular 1 Hz polling key completed at 75 minutes but exceeded the budget at
@@ -116,11 +150,12 @@ xmat --version
   with `analysis.rules.work-limit`. These two limits measure time, so whether a run reaches them depends on the
   machine and its load; the installed patterns never fall back. The budget bounds rule evaluation, not xmat's total
   time or memory use, so in automation run xmat with time and memory limits.
-- Neither the JSON output nor the published files contain captured content (hosts, URLs, headers, bodies, Xbox user
-  ids, IP addresses, device names or client process names and ids) or local paths such as the input's; the only paths
-  in them are artifact paths relative to `DIR`, such as `summary.json`. They hold rule names, levels and counts, service
-  labels, ordinal device and console ids, the SHA-256 of the input and the validated `--process` and
-  `--exclude-process` selectors. The input is never modified.
+- Neither the JSON output nor `analyze`'s published files contain captured content (hosts, URLs, headers, bodies, Xbox
+  user ids, IP addresses, device names or client process names and ids) or local paths such as the input's; the only
+  paths in them are artifact paths relative to `DIR`, such as `summary.json`. They hold rule names, levels and counts,
+  service labels, ordinal device and console ids, the SHA-256 of the input and the validated `--process` and
+  `--exclude-process` selectors. The input is never modified. An exported `FILE` holds the selected sessions
+  themselves, so treat it like the capture it came from.
 - `xmat doctor --for analyze` checks what `xmat analyze` needs and writes nothing: the analysis rules (`data.rules`),
   the API map (`data.apimap`) and the English strings (`localization.en-us`) installed next to `xmat.exe`, and a 64-bit
   process (`runtime.64-bit`). A missing or damaged file fails its check with a code such as `analysis.assets.rules` and
@@ -189,6 +224,15 @@ and `counts` is `null`. `summary.json` holds `schema` (`xmat-analysis/1`), `comm
 with its `id`, `status` and `slice`); `help` reports `commands`, each with its `name`, `status` (`supported`), `usage`
 and `capabilities` (the ids of the capabilities that the command provides); and `--version` reports `version`.
 
+`export` reports an `export` block and keeps `artifacts` empty: `format`; `input` (`kind` and `sha256`); `limits`;
+`selection`, which counts instead of repeating the values: `device`, `host` (`mode`, and how many `include` and
+`exclude` values were given, `include` being `null` without `--host`), `statuses` and `methods` (counts, or `null` when
+not given) and `matchNone`; `processFilter` as for `analyze`; `counts` with `total`, `matched` (by the filters),
+`selected`, `eligible`, `exported`, `unavailable`, `skippedIncomplete` and `noRecordedResponse` (sessions without a
+recorded response, part of `skippedIncomplete`), and the same counts per device in `devices`; `sanitization`
+(`redactedValues`, `omittedBodies`, `omittedHeaders`) for a sanitized archive; and `output` (`published`, `bytes`,
+`sha256`). Fields that the run did not reach are `null`.
+
 If xmat cannot produce this document (an internal error), it writes a fixed fallback document instead, with only
 `schema`, `command`, `runId`, `status`, `exitCode`, `artifacts`, `cleanup`, empty `warnings` and the error
 `cli.internal.output`. The run keeps its exit code: 7 stays 7, and a run that published `DIR` keeps 0 or 10 and lists
@@ -201,10 +245,10 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 |---|---|
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
-| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, or `--process` and `--exclude-process` leave no session |
+| 3 | Invalid input or nothing to analyze or export: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, the process selectors leave no session, or `export` has no session to write |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
-| 5 | Conflict: `--out` already exists |
-| 6 | The operation failed, for example the output could not be written, or `--out` is on storage without Windows permissions (`cli.output.unprotected`) |
+| 5 | Conflict: `--out` already exists, or `export`'s `--out` names the input or is locked by another program (`export.output.locked`) |
+| 6 | The operation failed, for example the output could not be written, or `--out` is on storage without Windows permissions (`cli.output.unprotected`; `export.output.unprotected` for `export`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
 | 70 | Internal error, for example a process selection that does not match the analyzed sessions (`analysis.process-filter.consistency`), or a `help`, `--version` or passing `doctor` run whose JSON document could not be produced (`cli.internal.output`) |
@@ -240,11 +284,12 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Write the analysis HTML report (`analysis.html-report`) | (not available yet) | Planned (S3, XMAT-008) |
 | Analyze network traces (`analysis.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Analyze Xbox Live service calls (`analysis.xbox-live`) | `xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N] [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S1) |
-| Export captures as Fiddler archives (.saz) (`capture-file.export-saz`) | (not available yet) | Planned (S2, XMAT-021) |
+| Export sessions as Fiddler archives (.saz) (`capture-file.export-saz`) | `xmat export INPUT --out FILE.saz` | Supported (S2) |
+| Export sessions as an XMAT capture (.xmatcap) (`capture-file.export-xmatcap`) | `xmat export INPUT --out FILE [--format xmatcap\|saz\|sanitized-saz] [--device ID] [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]... [--host PATTERN]... [--exclude-host PATTERN]... [--host-mode glob\|exact] [--status VALUE]... [--method VALUE]... [--match-none] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S10) |
 | Read network traces (.etl) (`capture-file.import-etl`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Read Fiddler archives (.saz) (`capture-file.import-saz`) | `xmat analyze INPUT.saz --out DIR` | Supported (S1) |
 | Read XMAT capture files (.xmatcap) (`capture-file.read-xmatcap`) | `xmat analyze INPUT.xmatcap --out DIR` | Supported (S1) |
-| Sanitize a capture into a Fiddler archive (`capture-file.sanitize`) | (not available yet) | Planned (S2, XMAT-021) |
+| Export sessions as a sanitized Fiddler archive (`capture-file.sanitize`) | `xmat export INPUT --out FILE.saz --format sanitized-saz` | Supported (S2) |
 | Save captures (.xmatcap) (`capture-file.save-xmatcap`) | (not available yet) | Planned (S5, XMAT-021) |
 | Choose the device and capture method (`capture.add-device`) | (not available yet) | Planned (S5, XMAT-021) |
 | Clear captured data (`capture.clear`) | (not available yet) | Planned (S8a, XMAT-021) |
@@ -252,7 +297,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Block or bypass hosts during capture (`capture.host-lists`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Capture this PC (`capture.local-pc`) | (not available yet) | Planned (S6, XMAT-021) |
 | Capture low-level network traces (`capture.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
-| Filter captured sessions by client process (`capture.process-filter`) | `xmat analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S9) |
+| Filter captured sessions by client process (`capture.process-filter`) | `xmat analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...`<br>`xmat export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S9) |
 | Run capture scripts (`capture.scripts`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Stop a running capture (`capture.stop`) | (not available yet) | Planned (S5, XMAT-021) |
 | Record WebSocket handshakes and report observed frames without their payloads (`capture.websocket-handshakes`) | (not available yet) | Planned (S4, XMAT-021) |

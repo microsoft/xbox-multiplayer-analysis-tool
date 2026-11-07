@@ -178,26 +178,8 @@ namespace XMAT.Cli
 
             report.Analysis.ProcessScope = result.Value?.ProcessScope;
 
-            bool failed = result.Outcome != OperationOutcome.Succeeded;
-            foreach (OperationDiagnostic diagnostic in result.Diagnostics)
-            {
-                if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
-                {
-                    report.Warnings.Add(diagnostic);
-                }
-                else if (diagnostic.Severity == OperationDiagnosticSeverity.Error || failed)
-                {
-                    report.Errors.Add(diagnostic);
-                }
-            }
-
-            report.SetExitCode(CliExitCodes.FromOutcome(result.Outcome));
-            if (failed && report.Errors.Count == 0)
-            {
-                report.Errors.Add(new OperationDiagnostic(
-                    "cli.analysis.failed", OperationDiagnosticSeverity.Error, "The analysis did not complete."));
-            }
-            else if (!failed && failOnFindings && report.Analysis.TotalFindings > 0)
+            report.ApplyOutcome(result, "cli.analysis.failed", "The analysis did not complete.");
+            if (result.Succeeded && failOnFindings && report.Analysis.TotalFindings > 0)
             {
                 report.SetExitCode(CliExitCodes.FindingsFound);
             }

@@ -4,28 +4,57 @@
 
 using System;
 using System.ComponentModel;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using XMAT.Operations;
+using XMAT.Operations.Export;
 
 namespace XMAT
 {
-    public partial class SanitizedExportProgressWindow : Window
+    public partial class ExportProgressWindow : Window, IProgress<OperationProgress>
     {
         private readonly Task _operation;
         private readonly Action _cancel;
+        private string _phase;
         private bool _cancellationRequested;
         private bool _canClose;
 
-        internal SanitizedExportProgressWindow(Task operation, Action cancel)
+        internal ExportProgressWindow(Task operation, Action cancel)
         {
             _operation = operation ?? throw new ArgumentNullException(nameof(operation));
             _cancel = cancel ?? throw new ArgumentNullException(nameof(cancel));
             InitializeComponent();
-            Title = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED");
-            StatusText.Text = Localization.GetLocalizedString("SANITIZED_EXPORT_SCANNING");
-            DetailsText.Text = Localization.GetLocalizedString("SANITIZED_EXPORT_PROGRESS_DETAILS");
+            Title = Localization.GetLocalizedString("EXPORT_TITLE");
+            StatusText.Text = Localization.GetLocalizedString("EXPORT_PROGRESS_EXPORTING");
+            DetailsText.Text = Localization.GetLocalizedString("EXPORT_PROGRESS_DETAILS");
             CancelExport.Content = Localization.GetLocalizedString("CANCEL");
+        }
+
+        // Shows the export's current phase, also one reported before the window appeared. Reading and writing alternate for
+        // every batch of sessions, so both show one text. Only a change of text reaches the dispatcher, and once Cancel is
+        // asked for the window keeps saying so.
+        void IProgress<OperationProgress>.Report(OperationProgress value)
+        {
+            string key = value?.Phase switch
+            {
+                ExportCaptureSessionsOperation.SelectPhase => "EXPORT_PHASE_SELECT",
+                ExportCaptureSessionsOperation.ReadPhase or ExportCaptureSessionsOperation.WritePhase =>
+                    "EXPORT_PROGRESS_EXPORTING",
+                ExportCaptureSessionsOperation.PublishPhase => "EXPORT_PHASE_PUBLISH",
+                _ => null,
+            };
+            if (key != null && Interlocked.Exchange(ref _phase, key) != key)
+            {
+                Dispatcher.InvokeAsync(() =>
+                {
+                    if (!_cancellationRequested)
+                    {
+                        StatusText.Text = Localization.GetLocalizedString(key);
+                    }
+                });
+            }
         }
 
         private async void Window_ContentRendered(object sender, EventArgs e)
@@ -53,7 +82,7 @@ namespace XMAT
             }
             _cancellationRequested = true;
             CancelExport.IsEnabled = false;
-            StatusText.Text = Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLING");
+            StatusText.Text = Localization.GetLocalizedString("EXPORT_PROGRESS_CANCELLING");
             _cancel();
         }
 
@@ -61,7 +90,7 @@ namespace XMAT
 
         private void Window_Closing(object sender, CancelEventArgs e)
         {
-            if (!_canClose)
+            if (!_canClose && !_operation.IsCompleted)
             {
                 e.Cancel = true;
                 RequestCancellation();

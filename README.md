@@ -98,9 +98,9 @@ proxy can lose access to Xbox services.
 | Set up XMAT and make my first capture | [Getting started](docs/getting-started.md) |
 | Configure proxying, inspect requests or WebSockets, filter by process, and manage hosts | [Web proxy](docs/web-proxy.md) |
 | Modify requests and responses with C# | [Scripting](docs/scripting.md) |
-| Save, load, import, or safely share capture files | [Capture files and sanitized export](docs/capture-files.md) |
+| Save, load, import, or safely share capture files, or export selected or filtered sessions | [Capture files and sanitized export](docs/capture-files.md) |
 | Analyze Xbox service calls and export reports | [Live trace analysis](docs/live-trace-analysis.md) |
-| Analyze captures from scripts or CI without the GUI | [Command line](docs/cli.md) |
+| Analyze or export captures from scripts or CI without the GUI | [Command line](docs/cli.md) |
 | Capture and analyze packets from a console or PC | [Network capture](docs/network-capture.md) |
 | Recover from proxy problems or collect diagnostic logs | [Troubleshooting](docs/troubleshooting.md) |
 

@@ -24,11 +24,13 @@ namespace XMAT.DataAbstractionLayer
 
         internal SqLtDataEnumerable(
             IDictionary<string, IFieldDefinition> fieldDefs,
+            IReadOnlySet<string> untypedColumns,
             SqliteDataReader dataReader,
             Predicate<IDataRecord> predicate,
             Action<SqLtDataEnumerable> disposed)
         {
             _fieldDefs = fieldDefs;
+            _untypedColumns = untypedColumns;
             _dataReader = dataReader;
             _predicate = predicate;
             _onDisposed = disposed;
@@ -36,6 +38,7 @@ namespace XMAT.DataAbstractionLayer
         }
 
         private IDictionary<string, IFieldDefinition> _fieldDefs;
+        private readonly IReadOnlySet<string> _untypedColumns;
         private SqliteDataReader _dataReader;
         private Predicate<IDataRecord> _predicate;
         private Action<SqLtDataEnumerable> _onDisposed;

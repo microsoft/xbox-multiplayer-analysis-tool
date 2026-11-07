@@ -5,8 +5,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Linq;
-using System.Text.RegularExpressions;
 
 namespace XMAT.WebServiceCapture.Models
 {
@@ -19,70 +17,21 @@ namespace XMAT.WebServiceCapture.Models
     /// </summary>
     public class BlockListModel
     {
-        public ObservableCollection<string> BlockedUrls { get; } = new ObservableCollection<string>();
+        private readonly HostPatternList _patterns = new();
 
-        private readonly object _lockObj = new object();
-        private readonly Dictionary<string, Regex> _regexCache = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
+        public ObservableCollection<string> BlockedUrls => _patterns.Entries;
 
-        public bool Add(string pattern)
-        {
-            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
-                return false;
-
-            lock (_lockObj)
-            {
-                if (BlockedUrls.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase)))
-                    return false;
-
-                BlockedUrls.Add(entry);
-                return true;
-            }
-        }
+        public bool Add(string pattern) => _patterns.Add(pattern);
 
         /// <summary>
         /// Returns true when the list holds exactly this entry (after normalization),
         /// regardless of any other pattern that might also match it.
         /// </summary>
-        public bool Contains(string pattern)
-        {
-            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
-                return false;
+        public bool Contains(string pattern) => _patterns.Contains(pattern);
 
-            lock (_lockObj)
-            {
-                return BlockedUrls.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase));
-            }
-        }
+        public bool Remove(string pattern) => _patterns.Remove(pattern);
 
-        public bool Remove(string pattern)
-        {
-            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
-                return false;
-
-            bool removed = false;
-            lock (_lockObj)
-            {
-                for (int i = BlockedUrls.Count - 1; i >= 0; i--)
-                {
-                    if (string.Equals(BlockedUrls[i], entry, StringComparison.OrdinalIgnoreCase))
-                    {
-                        BlockedUrls.RemoveAt(i);
-                        removed = true;
-                    }
-                }
-                _regexCache.Remove(entry);
-            }
-            return removed;
-        }
-
-        public void Clear()
-        {
-            lock (_lockObj)
-            {
-                BlockedUrls.Clear();
-                _regexCache.Clear();
-            }
-        }
+        public void Clear() => _patterns.Clear();
 
         /// <summary>
         /// Returns true if the given host (and optional path) matches any pattern in the block list.
@@ -92,21 +41,7 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return false;
 
-            host = HostListEntry.MatchCandidate(host);
-            string[] candidates;
-            if (!string.IsNullOrEmpty(path))
-            {
-                string normalizedPath = path.StartsWith('/') ? path : "/" + path;
-                candidates = new[] { host, host + normalizedPath };
-            }
-            else
-            {
-                candidates = new[] { host };
-            }
-
-            return Snapshot()
-                .Select(GetRegex)
-                .Any(regex => candidates.Any(candidate => regex.IsMatch(candidate)));
+            return _patterns.Matches(HostListEntry.MatchCandidates(host, path));
         }
 
         /// <summary>
@@ -118,29 +53,7 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return Array.Empty<string>();
 
-            string candidate = HostListEntry.MatchCandidate(host);
-            return Snapshot().Where(pattern => GetRegex(pattern).IsMatch(candidate)).ToList();
-        }
-
-        private string[] Snapshot()
-        {
-            lock (_lockObj)
-            {
-                return BlockedUrls.ToArray();
-            }
-        }
-
-        private Regex GetRegex(string pattern)
-        {
-            lock (_lockObj)
-            {
-                if (_regexCache.TryGetValue(pattern, out var cached))
-                    return cached;
-
-                var regex = HostListEntry.CreatePattern(pattern);
-                _regexCache[pattern] = regex;
-                return regex;
-            }
+            return _patterns.MatchingPatterns(HostListEntry.MatchCandidates(host));
         }
     }
 }

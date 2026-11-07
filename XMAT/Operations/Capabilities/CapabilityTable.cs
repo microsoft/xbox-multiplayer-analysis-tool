@@ -40,7 +40,8 @@ namespace XMAT.Operations.Capabilities
 
         private static string CommandLine(Capability capability) => capability.Status switch
         {
-            CapabilityStatus.Supported => "`xmat " + Escape(capability.CliRoute) + "`",
+            CapabilityStatus.Supported =>
+                string.Join("<br>", capability.CliRoutes.Select(route => "`xmat " + Escape(route) + "`")),
             CapabilityStatus.Planned => "(not available yet)",
             _ => "(none)",
         };
