@@ -49,7 +49,9 @@ namespace XMAT.Cli
     // command-line order, or null; its files are read when the run starts (CliRequestBody). SaveSaz also saves the sends as
     // a Fiddler archive, replays.saz (replay and compose). Proxy is the proxy of --proxy, which only AllowProxy
     // (--allow-proxy) lets the run send through. ClientCertificate is the certificate of --client-cert, which only
-    // AllowClientCertificate (--allow-client-cert), naming the run's one origin, lets the run offer.
+    // AllowClientCertificate (--allow-client-cert), naming the run's one origin, lets the run offer. WindowsAuth is
+    // --windows-auth, which only AllowWindowsAuth (--allow-windows-auth), naming the run's one origin, lets the run use; an
+    // allowance without its option is still checked and grants nothing.
     internal sealed record CliReplay(
         string Selection = null,
         int Repeat = 1,
@@ -82,7 +84,9 @@ namespace XMAT.Cli
         ReplayProxy Proxy = null,
         bool AllowProxy = false,
         ReplayClientCertificate ClientCertificate = null,
-        ReplayCredentialOrigin AllowClientCertificate = null)
+        ReplayCredentialOrigin AllowClientCertificate = null,
+        bool WindowsAuth = false,
+        ReplayCredentialOrigin AllowWindowsAuth = null)
     {
         internal static CliReplay Default { get; } = new();
     }
@@ -133,6 +137,8 @@ namespace XMAT.Cli
         internal const string ProxyOption = "--proxy";
         internal const string ClientCertOption = "--client-cert";
         internal const string AllowClientCertOption = "--allow-client-cert";
+        internal const string WindowsAuthSwitch = "--windows-auth";
+        internal const string AllowWindowsAuthOption = "--allow-windows-auth";
         internal const string UnconditionalSwitch = "--unconditional";
         internal const string VerifySwitch = "--verify";
         internal const string VerifyDiffSwitch = "--verify-diff";
@@ -166,6 +172,11 @@ namespace XMAT.Cli
 
         internal const string AllowClientCertMessage =
             "--allow-client-cert takes the one origin that may receive the client certificate, https://HOST or " +
+                "https://HOST:PORT: a host name or an IP address (an IPv6 address in brackets), with no user name, " +
+                "password, path, query or fragment; the port is 1 to 65535, 443 by default.";
+
+        internal const string AllowWindowsAuthMessage =
+            "--allow-windows-auth takes the one origin whose challenges Windows authentication may answer, https://HOST or " +
                 "https://HOST:PORT: a host name or an IP address (an IPv6 address in brackets), with no user name, " +
                 "password, path, query or fragment; the port is 1 to 65535, 443 by default.";
 
@@ -225,6 +236,7 @@ namespace XMAT.Cli
             ProxyOption,
             ClientCertOption,
             AllowClientCertOption,
+            AllowWindowsAuthOption,
             FormOption,
             FormStringOption,
             FormTypeOption,
@@ -255,14 +267,15 @@ namespace XMAT.Cli
 
         // compose has no captured origin to change, and replay never follows a redirect to another origin, so only replay
         // takes --allow-origin-change, and compose only with --request-file, whose URL is the origin. Both take
-        // --allow-connect-to and --allow-proxy, the permissions that --connect-to and --proxy need, and --save-saz, which
-        // also saves the sends as a Fiddler archive. Only replay has captured responses to verify against (--verify,
-        // --verify-diff).
+        // --allow-connect-to and --allow-proxy, the permissions that --connect-to and --proxy need, --windows-auth, which
+        // --allow-windows-auth permits for one origin, and --save-saz, which also saves the sends as a Fiddler archive. Only
+        // replay has captured responses to verify against (--verify, --verify-diff).
         private static readonly HashSet<string> ComposeSwitches = new(StringComparer.Ordinal)
         {
             AllowUnsafeMethodsSwitch,
             AllowConnectToSwitch,
             AllowProxySwitch,
+            WindowsAuthSwitch,
             SaveSazSwitch,
         };
 
@@ -322,13 +335,14 @@ namespace XMAT.Cli
             ProxyOption,
             ClientCertOption,
             AllowClientCertOption,
+            AllowWindowsAuthOption,
             SequenceOption,
             OriginOption,
         };
 
         private static readonly HashSet<string> CurlSendOnlySwitches = new(StringComparer.Ordinal)
         {
-            AllowConnectToSwitch, AllowProxySwitch, AllowUnsafeMethodsSwitch, VerifySwitch, VerifyDiffSwitch,
+            AllowConnectToSwitch, AllowProxySwitch, AllowUnsafeMethodsSwitch, VerifySwitch, VerifyDiffSwitch, WindowsAuthSwitch,
         };
 
         private static readonly HashSet<string> CurlReadOptions = new(SaveRequestOptions.Concat(CurlSendOnlyOptions), StringComparer.Ordinal);
@@ -338,8 +352,8 @@ namespace XMAT.Cli
         internal const string CurlSendOnlyMessage =
             "xmat curl exports each request with curl's default transport and sends nothing: --repeat, --parallel, " +
             "--timeout, --max-response-mib, --follow-redirects, --connect-to, --allow-connect-to, --proxy, --allow-proxy, " +
-            "--client-cert, --allow-client-cert, --sequence, --allow-unsafe-methods, --verify, --verify-diff and --origin " +
-            "do not apply.";
+            "--client-cert, --allow-client-cert, --windows-auth, --allow-windows-auth, --sequence, --allow-unsafe-methods, " +
+            "--verify, --verify-diff and --origin do not apply.";
 
         internal const string CurlHttpVersionMessage =
             "xmat curl takes --http-version auto or 1.1: curl's HTTP/2-only mode is not known to send the same request.";
@@ -1192,6 +1206,13 @@ namespace XMAT.Cli
                 return CliParseResult.UsageError(command, "cli.usage.invalid-value", AllowClientCertMessage);
             }
 
+            ReplayCredentialOrigin allowWindowsAuth = null;
+            if (arguments.Options.TryGetValue(AllowWindowsAuthOption, out string windowsOriginText) &&
+                !ReplayCredentialOrigin.TryParse(windowsOriginText, out allowWindowsAuth))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", AllowWindowsAuthMessage);
+            }
+
             arguments.Options.TryGetValue(BodyFileOption, out string bodyFile);
             replay = new CliReplay(
                 Repeat: values[0],
@@ -1215,7 +1236,9 @@ namespace XMAT.Cli
                 Proxy: proxy,
                 AllowProxy: arguments.Switches.Contains(AllowProxySwitch),
                 ClientCertificate: clientCertificate,
-                AllowClientCertificate: allowClientCertificate);
+                AllowClientCertificate: allowClientCertificate,
+                WindowsAuth: arguments.Switches.Contains(WindowsAuthSwitch),
+                AllowWindowsAuth: allowWindowsAuth);
             return null;
         }
 

@@ -139,22 +139,31 @@ namespace XMAT.Tests.Replay
         }
 
         // A send that was not direct says how it was sent, by its transport's name and never its endpoint or proxy, and one
-        // that could offer a client certificate says so, last, never which one nor whether a server received it; a direct
-        // send's flags are unchanged.
+        // that could offer a client certificate or answer with Windows authentication says so, last and in that order, never
+        // which certificate or label nor whether a server received or asked for either; a direct send's flags are unchanged.
         [Theory]
-        [InlineData(ReplayTransportOptions.DirectName, false, null)]
-        [InlineData(ReplayTransportOptions.ConnectToName, false, "x-xmat-replay-transport=connect-to")]
-        [InlineData(ReplayTransportOptions.ProxyName, false, "x-xmat-replay-transport=proxy")]
-        [InlineData(ReplayTransportOptions.DirectName, true, null)]
-        [InlineData(ReplayTransportOptions.ConnectToName, true, "x-xmat-replay-transport=connect-to")]
-        public void TheTransportFlags_NameASendThatWasNotDirect_OrCouldOfferAClientCertificate(
-            string transport, bool clientCertificate, string flag)
+        [InlineData(ReplayTransportOptions.DirectName, false, false, null)]
+        [InlineData(ReplayTransportOptions.ConnectToName, false, false, "x-xmat-replay-transport=connect-to")]
+        [InlineData(ReplayTransportOptions.ProxyName, false, false, "x-xmat-replay-transport=proxy")]
+        [InlineData(ReplayTransportOptions.DirectName, true, false, null)]
+        [InlineData(ReplayTransportOptions.ConnectToName, true, false, "x-xmat-replay-transport=connect-to")]
+        [InlineData(ReplayTransportOptions.DirectName, false, true, null)]
+        [InlineData(ReplayTransportOptions.DirectName, true, true, null)]
+        public void TheTransportFlags_NameASendThatWasNotDirect_OrCouldOfferACredential(
+            string transport, bool clientCertificate, bool windowsAuth, string flag)
         {
             ReplayExchange exchange = Exchange(
                 new Uri("http://example.test/"), "GET", new[] { Header("Host", "example.test") }, [], Response("HTTP/1.1 200 OK", Array.Empty<KeyValuePair<string, string>>(), []));
 
             string[] flags = Flags(
-                Archive((Result(1) with { Transport = transport, ClientCertificateConfigured = clientCertificate }, exchange)), 1);
+                Archive((Result(1) with
+                {
+                    Transport = transport,
+                    ClientCertificateConfigured = clientCertificate,
+                    WindowsAuthConfigured = windowsAuth,
+                    AuthHeaderSchemeObserved = windowsAuth ? "NTLM" : null,
+                }, exchange)),
+                1);
 
             IEnumerable<string> expected = new[] { "x-clientip=0.0.0.0", "x-xmat-replay-id=1", "x-xmat-replay-outcome=completed", "x-xmat-replay-redirects=0" };
             if (flag != null)
@@ -165,6 +174,11 @@ namespace XMAT.Tests.Replay
             if (clientCertificate)
             {
                 expected = expected.Append("x-xmat-replay-client-certificate-configured=true");
+            }
+
+            if (windowsAuth)
+            {
+                expected = expected.Append("x-xmat-replay-windows-auth-configured=true");
             }
 
             Assert.Equal(expected, flags);

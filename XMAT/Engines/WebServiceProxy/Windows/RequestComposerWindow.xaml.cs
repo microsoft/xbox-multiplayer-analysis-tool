@@ -215,6 +215,10 @@ namespace XMAT.WebServiceCapture
             ClientCertificateList.ToolTip = Localization.GetLocalizedString("COMPOSER_CLIENT_CERT_HINT");
             AutomationProperties.SetName(
                 ClientCertificateList, Localization.GetLocalizedString("COMPOSER_CLIENT_CERT_FIELD"));
+            // Automatically authenticate with Windows is read with the hint that says whose credentials answer which server;
+            // its content names it for automation.
+            WindowsAuthBox.Content = Localization.GetLocalizedString("COMPOSER_WINDOWS_AUTH");
+            WindowsAuthBox.ToolTip = Localization.GetLocalizedString("COMPOSER_WINDOWS_AUTH_HINT");
             ResponseView.Title = Localization.GetLocalizedString("COMPOSER_RESPONSE");
             // The response came through the HTTP stack, which already removed its transfer framing: its preview never
             // decodes chunked framing again.
@@ -257,7 +261,7 @@ namespace XMAT.WebServiceCapture
             RedirectLimitBox.SelectedItem = ReplayOptions.MaxRedirectLimit;
 
             // The HTTP version is chosen automatically, as before, unless the user asks for exactly one; Connect to another
-            // endpoint, Upstream proxy and Client certificate are off.
+            // endpoint, Upstream proxy, Client certificate and Automatically authenticate with Windows are off.
             HttpVersionBox.Items.Add(VersionItem(ReplayHttpVersion.Auto, "COMPOSER_HTTP_VERSION_AUTO"));
             HttpVersionBox.Items.Add(VersionItem(ReplayHttpVersion.Http11, "COMPOSER_HTTP_VERSION_11"));
             HttpVersionBox.Items.Add(VersionItem(ReplayHttpVersion.Http2, "COMPOSER_HTTP_VERSION_2"));
@@ -271,12 +275,13 @@ namespace XMAT.WebServiceCapture
         // Send. Everything that the run sends is fixed at its entry, on the UI thread and without parsing anything, before
         // the user is asked anything (FrozenSend): the request, as a copy that later edits do not change, whether its body
         // is a form that Build form made, the options, the transport as the controls hold it, the client certificate chosen,
-        // and where the request comes from. Checking it, which parses the headers, the body, the URL, the endpoint and the
-        // proxy, runs off the UI thread (CheckSend); for a URL with '#', the user then chooses the numbers on the UI thread,
-        // and the run with them is checked off the UI thread too (CheckSequence), over the same request and the transport
-        // that the first check parsed, never the controls again. Cancel request or closing the window stops either check
-        // (RunSendCheckAsync). The one question for the whole run is worded from what the checks found; then the run is
-        // recorded and sent, and why the operation refused it, if it did, is worded off the UI thread too (RunRefusalText).
+        // whether Windows answers the origin's challenges, and where the request comes from. Checking it, which parses the
+        // headers, the body, the URL, the endpoint and the proxy, runs off the UI thread (CheckSend); for a URL with '#', the
+        // user then chooses the numbers on the UI thread, and the run with them is checked off the UI thread too
+        // (CheckSequence), over the same request and the transport that the first check parsed, never the controls again.
+        // Cancel request or closing the window stops either check (RunSendCheckAsync). The one question for the whole run
+        // is worded from what the checks found; then the run is recorded and sent, and why the operation refused it, if it
+        // did, is worded off the UI thread too (RunRefusalText).
         internal async Task SendAsync()
         {
             if (_state != ComposerState.Idle || _closed)
@@ -296,7 +301,8 @@ namespace XMAT.WebServiceCapture
                 ProxyText.Text,
                 ClientCertificateBox.IsChecked == true,
                 SelectedCertificate,
-                Now);
+                Now,
+                WindowsAuthBox.IsChecked == true);
             bool inspect = InspectSessionBox.IsChecked == true;
             ReplayProvenance provenance = _provenance;
             string shown = StatusText.Text;
@@ -324,13 +330,14 @@ namespace XMAT.WebServiceCapture
             // One question for the whole run, about what was checked: what is typed or chosen afterwards changes nothing in
             // it. The window parses, escapes and bounds nothing to ask it: every text in it was made by the check, off the UI
             // thread (PlanQuestion), from the plan that the run sends, its transport included (ReplayPlanPreview.Transport),
-            // the URL's origin, the proxy, and the client certificate as chosen at Send with the one origin that may receive
-            // it (CredentialOrigin), which is the permission that the run is given.
+            // the URL's origin, the proxy, and the client certificate as chosen at Send and Windows authentication, with the
+            // one origin that may receive the certificate and whose challenges Windows authentication may answer
+            // (CredentialOrigin), which is the permission that the run is given for each.
             ReplayPlanPreview plan = found.Plan;
             int maxRedirects = send.MaxRedirects;
             bool confirmed = false;
             if (plan.UsesUnsafeMethod || plan.ChangesOrigin || plan.UsesConnectTo || plan.UsesProxy ||
-                plan.UsesClientCertificate)
+                plan.UsesClientCertificate || plan.UsesWindowsAuth)
             {
                 _state = ComposerState.Preparing;
                 try
@@ -507,8 +514,9 @@ namespace XMAT.WebServiceCapture
         // form that Build form made; the most redirects; the transport as the controls held it: the HTTP version, and
         // whether Connect to another endpoint is on, with the endpoint as typed; whether the URL has a '#', which numbers
         // the requests; whether Upstream proxy is on, with the proxy as typed; whether Client certificate is on, with the
-        // certificate chosen in its list, if any; and the time of Send, at which the question describes that certificate
-        // (PlanQuestion). Both checks of Send read only this, and the client (CheckSend, CheckSequence).
+        // certificate chosen in its list, if any; the time of Send, at which the question describes that certificate
+        // (PlanQuestion); and whether Automatically authenticate with Windows is on. Both checks of Send read only this, and
+        // the client (CheckSend, CheckSequence).
         internal sealed record FrozenSend(
             RequestReplayDraft Draft,
             bool Form,
@@ -521,7 +529,8 @@ namespace XMAT.WebServiceCapture
             string ProxyText,
             bool ClientCertificate,
             ReplayCertificateListing Certificate,
-            DateTimeOffset Time = default);
+            DateTimeOffset Time = default,
+            bool WindowsAuth = false);
 
         // What a check of Send found: why nothing is sent, as the status says it (Refusal); otherwise the transport that it
         // parsed and checked, which for a URL with '#' is the one that the check of its numbers takes (CheckSequence), and
@@ -537,10 +546,10 @@ namespace XMAT.WebServiceCapture
         // nothing bounds a method's length or checks a URL's path or query (MaxShownMethodChars, MaxShownUrlChars); the
         // first and last numbers of a sequence, as its URLs have them; the endpoint of Connect to another endpoint, as
         // parsed, and the URL's origin, which may keep Unicode, bounded and escaped (ShownOrigin); the proxy, as parsed, in
-        // its canonical form, ASCII and at most a few hundred characters; and the client certificate as chosen at Send,
-        // described at the time of Send (CertificateDetails), with the one origin that may receive it, in ASCII, bounded and
-        // escaped, since nothing bounds its host. Display only: the run gets the plan, its transport and its permission,
-        // never these texts.
+        // its canonical form, ASCII and at most a few hundred characters; the client certificate as chosen at Send,
+        // described at the time of Send (CertificateDetails); and the one origin that may receive it, or whose challenges
+        // Windows authentication may answer, in ASCII, bounded and escaped, since nothing bounds its host. Display only:
+        // the run gets the plan, its transport and its permissions, never these texts.
         internal sealed record PlanQuestion(
             string Method,
             string Url,
@@ -558,15 +567,16 @@ namespace XMAT.WebServiceCapture
                 ReplaySequence sequence = plan.Sequence;
                 ReplayTransportOptions transport = plan.Transport;
                 string certificate = null;
-                string credentialOrigin = null;
                 if (plan.UsesClientCertificate)
                 {
                     certificate = send?.Certificate != null
                         ? CertificateDetails(send.Certificate, send.Time)
                         : transport.ClientCertificate.Thumbprint;
-                    credentialOrigin = UntrustedText.Show(plan.CredentialOrigin?.ToString() ?? "", MaxShownOriginChars);
                 }
 
+                string credentialOrigin = plan.UsesClientCertificate || plan.UsesWindowsAuth
+                    ? UntrustedText.Show(plan.CredentialOrigin?.ToString() ?? "", MaxShownOriginChars)
+                    : null;
                 return new PlanQuestion(
                     UntrustedText.Show(plan.Template.Method ?? "", MaxShownMethodChars),
                     UntrustedText.Show(plan.Template.Url ?? "", MaxShownUrlChars),
@@ -658,15 +668,17 @@ namespace XMAT.WebServiceCapture
         // Send's first check, off the UI thread, over what Send froze, in the order that its refusals keep: a form whose
         // Content-Type the headers would drop (FormContentTypeDropped); the endpoint of Connect to another endpoint as typed
         // (TryParseTransport), then the proxy of Upstream proxy as typed (TryParseProxy), each refused in fixed words that
-        // never repeat the text, then Client certificate without a certificate chosen (TryParseClientCertificate); a part
-        // that a request file left out, which is never sent as the placeholder that the editors show for it; then, for a URL
-        // with '#', that only its path or query has one, with the transport that the check of its numbers takes once the
-        // user chose them (CheckSequence); otherwise that the request can be built, with what is wrong worded as building it
-        // says it, then the plan, as sending checks it, which refuses a proxy together with an endpoint or a client
-        // certificate, and a client certificate for anything but one HTTPS origin (Previewed). Pure: it reads only what it is
-        // given, and the client, which makes an operation of its own for each check. The token is checked before each step
-        // and before the result is given, so a stopped check gives none. CreateRequestToSend and Preview take no token: a
-        // cancel that comes while either runs waits for it to return, as long as the request makes it.
+        // never repeat the text, then Client certificate without a certificate chosen (TryParseClientCertificate), with
+        // Automatically authenticate with Windows as it was; a part that a request file left out, which is never sent as the
+        // placeholder that the editors show for it; then, for a URL with '#', that only its path or query has one, with the
+        // transport that the check of its numbers takes once the user chose them (CheckSequence); otherwise that the request
+        // can be built, with what is wrong worded as building it says it, then the plan, as sending checks it, which refuses
+        // a proxy together with an endpoint, a client certificate or Windows authentication, Windows authentication with an
+        // endpoint, HTTP/2 only or the request's own Authorization header, and either credential for anything but one HTTPS
+        // origin (Previewed). Pure: it reads only what it is given, and the client, which makes an operation of its own for
+        // each check. The token is checked before each step and before the result is given, so a stopped check gives none.
+        // CreateRequestToSend and Preview take no token: a cancel that comes while either runs waits for it to return, as
+        // long as the request makes it.
         internal static SendCheck CheckSend(FrozenSend send, RequestReplayClient client, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(send);
@@ -682,6 +694,7 @@ namespace XMAT.WebServiceCapture
             if (!TryParseClientCertificate(send.ClientCertificate, send.Certificate, out ReplayClientCertificate certificate))
                 return SendCheck.Refused(ErrorText(Localization.GetLocalizedString("COMPOSER_CLIENT_CERT_NONE")));
             transport = transport with { ClientCertificate = certificate };
+            transport = transport with { WindowsAuth = send.WindowsAuth };
             if (send.Draft.Omissions.Any)
                 return SendCheck.Refused(ErrorText(IncompleteText(send.Draft.Omissions)));
             try
@@ -771,10 +784,11 @@ namespace XMAT.WebServiceCapture
         }
 
         // Why the operation refused a run: what the composer says itself about Fiddler's control headers, the transport
-        // options, Upstream proxy's included, a client certificate (ClientCertificateRefusalKey) and a part that a request
-        // file left out; for a sequence whose request cannot be built, what building it with the widest number says, as a
-        // single send says it; otherwise the operation's message, such as a run that is too large. Building the widest
-        // request parses it, so this runs off the UI thread only (Previewed, RunRefusalText).
+        // options, Upstream proxy's included, a client certificate (ClientCertificateRefusalKey), Windows authentication
+        // (WindowsAuthRefusalKey) and a part that a request file left out; for a sequence whose request cannot be built, what
+        // building it with the widest number says, as a single send says it; otherwise the operation's message, such as a
+        // run that is too large. Building the widest request parses it, so this runs off the UI thread only (Previewed,
+        // RunRefusalText).
         private static string PlanError(OperationDiagnostic diagnostic, RequestReplayDraft draft, ReplaySequence sequence)
         {
             string explained = diagnostic?.Code switch
@@ -785,7 +799,7 @@ namespace XMAT.WebServiceCapture
                 ReplayOperation.ConnectToDeniedCode => "COMPOSER_CONNECT_TO_DENIED",
                 ReplayOperation.ProxyConnectToCode => "COMPOSER_PROXY_CONNECT_TO",
                 ReplayOperation.ProxyPolicyCode => "COMPOSER_PROXY_POLICY",
-                _ => ClientCertificateRefusalKey(diagnostic?.Code),
+                _ => ClientCertificateRefusalKey(diagnostic?.Code) ?? WindowsAuthRefusalKey(diagnostic?.Code),
             };
             if (explained != null)
             {
@@ -836,6 +850,22 @@ namespace XMAT.WebServiceCapture
             _ => null,
         };
 
+        // Why the operation refused a run with Windows authentication, in the composer's words, never the operation's: the
+        // run's transport, origin, HTTP version or request, which its first check finds (Previewed), and the permission,
+        // which only a missing or another origin's lacks. Null for any other code.
+        private static string WindowsAuthRefusalKey(string code) => code switch
+        {
+            ReplayOperation.WindowsAuthProxyCode => "COMPOSER_WINDOWS_AUTH_PROXY",
+            ReplayOperation.WindowsAuthConnectToCode => "COMPOSER_WINDOWS_AUTH_CONNECT_TO",
+            ReplayOperation.WindowsAuthHttpsCode => "COMPOSER_WINDOWS_AUTH_HTTPS",
+            ReplayOperation.WindowsAuthOriginInvalidCode => "COMPOSER_WINDOWS_AUTH_ORIGIN_INVALID",
+            ReplayOperation.WindowsAuthOriginCountCode => "COMPOSER_WINDOWS_AUTH_ORIGIN_COUNT",
+            ReplayOperation.WindowsAuthHttp2Code => "COMPOSER_WINDOWS_AUTH_HTTP2",
+            ReplayOperation.WindowsAuthAuthorizationCode => "COMPOSER_WINDOWS_AUTH_AUTHORIZATION",
+            ReplayOperation.WindowsAuthPolicyCode => "COMPOSER_WINDOWS_AUTH_POLICY",
+            _ => null,
+        };
+
         // The one confirmation of a run, put together on the UI thread from the texts that the check of the run made off it
         // (PlanQuestion), never from the plan's own strings: how many requests, with which method and to where, the method
         // and the URL bounded and escaped, while the run sends both whole; that they may change server data, as the whole
@@ -844,7 +874,9 @@ namespace XMAT.WebServiceCapture
         // parsed to ask; that they go through an upstream proxy, which it names as the check parsed it, with what the proxy
         // receives and that only a proxy trusted with the requests' credentials should be used; that a client certificate
         // may be offered, which it describes as chosen at Send, to the one origin that the check found (CredentialOrigin),
-        // bounded and escaped; and that redirects, when followed, are more requests.
+        // bounded and escaped; that the challenges of that one origin may be answered with the Windows credentials that XMAT
+        // runs with, over HTTP/1.1 only, whatever HTTP version is chosen; and that redirects, when followed, are more
+        // requests.
         internal static string ConfirmationMessage(ReplayPlanPreview plan, int maxRedirects, PlanQuestion question)
         {
             ArgumentNullException.ThrowIfNull(plan);
@@ -875,6 +907,12 @@ namespace XMAT.WebServiceCapture
             {
                 message += "\n\n" + Localization.GetLocalizedString(
                     "COMPOSER_CONFIRM_CLIENT_CERT", question.Certificate, question.CredentialOrigin);
+            }
+
+            if (plan.UsesWindowsAuth)
+            {
+                message += "\n\n" + Localization.GetLocalizedString(
+                    "COMPOSER_CONFIRM_WINDOWS_AUTH", question.CredentialOrigin);
             }
 
             return maxRedirects == 0
@@ -931,7 +969,7 @@ namespace XMAT.WebServiceCapture
             var status = new List<string>();
             if (plan.Sequence == null)
             {
-                status.Add(SendStatus(last, plan.UsesProxy, plan.UsesClientCertificate));
+                status.Add(SendStatus(last, plan.UsesProxy, plan.UsesClientCertificate, plan.UsesWindowsAuth));
             }
             else
             {
@@ -955,9 +993,10 @@ namespace XMAT.WebServiceCapture
 
         // The status of one send: its response, or why it got none. A send through an upstream proxy (proxied) says why in
         // the words of its code only (ProxyFailureText), never in an exception's message, which can name the proxy, and so
-        // does a send that could offer a client certificate (certified), in words that say where it goes; any other send
-        // says it as it always did.
-        private static string SendStatus(ReplayExchange exchange, bool proxied, bool certified) => exchange?.Outcome switch
+        // does a send that could offer a client certificate (certified), answer challenges with Windows authentication
+        // (windowsAuth) or both, in words that say where they go; any other send says it as it always did.
+        private static string SendStatus(
+            ReplayExchange exchange, bool proxied, bool certified, bool windowsAuth) => exchange?.Outcome switch
         {
             ReplayOutcome.Completed => Localization.GetLocalizedString(
                 "COMPOSER_COMPLETED",
@@ -967,7 +1006,10 @@ namespace XMAT.WebServiceCapture
             ReplayOutcome.TimedOut => Localization.GetLocalizedString("COMPOSER_TIMEOUT"),
             ReplayOutcome.TooLarge => ErrorText(Localization.GetLocalizedString("COMPOSER_TOO_LARGE")),
             _ when proxied => ErrorText(ProxyFailureText(exchange?.Code)),
+            _ when certified && windowsAuth =>
+                ErrorText(Localization.GetLocalizedString("COMPOSER_CLIENT_CERT_WINDOWS_AUTH_FAILED")),
             _ when certified => ErrorText(Localization.GetLocalizedString("COMPOSER_CLIENT_CERT_FAILED")),
+            _ when windowsAuth => ErrorText(Localization.GetLocalizedString("COMPOSER_WINDOWS_AUTH_FAILED")),
             _ => ErrorText(exchange?.Error?.Message ?? Localization.GetLocalizedString("COMPOSER_FAILED")),
         };
 
@@ -1208,8 +1250,9 @@ namespace XMAT.WebServiceCapture
 
         // The option that makes a cURL export unsupported now, as RequestCurlExporter.Prepare names it: a URL with '#', which
         // sends one request per number; redirects followed, which curl would follow its own way; HTTP/2 only, which the
-        // inbox curl.exe does not send; Connect to another endpoint; Client certificate, which XMAT never exports; or Upstream
-        // proxy, through which curl would not send. Null when there is none: Automatic and HTTP/1.1 only are exported.
+        // inbox curl.exe does not send; Connect to another endpoint; Client certificate, which XMAT never exports;
+        // Automatically authenticate with Windows, which XMAT never hands to curl; or Upstream proxy, through which curl
+        // would not send. Null when there is none: Automatic and HTTP/1.1 only are exported.
         private CurlUnsupported? UnsupportedCurlOption()
         {
             if (UrlBox.Text.Contains(ReplaySequence.Placeholder))
@@ -1222,6 +1265,8 @@ namespace XMAT.WebServiceCapture
                 return CurlUnsupported.ConnectTo;
             if (ClientCertificateBox.IsChecked == true)
                 return CurlUnsupported.ClientCertificate;
+            if (WindowsAuthBox.IsChecked == true)
+                return CurlUnsupported.WindowsAuth;
             return ProxyBox.IsChecked == true ? CurlUnsupported.Proxy : null;
         }
 
@@ -1235,6 +1280,7 @@ namespace XMAT.WebServiceCapture
                 CurlUnsupported.ConnectTo => "COMPOSER_CURL_CONNECT_TO",
                 CurlUnsupported.Proxy => "COMPOSER_CURL_PROXY",
                 CurlUnsupported.ClientCertificate => "COMPOSER_CURL_CLIENT_CERT",
+                CurlUnsupported.WindowsAuth => "COMPOSER_CURL_WINDOWS_AUTH",
                 _ => "COMPOSER_CURL_UNSUPPORTED",
             });
 
@@ -1244,10 +1290,10 @@ namespace XMAT.WebServiceCapture
 
         // The transport that the controls choose now, or false when Connect to another endpoint is on with text that is not
         // an IP address and port (TryParseTransport), Upstream proxy with text that is not a proxy (TryParseProxy), or Client
-        // certificate without a certificate chosen (TryParseClientCertificate). The cURL exports read it so, after their
-        // availability, which already refuses these options, and pass it to RequestCurlExporter.Prepare, which refuses them
-        // again; Send freezes the controls as they are and parses them off the UI thread (CheckSend). A run sends with the
-        // transport that its preview checked, never the controls afterwards.
+        // certificate without a certificate chosen (TryParseClientCertificate), with Automatically authenticate with Windows
+        // as it is. The cURL exports read it so, after their availability, which already refuses these options, and pass it
+        // to RequestCurlExporter.Prepare, which refuses them again; Send freezes the controls as they are and parses them off
+        // the UI thread (CheckSend). A run sends with the transport that its preview checked, never the controls afterwards.
         private bool TryReadTransport(out ReplayTransportOptions transport)
         {
             transport = null;
@@ -1260,7 +1306,12 @@ namespace XMAT.WebServiceCapture
                 return false;
             }
 
-            transport = read with { Proxy = proxy, ClientCertificate = certificate };
+            transport = read with
+            {
+                Proxy = proxy,
+                ClientCertificate = certificate,
+                WindowsAuth = WindowsAuthBox.IsChecked == true,
+            };
             return true;
         }
 
@@ -1323,6 +1374,8 @@ namespace XMAT.WebServiceCapture
             ClientCertificateList.IsEnabled = ClientCertificateBox.IsChecked == true;
             UpdateCurlAvailability();
         }
+
+        private void WindowsAuth_Changed(object sender, RoutedEventArgs e) => UpdateCurlAvailability();
 
         private async void ClientCertificateList_DropDownOpened(object sender, EventArgs e) => await ListCertificatesAsync();
 
@@ -1675,10 +1728,10 @@ namespace XMAT.WebServiceCapture
         // window closes or the user cancels it; a file that cannot be read changes nothing, nor does a file read by the time
         // of the cancel. What the file left out stays to be supplied (ShowOmissions). A body larger than the editor shows is
         // kept as its exact bytes and shown by its size (HeldBody). A file carries no transport but its HTTP version and
-        // grants no permission: Connect to another endpoint, Upstream proxy, Client certificate and Follow same-origin
-        // redirects go back to off, and a send asks for every permission that it needs, as always. Only the file's name is
-        // shown or kept, never its path. Nothing is sent, and the previous response is cleared, so it cannot pass for the
-        // new request's.
+        // grants no permission: Connect to another endpoint, Upstream proxy, Client certificate, Automatically authenticate
+        // with Windows and Follow same-origin redirects go back to off, and a send asks for every permission that it needs,
+        // as always. Only the file's name is shown or kept, never its path. Nothing is sent, and the previous response is
+        // cleared, so it cannot pass for the new request's.
         internal async Task OpenRequestAsync()
         {
             if (_state != ComposerState.Idle || _closed)
@@ -1780,9 +1833,9 @@ namespace XMAT.WebServiceCapture
         }
 
         // A request file carries the HTTP version and no other transport, and Load from the history none at all, which is
-        // Automatic: Connect to another endpoint goes back to off, without an endpoint, Upstream proxy and Client
-        // certificate too (ResetProxy, ResetClientCertificate), and Follow same-origin redirects to off, with at most 10
-        // when it is selected again. Inspect session stays as it is.
+        // Automatic: Connect to another endpoint goes back to off, without an endpoint, Upstream proxy, Client certificate
+        // and Automatically authenticate with Windows too (ResetProxy, ResetClientCertificate, ResetWindowsAuth), and Follow
+        // same-origin redirects to off, with at most 10 when it is selected again. Inspect session stays as it is.
         private void ResetTransport(ReplayHttpVersion httpVersion)
         {
             HttpVersionBox.SelectedItem = HttpVersionBox.Items.OfType<ComboBoxItem>()
@@ -1794,6 +1847,7 @@ namespace XMAT.WebServiceCapture
             RedirectLimitBox.SelectedItem = ReplayOptions.MaxRedirectLimit;
             ResetProxy();
             ResetClientCertificate();
+            ResetWindowsAuth();
         }
 
         // Upstream proxy goes back to off, without a proxy, whenever another request replaces the one in the editors: Open
@@ -1812,6 +1866,11 @@ namespace XMAT.WebServiceCapture
             ClientCertificateBox.IsChecked = false;
             ClientCertificateList.SelectedItem = null;
         }
+
+        // Automatically authenticate with Windows goes back to off whenever another request replaces the one in the editors,
+        // as Upstream proxy and Client certificate do and for the same reasons: neither a request file nor the history keeps
+        // it, and the permission that it needs is asked for the request that it is chosen with.
+        private void ResetWindowsAuth() => WindowsAuthBox.IsChecked = false;
 
         // The body of a request file that is larger than the editor shows (MaxShownBodyBytes); null for a smaller body, or
         // none, which the editor shows. The window keeps it as its exact bytes, sent and saved as they are, and shows only
@@ -2271,10 +2330,10 @@ namespace XMAT.WebServiceCapture
             !_closed && _state == ComposerState.Idle && ComposerSessionDrag.IsLending(data);
 
         // Drag a session: loads a request dragged from a connections list, in place of the request in the editors, after
-        // asking when the user has edited that one, Upstream proxy or Client certificate, which a drop turns off. What is
-        // loaded is the copy made when the drag began, built as Edit and resend builds it; nothing else that is dropped is
-        // used. Nothing is sent or read, and the previous response is cleared, so it cannot pass for the new request's.
-        // Refused while the window sends, reads a file or asks something.
+        // asking when the user has edited that one, Upstream proxy, Client certificate or Automatically authenticate with
+        // Windows, which a drop turns off. What is loaded is the copy made when the drag began, built as Edit and resend
+        // builds it; nothing else that is dropped is used. Nothing is sent or read, and the previous response is cleared, so
+        // it cannot pass for the new request's. Refused while the window sends, reads a file or asks something.
         internal bool DropSession(IDataObject data)
         {
             if (_closed)
@@ -2310,12 +2369,13 @@ namespace XMAT.WebServiceCapture
                 return false;
             }
 
-            // A drop keeps the transport options as they are, but for Upstream proxy and Client certificate, so changing
-            // them is not an edit that it loses. Nor does it set them: they stay compared with those that the window, the last
-            // request file or the last Load set, which Open request and Load reset. Upstream proxy and Client certificate are
-            // reset (ResetProxy, ResetClientCertificate), as Open request and Load reset them, so changing either is an edit
-            // that a drop loses, and asks about first, as about the request: each is compared as it is now with the baseline,
-            // which holds it as every load leaves it, off and without a proxy or a certificate.
+            // A drop keeps the transport options as they are, but for Upstream proxy, Client certificate and Automatically
+            // authenticate with Windows, so changing them is not an edit that it loses. Nor does it set them: they stay
+            // compared with those that the window, the last request file or the last Load set, which Open request and Load
+            // reset. Upstream proxy, Client certificate and Automatically authenticate with Windows are reset (ResetProxy,
+            // ResetClientCertificate, ResetWindowsAuth), as Open request and Load reset them, so changing any of them is an
+            // edit that a drop loses, and asks about first, as about the request: each is compared as it is now with the
+            // baseline, which holds it as every load leaves it, off and without a proxy or a certificate.
             TransportState loadedTransport = _loaded.Transport;
             EditorState current = CurrentEditors();
             TransportState compared = loadedTransport with
@@ -2324,6 +2384,7 @@ namespace XMAT.WebServiceCapture
                 ProxyText = current.Transport.ProxyText,
                 ClientCertificate = current.Transport.ClientCertificate,
                 Certificate = current.Transport.Certificate,
+                WindowsAuth = current.Transport.WindowsAuth,
             };
             if (current with { Transport = compared } != _loaded)
             {
@@ -2343,6 +2404,7 @@ namespace XMAT.WebServiceCapture
                     return false;
             }
 
+            ResetWindowsAuth();
             ResetClientCertificate();
             ResetProxy();
             LoadDraft(draft, provenance);
@@ -2667,7 +2729,8 @@ namespace XMAT.WebServiceCapture
                     Proxy: ProxyBox.IsChecked == true,
                     ProxyText: ProxyText.Text,
                     ClientCertificate: ClientCertificateBox.IsChecked == true,
-                    Certificate: SelectedCertificate?.Thumbprint));
+                    Certificate: SelectedCertificate?.Thumbprint,
+                    WindowsAuth: WindowsAuthBox.IsChecked == true));
 
         // Copy as cURL: one click copies to the clipboard a command for PowerShell 7 that sends the request as the editors
         // hold it, with the inbox curl.exe (RequestCurlExporter, CurlScriptForm.Pasteable); the warning beside the button
@@ -3054,10 +3117,10 @@ namespace XMAT.WebServiceCapture
         // What Open request, Load and a drop would discard, to tell whether the user has edited it: what the editors hold and
         // the parts that a request file left out and that are not supplied yet, edited since the request was loaded; and the
         // transport options, changed from those that the window, the last request file or the last Load set, also before a
-        // drop, which keeps them but for Upstream proxy and Client certificate. Supplying a part is an edit, even as the
-        // empty part that the editor already showed. A body that the window holds as bytes, an uploaded file's, a form's, or
-        // a large one from a request file or the Replays tab, is compared by reference: it is the same bytes until another
-        // upload, form or Clear body.
+        // drop, which keeps them but for Upstream proxy, Client certificate and Automatically authenticate with Windows.
+        // Supplying a part is an edit, even as the empty part that the editor already showed. A body that the window holds as
+        // bytes, an uploaded file's, a form's, or a large one from a request file or the Replays tab, is compared by
+        // reference: it is the same bytes until another upload, form or Clear body.
         private sealed record EditorState(
             string Method, string Url, string Headers, string Body, bool Base64, byte[] FileBody,
             RequestOmissions Omissions, TransportState Transport);
@@ -3065,9 +3128,10 @@ namespace XMAT.WebServiceCapture
         // The transport options as the user left them, which Open request and Load reset (ResetTransport) and a drop keeps:
         // the HTTP version, which a request file keeps too, and Connect to another endpoint and Follow same-origin
         // redirects, each with what it holds also while it is off: the endpoint as typed and the most redirects. And
-        // Upstream proxy, with the proxy as typed, and Client certificate, with the thumbprint of the certificate chosen,
-        // each also while it is off, which all three reset (ResetProxy, ResetClientCertificate) and nothing keeps: they are
-        // here only to tell whether replacing the request loses them, never to be saved or restored.
+        // Upstream proxy, with the proxy as typed, Client certificate, with the thumbprint of the certificate chosen, each
+        // also while it is off, and Automatically authenticate with Windows, which all three reset (ResetProxy,
+        // ResetClientCertificate, ResetWindowsAuth) and nothing keeps: they are here only to tell whether replacing the
+        // request loses them, never to be saved or restored.
         private sealed record TransportState(
             ReplayHttpVersion HttpVersion,
             bool ConnectTo,
@@ -3077,6 +3141,7 @@ namespace XMAT.WebServiceCapture
             bool Proxy,
             string ProxyText,
             bool ClientCertificate,
-            string Certificate);
+            string Certificate,
+            bool WindowsAuth);
     }
 }

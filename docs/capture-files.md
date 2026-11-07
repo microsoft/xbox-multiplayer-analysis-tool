@@ -79,11 +79,17 @@ XMAT checks capture files before reading them and never changes them:
 
 `xmat replay` and `xmat compose` with `--save-saz` also save their sends as
 `replays.saz`, which **Import** opens like any other `.SAZ`. Session flags name each
-send, as [Command line](cli.md) lists them. Two say how a send went out, never to
+send, as [Command line](cli.md) lists them. Three say how a send went out, never to
 what or with what: `x-xmat-replay-transport` (`connect-to` or `proxy`, never the
-endpoint or the proxy) for a send that was not direct, and
+endpoint or the proxy) for a send that was not direct,
 `x-xmat-replay-client-certificate-configured` (`true`) for a send that could offer a
-client certificate, never which certificate or whether one was sent.
+client certificate, never which certificate or whether one was sent, and
+`x-xmat-replay-windows-auth-configured` (`true`) for a send that could answer with
+Windows authentication, never whether the server asked or authentication succeeded.
+The request of such a send is saved without the `Authorization` header that Windows
+authentication added, and the `WWW-Authenticate` and `Proxy-Authenticate` headers of its
+response keep only the scheme names of their `Negotiate`, `NTLM` and `Kerberos`
+challenges, without their tokens; other challenges are saved as received.
 
 ## Export a sanitized capture
 

@@ -45,13 +45,24 @@ namespace XMAT.Operations.Replay
         internal const string ClientCertificateOriginInvalidCode = "replay.client-cert.origin-invalid";
         internal const string ClientCertificateOriginCountCode = "replay.client-cert.origin-count";
         internal const string ClientCertificatePolicyCode = "replay.policy.client-cert";
+        internal const string WindowsAuthProxyCode = "replay.windows-auth.proxy";
+        internal const string WindowsAuthConnectToCode = "replay.windows-auth.connect-to";
+        internal const string WindowsAuthHttpsCode = "replay.windows-auth.https-required";
+        internal const string WindowsAuthOriginInvalidCode = "replay.windows-auth.origin-invalid";
+        internal const string WindowsAuthOriginCountCode = "replay.windows-auth.origin-count";
+        internal const string WindowsAuthHttp2Code = "replay.windows-auth.http2";
+        internal const string WindowsAuthAuthorizationCode = "replay.windows-auth.authorization-header";
+        internal const string WindowsAuthPolicyCode = "replay.policy.windows-auth";
+
+        // The header that a request of a Windows-authentication run may not carry of its own.
+        private static readonly string[] AuthorizationHeader = { "Authorization" };
 
         // The sender of a run that connects to the URL's host; the GUI's composer passes one over its pooled connections.
         internal Func<ReplaySender> SenderFactory { get; set; } = static () => new ReplaySender();
 
         // The sender of a run whose transport is a setting of the handler (ReplayTransportOptions.NeedsOwnSender: a
-        // connect-to endpoint, a proxy or a client certificate): always one made for that run and disposed when it ends,
-        // so no pooled connection carries its requests, and none of its connections serve another run.
+        // connect-to endpoint, a proxy, a client certificate or Windows authentication): always one made for that run and
+        // disposed when it ends, so no pooled connection carries its requests, and none of its connections serve another run.
         internal Func<ReplaySenderSetup, ReplaySender> OwnSenderFactory { get; set; } =
             static setup => new ReplaySender(setup);
 
@@ -207,7 +218,7 @@ namespace XMAT.Operations.Replay
                     widest.UsesUnsafeMethod,
                     widest.ChangesOrigin,
                     transport,
-                    transport.ClientCertificate == null ? null : CredentialOriginOf(widest)));
+                    transport.ClientCertificate == null && !transport.WindowsAuth ? null : CredentialOriginOf(widest)));
             }
             catch (ReplayInputException ex)
             {
@@ -751,9 +762,11 @@ namespace XMAT.Operations.Replay
                         "Sending through the proxy was not allowed; nothing was sent.");
             }
 
-            // The consent names the one origin that may receive the certificate, and it must be this run's: CheckTransport
-            // made the run's requests share one, which is never null, and no consent is ever a null origin's.
-            ReplayCredentialOrigin runOrigin = transport.ClientCertificate == null ? null : CredentialOriginOf(items[0].Draft);
+            // The consents name the one origin that may receive the certificate or Windows authentication's answers, and it
+            // must be this run's: CheckTransport made the run's requests share one, which is never null, and no consent is
+            // ever a null origin's.
+            ReplayCredentialOrigin runOrigin =
+                transport.ClientCertificate == null && !transport.WindowsAuth ? null : CredentialOriginOf(items[0].Draft);
             if (transport.ClientCertificate != null &&
                 (options.AllowClientCertificate == null || runOrigin == null ||
                     !options.AllowClientCertificate.Equals(runOrigin)))
@@ -764,14 +777,28 @@ namespace XMAT.Operations.Replay
                         "server whose certificate this PC accepts for the origin. Sending it to this run's origin was not " +
                         "allowed; nothing was sent.");
             }
+
+            if (transport.WindowsAuth &&
+                (options.AllowWindowsAuth == null || runOrigin == null || !options.AllowWindowsAuth.Equals(runOrigin)))
+            {
+                throw new ReplayInputException(
+                    WindowsAuthPolicyCode,
+                    "Windows authentication answers the server's challenge with the Windows credentials that XMAT runs with. " +
+                        "Answering this run's origin was not allowed; nothing was sent.");
+            }
         }
 
         // How the requests may reach the server, in this order: a proxy chooses where it connects, so it cannot be combined
-        // with a connect-to endpoint or a client certificate; HTTP/2 only and a connect-to endpoint need HTTPS, so the
-        // server must prove that it is the URL's host; a connect-to endpoint serves one origin, and never an address that
-        // no request may go to; a client certificate goes only over HTTPS, to one supported origin per run.
+        // with a connect-to endpoint, a client certificate or Windows authentication, nor can Windows authentication with a
+        // connect-to endpoint; HTTP/2 only and a connect-to endpoint need HTTPS, so the server must prove that it is the
+        // URL's host; a connect-to endpoint serves one origin, and never an address that no request may go to; a client
+        // certificate and Windows authentication go only over HTTPS, to one supported origin per run, each checked before
+        // the other's next step; and Windows authentication needs HTTP/1.1 and requests without an Authorization header of
+        // their own, read from their header lines, also one that Connection would drop.
         private static void CheckTransport(IEnumerable<RequestReplayDraft> drafts, ReplayTransportOptions transport)
         {
+            bool certificate = transport.ClientCertificate != null;
+            bool windows = transport.WindowsAuth;
             if (transport.Proxy != null && transport.ConnectTo != null)
             {
                 throw new ReplayInputException(
@@ -780,10 +807,23 @@ namespace XMAT.Operations.Replay
                         "nothing was sent.");
             }
 
-            if (transport.Proxy != null && transport.ClientCertificate != null)
+            if (transport.Proxy != null && certificate)
             {
                 throw new ReplayInputException(
                     ClientCertificateProxyCode, "A client certificate cannot be sent through a proxy; nothing was sent.");
+            }
+
+            if (transport.Proxy != null && windows)
+            {
+                throw new ReplayInputException(
+                    WindowsAuthProxyCode, "Windows authentication cannot be used through a proxy; nothing was sent.");
+            }
+
+            if (transport.ConnectTo != null && windows)
+            {
+                throw new ReplayInputException(
+                    WindowsAuthConnectToCode,
+                    "Windows authentication cannot be used with another endpoint than the URL's host; nothing was sent.");
             }
 
             if (transport.HttpVersion == ReplayHttpVersion.Http2 && !drafts.All(IsHttps))
@@ -797,12 +837,13 @@ namespace XMAT.Operations.Replay
                 CheckConnectTo(drafts, transport.ConnectTo);
             }
 
-            if (transport.ClientCertificate == null)
+            if (!certificate && !windows)
             {
                 return;
             }
 
-            if (!drafts.All(IsHttps))
+            bool https = drafts.All(IsHttps);
+            if (certificate && !https)
             {
                 throw new ReplayInputException(
                     ClientCertificateHttpsCode,
@@ -810,19 +851,58 @@ namespace XMAT.Operations.Replay
                         "nothing was sent.");
             }
 
-            if (drafts.Any(draft => CredentialOriginOf(draft) == null))
+            if (windows && !https)
+            {
+                throw new ReplayInputException(
+                    WindowsAuthHttpsCode,
+                    "Windows authentication answers only HTTPS URLs, so the server must prove that it is the URL's host; " +
+                        "nothing was sent.");
+            }
+
+            bool invalid = drafts.Any(draft => CredentialOriginOf(draft) == null);
+            if (certificate && invalid)
             {
                 throw new ReplayInputException(
                     ClientCertificateOriginInvalidCode,
                     "Client-certificate authentication requires a supported HTTPS origin; nothing was sent.");
             }
 
-            if (drafts.Select(CredentialOriginOf).Distinct().Skip(1).Any())
+            if (windows && invalid)
+            {
+                throw new ReplayInputException(
+                    WindowsAuthOriginInvalidCode, "Windows authentication requires a supported HTTPS origin; nothing was sent.");
+            }
+
+            bool several = drafts.Select(CredentialOriginOf).Distinct().Skip(1).Any();
+            if (certificate && several)
             {
                 throw new ReplayInputException(
                     ClientCertificateOriginCountCode,
                     "A client certificate is sent to one origin per run, and the requests of this run do not share one; " +
                         "nothing was sent.");
+            }
+
+            if (windows && several)
+            {
+                throw new ReplayInputException(
+                    WindowsAuthOriginCountCode,
+                    "Windows authentication answers one origin per run, and the requests of this run do not share one; " +
+                        "nothing was sent.");
+            }
+
+            if (windows && transport.HttpVersion == ReplayHttpVersion.Http2)
+            {
+                throw new ReplayInputException(
+                    WindowsAuthHttp2Code,
+                    "Windows authentication needs HTTP/1.1, so it cannot be used with HTTP/2 only; nothing was sent.");
+            }
+
+            if (windows && drafts.Any(draft => draft.HasAnyHeader(AuthorizationHeader)))
+            {
+                throw new ReplayInputException(
+                    WindowsAuthAuthorizationCode,
+                    "A request that includes its own Authorization header cannot also use Windows authentication; nothing " +
+                        "was sent.");
             }
         }
 
@@ -928,7 +1008,7 @@ namespace XMAT.Operations.Replay
             cancellationToken.ThrowIfCancellationRequested();
             using ReplaySender sender =
                 (transport.NeedsOwnSender
-                    ? OwnSenderFactory(ReplaySenderSetup.For(transport, credential, ServerChainPolicyFactory))
+                    ? OwnSenderFactory(ReplaySenderSetup.For(transport, credential, ServerChainPolicyFactory, options.AllowWindowsAuth))
                     : SenderFactory()) ??
                 throw new InvalidOperationException("The replay sender factory returned no sender.");
             ReportProgress(context, 0, plan.Count);
@@ -975,7 +1055,9 @@ namespace XMAT.Operations.Replay
                         transport.TransportName,
                         transport.HttpVersionName,
                         ReplayTransportOptions.ResponseVersionName(exchange.Version),
-                        transport.ClientCertificate != null);
+                        transport.ClientCertificate != null,
+                        transport.WindowsAuth,
+                        exchange.AuthHeaderSchemeObserved);
                     lock (gate)
                     {
                         token.ThrowIfCancellationRequested();

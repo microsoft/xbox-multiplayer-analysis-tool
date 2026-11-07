@@ -464,6 +464,136 @@ namespace XMAT.Tests.Cli
                 });
         }
 
+        // --windows-auth needs --allow-windows-auth naming the run's origin, an https URL, HTTP/1.1 and no Authorization
+        // header of the request's own, for compose and replay alike: otherwise nothing is sent. The options say that Windows
+        // authentication was asked for and allowed, and that it asks for exactly HTTP/1.1 when the version was left
+        // automatic; neither the output nor its errors name the origin or the request's header.
+        [Fact]
+        public async Task WindowsAuth_WithoutWhatItNeeds_IsRefusedBeforeAnythingIsSent()
+        {
+            using var directory = new CliTestDirectory();
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string url = $"https://localhost:{server.Port}/item";
+            string consent = $"https://LOCALHOST:{server.Port}/";
+            string input = ReplayCaptures.WriteSaz(directory.Root, "capture.saz", new CapturedExchange("GET", url, ""));
+            (string[] Arguments, string Code)[] runs =
+            {
+                (new[] { "compose", "--url", url, "--windows-auth" }, ReplayOperation.WindowsAuthPolicyCode),
+                (new[] { "compose", "--url", url, "--windows-auth", "--allow-windows-auth", "https://localhost:1" }, ReplayOperation.WindowsAuthPolicyCode),
+                (new[] { "replay", input, "--request", "1", "--windows-auth" }, ReplayOperation.WindowsAuthPolicyCode),
+                (new[] { "compose", "--url", $"http://localhost:{server.Port}/item", "--windows-auth", "--allow-windows-auth", consent }, ReplayOperation.WindowsAuthHttpsCode),
+                (new[] { "compose", "--url", url, "--windows-auth", "--allow-windows-auth", consent, "--http-version", "2" }, ReplayOperation.WindowsAuthHttp2Code),
+                (new[] { "compose", "--url", url, "--windows-auth", "--allow-windows-auth", consent, "--header", "Authorization: Bearer " + Canary }, ReplayOperation.WindowsAuthAuthorizationCode),
+            };
+            var results = new List<XmatRun>();
+
+            for (int index = 0; index < runs.Length; index++)
+            {
+                XmatRun run = await XmatProcess.RunAsync(directory.Root, runs[index].Arguments.Concat(new[] { "--out", "r" + index }).ToArray());
+                results.Add(run);
+                CliAssert.ExitCode(3, run);
+                Assert.Equal(new[] { runs[index].Code }, run.ErrorCodes());
+                Assert.False(Directory.Exists(Path.Join(directory.Root, "r" + index)));
+            }
+
+            JsonElement automatic = results[0].Json().GetProperty("options");
+            JsonElement http2 = results[4].Json().GetProperty("options");
+            Assert.Equal(
+                ("1.1", true, false),
+                (automatic.GetProperty("httpVersion").GetString(), automatic.GetProperty("windowsAuth").GetBoolean(),
+                    automatic.GetProperty("allowWindowsAuth").GetBoolean()));
+            Assert.Equal(
+                ("2", true, true),
+                (http2.GetProperty("httpVersion").GetString(), http2.GetProperty("windowsAuth").GetBoolean(),
+                    http2.GetProperty("allowWindowsAuth").GetBoolean()));
+            Assert.Equal(0, server.Connections);
+            Assert.All(
+                results.SelectMany(run => new[] { run.Stdout, run.Stderr }),
+                text =>
+                {
+                    Assert.DoesNotContain("localhost", text, StringComparison.OrdinalIgnoreCase);
+                    Assert.DoesNotContain(Canary, text, StringComparison.OrdinalIgnoreCase);
+                });
+        }
+
+        // With --allow-windows-auth for the run's origin, the run goes on to send, and Windows authentication answers only a
+        // server that proves that it is the URL's host: one whose certificate comes from a root that Windows does not trust
+        // fails the send before any HTTP, so no request, and no credential, reaches it. The output says that the send was
+        // configured for Windows authentication at exactly HTTP/1.1, and never names the origin.
+        [Fact]
+        public async Task WindowsAuth_WithConsent_GoesOnToSend_AndAnUntrustedServerGetsNothing()
+        {
+            using var directory = new CliTestDirectory();
+            using var authority = new TestCertificateAuthority();
+            using X509Certificate2 certificate = authority.Issue(address: IPAddress.Loopback);
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok(), new LoopbackTls(certificate));
+
+            XmatRun sent = await XmatProcess.RunAsync(
+                directory.Root, "compose", "--url", server.Origin + "/item", "--windows-auth", "--allow-windows-auth", server.Origin,
+                "--out", "results");
+
+            CliAssert.ExitCode(12, sent);
+            JsonElement json = sent.Json();
+            JsonElement options = json.GetProperty("options");
+            Assert.Equal(
+                ("1.1", true, true),
+                (options.GetProperty("httpVersion").GetString(), options.GetProperty("windowsAuth").GetBoolean(),
+                    options.GetProperty("allowWindowsAuth").GetBoolean()));
+            JsonElement replay = Assert.Single(json.GetProperty("replays").EnumerateArray());
+            Assert.Equal(
+                ("failed", ReplaySender.SendFailedCode, "1.1", JsonValueKind.Null),
+                (replay.GetProperty("outcome").GetString(), replay.GetProperty("code").GetString(),
+                    replay.GetProperty("httpVersion").GetString(), replay.GetProperty("authHeaderSchemeObserved").ValueKind));
+            Assert.NotEqual(0, server.Connections);
+            Assert.Empty(server.Requests);
+            Assert.All(new[] { sent.Stdout, sent.Stderr }, text => Assert.DoesNotContain("127.0.0.1", text, StringComparison.Ordinal));
+        }
+
+        // A request file's HTTP version is the run's unless --http-version says otherwise, and the output reports the version
+        // that the run asked for: a file that asks for HTTP/2 only is refused with Windows authentication before anything is
+        // sent, and its options say "2"; --http-version auto overrides the file, and Windows authentication makes that exactly
+        // HTTP/1.1; without Windows authentication, the file's HTTP/2 only is the run's. The server's certificate comes from a
+        // root that Windows does not trust, so no send gets as far as HTTP.
+        [Fact]
+        public async Task WindowsAuth_ARequestFilesHttpVersion_IsTheRuns_AndTheOutputReportsWhatTheRunAskedFor()
+        {
+            using var directory = new CliTestDirectory();
+            using var authority = new TestCertificateAuthority();
+            using X509Certificate2 certificate = authority.Issue(address: IPAddress.Loopback);
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok(), new LoopbackTls(certificate));
+            string file = Path.Join(directory.Root, "http2.json");
+            File.WriteAllText(
+                file,
+                "{\"schema\":\"xmat-request/1\",\"profile\":\"content\",\"method\":\"GET\",\"url\":\"" + server.Origin + "/item\"," +
+                "\"httpVersion\":\"2\",\"headers\":[],\"body\":\"\",\"omitted\":[]}");
+            string[] windows = { "--windows-auth", "--allow-windows-auth", server.Origin };
+
+            XmatRun refused = await XmatProcess.RunAsync(
+                directory.Root, new[] { "compose", "--request-file", file, "--out", "refused" }.Concat(windows).ToArray());
+            int connectionsWhenRefused = server.Connections;
+            XmatRun overridden = await XmatProcess.RunAsync(
+                directory.Root,
+                new[] { "compose", "--request-file", file, "--http-version", "auto", "--out", "overridden" }.Concat(windows).ToArray());
+            XmatRun plain = await XmatProcess.RunAsync(directory.Root, "compose", "--request-file", file, "--out", "plain");
+
+            CliAssert.ExitCode(3, refused);
+            Assert.Equal(new[] { ReplayOperation.WindowsAuthHttp2Code }, refused.ErrorCodes());
+            Assert.Equal(0, connectionsWhenRefused);
+            CliAssert.ExitCode(12, overridden);
+            CliAssert.ExitCode(12, plain);
+            Assert.Equal(
+                new[] { ("2", (string)null), ("1.1", "1.1"), ("2", "2") },
+                new[] { refused, overridden, plain }.Select(run =>
+                {
+                    JsonElement json = run.Json();
+                    JsonElement[] replays = json.GetProperty("replays").EnumerateArray().ToArray();
+                    return (
+                        json.GetProperty("options").GetProperty("httpVersion").GetString(),
+                        replays.Length == 0 ? null : Assert.Single(replays).GetProperty("httpVersion").GetString());
+                }));
+            Assert.Empty(server.Requests);
+        }
+
         // A --connect-to that is not an address and port, or an HTTP version that XMAT does not offer, is a usage error
         // that never repeats the value; HTTP/2 or connect-to for an http URL is refused before anything is sent.
         [Theory]

@@ -35,6 +35,7 @@ namespace XMAT.Operations.Replay
         NumberedUrl,
         Proxy,
         ClientCertificate,
+        WindowsAuth,
     }
 
     internal sealed class CurlExportException : Exception
@@ -166,6 +167,11 @@ namespace XMAT.Operations.Replay
             if (transport.ClientCertificate != null)
             {
                 throw Unsupported(CurlUnsupported.ClientCertificate, "a client certificate");
+            }
+
+            if (transport.WindowsAuth)
+            {
+                throw Unsupported(CurlUnsupported.WindowsAuth, "Windows authentication");
             }
 
             if (followRedirects > 0)

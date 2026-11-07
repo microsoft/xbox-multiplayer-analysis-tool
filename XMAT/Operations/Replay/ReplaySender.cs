@@ -36,43 +36,63 @@ namespace XMAT.Operations.Replay
     }
 
     // What a sender's handler is made for (ReplaySender.CreateHandler): directly to the URL's host, to one connect-to
-    // endpoint, or through one proxy, never both of the last two; and, for a run that may offer a client certificate, the
-    // resolved certificate (ReplayClientCredential's copy) and the one origin that may receive it, never with a proxy.
-    // ChainPolicyFactory is null except in tests: it gives the handler and its client-certificate check each a new chain
-    // policy, so they trust the same roots; null keeps the platform's validation.
+    // endpoint, or through one proxy, never both of the last two; for a run that may offer a client certificate, the
+    // resolved certificate (ReplayClientCredential's copy); for a run that may authenticate with Windows, WindowsAuth; and,
+    // for either, the one origin that may receive them (CredentialOrigin), never with a proxy, and never with a connect-to
+    // endpoint for Windows authentication. ChainPolicyFactory is null except in tests: it gives the handler and its
+    // client-certificate check each a new chain policy, so they trust the same roots; null keeps the platform's validation.
     internal sealed record ReplaySenderSetup(
         ReplayConnectTo ConnectTo = null,
         ReplayProxy Proxy = null,
         X509Certificate2 ClientCertificate = null,
         ReplayCredentialOrigin CredentialOrigin = null,
-        Func<X509ChainPolicy> ChainPolicyFactory = null)
+        Func<X509ChainPolicy> ChainPolicyFactory = null,
+        bool WindowsAuth = false)
     {
         internal static ReplaySenderSetup Direct { get; } = new();
 
+        // windowsAuthOrigin is the origin that the run's Windows authentication was allowed for; a run with both a client
+        // certificate and Windows authentication was allowed both for the one origin of its requests.
         internal static ReplaySenderSetup For(
             ReplayTransportOptions transport,
             ReplayClientCredential credential = null,
-            Func<X509ChainPolicy> chainPolicyFactory = null) =>
-            new(
-                (transport ?? throw new ArgumentNullException(nameof(transport))).ConnectTo,
+            Func<X509ChainPolicy> chainPolicyFactory = null,
+            ReplayCredentialOrigin windowsAuthOrigin = null)
+        {
+            ArgumentNullException.ThrowIfNull(transport);
+            ReplayCredentialOrigin windows = transport.WindowsAuth ? windowsAuthOrigin : null;
+            if (credential != null && windows != null && !credential.Origin.Equals(windows))
+            {
+                throw new ArgumentException(
+                    "A client certificate and Windows authentication are allowed for one origin together.", nameof(windowsAuthOrigin));
+            }
+
+            return new(
+                transport.ConnectTo,
                 transport.Proxy,
                 credential?.Certificate,
-                credential?.Origin,
-                chainPolicyFactory);
+                credential?.Origin ?? windows,
+                chainPolicyFactory,
+                transport.WindowsAuth);
+        }
     }
 
     // The one way XMAT sends a replayed or composed request, for the GUI and xmat.exe alike. A replay goes through a proxy
     // only when its sender was made for one (so Local PC capture does not record it otherwise), never sends or keeps
-    // cookies of its own, never answers an authentication challenge with the user's Windows credentials or a proxy's with
-    // any, never decompresses (so inspectors see the bytes the server sent) and keeps the platform's certificate
-    // validation. It offers a client certificate only when its sender was made for one, and then only to a server that
-    // asks for one and proves, before the certificate is sent, that it is the one origin that may receive it. Replay
-    // follows redirects itself, at most MaxRedirects of them, and only within the origin it sent to: a server never chooses
-    // where the request's headers and body go next, so a hop to another origin, from HTTPS to HTTP or to anything but HTTP
-    // and HTTPS is never followed, nor, with a client certificate, a hop to any origin but the one that may receive it. A
-    // sender made for a connect-to endpoint connects only there, and one made for a proxy sends only through it, for every
-    // request and redirect; neither falls back to the URL's host. Each hop is recorded, and a redirect built, from what
-    // replay put in the request before the HTTP stack sent it, never from what the stack added while sending.
+    // cookies of its own, answers an authentication challenge with the Windows credentials that XMAT runs with only when
+    // its sender was made for Windows authentication, and then only the one consented origin's Negotiate and NTLM
+    // challenges, never answers a proxy's with any, never decompresses (so inspectors see the bytes the server sent) and
+    // keeps the platform's certificate validation. It offers a client certificate only when its sender was made for one,
+    // and then only to a server that asks for one and proves, before the certificate is sent, that it is the one origin
+    // that may receive it. Replay follows redirects itself, at most MaxRedirects of them, and only within the origin it
+    // sent to: a server never chooses where the request's headers and body go next, so a hop to another origin, from HTTPS
+    // to HTTP or to anything but HTTP and HTTPS is never followed, nor, with a client certificate or Windows
+    // authentication, a hop to any origin but the one that may receive them. A sender made for a connect-to endpoint
+    // connects only there, and one made for a proxy sends only through it, for every request and redirect; neither falls
+    // back to the URL's host. Each hop is recorded, and a redirect built, from what replay put in the request before the
+    // HTTP stack sent it, never from what the stack added while sending. With Windows authentication, the Authorization
+    // header that the stack added is removed from the live message after each hop, its scheme label alone kept, and the
+    // response's Negotiate, NTLM and Kerberos challenges are recorded without their tokens (ReplayAuthChallenges).
     internal sealed class ReplaySender : IDisposable
     {
         // Why a redirect was not followed; the redirect response is then the result.
@@ -123,10 +143,12 @@ namespace XMAT.Operations.Replay
         // Directly, the handler connects to the URL's host; for a connect-to endpoint, only to that endpoint; for a proxy,
         // only to the proxy (FixedProxy), never with proxy credentials, so a 407 is the result. Never the system's or the
         // environment's proxy. Credentials stay unset, so an NTLM or Negotiate challenge is the result, never answered with
-        // the user's Windows credentials. With a client certificate, nothing is offered up front (ClientCertificates stays
-        // unset) and TLS sessions are never resumed, so every connection makes a full handshake in which a server that
-        // asks for a certificate shows its own first: the certificate goes only to one that passes
-        // ReplayServerCertificateCheck for the consented origin.
+        // the user's Windows credentials, except for Windows authentication: then the credentials answer only the consented
+        // origin's Negotiate and NTLM challenges (ReplayWindowsCredentials), never ahead of a challenge (PreAuthenticate
+        // false). With a client certificate, nothing is offered up front (ClientCertificates stays unset) and TLS sessions
+        // are never resumed, so every connection makes a full handshake in which a server that asks for a certificate shows
+        // its own first: the certificate goes only to one that passes ReplayServerCertificateCheck for the consented
+        // origin.
         internal static SocketsHttpHandler CreateHandler(ReplaySenderSetup setup = null)
         {
             setup ??= ReplaySenderSetup.Direct;
@@ -141,6 +163,12 @@ namespace XMAT.Operations.Replay
                     "A client certificate needs the one origin that may receive it, and never goes through a proxy.", nameof(setup));
             }
 
+            if (setup.WindowsAuth && (setup.Proxy != null || setup.ConnectTo != null || setup.CredentialOrigin == null))
+            {
+                throw new ArgumentException(
+                    "Windows authentication needs the one origin that may receive it, directly from the URL's host.", nameof(setup));
+            }
+
             var handler = new SocketsHttpHandler
             {
                 UseProxy = setup.Proxy != null,
@@ -148,6 +176,12 @@ namespace XMAT.Operations.Replay
                 AllowAutoRedirect = false,
                 AutomaticDecompression = DecompressionMethods.None,
             };
+            if (setup.WindowsAuth)
+            {
+                handler.Credentials = new ReplayWindowsCredentials(setup.CredentialOrigin);
+                handler.PreAuthenticate = false;
+            }
+
             if (setup.Proxy != null)
             {
                 handler.Proxy = new FixedProxy(setup.Proxy);
@@ -222,6 +256,7 @@ namespace XMAT.Operations.Replay
             var stopwatch = Stopwatch.StartNew();
             int redirects = 0;
             ReplayMessage sent = null;
+            string observed = null;
             try
             {
                 while (true)
@@ -233,16 +268,37 @@ namespace XMAT.Operations.Replay
 
                     Hop hop = Hop.Of(request, body);
                     sent = DescribeRequest(hop, AttemptedVersion(hop));
-                    using HttpResponseMessage response =
-                        await _invoker.SendAsync(request, timeout.Token).ConfigureAwait(false);
-                    sent = DescribeRequest(hop, response.Version);
+                    observed = null;
+                    HttpResponseMessage received;
+                    try
+                    {
+                        received = await _invoker.SendAsync(request, timeout.Token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        // What the HTTP stack added to the live message for Windows authentication goes now, whatever the
+                        // send did: only its scheme label is kept, for this hop.
+                        if (_setup.WindowsAuth)
+                        {
+                            observed = Scrub(request);
+                        }
+                    }
+
+                    using HttpResponseMessage response = received;
+                    if (_setup.WindowsAuth && response.RequestMessage != null && !ReferenceEquals(response.RequestMessage, request))
+                    {
+                        Scrub(response.RequestMessage);
+                    }
+
+                    sent = DescribeRequest(hop, SentVersion(response.Version));
 
                     // A 407 on a run through a proxy asks for proxy authentication, which XMAT never gives, whichever hop it
                     // answers and whether the proxy or a server inside its tunnel sent it: it is never the server's response.
                     if (_setup.Proxy != null && response.StatusCode == HttpStatusCode.ProxyAuthenticationRequired)
                     {
                         return Failure(
-                            ReplayOutcome.Failed, ProxyAuthRequiredCode, sent, hop.Uri, started, redirects, stopwatch, error: null);
+                            ReplayOutcome.Failed, ProxyAuthRequiredCode, sent, hop.Uri, started, redirects, stopwatch, error: null,
+                            observed);
                     }
 
                     string stopCode = null;
@@ -283,32 +339,36 @@ namespace XMAT.Operations.Replay
                         Request = sent,
                         RequestUri = hop.Uri,
                         Started = started,
-                        Response = DescribeResponse(response, responseBody),
+                        Response = DescribeResponse(response, responseBody, _setup.WindowsAuth),
                         StatusCode = (int)response.StatusCode,
                         ReasonPhrase = response.ReasonPhrase,
                         Version = response.Version,
                         Duration = stopwatch.Elapsed,
                         Redirects = redirects,
+                        AuthHeaderSchemeObserved = observed,
                     };
                 }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                return Failure(ReplayOutcome.TimedOut, TimeoutCode, sent, request.RequestUri, started, redirects, stopwatch, error: null);
+                return Failure(
+                    ReplayOutcome.TimedOut, TimeoutCode, sent, request.RequestUri, started, redirects, stopwatch, error: null, observed);
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException)
             {
                 // A 407 is the proxy's answer, never an error of the send: auth-required keeps no exception, whether the
-                // 407 answered the request or the CONNECT of its tunnel.
+                // 407 answered the request or the CONNECT of its tunnel. A Windows-authentication send keeps none either.
                 string code = FailureCode(ex);
                 return Failure(
                     ReplayOutcome.Failed, code, sent, request.RequestUri, started, redirects, stopwatch,
-                    code == ProxyAuthRequiredCode ? null : ex);
+                    code == ProxyAuthRequiredCode || _setup.WindowsAuth ? null : ex, observed);
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex) && ex is not OperationCanceledException)
             {
                 // Anything else a server can provoke, such as a Location the URL parser refuses, ends this send only.
-                return Failure(ReplayOutcome.Failed, SendFailedCode, sent, request.RequestUri, started, redirects, stopwatch, ex);
+                return Failure(
+                    ReplayOutcome.Failed, SendFailedCode, sent, request.RequestUri, started, redirects, stopwatch,
+                    _setup.WindowsAuth ? null : ex, observed);
             }
             finally
             {
@@ -332,7 +392,8 @@ namespace XMAT.Operations.Replay
             DateTime started,
             int redirects,
             Stopwatch stopwatch,
-            Exception error) =>
+            Exception error,
+            string observed) =>
             new()
             {
                 Outcome = outcome,
@@ -343,7 +404,48 @@ namespace XMAT.Operations.Replay
                 Duration = stopwatch.Elapsed,
                 Redirects = redirects,
                 Error = error,
+                AuthHeaderSchemeObserved = observed,
             };
+
+        // Windows authentication: the scheme label of the Authorization header that the HTTP stack put on the live message,
+        // "Negotiate" or "NTLM" (null for any other, or for none), then that header removed, whatever reading its label did,
+        // so no token stays in the message once its hop is sent. Never throws.
+        private static string Scrub(HttpRequestMessage message)
+        {
+            string label = null;
+            try
+            {
+                if (message.Headers.NonValidated.TryGetValues("Authorization", out HeaderStringValues values))
+                {
+                    foreach (string value in values)
+                    {
+                        int space = value.IndexOf(' ', StringComparison.Ordinal);
+                        string scheme = space < 0 ? value : value[..space];
+                        label = scheme.Equals("Negotiate", StringComparison.OrdinalIgnoreCase) ? "Negotiate"
+                            : scheme.Equals("NTLM", StringComparison.OrdinalIgnoreCase) ? "NTLM"
+                            : null;
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                label = null;
+            }
+            finally
+            {
+                try
+                {
+                    message.Headers.Remove("Authorization");
+                }
+                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                {
+                    // HttpRequestHeaders removes a header it knows without failing; the message is disposed when the send ends.
+                }
+            }
+
+            return label;
+        }
 
         private static bool IsRedirect(HttpResponseMessage response) =>
             response.StatusCode is HttpStatusCode.MovedPermanently or HttpStatusCode.Found or HttpStatusCode.SeeOther or
@@ -404,6 +506,14 @@ namespace XMAT.Operations.Replay
                     throw;
                 }
             };
+
+        // The version of the request line that the HTTP stack sent on the connection that answered, never the version that
+        // the server's status line names: the response's on an HTTP/2 connection, the only kind whose responses have a
+        // version of 2 or more (an HTTP/1.x connection refuses a status line naming one), and HTTP/1.1 on an HTTP/1.x
+        // connection, which the stack writes for every request that XMAT makes (HTTP/1.1, or HTTP/2 or lower), also when
+        // the server answers HTTP/1.0.
+        private static Version SentVersion(Version responseVersion) =>
+            responseVersion.Major >= 2 ? responseVersion : HttpVersion.Version11;
 
         // The version a request goes out with before any response says otherwise: cleartext HTTP never upgrades to
         // HTTP/2 when a lower version is allowed, so only HTTPS can start with the requested version.
@@ -548,15 +658,44 @@ namespace XMAT.Operations.Replay
                 hop.Body);
         }
 
-        // The HTTP stack removes the chunked framing from the body, so Transfer-Encoding no longer describes it.
-        private static ReplayMessage DescribeResponse(HttpResponseMessage response, byte[] body) =>
-            new(
+        // The HTTP stack removes the chunked framing from the body, so Transfer-Encoding no longer describes it. For Windows
+        // authentication, each WWW-Authenticate and Proxy-Authenticate value is recorded without the tokens of its
+        // Negotiate, NTLM and Kerberos challenges, and not at all when it is not a challenge list (ReplayAuthChallenges).
+        private static ReplayMessage DescribeResponse(HttpResponseMessage response, byte[] body, bool windowsAuth)
+        {
+            List<KeyValuePair<string, string>> headers = Flatten(response.Headers.NonValidated)
+                .Where(header => !header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            List<KeyValuePair<string, string>> contentHeaders =
+                response.Content == null ? null : Flatten(response.Content.Headers.NonValidated);
+            return new(
                 $"{ReplayMessage.FormatVersion(response.Version)} {(int)response.StatusCode} {response.ReasonPhrase}".TrimEnd(),
-                Flatten(response.Headers.NonValidated)
-                    .Where(header => !header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
-                    .ToList(),
-                response.Content == null ? null : Flatten(response.Content.Headers.NonValidated),
+                windowsAuth ? WithoutTokens(headers) : headers,
+                windowsAuth && contentHeaders != null ? WithoutTokens(contentHeaders) : contentHeaders,
                 body);
+        }
+
+        // Each challenge value as ReplayAuthChallenges records it, left out when it gives none; every other header as it is.
+        private static List<KeyValuePair<string, string>> WithoutTokens(List<KeyValuePair<string, string>> headers)
+        {
+            var kept = new List<KeyValuePair<string, string>>(headers.Count);
+            foreach (KeyValuePair<string, string> header in headers)
+            {
+                if (!ReplayAuthChallenges.IsChallengeHeader(header.Key))
+                {
+                    kept.Add(header);
+                    continue;
+                }
+
+                string value = ReplayAuthChallenges.Sanitize(header.Value);
+                if (value != null)
+                {
+                    kept.Add(new(header.Key, value));
+                }
+            }
+
+            return kept;
+        }
 
         private static List<KeyValuePair<string, string>> Flatten(HttpHeadersNonValidated headers)
         {

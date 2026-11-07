@@ -20,7 +20,7 @@ xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat 
             [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]...
             [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS]
             [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL]
-            [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN]
+            [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN]
             [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--max-input-mib N]
             [--max-data-mib N] [--max-record-mib N] [--max-records N]
 xmat compose --url URL | --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD]
@@ -28,8 +28,8 @@ xmat compose --url URL | --request-file FILE --out DIR [--save-saz] [--sequence 
              [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]...
              [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
              [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] [--client-cert THUMBPRINT]
-             [--allow-client-cert ORIGIN] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to]
-             [--allow-proxy]
+             [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] [--allow-unsafe-methods]
+             [--allow-origin-change] [--allow-connect-to] [--allow-proxy]
 xmat save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] [--method METHOD]
                   [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE]
                   [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]...
@@ -139,7 +139,8 @@ xmat --version
   like Fiddler's Composer. Both send from this PC, the way the GUI's request composer does: directly, unless `--proxy`
   names an upstream proxy, and never through the system's or the environment's proxy settings (so, unless you name
   XMAT's own proxy, XMAT's capture, scripts and host lists do not apply and the replays are not captured), without
-  cookies of their own, without a client certificate unless `--client-cert` names one, without decompressing
+  cookies of their own, without a client certificate unless `--client-cert` names one, without answering an
+  authentication challenge unless `--windows-auth` is given, without decompressing
   responses, and with Windows' certificate validation. `replay` reads
   `INPUT` exactly as `analyze` does, with the same limit options and `analysis.input.*` errors. `--request` selects
   requests by the number the GUI shows in its `#` column: `all`, or numbers and ranges such as `1,5,9-12` (at most
@@ -215,8 +216,8 @@ xmat --version
 - `--http-version` chooses the HTTP version: `auto` (the default) sends HTTP/2 to an HTTPS server that offers it and
   HTTP/1.1 otherwise, as before; `1.1` and `2` ask for exactly that version, and a request that cannot be sent with it
   fails (`replay.send.failed`) rather than go out with another. `2` needs HTTPS URLs (`replay.http-version.https-required`).
-  xmat never answers an authentication challenge, such as NTLM or Negotiate, with your Windows credentials: the
-  challenge is the result.
+  Unless `--windows-auth` is given, xmat never answers an authentication challenge, such as NTLM or Negotiate, with
+  your Windows credentials: the challenge is the result.
 - `--connect-to IP:PORT` connects to that endpoint instead of the address of the URL's host, as Fiddler's
   `Fiddler-Host` does, for example to send a request for a production host name to a test server. The endpoint is a
   numeric address and a port (`IPv4:PORT` or `[IPv6]:PORT`, without a zone; the port is 1 to 65535); a host name, a
@@ -286,6 +287,29 @@ xmat --version
   never resumed, so every connection checks the server again. A server that does not ask for a certificate receives
   none, and the send goes on without it. A redirect is followed only within that one origin. An expired certificate is
   offered as it is: the server decides.
+- `--windows-auth` answers the server's `Negotiate` and `NTLM` challenges with the Windows credentials that xmat runs
+  with, as Fiddler's Composer can. Windows authentication: XMAT answers the origin's challenge with the Windows
+  credentials that it runs with, which may be a service or machine account's; Negotiate may fall back to NTLM, which a
+  recipient can relay or attack offline; a DNS attacker can steer the Kerberos service name through CNAMEs, while HTTPS
+  still proves the host. So xmat sends nothing unless `--allow-windows-auth ORIGIN` names the run's one origin
+  (`replay.policy.windows-auth`). `ORIGIN` is written as for `--allow-client-cert`, and anything else is a usage error
+  that never repeats the value (exit code 2). Before anything is sent, a run with `--windows-auth` is also refused when
+  it uses `--proxy` (`replay.windows-auth.proxy`) or `--connect-to` (`replay.windows-auth.connect-to`); when its URLs
+  are not HTTPS (`replay.windows-auth.https-required`), not each of an origin that it can be allowed for
+  (`replay.windows-auth.origin-invalid`) or not of one origin (`replay.windows-auth.origin-count`); with
+  `--http-version 2` (`replay.windows-auth.http2`); or when a request has an `Authorization` header of its own, even an
+  empty one or one that its `Connection` header names (`replay.windows-auth.authorization-header`). With
+  `--client-cert` too, the run needs both permissions, each for its one origin, and the certificate's checks come
+  first.
+- With `--windows-auth`, xmat answers only the allowed origin's `Negotiate` and `NTLM` challenges: a `Basic`, `Digest`
+  or any other challenge, and a 407's `Proxy-Authenticate`, are the result. It never sends credentials before the
+  server asks, asks for exactly HTTP/1.1 (`auto` becomes `1.1`, and the output says so), follows a redirect only within
+  the allowed origin, and sends on connections of the run's own, closed when the run ends, so no other request uses a
+  connection that it authenticated. The `Authorization` header that Windows authentication adds while a request is
+  sent is removed from it after each hop, so `request.http` and `replays.saz` show the request as xmat built it, without
+  that header. In each response, `WWW-Authenticate` and `Proxy-Authenticate` keep only the scheme names of their
+  `Negotiate`, `NTLM` and `Kerberos` challenges, without their tokens; other challenges stay as received, and a value
+  that is not a well-formed challenge list is left out.
 - Each request waits for its response up to `--timeout` seconds (30 by default, at most 600) and keeps a body of up to
   `--max-response-mib` (16 by default, at most 512). HEAD, 1xx, 204 and 304 responses have no body, whatever their
   `Content-Length` says. A request without a complete response is a result too: its
@@ -332,9 +356,11 @@ xmat --version
   order the sends completed, which `--parallel` can change. Session flags name the send: `x-xmat-replay-id`,
   `x-xmat-replay-of` (the request number), `x-xmat-replay-device`, `x-xmat-replay-sequence`, `x-xmat-replay-outcome`
   (`completed`, `failed`, `timed-out` or `too-large`), `x-xmat-replay-code`, `x-xmat-replay-redirects`, for a send
-  that was not direct, `x-xmat-replay-transport` (`connect-to` or `proxy`, never the endpoint or the proxy) and, for a
+  that was not direct, `x-xmat-replay-transport` (`connect-to` or `proxy`, never the endpoint or the proxy), for a
   send that could offer a client certificate, `x-xmat-replay-client-certificate-configured` (`true`; never the
-  certificate, nor whether the server received it). The archive
+  certificate, nor whether the server received it) and, for a send that could answer with Windows authentication,
+  `x-xmat-replay-windows-auth-configured` (`true`; never whether the server asked or authentication succeeded). The
+  archive
   is completed only when the run publishes `DIR`; a run that publishes nothing removes it with the staging folder. It
   holds captured content, as the request and response files do, and is published privately with them. xmat reads it
   back only within its input limits (`--max-input-mib`, `--max-record-mib` and the others below), refusing a larger
@@ -401,8 +427,8 @@ xmat --version
   (`replay.request.invalid`), such as one with a header value that is not well-formed Unicode. `--http-version 2` is a
   usage error, and so are the options that only sending uses: `--repeat`, `--parallel`, `--timeout`,
   `--max-response-mib`, `--follow-redirects`, `--connect-to`, `--allow-connect-to`, `--proxy`, `--allow-proxy`,
-  `--client-cert`, `--allow-client-cert`, `--sequence`, `--allow-unsafe-methods`, `--verify`, `--verify-diff` and
-  `--origin` (`cli.usage.unsupported-option`, exit code 2).
+  `--client-cert`, `--allow-client-cert`, `--windows-auth`, `--allow-windows-auth`, `--sequence`,
+  `--allow-unsafe-methods`, `--verify`, `--verify-diff` and `--origin` (`cli.usage.unsupported-option`, exit code 2).
 - A script needs PowerShell 7.2 or later on Windows. It refuses to send unless `curl.exe` is at least version 8.21.0
   and, when the URL or a header is not ASCII, supports Unicode. It runs curl without a configuration file (`-q`) and
   with only `SystemRoot`, `windir`, `SystemDrive`, `TEMP` and `TMP` in its environment, so no proxy, CA bundle or other
@@ -481,16 +507,22 @@ whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFai
 `slice`); `help` reports `commands`, each with its `name`, `status` (`supported`), `usage` and `capabilities` (the ids
 of the capabilities that the command provides); and `--version` reports `version`. Instead of the analysis fields,
 `replay` and `compose` report `options` (`repeat`, `parallel`, `timeoutSeconds`, `maxResponseMib`, `followRedirects`,
-`unconditional`, `verify`, `verifyDiff`, `allowUnsafeMethods`, `allowOriginChange`, `httpVersion`, `connectTo`, which
+`unconditional`, `verify`, `verifyDiff`, `allowUnsafeMethods`, `allowOriginChange`, `httpVersion` (the version that
+the run asks for: `--http-version`, or else the request file's, and `1.1` for `auto` with `--windows-auth`), `connectTo`, which
 says whether `--connect-to` was given but never its endpoint, `allowConnectTo`, `proxy`, which says whether `--proxy`
 was given but never its URL, `allowProxy`, `clientCertificate`, which says whether `--client-cert` was given but never
-its thumbprint, `allowClientCertificate`, which says whether `--allow-client-cert` was given but never its origin, and
+its thumbprint, `allowClientCertificate`, which says whether `--allow-client-cert` was given but never its origin,
+`windowsAuth`, which says whether `--windows-auth` was given, `allowWindowsAuth`, which says whether
+`--allow-windows-auth` was given but never its origin, and
 `saveSaz`), `replays` (one per send,
 in order, each with its `id`, `device` and `request` (null for `compose`), `sequence` (the number that `--sequence` put
 in the URL, otherwise null), `iteration`, `outcome`, `status` (null without a response), `durationMs`, `responseBytes`,
 `redirects`, `transport` (`direct`, `connect-to` or `proxy`, as the send was configured), `httpVersion` (the version
 asked for:
-`auto`, `1.1` or `2`), `responseVersion` (the version of the response, such as `1.1` or `2`, null without one), `code`,
+`auto`, `1.1` or `2`), `responseVersion` (the version of the response, such as `1.1` or `2`, null without one),
+`authHeaderSchemeObserved` (with `--windows-auth`, the `Authorization` label that the send's final request carried,
+`Negotiate` or `NTLM`, and otherwise null: a header label only, which proves neither that authentication succeeded nor
+which package was negotiated, while null does not prove that none was used), `code`,
 `verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`, its `differences`, a list of `status`
 and `body`, and its `detail`, null without `--verify-diff`, otherwise the `state` of its `diff.json` and, once
 published, its `file`) and, once published, its `files`) and `totals` (`replays`, `completed`, `failed`, `matched` and
@@ -509,7 +541,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 |---|---|
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
-| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device; for `replay` and `compose` also a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint, proxy or client certificate that cannot be used, a Fiddler control header, or a request that needs `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to`, `--allow-proxy` or `--allow-client-cert` for its origin (nothing is sent) |
+| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device; for `replay` and `compose` also a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint, proxy, client certificate or Windows authentication that cannot be used, a Fiddler control header, or a request that needs `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to`, `--allow-proxy`, `--allow-client-cert` or `--allow-windows-auth` for its origin (nothing is sent) |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists |
 | 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`) |
@@ -579,9 +611,9 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
-| Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--proxy URL] [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy]` | Supported (S9) |
+| Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--proxy URL] [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy]` | Supported (S9) |
 | Export requests as cURL scripts for PowerShell 7, without sending them (`request.curl`) | `xmat curl INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--include-sensitive] [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto\|1.1] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
-| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--proxy URL] [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
+| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--proxy URL] [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | Save requests as request files, without sending them (`request.save`) | `xmat save-request INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto\|1.1\|2] [--include-sensitive] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |

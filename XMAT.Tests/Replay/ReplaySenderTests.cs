@@ -45,6 +45,45 @@ namespace XMAT.Tests.Replay
             Assert.Equal("hello"u8.ToArray(), received.Body);
         }
 
+        // The request is recorded with the version of the request line that it was sent with, whatever version the server's
+        // status line names: an HTTP/1.0 or HTTP/1.9 answer to a request that went as HTTP/1.1, automatically or exactly,
+        // leaves the recorded request HTTP/1.1, while the response keeps the version that it named.
+        [Theory]
+        [InlineData("Auto", "HTTP/1.0", "1.0")]
+        [InlineData("Http11", "HTTP/1.0", "1.0")]
+        [InlineData("Http11", "HTTP/1.9", "1.9")]
+        public async Task TheRecordedRequest_KeepsTheVersionItWasSentWith_WhateverVersionTheServerAnswers(
+            string version, string answered, string responseVersion)
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok("ok") with { Version = answered });
+            using var sender = new ReplaySender();
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Url = server.Origin + "/item" },
+                ReplaySendOptions.Default with { HttpVersion = Enum.Parse<ReplayHttpVersion>(version) },
+                CancellationToken.None);
+
+            Assert.Equal("HTTP/1.1", Assert.Single(server.Requests).Version);
+            Assert.Equal(
+                ("GET /item HTTP/1.1", answered + " 200 OK", responseVersion),
+                (exchange.Request.StartLine, exchange.Response.StartLine, ReplayTransportOptions.ResponseVersionName(exchange.Version)));
+        }
+
+        // An answer of version 2 can only come over an HTTP/2 connection, so the request went, and is recorded, as HTTP/2.
+        [Fact]
+        public async Task TheRecordedRequest_IsHttp2_WhenTheAnswerIs()
+        {
+            using var handler = new StubHandler((_, _) =>
+                Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Version = HttpVersion.Version20 }));
+            using var invoker = new HttpMessageInvoker(handler);
+            using var sender = new ReplaySender(invoker);
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Url = "https://example.test/item" }, ReplaySendOptions.Default, CancellationToken.None);
+
+            Assert.Equal(("GET /item HTTP/2", "HTTP/2 200 OK"), (exchange.Request.StartLine, exchange.Response.StartLine));
+        }
+
         // A direct send records the request as replay built it, as it always has: Host first, then the headers in order with
         // each value of a repeated one on a line of its own, then the content headers without Content-Length, and the
         // length of the body last.

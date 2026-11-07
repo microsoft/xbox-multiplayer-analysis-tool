@@ -377,16 +377,22 @@ namespace XMAT.Cli
             writer.WriteBoolean("verifyDiff", options.VerifyDiff);
             writer.WriteBoolean("allowUnsafeMethods", options.AllowUnsafeMethods);
             writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
-            writer.WriteString("httpVersion", ReplayTransportOptions.VersionName(options.HttpVersion));
 
-            // Whether --connect-to, --proxy, --client-cert and --allow-client-cert were given, never their address, URL,
-            // thumbprint or origin: the output names no endpoint and no certificate.
+            // The version that the run asks for, a request file's included, which a run with Windows authentication makes
+            // exactly HTTP/1.1 when it is Automatic (CliReplayReport.HttpVersion); HTTP/2 only stays as asked, and is refused.
+            writer.WriteString("httpVersion", ReplayTransportOptions.VersionName(replay.HttpVersion));
+
+            // Whether --connect-to, --proxy, --client-cert, --allow-client-cert, --windows-auth and --allow-windows-auth
+            // were given, never their address, URL, thumbprint or origin: the output names no endpoint, no certificate and
+            // no identity.
             writer.WriteBoolean("connectTo", options.ConnectTo != null);
             writer.WriteBoolean("allowConnectTo", options.AllowConnectTo);
             writer.WriteBoolean("proxy", options.Proxy != null);
             writer.WriteBoolean("allowProxy", options.AllowProxy);
             writer.WriteBoolean("clientCertificate", options.ClientCertificate != null);
             writer.WriteBoolean("allowClientCertificate", options.AllowClientCertificate != null);
+            writer.WriteBoolean("windowsAuth", options.WindowsAuth);
+            writer.WriteBoolean("allowWindowsAuth", options.AllowWindowsAuth != null);
             writer.WriteBoolean("saveSaz", options.SaveSaz);
             writer.WriteEndObject();
 
@@ -431,6 +437,10 @@ namespace XMAT.Cli
                 writer.WriteString("transport", item.Transport);
                 writer.WriteString("httpVersion", item.HttpVersion);
                 writer.WriteString("responseVersion", item.ResponseVersion);
+
+                // The Authorization label that a Windows-authentication send's final request carried ("Negotiate" or
+                // "NTLM"), null otherwise: a header label only, never a token, the package or an identity.
+                writer.WriteString("authHeaderSchemeObserved", item.AuthHeaderSchemeObserved);
                 writer.WriteString("code", item.Code);
                 if (item.Verification == null)
                 {

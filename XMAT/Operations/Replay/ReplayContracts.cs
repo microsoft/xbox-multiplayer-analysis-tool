@@ -110,7 +110,9 @@ namespace XMAT.Operations.Replay
 
     // VerifyDiff also builds the differences of each verified send (VerifyDiffOperation) and hands them to the sink with its
     // exchange (ReplayExchange.VerifyDiff), never in the result; it needs Verify. AllowClientCertificate is the one origin
-    // that the transport's client certificate may go to; the run must be to exactly that origin.
+    // that the transport's client certificate may go to, and AllowWindowsAuth the one origin whose challenges Windows
+    // authentication may answer; the run must be to exactly that origin. An allowance that the transport does not use
+    // grants nothing.
     internal sealed record ReplayOptions(
         int Repeat = 1,
         int Parallelism = 1,
@@ -124,7 +126,8 @@ namespace XMAT.Operations.Replay
         ReplayTransportOptions Transport = null,
         bool VerifyDiff = false,
         bool AllowProxy = false,
-        ReplayCredentialOrigin AllowClientCertificate = null)
+        ReplayCredentialOrigin AllowClientCertificate = null,
+        ReplayCredentialOrigin AllowWindowsAuth = null)
     {
         internal const int MaxRepeat = 1000;
         internal const int MaxParallelism = 16;
@@ -148,8 +151,13 @@ namespace XMAT.Operations.Replay
 
         internal TimeSpan EffectiveTimeout => Timeout ?? ReplaySendOptions.DefaultTimeout;
 
-        // How the requests reach the server; never null.
-        internal ReplayTransportOptions EffectiveTransport => Transport ?? ReplayTransportOptions.Default;
+        // How the requests reach the server; never null. Windows authentication needs HTTP/1.1, so a run with it whose
+        // version is chosen automatically asks for exactly HTTP/1.1; one that asked for HTTP/2 only keeps it, and the
+        // operation refuses it (ReplayOperation.WindowsAuthHttp2Code).
+        internal ReplayTransportOptions EffectiveTransport =>
+            Transport is { WindowsAuth: true, HttpVersion: ReplayHttpVersion.Auto }
+                ? Transport with { HttpVersion = ReplayHttpVersion.Http11 }
+                : Transport ?? ReplayTransportOptions.Default;
 
         // AllowOriginChange applies to the requests the caller edits: replay never follows a redirect to another origin.
         internal ReplaySendOptions ToSendOptions() =>
@@ -181,9 +189,10 @@ namespace XMAT.Operations.Replay
     // What a composed request, or one per number of a sequence, would send (ReplayOperation.Preview). Template is a copy
     // of the draft that was checked, so later edits to that draft change nothing here; send it with ToSource and
     // Transport, which is how the plan was checked to reach the server. Sends counts every send, repeats included.
-    // UsesUnsafeMethod, ChangesOrigin, UsesConnectTo, UsesProxy and UsesClientCertificate say which consent the options
-    // must carry (AllowUnsafeMethods, AllowOriginChange, AllowConnectTo, AllowProxy, and AllowClientCertificate naming
-    // CredentialOrigin, the one origin of the plan) for the operation to send them; it checks them again when it runs.
+    // UsesUnsafeMethod, ChangesOrigin, UsesConnectTo, UsesProxy, UsesClientCertificate and UsesWindowsAuth say which consent
+    // the options must carry (AllowUnsafeMethods, AllowOriginChange, AllowConnectTo, AllowProxy, and AllowClientCertificate
+    // and AllowWindowsAuth naming CredentialOrigin, the one origin of the plan) for the operation to send them; it checks
+    // them again when it runs.
     internal sealed record ReplayPlanPreview(
         RequestReplayDraft Template,
         ReplaySequence Sequence,
@@ -199,6 +208,8 @@ namespace XMAT.Operations.Replay
 
         internal bool UsesClientCertificate => Transport?.ClientCertificate != null;
 
+        internal bool UsesWindowsAuth => Transport?.WindowsAuth == true;
+
         internal ReplaySource ToSource() =>
             Sequence == null ? ReplaySource.FromDraft(Template) : ReplaySource.FromTemplate(Template, Sequence);
     }
@@ -210,7 +221,10 @@ namespace XMAT.Operations.Replay
     // the server ("direct", "connect-to" or "proxy"), HttpVersion the version it asked for ("auto", "1.1" or "2") and
     // ResponseVersion the version of the response that it got ("1.1" or "2"), null without a response.
     // ClientCertificateConfigured says that the send could offer a client certificate, never that one was sent: a server
-    // that does not ask for one, or that fails the check, receives none.
+    // that does not ask for one, or that fails the check, receives none. WindowsAuthConfigured says that the send could
+    // answer its origin's Negotiate and NTLM challenges, never that it did; AuthHeaderSchemeObserved is the Authorization
+    // label ("Negotiate" or "NTLM") that its final request carried, or null when it carried neither, which proves neither
+    // that authentication succeeded nor which package was negotiated, and null is no proof that none was used.
     internal sealed record ReplayItemResult(
         int Id,
         string DeviceId,
@@ -228,7 +242,9 @@ namespace XMAT.Operations.Replay
         string Transport = ReplayTransportOptions.DirectName,
         string HttpVersion = ReplayTransportOptions.AutoVersionName,
         string ResponseVersion = null,
-        bool ClientCertificateConfigured = false);
+        bool ClientCertificateConfigured = false,
+        bool WindowsAuthConfigured = false,
+        string AuthHeaderSchemeObserved = null);
 
     // InputKind and InputSha256 describe a capture file and are null for other sources.
     internal sealed record ReplayResult(string InputKind, string InputSha256, IReadOnlyList<ReplayItemResult> Items)

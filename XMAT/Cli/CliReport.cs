@@ -72,6 +72,7 @@ namespace XMAT.Cli
         {
             Options = options ?? CliReplay.Default;
             Limits = limits;
+            HttpVersion = CliReplayCommand.RequestedHttpVersion(Options, file: null);
         }
 
         internal CliReplay Options { get; }
@@ -82,6 +83,10 @@ namespace XMAT.Cli
         internal string InputKind { get; set; }
 
         internal string InputSha256 { get; set; }
+
+        // The HTTP version that the run asks for (CliReplayCommand.RequestedHttpVersion): the options', and, once a request
+        // file was read, the file's unless --http-version says otherwise.
+        internal ReplayHttpVersion HttpVersion { get; set; }
 
         internal IReadOnlyList<ReplayItemResult> Items { get; set; } = Array.Empty<ReplayItemResult>();
 

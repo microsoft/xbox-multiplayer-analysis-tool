@@ -24,13 +24,15 @@ namespace XMAT.Operations.Replay
     // to send through (Fiddler's gateway). The URL, the Host header and the TLS server name and certificate check stay
     // those of the URL. The operation refuses a run with both an endpoint and a proxy before anything is sent. A client
     // certificate, named by its thumbprint, is offered to a server that asks for one and that proves it is the run's
-    // consented origin (ReplayServerCertificateCheck); it is not a way to reach the server, so it does not change
-    // TransportName.
+    // consented origin (ReplayServerCertificateCheck), and WindowsAuth answers that origin's Negotiate and NTLM challenges
+    // with the Windows credentials that XMAT runs with (ReplayWindowsCredentials); neither is a way to reach the server, so
+    // neither changes TransportName.
     internal sealed record ReplayTransportOptions(
         ReplayHttpVersion HttpVersion = ReplayHttpVersion.Auto,
         ReplayConnectTo ConnectTo = null,
         ReplayProxy Proxy = null,
-        ReplayClientCertificate ClientCertificate = null)
+        ReplayClientCertificate ClientCertificate = null,
+        bool WindowsAuth = false)
     {
         internal const string DirectName = "direct";
         internal const string ConnectToName = "connect-to";
@@ -40,12 +42,14 @@ namespace XMAT.Operations.Replay
         internal static ReplayTransportOptions Default { get; } = new();
 
         internal bool IsDefault =>
-            HttpVersion == ReplayHttpVersion.Auto && ConnectTo == null && Proxy == null && ClientCertificate == null;
+            HttpVersion == ReplayHttpVersion.Auto && ConnectTo == null && Proxy == null && ClientCertificate == null &&
+            !WindowsAuth;
 
-        // Whether the run needs a sender of its own, made for it and disposed when it ends: a connect-to endpoint, a proxy
-        // and a client certificate are settings of the handler, so no pooled connection may carry the run's requests. The
-        // HTTP version is asked for per request, so it alone needs none.
-        internal bool NeedsOwnSender => ConnectTo != null || Proxy != null || ClientCertificate != null;
+        // Whether the run needs a sender of its own, made for it and disposed when it ends: a connect-to endpoint, a proxy,
+        // a client certificate and Windows authentication are settings of the handler, so no pooled connection may carry
+        // the run's requests, and no connection that Windows authentication authenticated outlives the run. The HTTP
+        // version is asked for per request, so it alone needs none.
+        internal bool NeedsOwnSender => ConnectTo != null || Proxy != null || ClientCertificate != null || WindowsAuth;
 
         // How a send was configured to reach the server, as replay reports it: "direct", "connect-to" or "proxy".
         internal string TransportName => ConnectTo != null ? ConnectToName : Proxy != null ? ProxyName : DirectName;

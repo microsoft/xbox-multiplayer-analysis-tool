@@ -36,6 +36,18 @@ namespace XMAT.Cli
         // replays/00001, replays/00002, ...: one folder per send, in plan order.
         internal static string FolderOf(int id) => ReplaysPath + "/" + id.ToString("D5", CultureInfo.InvariantCulture);
 
+        // The HTTP version that a run asks for, as the operation takes it (ReplayOptions.EffectiveTransport): --http-version,
+        // or else a request file's, which Windows authentication makes exactly HTTP/1.1 when it is Automatic; HTTP/2 only
+        // stays as asked, and the operation then refuses it. The output reports this version, never another.
+        internal static ReplayHttpVersion RequestedHttpVersion(CliReplay replay, RequestFileContent file) =>
+            new ReplayOptions(Transport: new ReplayTransportOptions(HttpVersionOf(replay, file), WindowsAuth: replay.WindowsAuth))
+                .EffectiveTransport.HttpVersion;
+
+        // A request file's HTTP version is the run's unless --http-version says otherwise; nothing else in the file is
+        // transport or consent.
+        private static ReplayHttpVersion HttpVersionOf(CliReplay replay, RequestFileContent file) =>
+            file != null && !replay.HttpVersionSet ? file.HttpVersion : replay.HttpVersion;
+
         internal static Task<CliReport> RunAsync(CliRequest request, string runId, CancellationToken cancellationToken) =>
             RunAsync(request, runId, configureStorage: true, cancellationToken);
 
@@ -94,6 +106,7 @@ namespace XMAT.Cli
                 }
 
                 report.Replay.InputSha256 = file.Sha256;
+                report.Replay.HttpVersion = RequestedHttpVersion(request.Replay, file.Content);
             }
 
             CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
@@ -246,11 +259,6 @@ namespace XMAT.Cli
             CliRequest request, CliRequestBody prepared, RequestFileContent file, IReplayExchangeSink sink)
         {
             CliReplay replay = request.Replay;
-
-            // A request file's HTTP version is the run's unless --http-version says otherwise; nothing else in the file
-            // is transport or consent.
-            ReplayHttpVersion httpVersion =
-                file != null && !replay.HttpVersionSet ? file.HttpVersion : replay.HttpVersion;
             var options = new ReplayOptions(
                 Repeat: replay.Repeat,
                 Parallelism: replay.Parallel,
@@ -261,10 +269,12 @@ namespace XMAT.Cli
                 AllowUnsafeMethods: replay.AllowUnsafeMethods,
                 AllowOriginChange: replay.AllowOriginChange,
                 AllowConnectTo: replay.AllowConnectTo,
-                Transport: new ReplayTransportOptions(httpVersion, replay.ConnectTo, replay.Proxy, replay.ClientCertificate),
+                Transport: new ReplayTransportOptions(
+                    HttpVersionOf(replay, file), replay.ConnectTo, replay.Proxy, replay.ClientCertificate, replay.WindowsAuth),
                 VerifyDiff: replay.VerifyDiff,
                 AllowProxy: replay.AllowProxy,
-                AllowClientCertificate: replay.AllowClientCertificate);
+                AllowClientCertificate: replay.AllowClientCertificate,
+                AllowWindowsAuth: replay.AllowWindowsAuth);
             if (request.Command == CliCommands.Compose)
             {
                 // The operation applies and checks the method, headers and body of a composed request like any edit; with

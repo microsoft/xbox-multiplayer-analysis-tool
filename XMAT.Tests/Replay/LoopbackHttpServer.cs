@@ -25,6 +25,7 @@ namespace XMAT.Tests.Replay
 
     // Headers holds complete header lines ("Name: value\r\n"). Hang never answers; Chunked sends the body as one chunk;
     // NoLength sends no Content-Length of its own, for responses whose Headers declare one without a body (HEAD, 304).
+    // Version is the version that the status line names.
     internal sealed record LoopbackResponse(
         int Status = 200,
         string Reason = "OK",
@@ -32,7 +33,8 @@ namespace XMAT.Tests.Replay
         byte[] Body = null,
         bool Chunked = false,
         bool Hang = false,
-        bool NoLength = false)
+        bool NoLength = false,
+        string Version = "HTTP/1.1")
     {
         internal static LoopbackResponse Ok(string body = "") => new(Body: Encoding.UTF8.GetBytes(body));
 
@@ -317,11 +319,11 @@ namespace XMAT.Tests.Replay
         private static int IndexOfHeadEnd(MemoryStream buffer) =>
             buffer.GetBuffer().AsSpan(0, (int)buffer.Length).IndexOf("\r\n\r\n"u8);
 
-        // The response as HTTP/1.1 bytes, always with Connection: close.
+        // The response as HTTP/1.x bytes, always with Connection: close.
         internal static byte[] Serialize(LoopbackResponse response)
         {
             byte[] body = response.Body ?? Array.Empty<byte>();
-            var head = new StringBuilder($"HTTP/1.1 {response.Status} {response.Reason}\r\n").Append(response.Headers);
+            var head = new StringBuilder($"{response.Version} {response.Status} {response.Reason}\r\n").Append(response.Headers);
             if (response.Chunked)
             {
                 head.Append("Transfer-Encoding: chunked\r\n");

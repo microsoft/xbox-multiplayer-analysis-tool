@@ -110,6 +110,8 @@
                     Checked="ClientCertificate_Changed" Unchecked="ClientCertificate_Changed"/>
           <ComboBox x:Name="ClientCertificateList" MinWidth="220" MaxWidth="480" Margin="6,0,0,0" VerticalAlignment="Center"
                     IsEnabled="False" DropDownOpened="ClientCertificateList_DropDownOpened"/>
+          <CheckBox x:Name="WindowsAuthBox" Margin="18,0,0,0" VerticalAlignment="Center"
+                    Checked="WindowsAuth_Changed" Unchecked="WindowsAuth_Changed"/>
         </WrapPanel>
       </Grid>
       <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" ResizeDirection="Columns"/>

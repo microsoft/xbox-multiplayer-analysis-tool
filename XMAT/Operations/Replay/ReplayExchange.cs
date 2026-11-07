@@ -98,11 +98,11 @@ namespace XMAT.Operations.Replay
 
         internal const string UnknownLength = "unknown";
 
-        // "HTTP/1.1", or "HTTP/2" when the minor version is 0, as the proxy shows versions.
+        // "HTTP/1.1" or "HTTP/1.0" as the version names them, and "HTTP/2" for HTTP/2, which has no minor version.
         internal static string FormatVersion(Version version) =>
             version == null
                 ? "HTTP/1.1"
-                : version.Minor == 0
+                : version.Major >= 2
                     ? "HTTP/" + version.Major.ToString(CultureInfo.InvariantCulture)
                     : "HTTP/" + version.ToString(2);
     }
@@ -137,8 +137,15 @@ namespace XMAT.Operations.Replay
 
         internal int Redirects { get; init; }
 
-        // The transport failure, for the GUI to show. Its message can name hosts, so the command line never reports it.
+        // The transport failure, for the GUI to show. Its message can name hosts, so the command line never reports it. A
+        // Windows-authentication send keeps none: its failures are their codes only.
         internal Exception Error { get; init; }
+
+        // The Authorization scheme label that the final request of a Windows-authentication send carried when the HTTP
+        // stack sent it, "Negotiate" or "NTLM", read before the header was removed from the live message; null when it
+        // carried neither, and for every other send. It is a header label only: neither proof that authentication
+        // succeeded nor the package that was negotiated.
+        internal string AuthHeaderSchemeObserved { get; init; }
 
         // The send's verification differences, set once by ReplayOperation before the sink sees the exchange when the run
         // asked for them (ReplayOptions.VerifyDiff) and the send was verified; null otherwise. They can hold captured

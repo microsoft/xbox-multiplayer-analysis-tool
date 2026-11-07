@@ -25,7 +25,9 @@ namespace XMAT.Operations.Replay
     //   alphabet [0-9A-Za-z._:-] and at most 64 characters long, which ToSession checks. TransportFlag names a send that
     //   was not direct ("connect-to" or "proxy"), never its endpoint or proxy; a direct send has none.
     //   ClientCertificateFlag ("true") marks a send that could offer a client certificate, never which one, nor whether a
-    //   server received it; a send without one has none.
+    //   server received it; a send without one has none. WindowsAuthFlag ("true") marks a send that could answer its
+    //   origin's challenges with Windows credentials, never whether it did, as whom, nor with which package; a send without
+    //   Windows authentication has none.
     internal static class ReplaySaz
     {
         internal const string ClientIpFlag = "x-clientip";
@@ -38,6 +40,7 @@ namespace XMAT.Operations.Replay
         internal const string RedirectsFlag = "x-xmat-replay-redirects";
         internal const string TransportFlag = "x-xmat-replay-transport";
         internal const string ClientCertificateFlag = "x-xmat-replay-client-certificate-configured";
+        internal const string WindowsAuthFlag = "x-xmat-replay-windows-auth-configured";
         internal const int MaxFlagChars = 64;
 
         // The session of one send; null for a send that recorded no request, which has nothing to save, as it has no
@@ -142,6 +145,11 @@ namespace XMAT.Operations.Replay
             if (result.ClientCertificateConfigured)
             {
                 flags.Add(new(ClientCertificateFlag, "true"));
+            }
+
+            if (result.WindowsAuthConfigured)
+            {
+                flags.Add(new(WindowsAuthFlag, "true"));
             }
 
             foreach (KeyValuePair<string, string> flag in flags)

@@ -339,9 +339,12 @@ namespace XMAT.WebServiceCapture
         // How a send went with the composer's transport options, as the operation recorded it (ReplayItemResult, in the
         // names of ReplayTransportOptions): through another endpoint than the URL's host, or through an upstream proxy, never
         // named; whether a client certificate was configured, never which one and never whether it was sent, which is not
-        // recorded; and the HTTP version requested and the one that the response came with ("1.1" or "2", shown as HTTP/1.1
-        // or HTTP/2). Null for a send with the default transport, directly to the URL's host with the version chosen
-        // automatically and no client certificate; a requested version that replay does not name is shown as Automatic.
+        // recorded; whether Windows authentication was configured, never whether a challenge was answered or with which
+        // package, which the label that the request carried does not prove; and the HTTP version requested and the one that
+        // the response came with ("1.1" or "2", shown as HTTP/1.1 or HTTP/2), which with Windows authentication is
+        // HTTP/1.1 only, as the run recorded it. Null for a send with the default transport, directly to the URL's host with
+        // the version chosen automatically and neither credential; a requested version that replay does not name is shown
+        // as Automatic.
         internal static string TransportNote(ReplayItemResult sent)
         {
             string transportKey = sent?.Transport switch
@@ -352,8 +355,9 @@ namespace XMAT.WebServiceCapture
             };
             string requestedName = sent?.HttpVersion ?? ReplayTransportOptions.AutoVersionName;
             bool certificate = sent?.ClientCertificateConfigured == true;
-            if (sent == null ||
-                (!certificate && transportKey == null && requestedName == ReplayTransportOptions.AutoVersionName))
+            bool windowsAuth = sent?.WindowsAuthConfigured == true;
+            if (sent == null || (!certificate && !windowsAuth &&
+                transportKey == null && requestedName == ReplayTransportOptions.AutoVersionName))
             {
                 return null;
             }
@@ -371,6 +375,11 @@ namespace XMAT.WebServiceCapture
             string version = sent.ResponseVersion == null
                 ? Localization.GetLocalizedString("REPLAY_NOTE_HTTP_VERSION_NO_RESPONSE", requested)
                 : Localization.GetLocalizedString("REPLAY_NOTE_HTTP_VERSION", requested, "HTTP/" + sent.ResponseVersion);
+            if (windowsAuth)
+            {
+                version = Localization.GetLocalizedString("REPLAY_NOTE_WINDOWS_AUTH") + " " + version;
+            }
+
             if (certificate)
             {
                 version = Localization.GetLocalizedString("REPLAY_NOTE_CLIENT_CERT") + " " + version;
