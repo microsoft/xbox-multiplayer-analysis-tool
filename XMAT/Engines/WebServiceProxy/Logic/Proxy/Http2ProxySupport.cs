@@ -517,9 +517,11 @@ namespace XMAT.WebServiceCapture.Proxy
                 statusCode != HttpStatusCode.NotModified;
         }
 
+        // "HTTP/1.1" or "HTTP/1.0" as the upstream's status line names them, and "HTTP/2" for HTTP/2, which has no minor
+        // version.
         private static string GetProtocol(Version version)
         {
-            return version.Minor == 0
+            return version.Major >= 2
                 ? $"HTTP/{version.Major}"
                 : $"HTTP/{version.Major}.{version.Minor}";
         }
