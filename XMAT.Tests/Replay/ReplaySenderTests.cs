@@ -144,6 +144,46 @@ namespace XMAT.Tests.Replay
             Assert.DoesNotContain(Canary, Encoding.Latin1.GetString(exchange.Request.ToBytes()), StringComparison.Ordinal);
         }
 
+        // A handler may send a request's content more than once, as an authentication handshake does after a challenge:
+        // every hop's content, a redirect's included, gives the whole body each time that it is sent.
+        [Fact]
+        public async Task SendAsync_EveryHopsBody_CanBeSentAgain_ARedirectsIncluded()
+        {
+            var bodies = new List<string>();
+            var handler = new StubHandler(async (request, _) =>
+            {
+                for (int copy = 0; copy < 2; copy++)
+                {
+                    using var sent = new MemoryStream();
+                    await request.Content.CopyToAsync(sent);
+                    bodies.Add(request.RequestUri.AbsolutePath + " " + Encoding.ASCII.GetString(sent.ToArray()));
+                }
+
+                var response = new HttpResponseMessage(bodies.Count == 2 ? HttpStatusCode.TemporaryRedirect : HttpStatusCode.OK);
+                if (bodies.Count == 2)
+                {
+                    response.Headers.Location = new Uri("/next", UriKind.Relative);
+                }
+
+                return response;
+            });
+            using var sender = new ReplaySender(new HttpMessageInvoker(handler));
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft
+                {
+                    Method = "POST",
+                    Url = "https://example.test/start",
+                    HeadersText = "Content-Type: text/plain",
+                    BodyText = "payload",
+                },
+                ReplaySendOptions.Default with { MaxRedirects = 1 },
+                CancellationToken.None);
+
+            Assert.Equal((ReplayOutcome.Completed, 200, 1), (exchange.Outcome, exchange.StatusCode, exchange.Redirects));
+            Assert.Equal(new[] { "/start payload", "/start payload", "/next payload", "/next payload" }, bodies);
+        }
+
         [Fact]
         public async Task SendAsync_FollowsSameOriginRedirectsOnlyUpToTheLimit()
         {

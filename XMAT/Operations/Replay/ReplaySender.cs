@@ -17,6 +17,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.Operations.Replay
 {
@@ -599,7 +600,10 @@ namespace XMAT.Operations.Replay
 
             if (keepBody && hop.ContentHeaders != null)
             {
-                next.Content = new ByteArrayContent(hop.Body);
+                // The first hop's kind of content (ProxyHttpRequestFactory), so the body can still go duplex over HTTP/2:
+                // HttpClient waits for a ByteArrayContent's whole upload before it returns the response, and an origin
+                // that answers while it reads would stall it.
+                next.Content = ProxyHttpRequestFactory.CreateContent(hop.Body);
                 foreach (KeyValuePair<string, string[]> header in hop.ContentHeaders)
                 {
                     if (!header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
