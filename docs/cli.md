@@ -361,8 +361,8 @@ xmat --version
 - `--save-saz` (`replay` and `compose`) also publishes `replays.saz`, a Fiddler archive with each send as a session,
   which the GUI's import, `xmat analyze` and `xmat replay` read. It is a transcript of what xmat sent and got, not a
   capture of the wire. A request names its final URL in full, in ASCII (an international host name in its IDN form,
-  an IPv6 address without its zone), with the `Host` that was sent, the headers of `request.http`, one line each (a
-  reader joins repeated ones with commas), and its body. A `compose --raw` send is saved normalized instead: its
+  an IPv6 address without its zone), with the `Host` that was sent, the headers of `request.http`, one line each, and
+  its body. A `compose --raw` send is saved normalized instead: its
   target in that absolute form, `Host` written as that URL's authority whatever `Host` the request had, its other
   fields without the spaces around their values, and a chunked body decoded, with `Content-Length` in place of its
   `Transfer-Encoding`; only its `request.http` holds its exact bytes. A response has the head and body of

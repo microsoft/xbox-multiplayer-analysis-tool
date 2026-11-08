@@ -80,17 +80,23 @@ XMAT checks capture files before reading them and never changes them:
 - Header lines are read as Latin-1, so a byte from 0x80 to 0xFF shows as that
   character rather than `?`, and a line of such characters alone, such as 0x85 or 0xA0,
   is a malformed header line rather than the empty line that ends the headers. A header
-  name may contain an apostrophe, as HTTP allows, and a name that repeats is shown once,
-  with its values joined by commas. A time with an offset or `Z` is read as that
-  instant; one without, as XMAT's own exports write it, is this PC's local time. A
-  duration is the time between two instants, also across a daylight saving change, and
-  exports keep it. A time is read as unknown when it is the start of the year 1 without
-  an offset, which Fiddler writes for a timer it never set and XMAT's exports for a time
-  they do not know, or when it names no instant this PC can show as a local time, such
-  as the first hours of the year 1 in UTC, read in a time zone west of UTC. An unknown
-  time stays unknown when the capture is saved, exported or reloaded. Analysis and the
-  timeline leave out a request whose time is unknown or earlier than 1601, which
-  includes the year-1 times that earlier versions of XMAT saved for unknown times.
+  name may contain an apostrophe, as HTTP allows. Each header line is kept in its order
+  and with its name as written, its value without the spaces around it, so a name that
+  repeats keeps each of its lines: two `Set-Cookie` lines stay two, though their dates
+  hold commas. The import and analysis look a header up with the lines of a repeated
+  name joined by commas, as before; replay and `--verify` take the last line of a
+  repeated name instead, as in a capture that XMAT recorded. Earlier versions joined
+  the lines of a repeated name with commas on import; a capture saved from such an
+  import keeps them joined. A time with an offset or `Z` is read as that instant; one
+  without, as XMAT's own exports write it, is this PC's local time. A duration is the
+  time between two instants, also across a daylight saving change, and exports keep it.
+  A time is read as unknown when it is the start of the year 1 without an offset, which
+  Fiddler writes for a timer it never set and XMAT's exports for a time they do not
+  know, or when it names no instant this PC can show as a local time, such as the first
+  hours of the year 1 in UTC, read in a time zone west of UTC. An unknown time stays
+  unknown when the capture is saved, exported or reloaded. Analysis and the timeline
+  leave out a request whose time is unknown or earlier than 1601, which includes the
+  year-1 times that earlier versions of XMAT saved for unknown times.
 
 ### Replays saved by xmat
 

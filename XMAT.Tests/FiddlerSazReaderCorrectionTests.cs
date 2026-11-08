@@ -17,8 +17,8 @@ namespace XMAT.Tests
 {
     // The SAZ readers' corrections (FiddlerSazHandler.FromFiddlerFrame, which the GUI's import and the command line's reader
     // share): heads read as Latin-1, a head ended only by a line of ASCII whitespace, a header name with an apostrophe kept,
-    // fields collected as WebHeaderCollection did, and timers read as instants whatever the machine's culture, which every
-    // writer of the pair of timers keeps as instants.
+    // every field line kept in order and looked up as WebHeaderCollection did, and timers read as instants whatever the
+    // machine's culture, which every writer of the pair of timers keeps as instants.
     public class FiddlerSazReaderCorrectionTests
     {
         private readonly ITestOutputHelper _output;
@@ -102,7 +102,7 @@ namespace XMAT.Tests
 
             Assert.Equal(0, skipped);
             Assert.Equal("GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\nX'Name: request\r\n\r\n", record.RequestLineAndHeaders);
-            Assert.Equal("HTTP/1.1 200 OK\r\nX'Name: response,again\r\n\r\n", record.ResponseLineAndHeaders);
+            Assert.Equal("HTTP/1.1 200 OK\r\nX'Name: response\r\nx'name: again\r\n\r\n", record.ResponseLineAndHeaders);
             Assert.True(FiddlerSazHandler.IsValidHeaderLine("X'Name: v"));
             Assert.False(FiddlerSazHandler.IsValidHeaderLine("X(Name: v"));
         }
@@ -121,13 +121,15 @@ namespace XMAT.Tests
 
                 var fields = new SazHeaderFields();
                 fields.Add(line);
-                AssertSame(expected, fields, line);
+                Assert.Equal(expected.ToString(), fields.ToString());
+                AssertSameLookup(expected, fields, line);
             }
         }
 
-        // Heads of several lines: repeated names in different cases, empty values, an empty name and Latin-1 values.
+        // Heads of several lines: repeated names in different cases, empty values, an empty name and Latin-1 values. A name
+        // looks up as in WebHeaderCollection, and the text keeps every line in order, under its own name.
         [Fact]
-        public void HeaderFields_MatchWebHeaderCollection_ForWholeHeads()
+        public void HeaderFields_LookUpAsWebHeaderCollection_AndKeepEveryLine_ForWholeHeads()
         {
             string[] alphabet =
             {
@@ -146,7 +148,8 @@ namespace XMAT.Tests
                     fields.Add(line);
                 }
 
-                AssertSame(expected, fields, string.Join(" | ", accepted));
+                Assert.Equal(EveryLine(accepted), fields.ToString());
+                AssertSameLookup(expected, fields, string.Join(" | ", accepted));
             }
         }
 
@@ -841,9 +844,9 @@ namespace XMAT.Tests
             }
         }
 
-        private static void AssertSame(WebHeaderCollection expected, SazHeaderFields fields, string context)
+        private static void AssertSameLookup(WebHeaderCollection expected, SazHeaderFields fields, string context)
         {
-            if (expected.ToString() != fields.ToString() || expected.Count != fields.Count)
+            if (expected.Count != fields.Count)
             {
                 Assert.Fail("Head UTF-16: " + Convert.ToHexString(Encoding.Unicode.GetBytes(context ?? "")));
             }
@@ -855,6 +858,20 @@ namespace XMAT.Tests
             }
 
             Assert.Null(fields["X-Absent-Name"]);
+        }
+
+        // Each line as WebHeaderCollection writes a head of that line alone, in order, then the empty line.
+        private static string EveryLine(IEnumerable<string> lines)
+        {
+            var text = new StringBuilder();
+            foreach (string line in lines)
+            {
+                Assert.True(TryWebHeaderCollection(new[] { line }, out WebHeaderCollection single), line);
+                string head = single.ToString();
+                text.Append(head, 0, head.Length - 2);
+            }
+
+            return text.Append("\r\n").ToString();
         }
 
         // The first instant after start at which this machine's zone changes its offset, to the minute; null when it does

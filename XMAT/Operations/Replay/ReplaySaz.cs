@@ -16,7 +16,7 @@ namespace XMAT.Operations.Replay
     // - The request's start line has its method and HTTP version as sent, and its target in absolute form: the final URL,
     //   after the redirects that were followed, as {scheme}://{authority}{path and query}, in ASCII and escaped, without
     //   user information or a fragment (ReplayAuthority). Host comes first with that same authority, whatever Host was
-    //   recorded, then the other fields that replay recorded, in order, one line each: a reader joins repeated ones.
+    //   recorded, then the other fields that replay recorded, in order, one line each, which a reader keeps.
     // - A response keeps its head and its body, with the chunked framing removed and its content encoding as it came. One
     //   larger than the response size limit (TooLarge) came without its body: its head ends with
     //   X-XMAT-Response-Body-Not-Kept, the size that the response declared or "unknown", and its body is empty. A send
