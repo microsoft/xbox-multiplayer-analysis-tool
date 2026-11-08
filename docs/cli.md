@@ -164,6 +164,12 @@ xmat --version
   any request, counting every selected request, including any that a range or `all` would skip; each send can
   follow up to `--follow-redirects` redirects, so with `--follow-redirects 10` a run makes at most 110,000 HTTP
   requests.
+- xmat checks each HTTPS server's certificate as Windows does, with two limits that every send of `replay` and
+  `compose` shares, Raw mode's included. Revocation is not checked (`NoCheck`), so a revoked certificate can pass when
+  the rest of its validation succeeds. And no certificate is downloaded: validation never fetches an issuer certificate
+  from a URL in the server's certificate and fetches no revocation data, so a server must send every intermediate
+  certificate that this PC does not already have in its certificate stores or cache. Windows' automatic root update
+  may still ask Windows Update about an unknown root.
 - Edits apply to every selected request before anything is sent: `--method`; `--header "NAME: VALUE"`, which replaces
   every header of that name or adds it (repeat it for more headers; the value must be printable ASCII or tabs, and
   `Host`, `Content-Length` and connection headers cannot be set); `--remove-header`; `--body-file`, whose bytes
@@ -473,14 +479,8 @@ xmat --version
     `--target`, `--allow-raw` and `--fix-content-length` without `--raw`. `replay`, `save-request` and `curl` take none
     of these four options.
   - Over HTTPS, xmat offers only `http/1.1` (`replay.raw.alpn` when the server chooses another protocol), never
-    resumes a session and offers no client certificate. It checks the server's certificate as Windows does, with two
-    limits. Revocation is not checked (`NoCheck`), as in every replay path, so a revoked certificate can pass when the
-    rest of its validation succeeds. And Raw mode turns certificate downloads off: validation never fetches an issuer
-    certificate from a URL in the server's certificate and fetches no revocation data, so a raw HTTPS server must send
-    every intermediate certificate that this PC does not already have in its certificate stores or cache; Windows'
-    automatic root update may still ask Windows Update about an unknown root. Other sends keep Windows' default, which
-    allows such downloads, so for them `NoCheck` is no promise that validation makes no network request; one policy
-    for every replay path is an open follow-up.
+    resumes a session and offers no client certificate. It checks the server's certificate as every send does, without
+    a revocation check and without downloading a certificate (see above).
   - xmat reads one HTTP/1.x response within Raw mode's limits (`replay.raw.response-invalid`), with a body framed by
     `Content-Length`, `chunked` alone (`replay.raw.response-coding` otherwise) or the end of the connection. A body that
     the connection ends cannot be proven complete, and one that ends early is `replay.raw.response-incomplete`.

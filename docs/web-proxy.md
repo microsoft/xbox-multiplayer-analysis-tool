@@ -190,6 +190,14 @@ and with any character that could hide or reorder text, such as a bidirectional
 control, shown as `\uXXXX`; the request is sent with the whole method and URL as you
 entered them. CONNECT and WebSocket handshakes cannot be resent.
 
+HTTPS certificates are checked as Windows checks them, with two limits that every
+resent or composed request shares. Revocation is not checked, so a revoked certificate
+can pass when the rest of its validation succeeds. And no certificate is downloaded:
+validation never fetches an issuer certificate from an address in the server's
+certificate, and fetches no revocation data, so a server must send every intermediate
+certificate that this PC does not already have in its certificate stores or cache.
+Windows' automatic root update may still ask Windows Update about an unknown root.
+
 Use **Cancel request** to stop waiting. Sending has a 30-second timeout and a 16 MiB
 response limit for each request. Cancelling or timing out cannot undo changes already
 processed by the server. To send the request outside XMAT, use **Copy as cURL** or

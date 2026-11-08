@@ -87,7 +87,7 @@ namespace XMAT.Operations.Replay
     // own invocation of the resolver (a DNS name) or the connector (an IP literal or a connect-to endpoint); a cancellation
     // ordered before then throws with no exchange, and every send that began gives exactly one exchange. Every operation
     // goes through the arbiter's leases, observes only the arbiter's token, and is awaited before the exchange is made.
-    // TLS offers only http/1.1, never resumes a session, offers no client certificate, and validates with the platform,
+    // TLS offers only http/1.1, never resumes a session, offers no client certificate, and validates with ReplayTls,
     // without fetching any certificate or revocation data that the server's certificate names.
     internal sealed class RawSender
     {
@@ -354,11 +354,8 @@ namespace XMAT.Operations.Replay
 
         private SslClientAuthenticationOptions TlsOptions(ReplayRawTarget target)
         {
-            // The trust anchors may come from a test; downloads and revocation fetching are set after it, so no seam turns
-            // them back on.
-            X509ChainPolicy policy = _setup.ChainPolicyFactory?.Invoke() ?? new X509ChainPolicy();
-            policy.RevocationMode = X509RevocationMode.NoCheck;
-            policy.DisableCertificateDownloads = true;
+            // The replay policy (ReplayTls), with a test's trust anchors when it gives them.
+            X509ChainPolicy policy = ReplayTls.ChainPolicy(_setup.ChainPolicyFactory);
             return new SslClientAuthenticationOptions
             {
                 TargetHost = target.TlsName,

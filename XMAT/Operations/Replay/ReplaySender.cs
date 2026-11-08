@@ -40,8 +40,9 @@ namespace XMAT.Operations.Replay
     // endpoint, or through one proxy, never both of the last two; for a run that may offer a client certificate, the
     // resolved certificate (ReplayClientCredential's copy); for a run that may authenticate with Windows, WindowsAuth; and,
     // for either, the one origin that may receive them (CredentialOrigin), never with a proxy, and never with a connect-to
-    // endpoint for Windows authentication. ChainPolicyFactory is null except in tests: it gives the handler and its
-    // client-certificate check each a new chain policy, so they trust the same roots; null keeps the platform's validation.
+    // endpoint for Windows authentication. ChainPolicyFactory is null except in tests: it gives the trust anchors for
+    // the chain policy that the handler and its client-certificate check each build (ReplayTls), so they trust the same
+    // roots; null keeps the platform's trust.
     internal sealed record ReplaySenderSetup(
         ReplayConnectTo ConnectTo = null,
         ReplayProxy Proxy = null,
@@ -83,7 +84,7 @@ namespace XMAT.Operations.Replay
     // cookies of its own, answers an authentication challenge with the Windows credentials that XMAT runs with only when
     // its sender was made for Windows authentication, and then only the one consented origin's Negotiate and NTLM
     // challenges, never answers a proxy's with any, never decompresses (so inspectors see the bytes the server sent) and
-    // keeps the platform's certificate validation. It offers a client certificate only when its sender was made for one,
+    // validates certificates with ReplayTls. It offers a client certificate only when its sender was made for one,
     // and then only to a server that asks for one and proves, before the certificate is sent, that it is the one origin
     // that may receive it. Replay follows redirects itself, at most MaxRedirects of them, and only within the origin it
     // sent to: a server never chooses where the request's headers and body go next, so a hop to another origin, from HTTPS
@@ -194,24 +195,20 @@ namespace XMAT.Operations.Replay
                 handler.ConnectCallback = ConnectOnlyTo(setup.ConnectTo);
             }
 
-            if (setup.ChainPolicyFactory != null)
-            {
-                handler.SslOptions.CertificateChainPolicy = setup.ChainPolicyFactory();
-            }
+            // Every connection validates the server's certificate with the replay policy (ReplayTls), from a policy of the
+            // handler's own that each handshake clones.
+            handler.SslOptions.CertificateRevocationCheckMode = X509RevocationMode.NoCheck;
+            handler.SslOptions.CertificateChainPolicy = ReplayTls.ChainPolicy(setup.ChainPolicyFactory);
 
             if (setup.ClientCertificate != null)
             {
-                // Without a factory the check builds its chain as SslStream does without a policy: the handler's revocation
-                // mode, frozen here, the root excluded, the platform's trust (SslStream.Protocol.cs, VerifyRemoteCertificate).
+                // The check builds its chain as the handler's handshakes do, from a new policy of the same rules for each
+                // check, never one that the handler or another check uses.
                 SslClientAuthenticationOptions ssl = handler.SslOptions;
-                X509RevocationMode revocation = ssl.CertificateRevocationCheckMode;
+                Func<X509ChainPolicy> testPolicy = setup.ChainPolicyFactory;
                 var check = new ReplayServerCertificateCheck(
                     setup.CredentialOrigin,
-                    setup.ChainPolicyFactory ?? (() => new X509ChainPolicy
-                    {
-                        RevocationMode = revocation,
-                        RevocationFlag = X509RevocationFlag.ExcludeRoot,
-                    }));
+                    () => ReplayTls.ChainPolicy(testPolicy));
                 X509Certificate2 certificate = setup.ClientCertificate;
                 ssl.AllowTlsResume = false;
                 ssl.LocalCertificateSelectionCallback =
