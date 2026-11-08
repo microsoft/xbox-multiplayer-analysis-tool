@@ -51,12 +51,12 @@ namespace XMAT.Cli
             {
                 if (!output.IsPrivate())
                 {
+                    CliFailure failure =
+                        CliOutputFolder.Unprotected();
                     report.Fail(
-                        CliExitCodes.Failed,
-                        "cli.output.unprotected",
-                        "xmat cannot keep its output private there: the --out folder must be on a local NTFS volume and " +
-                            "reached without a network path, a mapped or substituted drive, a junction, a mounted folder " +
-                            "or a symbolic link.");
+                        failure.ExitCode,
+                        failure.Code,
+                        failure.Message);
                     return report;
                 }
 

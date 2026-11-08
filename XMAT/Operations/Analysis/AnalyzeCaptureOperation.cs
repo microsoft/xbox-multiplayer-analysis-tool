@@ -763,7 +763,7 @@ namespace XMAT.Operations.Analysis
                     SqLtSchemaFailure.UnsupportedVersion =>
                         new AnalysisInputException(
                             "capture.format.future",
-                            "The capture file uses a newer XMAT capture format and cannot be opened by this version of XMAT.",
+                            SqLtSchemaProfile.UnsupportedVersionMessage,
                             ex),
                     _ => new AnalysisInputException(
                         "analysis.input.schema",

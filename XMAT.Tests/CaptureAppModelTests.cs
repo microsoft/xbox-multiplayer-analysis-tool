@@ -1550,6 +1550,7 @@ namespace XMAT.Tests
         [InlineData("sidecar")]
         [InlineData("location")]
         [InlineData("future")]
+        [InlineData("utf16-future")]
         public async Task LoadDataCaptures_OpenRefusalPreservesPriorStateAndClosesNewDatabase(
             string kind)
         {
@@ -1608,6 +1609,17 @@ namespace XMAT.Tests
                     hostilePath,
                     2);
             }
+            else if (kind == "utf16-future")
+            {
+                File.Delete(
+                    hostilePath);
+                hostilePath =
+                    HostileSqliteSchemas.CreateUtf16Database(
+                        directory,
+                        "hostile.xmatcap",
+                        2,
+                        "CREATE TABLE Other(id INTEGER PRIMARY KEY,Value TEXT)");
+            }
 
             byte[] hostileHash =
                 SHA256.HashData(
@@ -1665,7 +1677,8 @@ namespace XMAT.Tests
                         "location" => (
                             SqLtSchemaFailure.UnsupportedLocation,
                             "CAPTURE_OPEN_LOCATION"),
-                        "future" => (
+                        "future" or
+                        "utf16-future" => (
                             SqLtSchemaFailure.UnsupportedVersion,
                             "CAPTURE_OPEN_FUTURE_VERSION"),
                         _ => (
@@ -1717,6 +1730,14 @@ namespace XMAT.Tests
                 string message =
                     Localization.GetLocalizedString(
                         expectedKey);
+                if (kind is
+                    "future" or
+                    "utf16-future")
+                {
+                    Assert.Equal(
+                        "The SQLite file has an unsupported user_version value. XMAT accepts only 0 or 1.",
+                        message);
+                }
                 Assert.DoesNotContain(
                     "NO_IMPL_",
                     message,

@@ -368,7 +368,7 @@ namespace XMAT.Cli
         private static CliFailure ParentMissing() =>
             new(CliExitCodes.Usage, "cli.output.parent-missing", "The folder that should contain the --out folder does not exist.");
 
-        private static CliFailure Unprotected() =>
+        internal static CliFailure Unprotected() =>
             new(
                 CliExitCodes.Failed,
                 "cli.output.unprotected",

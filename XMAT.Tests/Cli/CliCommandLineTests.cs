@@ -5,6 +5,7 @@
 using System.Text;
 using System.Text.Json;
 using XMAT.Cli;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
@@ -346,6 +347,150 @@ namespace XMAT.Tests.Cli
                         "valuesChanged")
                     .GetInt64());
             Assert.Equal(
+                new[]
+                {
+                    "input",
+                    "limits",
+                    "interpretation",
+                    "source",
+                    "output",
+                    "counts",
+                },
+                mark.EnumerateObject()
+                    .Select(
+                        property =>
+                            property.Name));
+            Assert.Equal(
+                JsonValueKind.String,
+                mark.GetProperty("input")
+                    .GetProperty("kind")
+                    .ValueKind);
+            Assert.Equal(
+                JsonValueKind.String,
+                mark.GetProperty("input")
+                    .GetProperty("sha256")
+                    .ValueKind);
+            Assert.Equal(
+                new[]
+                {
+                    "kind",
+                    "sha256",
+                },
+                mark.GetProperty("input")
+                    .EnumerateObject()
+                    .Select(property => property.Name));
+            Assert.Equal(
+                "xmatcap",
+                mark.GetProperty("input")
+                    .GetProperty("kind")
+                    .GetString());
+            Assert.Equal(
+                new string('a', 64),
+                mark.GetProperty("input")
+                    .GetProperty("sha256")
+                    .GetString());
+            Assert.Equal(
+                JsonValueKind.Number,
+                mark.GetProperty("limits")
+                    .GetProperty("maxInputMib")
+                    .ValueKind);
+            Assert.Equal(
+                new[]
+                {
+                    "maxInputMib",
+                },
+                mark.GetProperty("limits")
+                    .EnumerateObject()
+                    .Select(property => property.Name));
+            Assert.Equal(
+                512,
+                mark.GetProperty("limits")
+                    .GetProperty("maxInputMib")
+                    .GetInt32());
+            Assert.Equal(
+                JsonValueKind.Number,
+                mark.GetProperty("source")
+                    .GetProperty("userVersion")
+                    .ValueKind);
+            Assert.Equal(
+                JsonValueKind.String,
+                mark.GetProperty("source")
+                    .GetProperty("semantics")
+                    .ValueKind);
+            Assert.Equal(
+                new[]
+                {
+                    "userVersion",
+                    "semantics",
+                },
+                mark.GetProperty("source")
+                    .EnumerateObject()
+                    .Select(property => property.Name));
+            Assert.Equal(
+                CaptureTextFormat.AmbiguousUserVersion,
+                mark.GetProperty("source")
+                    .GetProperty("userVersion")
+                    .GetInt32());
+            Assert.Equal(
+                "ambiguousUnmarked",
+                mark.GetProperty("source")
+                    .GetProperty("semantics")
+                    .GetString());
+            Assert.Equal(
+                new[]
+                {
+                    "file",
+                    "sha256",
+                    "userVersion",
+                },
+                mark.GetProperty("output")
+                    .EnumerateObject()
+                    .Select(property => property.Name));
+            Assert.Equal(
+                "capture.xmatcap",
+                mark.GetProperty("output")
+                    .GetProperty("file")
+                    .GetString());
+            Assert.Equal(
+                new string('b', 64),
+                mark.GetProperty("output")
+                    .GetProperty("sha256")
+                    .GetString());
+            Assert.Equal(
+                CaptureTextFormat.LiteralUserVersion,
+                mark.GetProperty("output")
+                    .GetProperty("userVersion")
+                    .GetInt32());
+            Assert.Equal(
+                new[]
+                {
+                    "tables",
+                    "rows",
+                    "valuesExamined",
+                    "valuesChanged",
+                },
+                mark.GetProperty("counts")
+                    .EnumerateObject()
+                    .Select(property => property.Name));
+            Assert.All(
+                mark.GetProperty("counts")
+                    .EnumerateObject(),
+                property =>
+                    Assert.Equal(
+                        JsonValueKind.Number,
+                        property.Value.ValueKind));
+            Assert.Equal(
+                new long[]
+                {
+                    2,
+                    3,
+                    4,
+                    5,
+                },
+                mark.GetProperty("counts")
+                    .EnumerateObject()
+                    .Select(property => property.Value.GetInt64()));
+            Assert.Equal(
                 "xmat-mark-capture-text/1",
                 summary.RootElement.GetProperty(
                     "schema")
@@ -371,6 +516,94 @@ namespace XMAT.Tests.Cli
                     "warnings",
                 },
                 summary.RootElement.EnumerateObject()
+                    .Select(
+                        property =>
+                            property.Name));
+            foreach (string property in new[]
+            {
+                "input",
+                "limits",
+                "interpretation",
+                "source",
+                "output",
+                "counts",
+            })
+            {
+                Assert.True(
+                    JsonElement.DeepEquals(
+                        mark.GetProperty(
+                            property),
+                        summary.RootElement.GetProperty(
+                            property)),
+                    property);
+            }
+        }
+
+        [Fact]
+        public void FailedMarkOutput_NeverPublishesSourceOutputOrCounts()
+        {
+            var report =
+                new CliReport(
+                    CliCommands.MarkCaptureText,
+                    "run")
+                {
+                    MarkCaptureText =
+                        new CliMarkCaptureTextReport
+                        {
+                            Interpretation =
+                                CaptureTextInterpretation.AsStored,
+                            MaxInputMib = 512,
+                            InputKind = "xmatcap",
+                            InputSha256 = new string('a', 64),
+                            OutputSha256 = new string('b', 64),
+                            Counts =
+                                new MarkCaptureTextCounts(
+                                    1,
+                                    2,
+                                    3,
+                                    4),
+                        },
+                };
+            report.Fail(
+                CliExitCodes.Conflict,
+                "cli.output.exists",
+                "Nothing was published.");
+
+            using JsonDocument output =
+                JsonDocument.Parse(
+                    CliJson.Serialize(
+                        report));
+            JsonElement mark =
+                output.RootElement.GetProperty(
+                    "markCaptureText");
+
+            Assert.False(
+                mark.TryGetProperty(
+                    "source",
+                    out _));
+            Assert.False(
+                mark.TryGetProperty(
+                    "output",
+                    out _));
+            Assert.False(
+                mark.TryGetProperty(
+                    "counts",
+                    out _));
+            Assert.Equal(
+                "xmatcap",
+                mark.GetProperty(
+                        "input")
+                    .GetProperty(
+                        "kind")
+                    .GetString());
+            Assert.Equal(
+                new[]
+                {
+                    "input",
+                    "limits",
+                    "interpretation",
+                },
+                mark.EnumerateObject()
                     .Select(
                         property =>
                             property.Name));

@@ -180,6 +180,40 @@ namespace XMAT.Tests.Operations.Analysis
                 Assert.Single(
                     result.Diagnostics)
                     .Code);
+            Assert.Equal(
+                "The SQLite file has an unsupported user_version value. XMAT accepts only 0 or 1.",
+                Assert.Single(
+                    result.Diagnostics)
+                    .Message);
+        }
+
+        [Fact]
+        public async Task Utf16SqliteWithUnsupportedMarker_IsFutureBeforeSchemaClassification()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateUtf16Database(
+                    directory.Path,
+                    "utf16-future.xmatcap",
+                    2,
+                    "CREATE TABLE Other(id INTEGER PRIMARY KEY,Value TEXT)");
+
+            OperationResult<AnalysisResult> result =
+                await AnalyzeFile(
+                    path);
+
+            Assert.Equal(
+                OperationOutcome.InvalidInput,
+                result.Outcome);
+            OperationDiagnostic diagnostic =
+                Assert.Single(
+                    result.Diagnostics);
+            Assert.Equal(
+                "capture.format.future",
+                diagnostic.Code);
+            Assert.Equal(
+                "The SQLite file has an unsupported user_version value. XMAT accepts only 0 or 1.",
+                diagnostic.Message);
         }
 
         [Fact]

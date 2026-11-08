@@ -2,6 +2,9 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Drawing;
+using System.IO.Compression;
+using System.Reflection;
 using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
@@ -340,14 +343,15 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void RealCaptureSchema_SaveLoadAndModelKeepExactQuotes()
+        public async Task RealCaptureSchema_SaveLoadAndModelKeepExactQuotes()
         {
             const string Device = "dev\"ice";
+            // Production FirstLineAndHeaders includes the blank line that ends the header block.
             const string Headers =
                 "GET / HTTP/1.1\r\n" +
                 "Host: example.test\r\n" +
                 "If-None-Match: \"v1\"\r\n" +
-                "X-Adjacent: \"\"\r\n";
+                "X-Adjacent: \"\"\r\n\r\n";
             using var directory = new TestDirectory();
             string path =
                 Path.Join(
@@ -384,7 +388,7 @@ namespace XMAT.Tests
                     "200",
                     Headers,
                     string.Empty,
-                    "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n",
+                    "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
                     string.Empty,
                     "10.0.0.1");
                 database.SaveToFile(path);
@@ -411,6 +415,117 @@ namespace XMAT.Tests
             Assert.Equal(
                 CaptureTextSemantics.Literal,
                 model.CaptureTextSource.Semantics);
+
+            using var cycleDatabase =
+                new SqLtDatabase();
+            cycleDatabase.Initialize();
+            IDataTable cycleTable =
+                CreateWebProxyTable(
+                    cycleDatabase);
+            model.AddToDataTable(
+                Device,
+                cycleTable);
+            var captureMethod =
+                (WebServiceCaptureMethod)Activator.CreateInstance(
+                    typeof(WebServiceCaptureMethod),
+                    nonPublic: true);
+            typeof(WebServiceCaptureMethod)
+                .GetProperty(
+                    nameof(WebServiceCaptureMethod.WebProxyConnectionsTable),
+                    BindingFlags.Instance |
+                        BindingFlags.NonPublic)
+                .SetValue(
+                    captureMethod,
+                    cycleTable);
+            var controller =
+                new WebServiceDeviceCaptureController(
+                    Device,
+                    DeviceType.Unknown,
+                    true);
+            var context =
+                new Context(
+                    controller);
+            byte[][] requestEntries =
+                new byte[3][];
+            for (int cycle = 0;
+                cycle < requestEntries.Length;
+                cycle++)
+            {
+                string archive =
+                    Path.Join(
+                        directory.Path,
+                        $"cycle-{cycle}.saz");
+                captureMethod.ExportToFiddler(
+                    archive);
+                requestEntries[cycle] =
+                    RequestEntry(
+                        archive);
+                await captureMethod.ImportFromFiddlerAsync(
+                    archive,
+                    context,
+                    cycleTable);
+                ProxyConnectionModel imported =
+                    Assert.Single(
+                        controller.ProxyConnections);
+                Assert.Equal(
+                    Headers,
+                    imported.RequestLineAndHeaders);
+                Assert.Equal(
+                    Headers,
+                    Assert.Single(
+                            cycleTable.Dataset.DataRecords)
+                        .Str(
+                            WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders));
+            }
+            Assert.Equal(
+                requestEntries[1],
+                requestEntries[2]);
+        }
+
+        private static byte[] RequestEntry(
+            string path)
+        {
+            using ZipArchive archive =
+                ZipFile.OpenRead(
+                    path);
+            ZipArchiveEntry entry =
+                Assert.Single(
+                    archive.Entries,
+                    candidate =>
+                        candidate.FullName.EndsWith(
+                            "_c.txt",
+                            StringComparison.Ordinal));
+            using Stream stream =
+                entry.Open();
+            using var bytes =
+                new MemoryStream();
+            stream.CopyTo(
+                bytes);
+            return bytes.ToArray();
+        }
+
+        private sealed class Context(
+            WebServiceDeviceCaptureController controller) :
+            ICaptureDeviceContext
+        {
+            public DeviceType DeviceType =>
+                DeviceType.Unknown;
+
+            public CaptureType CaptureType =>
+                CaptureType.WebProxy;
+
+            public string DeviceName =>
+                controller.DeviceName;
+
+            public bool IsSelected { get; set; }
+
+            public bool IsReadOnly { get; set; } =
+                true;
+
+            public Color DeviceColor { get; set; }
+
+            public IDeviceCaptureController CaptureController =>
+                controller;
         }
 
         private static IDataTable CreateWebProxyTable(

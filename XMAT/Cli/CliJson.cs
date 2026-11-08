@@ -66,7 +66,8 @@ namespace XMAT.Cli
                         "markCaptureText");
                     WriteMarkCaptureText(
                         writer,
-                        report.MarkCaptureText);
+                        report.MarkCaptureText,
+                        report.Artifacts.Count != 0);
                     writer.WriteEndObject();
                 }
 
@@ -181,7 +182,8 @@ namespace XMAT.Cli
                 WriteMarkCaptureText(
                     writer,
                     report.MarkCaptureText ??
-                        new CliMarkCaptureTextReport());
+                        new CliMarkCaptureTextReport(),
+                    includePublishedResults: true);
                 WriteDiagnostics(
                     writer,
                     "warnings",
@@ -260,7 +262,8 @@ namespace XMAT.Cli
 
         private static void WriteMarkCaptureText(
             Utf8JsonWriter writer,
-            CliMarkCaptureTextReport report)
+            CliMarkCaptureTextReport report,
+            bool includePublishedResults)
         {
             if (report.InputKind != null ||
                 report.InputSha256 != null)
@@ -288,7 +291,8 @@ namespace XMAT.Cli
                     CaptureTextInterpretation.LegacyOneLayer
                     ? "legacyOneLayer"
                     : "asStored");
-            if (report.OutputSha256 == null ||
+            if (!includePublishedResults ||
+                report.OutputSha256 == null ||
                 report.Counts == null)
             {
                 return;

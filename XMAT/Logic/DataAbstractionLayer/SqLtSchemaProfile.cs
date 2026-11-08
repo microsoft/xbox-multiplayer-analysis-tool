@@ -11,6 +11,7 @@ namespace XMAT.DataAbstractionLayer
     internal enum SqLtSchemaFailure
     {
         Invalid,
+        NotXmat,
         Unsupported,
         Limit,
         Sidecar,
@@ -36,7 +37,9 @@ namespace XMAT.DataAbstractionLayer
                     SqLtSchemaFailure.WriteAheadLog =>
                         "The capture database uses write-ahead logging.",
                     SqLtSchemaFailure.UnsupportedVersion =>
-                        "The capture file uses a newer XMAT capture format and cannot be opened by this version of XMAT.",
+                        SqLtSchemaProfile.UnsupportedVersionMessage,
+                    SqLtSchemaFailure.NotXmat =>
+                        "The database is not a native XMAT capture.",
                     _ => "The capture database schema is unsupported or invalid.",
                 },
                 innerException)
@@ -95,6 +98,9 @@ namespace XMAT.DataAbstractionLayer
 
     internal sealed class SqLtSchemaProfile
     {
+        internal const string UnsupportedVersionMessage =
+            "The SQLite file has an unsupported user_version value. XMAT accepts only 0 or 1.";
+
         internal const int MaxSchemaRecords = 16;
         internal const int MaxSchemaRecordBytes = 64 * 1024;
         internal const int MaxTotalSchemaBytes = 256 * 1024;

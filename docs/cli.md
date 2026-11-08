@@ -38,9 +38,11 @@ xmat --version
   length, then removes exactly one historical XMAT quote-doubling layer. It never repairs a `.saz`, request file or
   arbitrary SQLite file. `--max-input-mib` defaults to 512 and permits 1 through 2,048. The command validates all known
   tables, rewrites no extension column and can use about twice the largest value plus SQLite overhead while rewriting.
-  It publishes `capture.xmatcap` and `summary.json` (schema `xmat-mark-capture-text/1`) at the root of `DIR`.
-  `DIR` has the same link-free local-NTFS requirement as `analyze`. It refuses a non-XMAT SQLite input
-  (`capture.repair.input-not-xmatcap`), a future marker (`capture.format.future`), a marked input
+  One Release run on .NET 10.0.14, rewriting a single 64 MiB value, measured a peak working set of 186,519,552 bytes
+  (about 178 MiB). It publishes `capture.xmatcap` and `summary.json` (schema `xmat-mark-capture-text/1`) at the root of
+  `DIR`. `DIR` has the same link-free local-NTFS requirement as `analyze`. It refuses a non-XMAT SQLite input
+  (`capture.repair.input-not-xmatcap`), an invalid native XMAT schema (`analysis.input.schema`), an unsupported marker
+  (`capture.format.future`, meaning any `user_version` other than 0 or 1), a marked input
   (`capture.repair.already-marked`), data outside the one-layer domain (`capture.repair.not-legacy-encoding`) or an
   invalid prepared output entry (`capture.repair.output-invalid`); no refusal publishes `DIR`.
 - xmat treats its input as untrusted. By default it refuses an input (exit code 3) larger than 512 MiB
@@ -156,6 +158,7 @@ An abridged result:
   "status": "succeeded",
   "exitCode": 0,
   "input": { "kind": "saz", "sha256": "..." },
+  "storedText": { "semantics": "notApplicable", "policy": "notNeeded" },
   "limits": { "maxInputMib": 512, "maxDataMib": 256, "maxRecordMib": 32, "maxRecords": 100000 },
   "devices": [ { "id": "d1", "consoles": [ { "id": "c1", "calls": 4, "findings": [
     { "rule": "XR049Rule", "service": "presence_service", "level": "Warning", "count": 1 } ] } ] } ],
@@ -177,6 +180,18 @@ empty. Once its command line is valid, `analyze` reports the effective input lim
 `architecture`, the process architecture such as `x64`) and `capabilities` (each with its `id`, `status` and
 `slice`); `help` reports `commands`, each with its `name`, `status` (`supported`), `usage` and `capabilities` (the ids
 of the capabilities that the command provides); and `--version` reports `version`.
+
+For native captures, analyze reports `storedText.semantics` as `literal` or `ambiguousUnmarked`; SAZ input reports
+`notApplicable`. Its policy is `notNeeded`. An unmarked native capture is still analyzed as stored and adds the warning
+`capture.text.ambiguous`.
+
+On standard output, `mark-capture-text` reports these fields under `markCaptureText`: `limits.maxInputMib` and
+`interpretation`, and `input` (`kind`, `sha256`) once the input's kind and SHA-256 are known. A published run also
+reports `source` (`userVersion`, `semantics`), `output` (`file`, `sha256`, `userVersion`) and integer `counts`
+(`tables`, `rows`, `valuesExamined`, `valuesChanged`). A failed run never reports `source`, `output` or `counts`. Its
+summary uses schema `xmat-mark-capture-text/1` and places the same fields at the root. Cancellation reports
+`capture.repair.cancelled` while the shared publication boundary can report `cli.cancelled`; an unexpected operation
+failure reports `capture.repair.internal`.
 
 If xmat cannot produce this document (an internal error), it writes a fixed fallback document instead, with only
 `schema`, `command`, `runId`, `status`, `exitCode`, `artifacts`, `cleanup`, empty `warnings` and the error
@@ -201,16 +216,19 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 
 ## Compatibility
 
-- The JSON on standard output (`xmat-cli/1`) and `summary.json` (`xmat-analysis/1`) only grow within their version: a
-  release may add fields, diagnostic codes, commands and capabilities, so ignore what you do not know. A change that
-  removes or renames a field, changes its type or meaning, or changes what a status value means ships as a new schema
-  version (`xmat-cli/2`, `xmat-analysis/2`) together with migration guidance in this document.
+- The JSON on standard output (`xmat-cli/1`) and summary schemas `xmat-analysis/1` and
+  `xmat-mark-capture-text/1` only grow within their version: a release may add fields, diagnostic codes, commands and
+  capabilities, so ignore what you do not know. A change that removes or renames a field, changes its type or meaning,
+  or changes what a status value means ships as a new schema version (`xmat-cli/2`, `xmat-analysis/2` or
+  `xmat-mark-capture-text/2`) together with migration guidance in this document.
 - Exit codes keep their meaning: new codes may be added, but a code is never renumbered or reused.
 - The command lines of available commands keep working.
 - Intentional diagnostic changes from the earlier headless draft: XMAT capture sidecars and WAL mode now report
   `analysis.input.live-database`, unsupported normalized-path locations report
   `analysis.input.location-unsupported`, and writer sharing violations report `analysis.input.unreadable`; each is
   invalid input with exit code 3.
+- `analyze --out` now requires link-free local NTFS storage and refuses network, mapped/substituted, reparse-point and
+  non-NTFS output locations before analysis.
 
 ## What runs headless
 

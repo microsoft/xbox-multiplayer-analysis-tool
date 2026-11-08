@@ -4,9 +4,11 @@
 
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Win32.SafeHandles;
+using SQLitePCL;
 using XMAT.Cli;
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
@@ -185,6 +187,100 @@ namespace XMAT.Tests.Operations.CaptureFiles
         }
 
         [Fact]
+        public async Task CopyUsesTheHeldSourceWhenItsInputAliasIsRetargeted()
+        {
+            using var directory = new CliTestDirectory();
+            string first =
+                Path.Join(
+                    directory.Root,
+                    "first");
+            string second =
+                Path.Join(
+                    directory.Root,
+                    "second");
+            Directory.CreateDirectory(first);
+            Directory.CreateDirectory(second);
+            string original =
+                CreateUnmarked(
+                    first,
+                    "capture.xmatcap");
+            string replacement =
+                CreateUnmarked(
+                    second,
+                    "capture.xmatcap");
+            UpdateValue(
+                original,
+                "RequestHost",
+                "held.example");
+            UpdateValue(
+                replacement,
+                "RequestHost",
+                "retargeted.example");
+            string link =
+                Path.Join(
+                    directory.Root,
+                    "alias");
+            Links.Junction(
+                link,
+                first);
+            try
+            {
+                var operation =
+                    new MarkCaptureTextOperation();
+                using MarkCaptureTextPlan plan =
+                    await Prepare(
+                        operation,
+                        Path.Join(
+                            link,
+                            "capture.xmatcap"),
+                        CaptureTextInterpretation.AsStored);
+                Links.Remove(
+                    link);
+                Links.Junction(
+                    link,
+                    second);
+                using CliOutputFolder output =
+                    CliTestOutput.Reserve(
+                        Path.Join(
+                            directory.Root,
+                            "results"),
+                        "run");
+                CreateEmpty(output);
+
+                OperationResult<MarkCaptureTextResult> result =
+                    await Execute(
+                        operation,
+                        plan,
+                        output);
+
+                Assert.True(
+                    result.Succeeded,
+                    Describe(
+                        result));
+                Assert.Equal(
+                    "held.example",
+                    ReadValue(
+                        Path.Join(
+                            output.StagingPath,
+                            Capture),
+                        "RequestHost"));
+                Assert.Equal(
+                    Convert.ToHexString(
+                            SHA256.HashData(
+                                File.ReadAllBytes(
+                                    original)))
+                        .ToLowerInvariant(),
+                    result.Value.InputSha256);
+                Assert.True(output.TryDiscard());
+            }
+            finally
+            {
+                Links.Remove(
+                    link);
+            }
+        }
+
+        [Fact]
         public async Task LegacyOneLayer_DecodesExactlyOnceAndLeavesExtensionsAlone()
         {
             using var directory = new CliTestDirectory();
@@ -236,9 +332,544 @@ namespace XMAT.Tests.Operations.CaptureFiles
             Assert.True(output.TryDiscard());
         }
 
+        [Fact]
+        public async Task LegacyOneLayer_RewritesEveryPinnedColumnAndNoExtension()
+        {
+            using var directory = new CliTestDirectory();
+            string input =
+                CreateUnmarked(
+                    directory.Root,
+                    "columns.xmatcap");
+            const string Encoded =
+                "a\"\"b'\u2018\u2019\u201c\u201d";
+            using (SqliteConnection connection =
+                Open(
+                    input,
+                    SqliteOpenMode.ReadWrite))
+            {
+                using SqliteCommand command =
+                    connection.CreateCommand();
+                command.CommandText =
+                    "ALTER TABLE CaptureDevices ADD ExtensionText TEXT;" +
+                    "ALTER TABLE CaptureDevices ADD ExtensionInteger INTEGER;" +
+                    "UPDATE CaptureDevices SET DeviceName=$device,ExtensionText='ext\"\"keep',ExtensionInteger=42;" +
+                    "ALTER TABLE WebProxyConnections ADD ExtensionText TEXT;" +
+                    "ALTER TABLE WebProxyConnections ADD ExtensionInteger INTEGER;" +
+                    "UPDATE WebProxyConnections SET " +
+                    string.Join(
+                        ",",
+                        new[]
+                        {
+                            "DeviceName=$device",
+                            "RequestTimestamp=$value",
+                            "ResponseTimestamp=$value",
+                            "RequestScheme=$value",
+                            "RequestHost=$value",
+                            "RequestPort=$value",
+                            "RequestMethod=$value",
+                            "RequestPath=$value",
+                            "RequestStatus=$value",
+                            "RequestLineAndHeaders=$value",
+                            "RequestBody=$value",
+                            "ResponseLineAndHeaders=$value",
+                            "ResponseBody=$value",
+                            "ClientIP=$value",
+                            "ExtensionText='web\"\"keep'",
+                            "ExtensionInteger=43",
+                        }) +
+                    ";" +
+                    "CREATE TABLE NetworkTracePackets(" +
+                    "id INTEGER PRIMARY KEY," +
+                    "DeviceName TEXT,ProcessId INTEGER,ThreadId INTEGER,Timestamp TEXT,MediaType TEXT," +
+                    "StartPacket INTEGER,EndPacket INTEGER,Fragment INTEGER,Send INTEGER,Receive INTEGER,Payload TEXT," +
+                    "ExtensionText TEXT,ExtensionInteger INTEGER);" +
+                    "INSERT INTO NetworkTracePackets(" +
+                    "DeviceName,ProcessId,ThreadId,Timestamp,MediaType,StartPacket,EndPacket,Fragment,Send,Receive,Payload," +
+                    "ExtensionText,ExtensionInteger) VALUES(" +
+                    "$value,1,2,$value,$value,1,1,0,1,0,$value,'trace\"\"keep',44)";
+                command.Parameters.AddWithValue(
+                    "$device",
+                    "dev\"\"ice");
+                command.Parameters.AddWithValue(
+                    "$value",
+                    Encoded);
+                command.ExecuteNonQuery();
+            }
+            var operation =
+                new MarkCaptureTextOperation();
+            using MarkCaptureTextPlan plan =
+                await Prepare(
+                    operation,
+                    input,
+                    CaptureTextInterpretation.LegacyOneLayer);
+            Assert.Equal(
+                new MarkCaptureTextCounts(
+                    3,
+                    3,
+                    19,
+                    19),
+                plan.Counts);
+            using CliOutputFolder output =
+                CliTestOutput.Reserve(
+                    Path.Join(
+                        directory.Root,
+                        "results"),
+                    "run");
+            CreateEmpty(output);
+
+            OperationResult<MarkCaptureTextResult> result =
+                await Execute(
+                    operation,
+                    plan,
+                    output);
+
+            Assert.True(
+                result.Succeeded,
+                Describe(
+                    result));
+            Assert.Equal(
+                plan.Counts,
+                result.Value.Counts);
+            string repaired =
+                Path.Join(
+                    output.StagingPath,
+                    Capture);
+            using SqliteConnection read =
+                Open(
+                    repaired,
+                    SqliteOpenMode.ReadOnly);
+            Assert.Equal(
+                "dev\"ice",
+                Scalar<string>(
+                    read,
+                    "SELECT DeviceName FROM CaptureDevices"));
+            Assert.Equal(
+                Encoded.Replace(
+                    "\"\"",
+                    "\"",
+                    StringComparison.Ordinal),
+                Scalar<string>(
+                    read,
+                    "SELECT RequestHost FROM WebProxyConnections"));
+            Assert.Equal(
+                Encoded.Replace(
+                    "\"\"",
+                    "\"",
+                    StringComparison.Ordinal),
+                Scalar<string>(
+                    read,
+                    "SELECT Payload FROM NetworkTracePackets"));
+            Assert.Equal(
+                new[]
+                {
+                    "ext\"\"keep",
+                    "web\"\"keep",
+                    "trace\"\"keep",
+                },
+                new[]
+                {
+                    Scalar<string>(
+                        read,
+                        "SELECT ExtensionText FROM CaptureDevices"),
+                    Scalar<string>(
+                        read,
+                        "SELECT ExtensionText FROM WebProxyConnections"),
+                    Scalar<string>(
+                        read,
+                        "SELECT ExtensionText FROM NetworkTracePackets"),
+                });
+            Assert.Equal(
+                new long[]
+                {
+                    42,
+                    43,
+                    44,
+                },
+                new[]
+                {
+                    Scalar<long>(
+                        read,
+                        "SELECT ExtensionInteger FROM CaptureDevices"),
+                    Scalar<long>(
+                        read,
+                        "SELECT ExtensionInteger FROM WebProxyConnections"),
+                    Scalar<long>(
+                        read,
+                        "SELECT ExtensionInteger FROM NetworkTracePackets"),
+                });
+            Assert.Equal(
+                1L,
+                Scalar<long>(
+                    read,
+                    "SELECT COUNT(*) FROM WebProxyConnections WHERE DeviceName='dev\"ice'"));
+            read.Dispose();
+            Assert.True(output.TryDiscard());
+        }
+
+        [Fact]
+        public async Task Progress_UsesThePinnedPhasesAndUnits()
+        {
+            using var directory = new CliTestDirectory();
+            string input =
+                CreateUnmarked(
+                    directory.Root,
+                    "progress.xmatcap");
+            UpdateValue(
+                input,
+                "RequestHost",
+                new string(
+                    'a',
+                    200_000) +
+                    "\"\"");
+            var progress =
+                new RecordingProgress();
+            var context =
+                new OperationContext(
+                    progress:
+                        progress);
+            var operation =
+                new MarkCaptureTextOperation();
+            OperationResult<MarkCaptureTextPlan> prepared =
+                await operation.PrepareAsync(
+                    input,
+                    CaptureTextInterpretation.LegacyOneLayer,
+                    MaxInputBytes,
+                    context,
+                    CancellationToken.None);
+            Assert.True(
+                prepared.Succeeded,
+                Describe(
+                    prepared));
+            using MarkCaptureTextPlan plan =
+                prepared.Value;
+            using CliOutputFolder output =
+                CliTestOutput.Reserve(
+                    Path.Join(
+                        directory.Root,
+                        "results"),
+                    "run");
+            CreateEmpty(output);
+
+            OperationResult<MarkCaptureTextResult> result =
+                await Execute(
+                    operation,
+                    plan,
+                    output,
+                    context,
+                    CancellationToken.None);
+
+            Assert.True(
+                result.Succeeded,
+                Describe(
+                    result));
+            double[] hashing =
+                progress.For(
+                    "capture-text.hashing");
+            double[] copying =
+                progress.For(
+                    "capture-text.copying");
+            Assert.True(
+                hashing.Length >
+                    1);
+            Assert.Equal(
+                hashing,
+                copying);
+            Assert.Equal(
+                1d,
+                hashing[^1]);
+            Assert.All(
+                hashing[..^1],
+                fraction =>
+                    Assert.InRange(
+                        fraction,
+                        double.Epsilon,
+                        1d -
+                            double.Epsilon));
+            double[] validating =
+                progress.For(
+                    "capture-text.validating");
+            Assert.Equal(
+                plan.Counts.ValuesExamined +
+                    1,
+                validating.LongLength);
+            Assert.Equal(
+                1d /
+                    plan.Counts.ValuesExamined,
+                validating[0],
+                12);
+            Assert.Equal(
+                1d,
+                validating[^1]);
+            double[] rewriting =
+                progress.For(
+                    "capture-text.rewriting");
+            Assert.Equal(
+                plan.Columns.Count,
+                rewriting.Length);
+            Assert.Equal(
+                1d /
+                    plan.Columns.Count,
+                rewriting[0],
+                12);
+            Assert.Equal(
+                1d,
+                rewriting[^1]);
+            Assert.True(output.TryDiscard());
+        }
+
+        [Theory]
+        [InlineData("capture-text.hashing")]
+        [InlineData("capture-text.validating")]
+        [InlineData("capture-text.copying")]
+        [InlineData("capture-text.rewriting")]
+        public async Task CancellationInEveryProgressPhase_StopsTheOperation(
+            string phase)
+        {
+            using var directory = new CliTestDirectory();
+            string input =
+                CreateUnmarked(
+                    directory.Root,
+                    "cancel.xmatcap");
+            UpdateValue(
+                input,
+                "RequestHost",
+                "a\"\"b");
+            byte[] before =
+                File.ReadAllBytes(
+                    input);
+            using var cancellation =
+                new CancellationTokenSource();
+            var progress =
+                new RecordingProgress(
+                    report =>
+                    {
+                        if (report.Phase ==
+                            phase)
+                        {
+                            cancellation.Cancel();
+                        }
+                    });
+            var context =
+                new OperationContext(
+                    progress:
+                        progress);
+            var operation =
+                new MarkCaptureTextOperation();
+            OperationResult<MarkCaptureTextPlan> prepared =
+                await operation.PrepareAsync(
+                    input,
+                    CaptureTextInterpretation.LegacyOneLayer,
+                    MaxInputBytes,
+                    phase is "capture-text.hashing" or
+                        "capture-text.validating"
+                        ? context
+                        : OperationContext.None,
+                    cancellation.Token);
+            if (!prepared.Succeeded)
+            {
+                Assert.Equal(
+                    OperationOutcome.Cancelled,
+                    prepared.Outcome);
+                Assert.Equal(
+                    "capture.repair.cancelled",
+                    Assert.Single(
+                        prepared.Diagnostics)
+                        .Code);
+                Assert.Equal(
+                    before,
+                    File.ReadAllBytes(
+                        input));
+                return;
+            }
+
+            using MarkCaptureTextPlan plan =
+                prepared.Value;
+            using CliOutputFolder output =
+                CliTestOutput.Reserve(
+                    Path.Join(
+                        directory.Root,
+                        "results"),
+                    "run");
+            CreateEmpty(output);
+            OperationResult<MarkCaptureTextResult> result =
+                await Execute(
+                    operation,
+                    plan,
+                    output,
+                    context,
+                    cancellation.Token);
+
+            Assert.Equal(
+                OperationOutcome.Cancelled,
+                result.Outcome);
+            Assert.Equal(
+                "capture.repair.cancelled",
+                Assert.Single(
+                    result.Diagnostics)
+                    .Code);
+            if (phase ==
+                "capture-text.rewriting")
+            {
+                Assert.Single(
+                    progress.For(
+                        phase));
+            }
+            Assert.Equal(
+                before,
+                File.ReadAllBytes(
+                    input));
+            Assert.True(output.TryDiscard());
+        }
+
+        [Fact]
+        public async Task CancellationAfterTheLastRewriteStopsBeforeTheMarker()
+        {
+            using var directory = new CliTestDirectory();
+            string input =
+                CreateUnmarked(
+                    directory.Root,
+                    "cancel-before-marker.xmatcap");
+            UpdateValue(
+                input,
+                "RequestHost",
+                "a\"\"b");
+            byte[] before =
+                File.ReadAllBytes(
+                    input);
+            using var cancellation =
+                new CancellationTokenSource();
+            var progress =
+                new RecordingProgress(
+                    report =>
+                    {
+                        if (report.Phase ==
+                                "capture-text.rewriting" &&
+                            report.Fraction ==
+                                1d)
+                        {
+                            cancellation.Cancel();
+                        }
+                    });
+            var operation =
+                new MarkCaptureTextOperation();
+            using MarkCaptureTextPlan plan =
+                await Prepare(
+                    operation,
+                    input,
+                    CaptureTextInterpretation.LegacyOneLayer);
+            using CliOutputFolder output =
+                CliTestOutput.Reserve(
+                    Path.Join(
+                        directory.Root,
+                        "results"),
+                    "run");
+            CreateEmpty(output);
+
+            OperationResult<MarkCaptureTextResult> result =
+                await Execute(
+                    operation,
+                    plan,
+                    output,
+                    new OperationContext(
+                        progress:
+                            progress),
+                    cancellation.Token);
+
+            Assert.Equal(
+                OperationOutcome.Cancelled,
+                result.Outcome);
+            Assert.Equal(
+                "capture.repair.cancelled",
+                Assert.Single(
+                    result.Diagnostics)
+                    .Code);
+            string staged =
+                Path.Join(
+                    output.StagingPath,
+                    Capture);
+            Assert.Equal(
+                CaptureTextFormat.AmbiguousUserVersion,
+                ReadUserVersion(
+                    staged));
+            Assert.Equal(
+                "a\"\"b",
+                ReadValue(
+                    staged,
+                    "RequestHost"));
+            Assert.Equal(
+                before,
+                File.ReadAllBytes(
+                    input));
+            Assert.True(output.TryDiscard());
+        }
+
+        [Fact]
+        public async Task BothSqliteConnectionsUseAndEnforceTheRepairLengthLimit()
+        {
+            const int Limit =
+                1024 * 1024;
+            using var directory = new CliTestDirectory();
+            string input =
+                CreateUnmarked(
+                    directory.Root,
+                    "limits.xmatcap");
+            var operation =
+                new MarkCaptureTextOperation();
+            OperationResult<MarkCaptureTextPlan> prepared =
+                await operation.PrepareAsync(
+                    input,
+                    CaptureTextInterpretation.AsStored,
+                    Limit,
+                    OperationContext.None,
+                    CancellationToken.None);
+            Assert.True(
+                prepared.Succeeded,
+                Describe(
+                    prepared));
+            using MarkCaptureTextPlan plan =
+                prepared.Value;
+            AssertLengthLimit(
+                plan.Database.Connection,
+                Limit);
+            int repairChecks = 0;
+            operation.RepairConnectionOpened =
+                connection =>
+                {
+                    repairChecks++;
+                    AssertLengthLimit(
+                        connection,
+                        Limit);
+                };
+            using CliOutputFolder output =
+                CliTestOutput.Reserve(
+                    Path.Join(
+                        directory.Root,
+                        "results"),
+                    "run");
+            CreateEmpty(output);
+
+            OperationResult<MarkCaptureTextResult> result =
+                await Execute(
+                    operation,
+                    plan,
+                    output);
+
+            Assert.True(
+                result.Succeeded,
+                Describe(
+                    result));
+            Assert.Equal(
+                1,
+                repairChecks);
+            Assert.True(output.TryDiscard());
+        }
+
         [Theory]
         [InlineData("odd")]
         [InlineData("blob")]
+        [InlineData("integer")]
+        [InlineData("real")]
+        [InlineData("null")]
         [InlineData("invalid-utf8")]
         public async Task LegacyOneLayer_RefusesValuesOutsideOnePassDomain(
             string problem)
@@ -248,6 +879,22 @@ namespace XMAT.Tests.Operations.CaptureFiles
                 CreateUnmarked(
                     directory.Root,
                     "invalid.xmatcap");
+            bool numericStorage =
+                problem is
+                    "integer" or
+                    "real";
+            if (numericStorage)
+            {
+                // TEXT affinity would convert these values to text. Store them under NUMERIC affinity, then restore the
+                // validated XMAT declaration without rewriting the value.
+                HostileSqliteSchemas.ReplaceSchemaSql(
+                    input,
+                    "WebProxyConnections",
+                    HostileSqliteSchemas.WebProxyConnectionsDdl.Replace(
+                        "RequestHost TEXT",
+                        "RequestHost NUMERIC",
+                        StringComparison.Ordinal));
+            }
             using (var connection =
                 Open(
                     input,
@@ -262,10 +909,23 @@ namespace XMAT.Tests.Operations.CaptureFiles
                             "UPDATE WebProxyConnections SET RequestHost='odd\"'",
                         "blob" =>
                             "UPDATE WebProxyConnections SET RequestHost=X'22'",
+                        "integer" =>
+                            "UPDATE WebProxyConnections SET RequestHost=7",
+                        "real" =>
+                            "UPDATE WebProxyConnections SET RequestHost=1.5",
+                        "null" =>
+                            "UPDATE WebProxyConnections SET RequestHost=NULL",
                         _ =>
                             "UPDATE WebProxyConnections SET RequestHost=CAST(X'80' AS TEXT)",
                     };
                 command.ExecuteNonQuery();
+            }
+            if (numericStorage)
+            {
+                HostileSqliteSchemas.ReplaceSchemaSql(
+                    input,
+                    "WebProxyConnections",
+                    HostileSqliteSchemas.WebProxyConnectionsDdl);
             }
             var operation =
                 new MarkCaptureTextOperation();
@@ -277,6 +937,8 @@ namespace XMAT.Tests.Operations.CaptureFiles
                     MaxInputBytes,
                     OperationContext.None,
                     CancellationToken.None);
+            using MarkCaptureTextPlan unexpectedPlan =
+                result.Value;
 
             Assert.False(result.Succeeded);
             Assert.Equal(
@@ -290,6 +952,143 @@ namespace XMAT.Tests.Operations.CaptureFiles
                     entry.StartsWith(
                         CliOutputFolder.StagingPrefix,
                         StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public async Task LegacyValidation_CarriesQuoteAndUtf8StateAcrossSlices()
+        {
+            using var directory = new CliTestDirectory();
+            string input =
+                CreateUnmarked(
+                    directory.Root,
+                    "slices.xmatcap");
+            string value =
+                new string(
+                    'a',
+                    (64 * 1024) -
+                        1) +
+                "\"\"" +
+                new string(
+                    'b',
+                    (64 * 1024) -
+                        2) +
+                "€tail";
+            UpdateValue(
+                input,
+                "RequestHost",
+                value);
+            var operation =
+                new MarkCaptureTextOperation();
+            using MarkCaptureTextPlan plan =
+                await Prepare(
+                    operation,
+                    input,
+                    CaptureTextInterpretation.LegacyOneLayer);
+            using CliOutputFolder output =
+                CliTestOutput.Reserve(
+                    Path.Join(
+                        directory.Root,
+                        "results"),
+                    "run");
+            CreateEmpty(output);
+
+            OperationResult<MarkCaptureTextResult> result =
+                await Execute(
+                    operation,
+                    plan,
+                    output);
+
+            Assert.True(
+                result.Succeeded,
+                Describe(
+                    result));
+            Assert.Equal(
+                value.Replace(
+                    "\"\"",
+                    "\"",
+                    StringComparison.Ordinal),
+                ReadValue(
+                    Path.Join(
+                        output.StagingPath,
+                        Capture),
+                    "RequestHost"));
+            Assert.True(output.TryDiscard());
+        }
+
+        [Fact]
+        public async Task LegacyValidation_RefusesAnOddQuoteRunAcrossSlices()
+        {
+            using var directory = new CliTestDirectory();
+            string input =
+                CreateUnmarked(
+                    directory.Root,
+                    "odd-slice.xmatcap");
+            UpdateValue(
+                input,
+                "RequestHost",
+                new string(
+                    'a',
+                    (64 * 1024) -
+                        1) +
+                    "\"b");
+            var operation =
+                new MarkCaptureTextOperation();
+
+            OperationResult<MarkCaptureTextPlan> result =
+                await operation.PrepareAsync(
+                    input,
+                    CaptureTextInterpretation.LegacyOneLayer,
+                    MaxInputBytes,
+                    OperationContext.None,
+                    CancellationToken.None);
+
+            Assert.False(
+                result.Succeeded);
+            Assert.Equal(
+                "capture.repair.not-legacy-encoding",
+                Assert.Single(
+                    result.Diagnostics)
+                    .Code);
+        }
+
+        [Fact]
+        public async Task LegacyValidation_RefusesAPotentialDeviceNameCollision()
+        {
+            using var directory = new CliTestDirectory();
+            string input =
+                CreateUnmarked(
+                    directory.Root,
+                    "device-collision.xmatcap");
+            using (SqliteConnection connection =
+                Open(
+                    input,
+                    SqliteOpenMode.ReadWrite))
+            {
+                using SqliteCommand update =
+                    connection.CreateCommand();
+                update.CommandText =
+                    "UPDATE CaptureDevices SET DeviceName='a\"\"b';" +
+                    "INSERT INTO CaptureDevices(DeviceType,DeviceName,CaptureType) VALUES(0,'a\"b',0)";
+                update.ExecuteNonQuery();
+            }
+            var operation =
+                new MarkCaptureTextOperation();
+
+            OperationResult<MarkCaptureTextPlan> result =
+                await operation.PrepareAsync(
+                    input,
+                    CaptureTextInterpretation.LegacyOneLayer,
+                    MaxInputBytes,
+                    OperationContext.None,
+                    CancellationToken.None);
+
+            Assert.False(
+                result.Succeeded);
+            Assert.Equal(
+                "capture.repair.not-legacy-encoding",
+                Assert.Single(
+                    result.Diagnostics)
+                    .Code);
         }
 
         [Theory]
@@ -403,7 +1202,7 @@ namespace XMAT.Tests.Operations.CaptureFiles
             Assert.True(output.TryDiscard());
         }
 
-        [Fact]
+        [SymbolicLinkFact]
         public async Task Execute_RefusesAFileSymbolicLinkWithoutFollowingIt()
         {
             using var directory = new CliTestDirectory();
@@ -651,6 +1450,20 @@ namespace XMAT.Tests.Operations.CaptureFiles
             MarkCaptureTextOperation operation,
             MarkCaptureTextPlan plan,
             CliOutputFolder output)
+            =>
+            await Execute(
+                operation,
+                plan,
+                output,
+                OperationContext.None,
+                CancellationToken.None);
+
+        private static async Task<OperationResult<MarkCaptureTextResult>> Execute(
+            MarkCaptureTextOperation operation,
+            MarkCaptureTextPlan plan,
+            CliOutputFolder output,
+            OperationContext context,
+            CancellationToken cancellationToken)
         {
             using var markOutput =
                 new MarkCaptureTextOutput(
@@ -660,8 +1473,40 @@ namespace XMAT.Tests.Operations.CaptureFiles
                 new MarkCaptureTextRequest(
                     plan,
                     markOutput),
-                OperationContext.None,
-                CancellationToken.None);
+                context,
+                cancellationToken);
+        }
+
+        private static void AssertLengthLimit(
+            SqliteConnection connection,
+            int limit)
+        {
+            Assert.Equal(
+                limit,
+                raw.sqlite3_limit(
+                    connection.Handle,
+                    raw.SQLITE_LIMIT_LENGTH,
+                    -1));
+            using SqliteCommand command =
+                connection.CreateCommand();
+            command.CommandText =
+                "SELECT length(zeroblob($length))";
+            command.Parameters.AddWithValue(
+                "$length",
+                limit);
+            Assert.Equal(
+                limit,
+                (long)command.ExecuteScalar());
+            command.Parameters["$length"].Value =
+                limit +
+                1;
+            SqliteException exception =
+                Assert.Throws<SqliteException>(
+                    () =>
+                        command.ExecuteScalar());
+            Assert.Equal(
+                raw.SQLITE_TOOBIG,
+                exception.SqliteErrorCode);
         }
 
         private static void CreateEmpty(
@@ -704,6 +1549,17 @@ namespace XMAT.Tests.Operations.CaptureFiles
             command.CommandText =
                 $"SELECT \"{column}\" FROM WebProxyConnections";
             return command.ExecuteScalar() as string;
+        }
+
+        private static T Scalar<T>(
+            SqliteConnection connection,
+            string sql)
+        {
+            using SqliteCommand command =
+                connection.CreateCommand();
+            command.CommandText =
+                sql;
+            return (T)command.ExecuteScalar();
         }
 
         private static byte[] ReadAllBytesShared(
@@ -795,6 +1651,36 @@ namespace XMAT.Tests.Operations.CaptureFiles
                         diagnostic.Code +
                         ": " +
                         diagnostic.Message));
+
+        private sealed class RecordingProgress(
+            Action<OperationProgress> report = null) :
+            IProgress<OperationProgress>
+        {
+            private readonly List<OperationProgress> _reports =
+                new();
+
+            public void Report(
+                OperationProgress value)
+            {
+                _reports.Add(
+                    value);
+                report?.Invoke(
+                    value);
+            }
+
+            internal double[] For(
+                string phase) =>
+                _reports
+                    .Where(
+                        item =>
+                            item.Phase ==
+                            phase)
+                    .Select(
+                        item =>
+                            item.Fraction ??
+                            double.NaN)
+                    .ToArray();
+        }
 
         private static int PosixReplace(
             string source,

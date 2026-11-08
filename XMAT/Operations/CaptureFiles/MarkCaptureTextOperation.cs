@@ -66,8 +66,16 @@ namespace XMAT.Operations.CaptureFiles
                     },
             };
 
-        // Test-only checkpoints: output-opened, copy-verified and repair-closed.
+        // Test-only seams; production uses the default database factory.
         internal Action<string> Checkpoint { get; set; }
+
+        internal Action<SqliteConnection> RepairConnectionOpened { get; set; }
+
+        internal Func<string, SqLtSchemaProfile, SqLtReadonlyDatabase> DatabaseFactory { get; set; } =
+            (path, profile) =>
+                new SqLtReadonlyDatabase(
+                    path,
+                    profile);
 
         internal string InputSha256 { get; private set; }
 
@@ -218,7 +226,7 @@ namespace XMAT.Operations.CaptureFiles
             try
             {
                 database =
-                    new SqLtReadonlyDatabase(
+                    DatabaseFactory(
                         path,
                         SqLtSchemaProfile.CreateRepair(
                             maxInputBytes));
@@ -334,13 +342,6 @@ namespace XMAT.Operations.CaptureFiles
             catch (MarkCaptureTextInputException)
             {
                 throw;
-            }
-            catch (FileNotFoundException exception)
-            {
-                throw new MarkCaptureTextInputException(
-                    "analysis.input.not-found",
-                    "The analysis input was not found.",
-                    exception);
             }
             catch (Exception exception) when (
                 AnchoredFileFailure(exception))
@@ -727,7 +728,7 @@ namespace XMAT.Operations.CaptureFiles
             return hasQuotes;
         }
 
-        private static void Repair(
+        private void Repair(
             string outputPath,
             MarkCaptureTextPlan plan,
             OperationContext context,
@@ -747,6 +748,8 @@ namespace XMAT.Operations.CaptureFiles
             SqLtReadonlyDatabase.ApplyRepairLengthLimit(
                 connection,
                 plan.MaxInputBytes);
+            RepairConnectionOpened?.Invoke(
+                connection);
             using SqliteTransaction transaction =
                 connection.BeginTransaction();
             long completed = 0;
@@ -891,9 +894,9 @@ namespace XMAT.Operations.CaptureFiles
                 SqLtSchemaFailure.UnsupportedVersion =>
                     new MarkCaptureTextInputException(
                         "capture.format.future",
-                        "The capture file uses a newer XMAT capture format and cannot be opened by this version of XMAT.",
+                        SqLtSchemaProfile.UnsupportedVersionMessage,
                         exception),
-                SqLtSchemaFailure.Unsupported =>
+                SqLtSchemaFailure.NotXmat =>
                     new MarkCaptureTextInputException(
                         "capture.repair.input-not-xmatcap",
                         "The input is not an XMAT capture file.",

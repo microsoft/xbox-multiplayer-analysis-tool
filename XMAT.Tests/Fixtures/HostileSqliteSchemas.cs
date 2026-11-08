@@ -76,6 +76,48 @@ namespace XMAT.Tests.Fixtures
             return path;
         }
 
+        internal static string CreateUtf16Database(
+            string directory,
+            string fileName,
+            uint userVersion,
+            params string[] statements)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            using var connection =
+                new SqliteConnection(
+                    new SqliteConnectionStringBuilder
+                    {
+                        DataSource = path,
+                        Pooling = false,
+                    }.ToString());
+            connection.Open();
+            using (var encoding = connection.CreateCommand())
+            {
+                encoding.CommandText =
+                    "PRAGMA encoding='UTF-16le'";
+                encoding.ExecuteNonQuery();
+            }
+            foreach (string statement in statements)
+            {
+                using var command =
+                    connection.CreateCommand();
+                command.CommandText =
+                    statement;
+                command.ExecuteNonQuery();
+            }
+            using (var marker = connection.CreateCommand())
+            {
+                marker.CommandText =
+                    $"PRAGMA user_version={userVersion.ToString(CultureInfo.InvariantCulture)}";
+                marker.ExecuteNonQuery();
+            }
+            return path;
+        }
+
         internal static string CreateOrdinaryCapture(
             string directory,
             string fileName,

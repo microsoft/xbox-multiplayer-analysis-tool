@@ -159,6 +159,49 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void Preflight_DistinguishesSqliteWithoutXmatTables()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateDatabase(
+                    directory.Path,
+                    "not-xmat.sqlite",
+                    "CREATE TABLE Other(id INTEGER PRIMARY KEY,Value TEXT)");
+
+            SqLtSchemaException exception =
+                Assert.Throws<SqLtSchemaException>(
+                    () =>
+                        ValidateGui(
+                            path));
+
+            Assert.Equal(
+                SqLtSchemaFailure.NotXmat,
+                exception.Failure);
+        }
+
+        [Fact]
+        public void Preflight_UnsupportedMarkerPrecedesUtf16Classification()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateUtf16Database(
+                    directory.Path,
+                    "utf16-future.sqlite",
+                    2,
+                    "CREATE TABLE Other(id INTEGER PRIMARY KEY,Value TEXT)");
+
+            SqLtSchemaException exception =
+                Assert.Throws<SqLtSchemaException>(
+                    () =>
+                        ValidateGui(
+                            path));
+
+            Assert.Equal(
+                SqLtSchemaFailure.UnsupportedVersion,
+                exception.Failure);
+        }
+
+        [Fact]
         public void Preflight_RejectsGeneratedColumnsBeforeSqliteOpensTheSchema()
         {
             using var directory = new TestDirectory();

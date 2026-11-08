@@ -24,7 +24,12 @@ namespace XMAT.Cli
             CliRequest request,
             string runId,
             CancellationToken cancellationToken,
-            Func<SafeFileHandle, (string FileSystemName, string DevicePath)> probeStorageFacts = null)
+            Func<SafeFileHandle, (string FileSystemName, string DevicePath)> probeStorageFacts = null,
+            ICliCommitObserver commitObserver = null,
+            Action<string> configureHeadlessStorage = null,
+            Action<MarkCaptureTextOperation> configureOperation = null,
+            Action<CliOutputFolder> outputPrepared = null,
+            Action<string> reserveCheckpoint = null)
         {
             var report =
                 new CliReport(
@@ -62,6 +67,8 @@ namespace XMAT.Cli
 
             var operation =
                 new MarkCaptureTextOperation();
+            configureOperation?.Invoke(
+                operation);
             long maxInputBytes =
                 checked(
                     request.MaxInputMib *
@@ -103,7 +110,8 @@ namespace XMAT.Cli
                     CliOutputFolder.TryReserve(
                         target,
                         runId,
-                        out output);
+                        out output,
+                        reserveCheckpoint);
                 if (failure != null)
                 {
                     report.Fail(
@@ -134,8 +142,10 @@ namespace XMAT.Cli
                         plan,
                         output,
                         report,
+                        configureHeadlessStorage,
+                        outputPrepared,
                         token),
-                    null,
+                    commitObserver,
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -153,15 +163,21 @@ namespace XMAT.Cli
             MarkCaptureTextPlan plan,
             CliOutputFolder output,
             CliReport report,
+            Action<string> configureHeadlessStorage,
+            Action<CliOutputFolder> outputPrepared,
             CancellationToken cancellationToken)
         {
-            HeadlessStorage.Configure(
+            // Test seam; production always configures the real isolated headless storage.
+            (configureHeadlessStorage ??
+                HeadlessStorage.Configure)(
                 output.WorkPath);
             using (output.CreateFile(
                 CapturePath))
             {
                 // The operation opens this closed, empty entry relative to the held staging folder.
             }
+            outputPrepared?.Invoke(
+                output);
 
             using var markOutput =
                 new MarkCaptureTextOutput(

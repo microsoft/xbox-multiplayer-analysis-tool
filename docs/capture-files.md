@@ -58,8 +58,14 @@ XMAT checks capture files before reading them and never changes them:
   of header data (its first line, the header lines and the empty line that ends them);
   a larger message stops the import rather than being truncated. Malformed header
   lines and incomplete frames are skipped, and the status bar notes that data was
-  skipped. A request without a usable `Host` header is imported without a host;
-  analysis keeps its path, and the Block and Bypass actions do not apply to it.
+  skipped. XMAT stores each request and response head with the empty line that ends it,
+  and Save Captures and Load Captures keep heads exactly. A `.SAZ` export writes each
+  stored head unchanged. A `.SAZ` import rebuilds each head from its header lines: one
+  `Name: value` line per header name, with the values of a repeated name joined by
+  commas and without surrounding spaces, then the empty line. Characters inside
+  values, double quotation marks included, are kept. A request without a usable `Host`
+  header is imported without a host; analysis keeps its path, and the Block and Bypass
+  actions do not apply to it.
 
 ## Capture text markers and marked copies
 
@@ -69,8 +75,15 @@ not certify that every attempted network byte was transmitted or recorded
 without omission. An older or foreign file with marker `0` is
 **AmbiguousUnmarked**. XMAT opens it read-only and uses every stored character
 unchanged, with a warning: adjacent double quotation marks may be original data
-or may have been added by an older XMAT version. Any other marker is a future
-format and is refused.
+or may have been added by an older XMAT version. Any `user_version` other than
+0 or 1 is unsupported and refused before SQLite opens.
+
+| Stored-text source | View and analyze | Import into a live marked session | Sanitized export |
+|---|---|---|---|
+| Marked (`user_version = 1`) | Proceed without a warning. | Allowed literally. | Allowed. |
+| Unmarked (`user_version = 0`) | Preserve the stored text and warn that its historical interpretation is ambiguous. | Refused. | Refused; create and open a marked copy first. |
+| Unsupported `user_version` | Refused before SQLite opens. | Refused. | Refused. |
+| Unclassified/custom source | Treat as ambiguous and fail closed. | Refused. | Refused; use a marked native capture. |
 
 Create a separate marked copy from the command line:
 
@@ -100,6 +113,10 @@ empty; open it with the current XMAT version.
 Sanitization is per export, not a preference. Ordinary **Export** and native
 **Save Captures** remain unsanitized. Only the selected capture is exported;
 the original capture is not sanitized in place.
+
+An unmarked or unclassified selected capture is refused before export work
+starts. Create a marked copy with `xmat mark-capture-text`, open that copy, and
+export it instead.
 
 ### What is inspected
 
