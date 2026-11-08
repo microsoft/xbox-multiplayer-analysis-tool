@@ -5,6 +5,7 @@
 using System.Buffers.Binary;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using XMAT.DataAbstractionLayer;
 
 namespace XMAT.Tests.Fixtures
 {
@@ -33,6 +34,19 @@ namespace XMAT.Tests.Fixtures
             string fileName,
             params string[] statements)
         {
+            return CreateDatabase(
+                directory,
+                fileName,
+                CaptureTextFormat.AmbiguousUserVersion,
+                statements);
+        }
+
+        internal static string CreateDatabase(
+            string directory,
+            string fileName,
+            uint userVersion,
+            params string[] statements)
+        {
             Directory.CreateDirectory(directory);
             string path = Path.Combine(
                 directory,
@@ -53,6 +67,54 @@ namespace XMAT.Tests.Fixtures
                 command.CommandText = statement;
                 command.ExecuteNonQuery();
             }
+            using (var marker = connection.CreateCommand())
+            {
+                marker.CommandText =
+                    $"PRAGMA user_version={userVersion.ToString(CultureInfo.InvariantCulture)}";
+                marker.ExecuteNonQuery();
+            }
+            return path;
+        }
+
+        internal static string CreateUtf16Database(
+            string directory,
+            string fileName,
+            uint userVersion,
+            params string[] statements)
+        {
+            Directory.CreateDirectory(directory);
+            string path =
+                Path.Combine(
+                    directory,
+                    fileName);
+            using var connection =
+                new SqliteConnection(
+                    new SqliteConnectionStringBuilder
+                    {
+                        DataSource = path,
+                        Pooling = false,
+                    }.ToString());
+            connection.Open();
+            using (var encoding = connection.CreateCommand())
+            {
+                encoding.CommandText =
+                    "PRAGMA encoding='UTF-16le'";
+                encoding.ExecuteNonQuery();
+            }
+            foreach (string statement in statements)
+            {
+                using var command =
+                    connection.CreateCommand();
+                command.CommandText =
+                    statement;
+                command.ExecuteNonQuery();
+            }
+            using (var marker = connection.CreateCommand())
+            {
+                marker.CommandText =
+                    $"PRAGMA user_version={userVersion.ToString(CultureInfo.InvariantCulture)}";
+                marker.ExecuteNonQuery();
+            }
             return path;
         }
 
@@ -60,7 +122,8 @@ namespace XMAT.Tests.Fixtures
             string directory,
             string fileName,
             string webDdl = null,
-            bool includeNetworkTrace = false)
+            bool includeNetworkTrace = false,
+            uint userVersion = CaptureTextFormat.AmbiguousUserVersion)
         {
             var statements = new List<string>
             {
@@ -75,6 +138,7 @@ namespace XMAT.Tests.Fixtures
             return CreateDatabase(
                 directory,
                 fileName,
+                userVersion,
                 statements.ToArray());
         }
 
@@ -455,6 +519,25 @@ namespace XMAT.Tests.Fixtures
             File.WriteAllBytes(
                 path,
                 bytes);
+        }
+
+        internal static void SetUserVersion(
+            string path,
+            uint userVersion)
+        {
+            using var connection =
+                new SqliteConnection(
+                    new SqliteConnectionStringBuilder
+                    {
+                        DataSource = path,
+                        Pooling = false,
+                    }.ToString());
+            connection.Open();
+            using var command =
+                connection.CreateCommand();
+            command.CommandText =
+                $"PRAGMA user_version={userVersion.ToString(CultureInfo.InvariantCulture)}";
+            command.ExecuteNonQuery();
         }
 
         internal static void AppendUnusedPage(string path)

@@ -39,7 +39,11 @@ namespace XMAT.DataAbstractionLayer
             _command.CommandText = _commandBuilder.ToString();
             _command.ExecuteNonQuery();
 
-            var newTable = new SqLtDataTable(_connection, name, fields);
+            var newTable = new SqLtDataTable(
+                _connection,
+                name,
+                fields,
+                CaptureTextSource);
             _dataTables[name] = newTable;
             return newTable;
         }
@@ -53,6 +57,9 @@ namespace XMAT.DataAbstractionLayer
 
             _connection = new SqliteConnection("Data Source=:memory:");
             _connection.Open();
+            SetLiteralUserVersion(_connection);
+            CaptureTextSource =
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal;
 
             _command = new SqliteCommand();
             _command.Connection = _connection;
@@ -120,6 +127,14 @@ namespace XMAT.DataAbstractionLayer
                         temporaryPath);
                     _connection.BackupDatabase(
                         saveDbConnection);
+                    BackupCompleted?.Invoke(
+                        saveDbConnection);
+                    if (ReadUserVersion(saveDbConnection) !=
+                        CaptureTextFormat.LiteralUserVersion)
+                    {
+                        throw new InvalidOperationException(
+                            "The saved capture database did not keep its literal text marker.");
+                    }
                 }
 
                 MoveFailureInjection?.Invoke(
@@ -318,10 +333,35 @@ namespace XMAT.DataAbstractionLayer
 
         internal Action<string> TemporaryReserved { get; set; }
 
+        internal Action<SqliteConnection> BackupCompleted { get; set; }
+
         private SqliteConnection _connection;
         private SqliteCommand _command;
         private StringBuilder _commandBuilder;
 
         private readonly Dictionary<string, SqLtDataTable> _dataTables = new Dictionary<string, SqLtDataTable>();
+
+        private static void SetLiteralUserVersion(
+            SqliteConnection connection)
+        {
+            using var set = connection.CreateCommand();
+            set.CommandText =
+                $"PRAGMA user_version={CaptureTextFormat.LiteralUserVersion}";
+            set.ExecuteNonQuery();
+            if (ReadUserVersion(connection) !=
+                CaptureTextFormat.LiteralUserVersion)
+            {
+                throw new InvalidOperationException(
+                    "The active capture database did not keep its literal text marker.");
+            }
+        }
+
+        private static long ReadUserVersion(
+            SqliteConnection connection)
+        {
+            using var read = connection.CreateCommand();
+            read.CommandText = "PRAGMA user_version";
+            return (long)read.ExecuteScalar();
+        }
     }
 }

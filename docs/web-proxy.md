@@ -178,6 +178,13 @@ if no further requests arrive.
 Loaded and imported captures can be resent too. Binary, compressed, and non-UTF-8
 request bodies are preserved as editable Base64; text bodies use UTF-8.
 
+The exception is an XMAT capture without the text-format marker (see
+[Capture text markers](capture-files.md#capture-text-markers-and-marked-copies)), whose
+stored text an older XMAT may have changed. For its requests, **Edit and resend**,
+**Replay**, and dragging one into a composer refuse, and nothing opens, is asked, or is
+sent. Create a marked copy with `xmat mark-capture-text`, open that copy, and use its
+requests instead.
+
 Requests are sent directly from this PC, unless you select **Upstream proxy** (see
 below), bypassing system proxies and capture scripts. HTTPS certificates are validated,
 redirects are not followed unless you select **Follow same-origin redirects** (see

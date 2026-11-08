@@ -18,6 +18,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.Scripting;
 using XMAT.SharedInterfaces;
@@ -217,6 +218,12 @@ namespace XMAT.WebServiceCapture
         private readonly BatchedDispatcherQueue _uiUpdateQueue;
         private CancellationTokenSource _captureCallbackCancellationTokenSource;
         private bool _isTransitioning;
+
+        internal CaptureTextSource ExportTextSource =>
+            global::XMAT.DataAbstractionLayer.CaptureTextSource.Of(
+                _captureDataSource == CaptureDataSource.LoadedDataset
+                    ? _loadedCaptureDataset
+                    : _dataTable);
         private bool _initialized;
         private readonly ProxyPortPool _portPool;
         private readonly IProxyDeviceConfiguration _deviceConfiguration;

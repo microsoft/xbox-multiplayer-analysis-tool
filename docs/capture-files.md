@@ -97,6 +97,10 @@ XMAT checks capture files before reading them and never changes them:
   unknown when the capture is saved, exported or reloaded. Analysis and the timeline
   leave out a request whose time is unknown or earlier than 1601, which includes the
   year-1 times that earlier versions of XMAT saved for unknown times.
+- XMAT stores each request and response head with the empty line that ends it, and
+  Save Captures and Load Captures keep heads exactly. A `.SAZ` export writes each
+  stored head unchanged. Characters inside header values, double quotation marks
+  included, are kept.
 
 ### Replays saved by xmat
 
@@ -130,6 +134,48 @@ saved or first sent for, only in memory with its row in the **Replays** tab, so 
 later send of it to another origin asks for consent. Saved and exported captures do not
 keep it.
 
+## Capture text markers and marked copies
+
+Current `.XMATCAP` files carry SQLite `user_version = 1`, which means XMAT
+stored their text literally. This is a storage classification only; it does
+not certify that every attempted network byte was transmitted or recorded
+without omission. An older or foreign file with marker `0` is
+**AmbiguousUnmarked**. XMAT opens it read-only and uses every stored character
+unchanged, with a warning: adjacent double quotation marks may be original data
+or may have been added by an older XMAT version. Any `user_version` other than
+0 or 1 is unsupported and refused before SQLite opens.
+
+| Stored-text source | View and analyze | Import into a live marked session | Sanitized export |
+|---|---|---|---|
+| Marked (`user_version = 1`) | Proceed without a warning. | Allowed literally. | Allowed. |
+| Unmarked (`user_version = 0`) | Preserve the stored text and warn that its historical interpretation is ambiguous. | Refused. | Refused; create and open a marked copy first. |
+| Unsupported `user_version` | Refused before SQLite opens. | Refused. | Refused. |
+| Unclassified/custom source | Treat as ambiguous and fail closed. | Refused. | Refused; use a marked native capture. |
+
+Replaying a request, saving it as a request file and exporting it as a cURL script
+use its stored text too. The GUI refuses them for an unmarked capture; create
+and open a marked copy first. `xmat replay`, `xmat save-request` and `xmat curl`
+use an unmarked capture's text as stored only with `--accept-stored-text`, for
+that run's input alone (see [Command line](cli.md)).
+
+Create a separate marked copy from the command line:
+
+```text
+xmat mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer
+```
+
+`as-stored` preserves the file's stored values. `legacy-one-layer` is
+explicit: it accepts only TEXT values that are strict UTF-8 and whose every run
+of `"` has even length, then removes one quote-doubling layer. The source
+remains unchanged, extension columns are untouched, and marker 1 is written
+only after the selected interpretation succeeds. XMAT never guesses an
+interpretation and never applies this repair to a Fiddler archive or request
+file.
+
+Versions before capture-text fidelity cannot reliably filter a marked capture
+whose device name contains a double quotation mark, so such a tab can appear
+empty; open it with the current XMAT version.
+
 ## Export a sanitized capture
 
 1. Stop all captures and select the web proxy capture to share.
@@ -140,6 +186,10 @@ keep it.
 Sanitization is per export, not a preference. Ordinary **Export** and native
 **Save Captures** remain unsanitized. Only the selected capture is exported;
 the original capture is not sanitized in place.
+
+An unmarked or unclassified selected capture is refused before export work
+starts. Create a marked copy with `xmat mark-capture-text`, open that copy, and
+export it instead.
 
 ### What is inspected
 

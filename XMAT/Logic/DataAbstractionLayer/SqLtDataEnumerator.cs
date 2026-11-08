@@ -22,7 +22,10 @@ namespace XMAT.DataAbstractionLayer
                     this);
                 if (_cachedDataRecord == null)
                 {
-                    _cachedDataRecord = new SqLtDataRecord(_dataReader, _fieldDefs);
+                    _cachedDataRecord = new SqLtDataRecord(
+                        _dataReader,
+                        _fieldDefs,
+                        CaptureTextSource);
                 }
 
                 return _cachedDataRecord;

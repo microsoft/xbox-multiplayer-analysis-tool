@@ -279,6 +279,113 @@ namespace XMAT.Tests.Cli
             Assert.Empty(directory.Entries());
         }
 
+        [Fact]
+        public void StreamingWrite_CreatesOneNewFileWithoutBuildingItsContents()
+        {
+            using var directory = new CliTestDirectory();
+            var report = NewReport();
+            using CliOutputFolder output = Reserve(
+                directory,
+                report);
+            byte[] expected =
+                Encoding.ASCII.GetBytes(
+                    "streamed");
+
+            output.WriteFile(
+                "nested/streamed.bin",
+                stream =>
+                    stream.Write(
+                        expected,
+                        0,
+                        expected.Length));
+
+            Assert.Equal(
+                expected,
+                File.ReadAllBytes(
+                    Path.Join(
+                        output.StagingPath,
+                        "nested",
+                        "streamed.bin")));
+            Assert.True(output.TryDiscard());
+        }
+
+        [Fact]
+        public async Task AFileWrittenDuringTheRun_IsPublishedWithoutBeingWrittenAgain()
+        {
+            using var directory = new CliTestDirectory();
+            var report = NewReport();
+            CliOutputFolder output = Reserve(directory, report);
+            byte[] capture = Encoding.ASCII.GetBytes("capture");
+            byte[] summary = Encoding.ASCII.GetBytes("{}");
+
+            await CliStagedRun.CompleteAsync(
+                report,
+                output,
+                _ =>
+                {
+                    using (FileStream stream =
+                        output.CreateFile(
+                            "capture.xmatcap"))
+                    {
+                        stream.Write(
+                            capture,
+                            0,
+                            capture.Length);
+                        stream.Flush(
+                            flushToDisk: true);
+                    }
+                    report.SetExitCode(
+                        CliExitCodes.Success);
+                    return Task.FromResult<IReadOnlyList<CliStagedFile>>(
+                        new[]
+                        {
+                            new CliStagedFile(
+                                "capture",
+                                "capture.xmatcap",
+                                null),
+                            new CliStagedFile(
+                                "summary",
+                                "summary.json",
+                                summary),
+                        });
+                },
+                null,
+                CancellationToken.None);
+
+            string published =
+                Path.Join(
+                    directory.Root,
+                    Results);
+            Assert.Equal(
+                capture,
+                File.ReadAllBytes(
+                    Path.Join(
+                        published,
+                        "capture.xmatcap")));
+            Assert.Equal(
+                summary,
+                File.ReadAllBytes(
+                    Path.Join(
+                        published,
+                        "summary.json")));
+            Assert.False(
+                Directory.Exists(
+                    Path.Join(
+                        published,
+                        "work")));
+            Assert.Equal(
+                new[]
+                {
+                    "capture:capture.xmatcap",
+                    "summary:summary.json",
+                },
+                report.Artifacts.Select(
+                    artifact =>
+                        artifact.Kind +
+                        ":" +
+                        artifact.Path));
+        }
+
         // A report that cannot be serialized (here a null warning, which also breaks the text on standard error) is replaced
         // by the fixed fallback document. Exit code 7 stays, and a published run keeps its result and lists its artifacts;
         // only a run whose document was its result, such as --version, becomes an internal error.

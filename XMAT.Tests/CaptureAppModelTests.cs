@@ -381,7 +381,13 @@ namespace XMAT.Tests
             var model = new CaptureAppModel();
             try
             {
-                model.LoadDataCaptures(path);
+                CaptureLoadResult load =
+                    model.LoadDataCaptures(path);
+                Assert.True(
+                    load.AddedOrReplaced);
+                Assert.Equal(
+                    CaptureTextSemantics.Literal,
+                    load.Source.Semantics);
                 var database =
                     Assert.IsType<
                         SqLtReadonlyDatabase>(
@@ -444,6 +450,44 @@ namespace XMAT.Tests
                         model.CaptureDeviceContexts[^1]);
                 }
                 TestFolderCleanup.Delete(directory);
+            }
+        }
+
+        [Fact]
+        public void LoadDataCaptures_NoRowsReturnsTheSourceWithoutAddingATab()
+        {
+            string directory =
+                Path.Combine(
+                    AppContext.BaseDirectory,
+                    "CaptureAppModelFixtures",
+                    Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string path =
+                HostileSqliteSchemas.CreateOrdinaryCapture(
+                    directory,
+                    "empty.xmatcap");
+            var model =
+                new CaptureAppModel();
+            try
+            {
+                CaptureLoadResult result =
+                    model.LoadDataCaptures(path);
+
+                Assert.False(
+                    result.AddedOrReplaced);
+                Assert.Equal(
+                    CaptureTextSemantics.AmbiguousUnmarked,
+                    result.Source.Semantics);
+                Assert.Empty(
+                    model.CaptureDeviceContexts);
+                Assert.Null(
+                    model.LoadedDatabase);
+            }
+            finally
+            {
+                Directory.Delete(
+                    directory,
+                    true);
             }
         }
 
@@ -1493,6 +1537,8 @@ namespace XMAT.Tests
         [InlineData("limit")]
         [InlineData("sidecar")]
         [InlineData("location")]
+        [InlineData("future")]
+        [InlineData("utf16-future")]
         public async Task LoadDataCaptures_OpenRefusalPreservesPriorStateAndClosesNewDatabase(
             string kind)
         {
@@ -1544,6 +1590,23 @@ namespace XMAT.Tests
                             .MaxSchemaRecordBytes *
                         2) +
                     ")");
+            }
+            else if (kind == "future")
+            {
+                HostileSqliteSchemas.SetUserVersion(
+                    hostilePath,
+                    2);
+            }
+            else if (kind == "utf16-future")
+            {
+                File.Delete(
+                    hostilePath);
+                hostilePath =
+                    HostileSqliteSchemas.CreateUtf16Database(
+                        directory,
+                        "hostile.xmatcap",
+                        2,
+                        "CREATE TABLE Other(id INTEGER PRIMARY KEY,Value TEXT)");
             }
 
             byte[] hostileHash =
@@ -1602,6 +1665,10 @@ namespace XMAT.Tests
                         "location" => (
                             SqLtSchemaFailure.UnsupportedLocation,
                             "CAPTURE_OPEN_LOCATION"),
+                        "future" or
+                        "utf16-future" => (
+                            SqLtSchemaFailure.UnsupportedVersion,
+                            "CAPTURE_OPEN_FUTURE_VERSION"),
                         _ => (
                             SqLtSchemaFailure.Unsupported,
                             "CAPTURE_OPEN_SCHEMA_ERROR"),
@@ -1651,6 +1718,14 @@ namespace XMAT.Tests
                 string message =
                     Localization.GetLocalizedString(
                         expectedKey);
+                if (kind is
+                    "future" or
+                    "utf16-future")
+                {
+                    Assert.Equal(
+                        "The SQLite file has an unsupported user_version value. XMAT accepts only 0 or 1.",
+                        message);
+                }
                 Assert.DoesNotContain(
                     "NO_IMPL_",
                     message,
@@ -1826,6 +1901,7 @@ namespace XMAT.Tests
             }
 
             var rowIds = ((IImportedCaptureTable)table).ReplaceImportedRows(
+                CaptureTextSource.Literal,
                 new FieldValue<string>(
                     WebServiceCaptureMethod.FieldKey_DeviceName,
                     deviceName),
@@ -1839,7 +1915,7 @@ namespace XMAT.Tests
                 rowIds.ToArray(),
                 records.Select(record => (long)record.RowId).ToArray());
             Assert.Equal(
-                "first\"\"quoted.example",
+                "first\"quoted.example",
                 records[0].Str(WebServiceCaptureMethod.FieldKey_RequestHost));
             Assert.Equal(
                 "/first's",
@@ -1892,6 +1968,7 @@ namespace XMAT.Tests
 
             var actual = Assert.Throws<InvalidOperationException>(() =>
                 ((IImportedCaptureTable)table).ReplaceImportedRows(
+                    CaptureTextSource.Literal,
                     new FieldValue<string>(
                         WebServiceCaptureMethod.FieldKey_DeviceName,
                         deviceName),
@@ -2420,10 +2497,15 @@ namespace XMAT.Tests
             }
 
             public IReadOnlyList<long> ReplaceImportedRows(
-                IFieldValue capture, IEnumerable<object[]> rows)
+                CaptureTextSource source,
+                IFieldValue capture,
+                IEnumerable<object[]> rows)
             {
                 ImportThreadId = Environment.CurrentManagedThreadId;
-                return ((IImportedCaptureTable)_inner).ReplaceImportedRows(capture, rows);
+                return ((IImportedCaptureTable)_inner).ReplaceImportedRows(
+                    source,
+                    capture,
+                    rows);
             }
 
             public IDataset Subset(params string[] fieldNames)

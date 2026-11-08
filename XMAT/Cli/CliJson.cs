@@ -6,8 +6,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
 using XMAT.Operations.Replay;
 
@@ -21,6 +23,8 @@ namespace XMAT.Cli
     {
         // summary.json in a published --out folder.
         internal const string SummarySchema = "xmat-analysis/1";
+        internal const string MarkCaptureTextSummarySchema =
+            "xmat-mark-capture-text/1";
 
         // summary.json of a published replay or compose run.
         internal const string ReplaySummarySchema = "xmat-replay/1";
@@ -80,6 +84,17 @@ namespace XMAT.Cli
                 if (report.Doctor != null)
                 {
                     WriteDoctor(writer, report.Doctor);
+                }
+
+                if (report.MarkCaptureText != null)
+                {
+                    writer.WriteStartObject(
+                        "markCaptureText");
+                    WriteMarkCaptureText(
+                        writer,
+                        report.MarkCaptureText,
+                        report.Artifacts.Count != 0);
+                    writer.WriteEndObject();
                 }
 
                 if (report.Commands != null)
@@ -190,6 +205,44 @@ namespace XMAT.Cli
             return stream.ToArray();
         }
 
+        internal static byte[] SerializeMarkCaptureTextSummary(
+            CliReport report)
+        {
+            using var stream =
+                new MemoryStream();
+            using (var writer =
+                new Utf8JsonWriter(
+                    stream,
+                    Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString(
+                    "schema",
+                    MarkCaptureTextSummarySchema);
+                writer.WriteString(
+                    "command",
+                    report.Command);
+                writer.WriteString(
+                    "runId",
+                    report.RunId);
+                writer.WriteString(
+                    "version",
+                    CliReport.ToolVersion);
+                WriteMarkCaptureText(
+                    writer,
+                    report.MarkCaptureText ??
+                        new CliMarkCaptureTextReport(),
+                    includePublishedResults: true);
+                WriteDiagnostics(
+                    writer,
+                    "warnings",
+                    report.Warnings);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+
         private static void WriteLimits(Utf8JsonWriter writer, CliLimits limits)
         {
             writer.WriteStartObject("limits");
@@ -237,10 +290,16 @@ namespace XMAT.Cli
                 WriteLimits(writer, save.Limits);
             }
 
+            if (includeFiles && save.StoredText != null)
+            {
+                WriteStoredText(writer, save.StoredText);
+            }
+
             CliReplay options = save.Options;
             writer.WriteStartObject("options");
             writer.WriteBoolean("includeSensitive", options.IncludeSensitive);
             writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+            writer.WriteBoolean("acceptStoredText", options.AcceptStoredText);
             writer.WriteBoolean("unconditional", options.Unconditional);
             writer.WriteString(
                 "httpVersion", options.HttpVersionSet ? ReplayTransportOptions.VersionName(options.HttpVersion) : null);
@@ -311,10 +370,16 @@ namespace XMAT.Cli
                 WriteLimits(writer, curl.Limits);
             }
 
+            if (includeFiles && curl.StoredText != null)
+            {
+                WriteStoredText(writer, curl.StoredText);
+            }
+
             CliReplay options = curl.Options;
             writer.WriteStartObject("options");
             writer.WriteBoolean("includeSensitive", options.IncludeSensitive);
             writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+            writer.WriteBoolean("acceptStoredText", options.AcceptStoredText);
             writer.WriteBoolean("unconditional", options.Unconditional);
             writer.WriteString(
                 "httpVersion", options.HttpVersionSet ? ReplayTransportOptions.VersionName(options.HttpVersion) : null);
@@ -369,6 +434,12 @@ namespace XMAT.Cli
                 WriteLimits(writer, replay.Limits);
             }
 
+            // A replay run's capture (compose has none to classify), once the run published.
+            if (includeFiles && replay.StoredText != null)
+            {
+                WriteStoredText(writer, replay.StoredText);
+            }
+
             CliReplay options = replay.Options;
             writer.WriteStartObject("options");
             writer.WriteNumber("repeat", options.Repeat);
@@ -381,6 +452,12 @@ namespace XMAT.Cli
             writer.WriteBoolean("verifyDiff", options.VerifyDiff);
             writer.WriteBoolean("allowUnsafeMethods", options.AllowUnsafeMethods);
             writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+
+            // --accept-stored-text as given: replay takes it, compose (whose report has no input limits) does not.
+            if (replay.Limits != null)
+            {
+                writer.WriteBoolean("acceptStoredText", options.AcceptStoredText);
+            }
 
             // The version that the run asks for, a request file's included, which a run with Windows authentication makes
             // exactly HTTP/1.1 when it is Automatic (CliReplayReport.HttpVersion); HTTP/2 only stays as asked, and is refused.
@@ -530,6 +607,15 @@ namespace XMAT.Cli
             _ => "failed",
         };
 
+        // How a run that published used its input's stored text (Q): the object that analyze reports too.
+        private static void WriteStoredText(Utf8JsonWriter writer, StoredTextSummary storedText)
+        {
+            writer.WriteStartObject("storedText");
+            writer.WriteString("semantics", storedText.Semantics);
+            writer.WriteString("policy", storedText.Policy);
+            writer.WriteEndObject();
+        }
+
         private static void WriteAnalysis(Utf8JsonWriter writer, CliAnalysisReport analysis)
         {
             writer.WriteStartObject("input");
@@ -539,6 +625,19 @@ namespace XMAT.Cli
             if (analysis.Limits != null)
             {
                 WriteLimits(writer, analysis.Limits);
+            }
+
+            if (analysis.StoredText != null)
+            {
+                writer.WriteStartObject(
+                    "storedText");
+                writer.WriteString(
+                    "semantics",
+                    analysis.StoredText.Semantics);
+                writer.WriteString(
+                    "policy",
+                    analysis.StoredText.Policy);
+                writer.WriteEndObject();
             }
 
             writer.WriteStartArray("devices");
@@ -575,6 +674,82 @@ namespace XMAT.Cli
             writer.WriteStartObject("totals");
             writer.WriteNumber("calls", analysis.TotalCalls);
             writer.WriteNumber("findings", analysis.TotalFindings);
+            writer.WriteEndObject();
+        }
+
+        private static void WriteMarkCaptureText(
+            Utf8JsonWriter writer,
+            CliMarkCaptureTextReport report,
+            bool includePublishedResults)
+        {
+            if (report.InputKind != null ||
+                report.InputSha256 != null)
+            {
+                writer.WriteStartObject(
+                    "input");
+                writer.WriteString(
+                    "kind",
+                    report.InputKind);
+                writer.WriteString(
+                    "sha256",
+                    report.InputSha256);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteStartObject(
+                "limits");
+            writer.WriteNumber(
+                "maxInputMib",
+                report.MaxInputMib);
+            writer.WriteEndObject();
+            writer.WriteString(
+                "interpretation",
+                report.Interpretation ==
+                    CaptureTextInterpretation.LegacyOneLayer
+                    ? "legacyOneLayer"
+                    : "asStored");
+            if (!includePublishedResults ||
+                report.OutputSha256 == null ||
+                report.Counts == null)
+            {
+                return;
+            }
+
+            writer.WriteStartObject(
+                "source");
+            writer.WriteNumber(
+                "userVersion",
+                CaptureTextFormat.AmbiguousUserVersion);
+            writer.WriteString(
+                "semantics",
+                "ambiguousUnmarked");
+            writer.WriteEndObject();
+            writer.WriteStartObject(
+                "output");
+            writer.WriteString(
+                "file",
+                CliMarkCaptureTextCommand.CapturePath);
+            writer.WriteString(
+                "sha256",
+                report.OutputSha256);
+            writer.WriteNumber(
+                "userVersion",
+                CaptureTextFormat.LiteralUserVersion);
+            writer.WriteEndObject();
+            writer.WriteStartObject(
+                "counts");
+            writer.WriteNumber(
+                "tables",
+                report.Counts.Tables);
+            writer.WriteNumber(
+                "rows",
+                report.Counts.Rows);
+            writer.WriteNumber(
+                "valuesExamined",
+                report.Counts.ValuesExamined);
+            writer.WriteNumber(
+                "valuesChanged",
+                report.Counts.ValuesChanged);
             writer.WriteEndObject();
         }
 

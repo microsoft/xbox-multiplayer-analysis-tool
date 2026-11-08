@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Buffers.Binary;
 using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
@@ -11,6 +12,64 @@ namespace XMAT.Tests
 {
     public class SqLtDatabaseSaveTests
     {
+        [Fact]
+        public void SaveToFile_PreservesTheLiteralMarkerAcrossRepeatedSaves()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                Path.Join(
+                    directory.Path,
+                    "marked.xmatcap");
+            using SqLtDatabase database =
+                CreateDatabase(
+                    out IDataTable table);
+            Assert.Same(
+                CaptureTextSource.Literal,
+                database.CaptureTextSource);
+
+            table.AddRow("first");
+            database.SaveToFile(path);
+            AssertLiteralMarker(path);
+            table.AddRow("second");
+            database.SaveToFile(path);
+            AssertLiteralMarker(path);
+        }
+
+        [Fact]
+        public void SaveToFile_RefusesABackupThatLostTheLiteralMarker()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                Path.Join(
+                    directory.Path,
+                    "marker-readback.xmatcap");
+            using SqLtDatabase database =
+                CreateSavedDatabase(
+                    path,
+                    out byte[] original);
+            database.BackupCompleted = connection =>
+            {
+                using var command =
+                    connection.CreateCommand();
+                command.CommandText =
+                    $"PRAGMA user_version={CaptureTextFormat.AmbiguousUserVersion}";
+                command.ExecuteNonQuery();
+            };
+
+            CaptureSaveException exception =
+                Assert.Throws<CaptureSaveException>(
+                    () => database.SaveToFile(path));
+
+            Assert.Equal(
+                CaptureSaveFailure.Failed,
+                exception.Failure);
+            AssertOriginalAndNoTemporaryFile(
+                directory.Path,
+                path,
+                original);
+            AssertLiteralMarker(path);
+        }
+
         [Fact]
         public void SaveToFile_ReleasesDestinationAndProducesReadableDatabase()
         {
@@ -700,6 +759,37 @@ namespace XMAT.Tests
                     reader.GetString(0));
             }
             return values.ToArray();
+        }
+
+        private static void AssertLiteralMarker(
+            string path)
+        {
+            byte[] header =
+                File.ReadAllBytes(path);
+            Assert.True(header.Length >= 64);
+            Assert.Equal(
+                (uint)CaptureTextFormat.LiteralUserVersion,
+                BinaryPrimitives.ReadUInt32BigEndian(
+                    header.AsSpan(
+                        60,
+                        4)));
+
+            using var connection =
+                new SqliteConnection(
+                    new SqliteConnectionStringBuilder
+                    {
+                        DataSource = path,
+                        Mode = SqliteOpenMode.ReadOnly,
+                        Pooling = false,
+                    }.ToString());
+            connection.Open();
+            using var command =
+                connection.CreateCommand();
+            command.CommandText =
+                "PRAGMA user_version";
+            Assert.Equal(
+                (long)CaptureTextFormat.LiteralUserVersion,
+                command.ExecuteScalar());
         }
 
         // The directory holds exactly these files and folders.

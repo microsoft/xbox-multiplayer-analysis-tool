@@ -10,6 +10,7 @@ using System.Runtime.ExceptionServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations.Analysis;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
@@ -53,6 +54,24 @@ namespace XMAT.Operations.Replay
         internal const string WindowsAuthHttp2Code = "replay.windows-auth.http2";
         internal const string WindowsAuthAuthorizationCode = "replay.windows-auth.authorization-header";
         internal const string WindowsAuthPolicyCode = "replay.policy.windows-auth";
+
+        // An XMAT capture without the text-format marker holds text that an older XMAT may have changed (Q): it is sent or
+        // exported only as stored, once the caller accepts that for the run's capture file (ReplayOptions.AcceptStoredText),
+        // and refused before any draft exists otherwise. Captures and drafts that the caller holds are refused whatever
+        // the run accepts, until the GUI asks for a decision bound to their own source.
+        internal const string StoredTextAmbiguousCode = "replay.capture-text.ambiguous";
+        internal const string StoredTextAmbiguousExportCode = "capture.text.ambiguous-export";
+
+        // The policy that a summary reports once AcceptStoredText let an unmarked capture's text be used as stored.
+        internal const string AcceptedAsStoredPolicy = "acceptedAsStored";
+
+        private const string StoredTextAmbiguousMessage =
+            "This unmarked XMAT capture requires --accept-stored-text before replay, or xmat mark-capture-text to create a " +
+                "marked copy.";
+
+        private const string StoredTextAmbiguousExportMessage =
+            "This unmarked XMAT capture requires --accept-stored-text to export its stored text unchanged, or xmat " +
+                "mark-capture-text to create a marked copy.";
 
         // The header that a request of a Windows-authentication run may not carry of its own.
         private static readonly string[] AuthorizationHeader = { "Authorization" };
@@ -139,7 +158,7 @@ namespace XMAT.Operations.Replay
                 IReadOnlyList<ReplayItemResult> items = await RunAsync(
                     prepared.Items, options, credential, request.Sink, context, cancellationToken).ConfigureAwait(false);
                 return OperationResult<ReplayResult>.Success(
-                    new ReplayResult(prepared.InputKind, prepared.InputSha256, items),
+                    new ReplayResult(prepared.InputKind, prepared.InputSha256, items, prepared.StoredText),
                     diagnostics);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -228,6 +247,7 @@ namespace XMAT.Operations.Replay
                 }
 
                 RequestReplayDraft template = source.Draft.WithUrl(source.Draft.Url);
+                CheckStoredText(template, StoredTextAmbiguousCode);
                 RequestReplayDraft widest = template;
                 int requests = 1;
                 if (source.Sequence != null)
@@ -261,7 +281,9 @@ namespace XMAT.Operations.Replay
         // The requests of a run, prepared to be saved or exported, never sent: loaded, selected, built and edited as
         // ExecuteAsync does, at most MaxSends of them, counted before any draft is built, then checked as data
         // (RequestReplayDraft.ValidateStructure). None of the checks that only sending needs apply, consent included, and
-        // nothing on this path makes a sender. A pending omission is kept, for the caller to save or refuse.
+        // nothing on this path makes a sender; but an unmarked capture's stored text needs the acceptance that sending needs
+        // (request.Options.AcceptStoredText, the only option read here), refused with StoredTextAmbiguousExportCode. A
+        // pending omission is kept, for the caller to save or refuse.
         internal OperationResult<ReplayExport> PrepareForExport(ReplayRequest request, CancellationToken cancellationToken)
         {
             if (request?.Source?.Raw != null)
@@ -278,7 +300,12 @@ namespace XMAT.Operations.Replay
                     throw new ReplayInputException("replay.request.missing", "A replay source is required.");
                 }
 
-                Prepared gathered = Gather(request, ReplayOptions.Default, diagnostics, cancellationToken);
+                Prepared gathered = Gather(
+                    request,
+                    ReplayOptions.Default with { AcceptStoredText = request.Options?.AcceptStoredText == true },
+                    diagnostics,
+                    StoredTextAmbiguousExportCode,
+                    cancellationToken);
                 if (gathered.Failure != null)
                 {
                     return OperationResult<ReplayExport>.Failure(
@@ -302,7 +329,8 @@ namespace XMAT.Operations.Replay
                 }
 
                 return OperationResult<ReplayExport>.Success(
-                    new ReplayExport(gathered.InputKind, gathered.InputSha256, items.AsReadOnly()), diagnostics);
+                    new ReplayExport(gathered.InputKind, gathered.InputSha256, items.AsReadOnly(), gathered.StoredText),
+                    diagnostics);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -327,15 +355,19 @@ namespace XMAT.Operations.Replay
             }
         }
 
+        // storedTextCode is the code that refuses unmarked text without a decision: StoredTextAmbiguousCode to send it,
+        // StoredTextAmbiguousExportCode to export it.
         private Prepared Gather(
             ReplayRequest request,
             ReplayOptions options,
             List<OperationDiagnostic> diagnostics,
+            string storedTextCode,
             CancellationToken cancellationToken)
         {
             ReplaySource source = request.Source;
             string inputKind = null;
             string inputSha256 = null;
+            StoredTextSummary storedText = null;
             List<ReplayItem> items;
             bool edited = false;
             if (source.Path != null)
@@ -352,6 +384,19 @@ namespace XMAT.Operations.Replay
                 diagnostics.AddRange(read.Diagnostics);
                 inputKind = read.Value.InputKind;
                 inputSha256 = read.Value.InputSha256;
+
+                // Before anything is selected or any draft exists: an unmarked capture's text is used only as stored, once
+                // the run accepted that for this file, its one input. An edit, such as a new URL, leaves that text in the
+                // request, so it never stands in for the decision.
+                bool ambiguous = !IsLiteral(read.Value.TextSource);
+                if (ambiguous && !options.AcceptStoredText)
+                {
+                    throw StoredTextAmbiguous(storedTextCode);
+                }
+
+                storedText = ambiguous
+                    ? read.Value.StoredText with { Policy = AcceptedAsStoredPolicy }
+                    : read.Value.StoredText;
                 List<(string DeviceId, long Number, IDataRecord Record)> selected =
                     SelectRecords(read.Value, source, cancellationToken);
 
@@ -361,13 +406,23 @@ namespace XMAT.Operations.Replay
             }
             else if (source.Captures != null)
             {
+                // Rows that the caller holds carry their own source, which the run's acceptance of a capture file never
+                // covers: a row of an unmarked capture is refused until the GUI asks for a decision bound to its source.
+                // Like a capture file's, the refusal comes before the plan size, whatever the plan's size.
+                if (source.Captures.Any(capture => !IsLiteral(capture.CaptureTextSource)))
+                {
+                    throw StoredTextAmbiguous(storedTextCode);
+                }
+
                 CheckPlanSize(source.Captures.Count, options);
                 items = SelectCaptures(source.Captures, source.CapturedOrigins, diagnostics, cancellationToken);
             }
             else if (source.Sequence != null)
             {
-                // Checked before the template is expanded, so a sequence that is too large costs nothing to refuse. The
-                // edits apply once, to a copy of the template, so every expanded request shares its header text and body.
+                // The template's source first, as Preview checks it, so both report the same refusal. Then the plan size,
+                // before the template is expanded, so a sequence that is too large costs nothing to refuse. The edits
+                // apply once, to a copy of the template, so every expanded request shares its header text and body.
+                CheckStoredText(source.Draft, storedTextCode);
                 CheckPlanSize(source.Sequence.Count, options);
                 RequestReplayDraft template = source.Draft.WithUrl(source.Draft.Url);
                 ApplyEdits(
@@ -379,6 +434,7 @@ namespace XMAT.Operations.Replay
             }
             else
             {
+                CheckStoredText(source.Draft, storedTextCode);
                 items = new List<ReplayItem> { new(null, null, null, source.Draft) };
             }
 
@@ -394,8 +450,23 @@ namespace XMAT.Operations.Replay
                 ApplyEdits(items, request.Edits ?? ReplayEdits.None, cancellationToken);
             }
 
-            return new Prepared(items, inputKind, inputSha256, null);
+            return new Prepared(items, inputKind, inputSha256, null, storedText);
         }
+
+        private static bool IsLiteral(CaptureTextSource source) => source?.Semantics == CaptureTextSemantics.Literal;
+
+        // A draft that the caller holds keeps the source of the capture that it was made from: one of an unmarked capture
+        // is refused, as its capture's rows are.
+        private static void CheckStoredText(RequestReplayDraft draft, string storedTextCode)
+        {
+            if (!IsLiteral(draft.CaptureTextSource))
+            {
+                throw StoredTextAmbiguous(storedTextCode);
+            }
+        }
+
+        private static ReplayInputException StoredTextAmbiguous(string code) =>
+            new(code, code == StoredTextAmbiguousExportCode ? StoredTextAmbiguousExportMessage : StoredTextAmbiguousMessage);
 
         // The requests of a run, gathered (Gather), then checked as sending needs them checked: valid, complete, allowed
         // and reachable as the options say. A raw request is checked on its own (contract 2.5): its frozen values, then
@@ -418,7 +489,7 @@ namespace XMAT.Operations.Replay
                     null);
             }
 
-            Prepared prepared = Gather(request, options, diagnostics, cancellationToken);
+            Prepared prepared = Gather(request, options, diagnostics, StoredTextAmbiguousCode, cancellationToken);
             if (prepared.Failure != null)
             {
                 return prepared;
@@ -1327,11 +1398,13 @@ namespace XMAT.Operations.Replay
                     (Original.ResponseBody?.Length ?? 0) == 0);
         }
 
+        // StoredText is how a capture file's stored text was used (ReplayResult.StoredText); null for other sources.
         private sealed record Prepared(
             IReadOnlyList<ReplayItem> Items,
             string InputKind,
             string InputSha256,
-            OperationResult<ReplayResult> Failure);
+            OperationResult<ReplayResult> Failure,
+            StoredTextSummary StoredText = null);
 
         private sealed class ReplayInputException : Exception
         {

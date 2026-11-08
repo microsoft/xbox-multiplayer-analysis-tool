@@ -33,6 +33,10 @@ namespace XMAT.Models
         NetTrace = 1
     }
 
+    internal sealed record CaptureLoadResult(
+        CaptureTextSource Source,
+        bool AddedOrReplaced);
+
     internal class CaptureAppModel : ICaptureAppModel, INotifyPropertyChanged
     {
         public IDatabase ActiveDatabase { get; internal set; }
@@ -200,6 +204,8 @@ namespace XMAT.Models
         private TaskCompletionSource _cancellableOperationEnded;
         private CancellableOperationLease _cancellableOperationLease;
         private bool _isShuttingDown;
+
+        internal Action SanitizedExportWorkerStarting { get; set; }
 
         public CaptureAppModel() :
             this(Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher)
@@ -653,7 +659,8 @@ namespace XMAT.Models
             }
         }
 
-        internal void LoadDataCaptures(string fromFilePath) =>
+        internal CaptureLoadResult LoadDataCaptures(
+            string fromFilePath) =>
             LoadDataCaptures(
                 fromFilePath,
                 path =>
@@ -663,12 +670,15 @@ namespace XMAT.Models
                     throw new InvalidOperationException(
                         "The loaded capture database has an unsupported implementation."));
 
-        internal void LoadDataCaptures(
+        internal CaptureLoadResult LoadDataCaptures(
             string fromFilePath,
             Func<string, SqLtReadonlyDatabase> openDatabase)
         {
             SqLtReadonlyDatabase opened =
                 openDatabase(fromFilePath);
+            CaptureTextSource source =
+                opened.CaptureTextSource;
+            bool addedOrReplaced = false;
             var staged = new List<ICaptureDeviceContext>();
             try
             {
@@ -769,6 +779,9 @@ namespace XMAT.Models
                 {
                     transfer();
                 }
+                addedOrReplaced =
+                    added.Count != 0 ||
+                    transfers.Count != 0;
                 IDeviceCaptureController[] distinctOwners =
                     owners.Where(owner =>
                             _captureDeviceContexts.Any(
@@ -829,6 +842,9 @@ namespace XMAT.Models
                     opened?.Dispose();
                 }
             }
+            return new CaptureLoadResult(
+                source,
+                addedOrReplaced);
         }
 
         private static Action CreateLoadedCaptureTransfer(
@@ -1005,6 +1021,15 @@ namespace XMAT.Models
             using (operation)
             {
                 var controller = (WebServiceCapture.WebServiceDeviceCaptureController)SelectedDeviceContext.CaptureController;
+                CaptureTextSource source =
+                    controller.ExportTextSource;
+                if (source.Semantics !=
+                    CaptureTextSemantics.Literal)
+                {
+                    throw new InvalidOperationException(
+                        Localization.GetLocalizedString(
+                            "CAPTURE_TEXT_EXPORT_POLICY_REQUIRED"));
+                }
                 IEnumerable<WebServiceCapture.Models.ProxyConnectionModel> Records()
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -1014,6 +1039,7 @@ namespace XMAT.Models
                         yield return new WebServiceCapture.Models.ProxyConnectionModel(record);
                     }
                 }
+                SanitizedExportWorkerStarting?.Invoke();
                 return await Task.Run(() => WebServiceCapture.FiddlerSazHandler.CreateSanitizedSazFile(toFilePath,
                     Records(), cancellationToken));
             }

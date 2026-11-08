@@ -169,13 +169,18 @@ namespace XMAT.Operations.Replay
     // and number of the captured request that it came from, or null for a composed one.
     internal sealed record ReplayExportItem(string DeviceId, long? RequestNumber, RequestReplayDraft Draft);
 
-    internal sealed record ReplayExport(string InputKind, string InputSha256, IReadOnlyList<ReplayExportItem> Items);
+    // StoredText is how a capture file's stored text was used (ReplayResult.StoredText); null for other sources.
+    internal sealed record ReplayExport(
+        string InputKind, string InputSha256, IReadOnlyList<ReplayExportItem> Items, StoredTextSummary StoredText = null);
 
     // VerifyDiff also builds the differences of each verified send (VerifyDiffOperation) and hands them to the sink with its
     // exchange (ReplayExchange.VerifyDiff), never in the result; it needs Verify. AllowClientCertificate is the one origin
     // that the transport's client certificate may go to, and AllowWindowsAuth the one origin whose challenges Windows
     // authentication may answer; the run must be to exactly that origin. An allowance that the transport does not use
-    // grants nothing. AllowRaw is the consent to send one raw request, bound to its image and target.
+    // grants nothing. AllowRaw is the consent to send one raw request, bound to its image and target. AcceptStoredText
+    // accepts the stored text of the run's capture file as stored (ReplaySource.FromFile), which an XMAT capture without
+    // the text-format marker needs before any of it is sent or exported: it covers that file only, which the run reads
+    // once (one input SHA-256), and never captures or drafts that the caller holds, which carry their own source.
     internal sealed record ReplayOptions(
         int Repeat = 1,
         int Parallelism = 1,
@@ -191,7 +196,8 @@ namespace XMAT.Operations.Replay
         bool AllowProxy = false,
         ReplayCredentialOrigin AllowClientCertificate = null,
         ReplayCredentialOrigin AllowWindowsAuth = null,
-        ReplayRawConsent AllowRaw = null)
+        ReplayRawConsent AllowRaw = null,
+        bool AcceptStoredText = false)
     {
         internal const int MaxRepeat = 1000;
         internal const int MaxParallelism = 16;
@@ -323,8 +329,12 @@ namespace XMAT.Operations.Replay
         string RequestWrite = null,
         string ResponseFraming = null);
 
-    // InputKind and InputSha256 describe a capture file and are null for other sources.
-    internal sealed record ReplayResult(string InputKind, string InputSha256, IReadOnlyList<ReplayItemResult> Items)
+    // InputKind and InputSha256 describe a capture file and are null for other sources. StoredText is how the file's stored
+    // text was used, as summaries report it: literal or ambiguousUnmarked for an XMAT capture, notApplicable for a SAZ
+    // archive, with the policy acceptedAsStored when AcceptStoredText let an unmarked capture's text be used and notNeeded
+    // otherwise; null for other sources.
+    internal sealed record ReplayResult(
+        string InputKind, string InputSha256, IReadOnlyList<ReplayItemResult> Items, StoredTextSummary StoredText = null)
     {
         internal int Completed => Items.Count(item => item.Outcome == ReplayOutcome.Completed);
 

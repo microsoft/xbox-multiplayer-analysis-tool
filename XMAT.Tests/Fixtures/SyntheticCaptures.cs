@@ -23,7 +23,8 @@ namespace XMAT.Tests.Fixtures
         int Devices = 1,
         int RequestsPerDevice = 4,
         bool IncludeCanaries = false,
-        bool IncludeXr049Violation = false);
+        bool IncludeXr049Violation = false,
+        uint UserVersion = CaptureTextFormat.LiteralUserVersion);
 
     // A frame for the SAZ readers. Valid frames, and those with a malformed start line, have an absolute https request
     // target; the hostless kinds have an origin-form target (a path), so the Host header alone could name the host, and the
@@ -192,6 +193,13 @@ namespace XMAT.Tests.Fixtures
             }
 
             database.SaveToFile(path);
+            if (options.UserVersion !=
+                CaptureTextFormat.LiteralUserVersion)
+            {
+                HostileSqliteSchemas.SetUserVersion(
+                    path,
+                    options.UserVersion);
+            }
             return path;
         }
 

@@ -197,7 +197,9 @@ namespace XMAT.Operations.Analysis
                     new CaptureRecordSet(
                         InputKindName(loaded.Kind),
                         loaded.InputSha256,
-                        devices),
+                        devices,
+                        loaded.TextSource,
+                        loaded.StoredText),
                     diagnostics);
             }
             catch (AnalysisInputException ex)
@@ -369,6 +371,7 @@ namespace XMAT.Operations.Analysis
             var summary = new AnalysisSummary(
                 InputKindName(loaded.Kind),
                 loaded.InputSha256,
+                loaded.StoredText,
                 deviceSummaries,
                 totalCalls,
                 totalFindings);
@@ -420,6 +423,8 @@ namespace XMAT.Operations.Analysis
             {
                 return new LoadedInput(
                     AnalysisInputKind.Records,
+                    null,
+                    null,
                     null,
                     new[]
                     {
@@ -493,6 +498,10 @@ namespace XMAT.Operations.Analysis
                     AnalysisInputKind.Saz => new LoadedInput(
                         AnalysisInputKind.Saz,
                         hash,
+                        new StoredTextSummary(
+                            "notApplicable",
+                            "notNeeded"),
+                        CaptureTextSource.Literal,
                         new[]
                         {
                             new LoadedDevice(
@@ -623,6 +632,25 @@ namespace XMAT.Operations.Analysis
                     ComputeSha256(
                         database,
                         cancellationToken);
+                StoredTextSummary storedText =
+                    database.CaptureTextSource.Semantics ==
+                        CaptureTextSemantics.Literal
+                        ? new StoredTextSummary(
+                            "literal",
+                            "notNeeded")
+                        : new StoredTextSummary(
+                            "ambiguousUnmarked",
+                            "notNeeded");
+                if (database.CaptureTextSource.Semantics ==
+                    CaptureTextSemantics.AmbiguousUnmarked)
+                {
+                    AddDiagnostic(
+                        diagnostics,
+                        new OperationDiagnostic(
+                            "capture.text.ambiguous",
+                            OperationDiagnosticSeverity.Warning,
+                            "This capture has no XMAT text-format marker. XMAT treats its stored text as ambiguous and will use it unchanged; adjacent double quotation marks may be original data or may have been added by an older XMAT version."));
+                }
                 var deviceTable = database.TableByName(CaptureDevicesTableName);
                 var webProxyTable = database.TableByName(WebServiceCaptureMethod.TableName);
                 ValidateTable(deviceTable, CaptureDeviceFields);
@@ -716,6 +744,8 @@ namespace XMAT.Operations.Analysis
                 return new LoadedInput(
                     AnalysisInputKind.XmatCapture,
                     inputSha256,
+                    storedText,
+                    database.CaptureTextSource,
                     devices);
             }
             catch (OperationCanceledException)
@@ -775,6 +805,11 @@ namespace XMAT.Operations.Analysis
                         new AnalysisInputException(
                             "analysis.input.location-unsupported",
                             "The capture database location cannot be opened safely.",
+                            ex),
+                    SqLtSchemaFailure.UnsupportedVersion =>
+                        new AnalysisInputException(
+                            "capture.format.future",
+                            SqLtSchemaProfile.UnsupportedVersionMessage,
                             ex),
                     _ => new AnalysisInputException(
                         "analysis.input.schema",
@@ -1335,16 +1370,26 @@ namespace XMAT.Operations.Analysis
             internal LoadedInput(
                 AnalysisInputKind kind,
                 string inputSha256,
+                StoredTextSummary storedText,
+                CaptureTextSource textSource,
                 IReadOnlyList<LoadedDevice> devices)
             {
                 Kind = kind;
                 InputSha256 = inputSha256;
+                StoredText = storedText;
+                TextSource = textSource;
                 Devices = devices;
             }
 
             internal AnalysisInputKind Kind { get; }
 
             internal string InputSha256 { get; }
+
+            internal StoredTextSummary StoredText { get; }
+
+            // The source of a capture file's stored text (CaptureRecordSet.TextSource); null for records, which carry
+            // their own.
+            internal CaptureTextSource TextSource { get; }
 
             internal IReadOnlyList<LoadedDevice> Devices { get; }
 
@@ -1501,17 +1546,23 @@ namespace XMAT.Operations.Analysis
 
         internal sealed class AnalysisDataRecord :
             IDataRecord,
-            IRawBodyDataRecord
+            IRawBodyDataRecord,
+            ICaptureTextSourceProvider
         {
             private readonly Dictionary<string, object> _values;
 
-            private AnalysisDataRecord(int rowId, Dictionary<string, object> values)
+            private AnalysisDataRecord(int rowId, Dictionary<string, object> values, CaptureTextSource captureTextSource)
             {
                 RowId = rowId;
                 _values = values;
+                CaptureTextSource = captureTextSource;
             }
 
             public int RowId { get; }
+
+            // The source of the model's stored text, which a model made from this record keeps: Literal for a SAZ
+            // record, as its parser's text is.
+            public CaptureTextSource CaptureTextSource { get; }
 
             public long Int(string fieldName)
             {
@@ -1587,7 +1638,8 @@ namespace XMAT.Operations.Analysis
                             model.ResponseBody,
                         [WebServiceCaptureMethod.FieldKey_ClientIP] =
                             model.ClientIP ?? string.Empty,
-                    });
+                    },
+                    model.CaptureTextSource);
             }
 
             private static string EncodeBody(byte[] body)

@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
@@ -608,10 +609,16 @@ namespace XMAT.Tests
         private static string Request(string type, string extra = "") =>
             "POST / HTTP/1.1\r\nContent-Type: " + type + "\r\n" + extra + "\r\n";
 
-        private sealed class ReaderDataset : IDataset, IDisposable
+        private sealed class ReaderDataset :
+            IDataset,
+            IDisposable,
+            ICaptureTextSourceProvider
         {
             private readonly SqliteConnection _connection;
             private readonly List<SqliteDataReader> _readers = new();
+
+            public CaptureTextSource CaptureTextSource =>
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal;
             private readonly List<SqliteCommand> _commands = new();
             internal int OpenReaders { get; private set; }
             internal string ConnectionString { get; }
