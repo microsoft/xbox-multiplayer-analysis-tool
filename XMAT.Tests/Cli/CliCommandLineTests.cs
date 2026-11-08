@@ -598,7 +598,7 @@ namespace XMAT.Tests.Cli
             }
 
             Assert.Equal(
-                new[] { "schema", "command", "runId", "version", "input", "limits", "options", "replays", "totals", "warnings" },
+                new[] { "schema", "command", "runId", "version", "status", "input", "limits", "options", "replays", "totals", "warnings", "errors" },
                 summary.RootElement.EnumerateObject().Select(property => property.Name));
             JsonElement options = published.RootElement.GetProperty("options");
             Assert.Equal(
@@ -613,8 +613,8 @@ namespace XMAT.Tests.Cli
                 new[]
                 {
                     "id", "device", "request", "sequence", "iteration", "outcome", "status", "durationMs", "responseBytes",
-                    "redirects", "transport", "httpVersion", "responseVersion", "authHeaderSchemeObserved", "code", "verify",
-                    "files",
+                    "redirects", "transport", "httpVersion", "responseVersion", "authHeaderSchemeObserved", "raw",
+                    "requestWrite", "requestBytesWritten", "responseFraming", "code", "verify", "files",
                 },
                 replays[0].EnumerateObject().Select(property => property.Name));
             Assert.Equal(

@@ -105,20 +105,26 @@ namespace XMAT.Operations.Replay
 
         // Addresses that no request may be sent to: unspecified (0.0.0.0, ::), multicast and the limited broadcast
         // address, also written as IPv4-mapped IPv6.
-        internal bool IsDenied
-        {
-            get
-            {
-                IPAddress address = ToAddress();
-                if (address.AddressFamily == AddressFamily.InterNetwork)
-                {
-                    return address.Equals(IPAddress.Any) ||
-                        address.Equals(IPAddress.Broadcast) ||
-                        (address.GetAddressBytes()[0] & 0xF0) == 0xE0;
-                }
+        internal bool IsDenied => IsDeniedAddress(ToAddress());
 
-                return address.Equals(IPAddress.IPv6Any) || address.IsIPv6Multicast;
+        // Whether no request may be sent to this address (IsDenied). Raw mode's targets and the addresses that their names
+        // resolve to use the same set.
+        internal static bool IsDeniedAddress(IPAddress address)
+        {
+            ArgumentNullException.ThrowIfNull(address);
+            if (address.IsIPv4MappedToIPv6)
+            {
+                address = address.MapToIPv4();
             }
+
+            if (address.AddressFamily == AddressFamily.InterNetwork)
+            {
+                return address.Equals(IPAddress.Any) ||
+                    address.Equals(IPAddress.Broadcast) ||
+                    (address.GetAddressBytes()[0] & 0xF0) == 0xE0;
+            }
+
+            return address.Equals(IPAddress.IPv6Any) || address.IsIPv6Multicast;
         }
 
         // Only a.b.c.d:port, each part a decimal number without leading zeros (so never an abbreviated, octal or
@@ -331,7 +337,7 @@ namespace XMAT.Operations.Replay
         // Labels of 1 to 63 letters, digits and hyphens, neither starting nor ending with a hyphen, at most 253 characters
         // in all. As URL parsers do, a host whose last label is a number (all digits, or 0x and hexadecimal digits) is read
         // as an IPv4 address, so it is no name: 127.1, 0x7f.0.0.1 and 2130706433 are refused, not looked up.
-        private static bool IsName(string host)
+        internal static bool IsName(string host)
         {
             if (host.Length is < 1 or > MaxNameLength)
             {

@@ -85,6 +85,18 @@ namespace XMAT.Operations.Replay
         // The expanded URLs of a sequence are kept until the run ends, so their total length is bounded.
         internal long MaxSequenceUrlCharacters { get; set; } = ReplayOptions.MaxSequenceUrlCharacters;
 
+        // The sender of a raw run's requests (slice L): one per run, made from its connect-to endpoint and, in tests, the
+        // server trust (ServerChainPolicyFactory). Every raw send has a connection of its own.
+        internal Func<RawSenderSetup, RawSender> RawSenderFactory { get; set; } = static setup => new RawSender(setup);
+
+        // Null except in tests: the SHA-256 that a raw run recomputes over its image before any other check
+        // (replay.raw.changed), so a test can stand for an image that changed after it was checked.
+        internal Func<RawRequestImage, CancellationToken, string> RawDigest { get; set; }
+
+        // Null except in tests: awaited with the send's id after a raw send ends and before its result goes to the sink, so
+        // a test can order a cancellation between them.
+        internal Func<int, Task> RawSendEnded { get; set; }
+
         public async Task<OperationResult<ReplayResult>> ExecuteAsync(
             ReplayRequest request,
             OperationContext context,
@@ -180,13 +192,17 @@ namespace XMAT.Operations.Replay
         // without sending anything or expanding the sequence: the options, the plan size, the template and its URL budget,
         // that the request can be built (the widest number's URL for a sequence) and how it may reach the server. The
         // result says how many sends it makes and which consent they need, so the GUI can ask once before it sends, and
-        // carries the transport that was checked. An invalid plan fails with the code that ExecuteAsync would report.
-        internal OperationResult<ReplayPlanPreview> Preview(ReplaySource source, ReplayOptions options = null)
+        // carries the transport that was checked. An invalid plan fails with the code that ExecuteAsync would report. A raw
+        // request is checked through its frozen values (contract 2.5, stage 2), and its plan carries the image that the
+        // raw consent must cover (ReplayRawConsent.For); cancellationToken stops recomputing its SHA-256, and throws.
+        internal OperationResult<ReplayPlanPreview> Preview(
+            ReplaySource source, ReplayOptions options = null, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(source);
-            if (source.Draft == null)
+            if (source.Draft == null && source.Raw == null)
             {
-                throw new ArgumentException("Only a composed request or sequence can be previewed.", nameof(source));
+                throw new ArgumentException(
+                    "Only a composed request, a sequence or a raw request can be previewed.", nameof(source));
             }
 
             options ??= ReplayOptions.Default;
@@ -195,6 +211,20 @@ namespace XMAT.Operations.Replay
                 if (!options.IsValid)
                 {
                     throw new ReplayInputException("replay.options.invalid", "The replay options are out of range.");
+                }
+
+                if (source.Raw != null)
+                {
+                    CheckRawValues(source.Raw, null, options, cancellationToken);
+                    return OperationResult<ReplayPlanPreview>.Success(new ReplayPlanPreview(
+                        null,
+                        null,
+                        options.Repeat,
+                        source.Raw.UsesUnsafeMethod,
+                        RawChangesOrigin(source),
+                        options.EffectiveTransport,
+                        Raw: source.Raw,
+                        ProvenanceOrigin: source.ProvenanceOrigin));
                 }
 
                 RequestReplayDraft template = source.Draft.WithUrl(source.Draft.Url);
@@ -234,6 +264,12 @@ namespace XMAT.Operations.Replay
         // nothing on this path makes a sender. A pending omission is kept, for the caller to save or refuse.
         internal OperationResult<ReplayExport> PrepareForExport(ReplayRequest request, CancellationToken cancellationToken)
         {
+            if (request?.Source?.Raw != null)
+            {
+                // A request file or a cURL script holds a parsed request, never a raw request's prepared bytes.
+                throw new ArgumentException("A raw request cannot be prepared for export.", nameof(request));
+            }
+
             var diagnostics = new List<OperationDiagnostic>();
             try
             {
@@ -326,7 +362,7 @@ namespace XMAT.Operations.Replay
             else if (source.Captures != null)
             {
                 CheckPlanSize(source.Captures.Count, options);
-                items = SelectCaptures(source.Captures, diagnostics, cancellationToken);
+                items = SelectCaptures(source.Captures, source.CapturedOrigins, diagnostics, cancellationToken);
             }
             else if (source.Sequence != null)
             {
@@ -362,13 +398,26 @@ namespace XMAT.Operations.Replay
         }
 
         // The requests of a run, gathered (Gather), then checked as sending needs them checked: valid, complete, allowed
-        // and reachable as the options say.
+        // and reachable as the options say. A raw request is checked on its own (contract 2.5): its frozen values, then
+        // each consent, and it is the run's only request.
         private Prepared Prepare(
             ReplayRequest request,
             ReplayOptions options,
             List<OperationDiagnostic> diagnostics,
             CancellationToken cancellationToken)
         {
+            ReplaySource source = request.Source;
+            if (source.Raw != null)
+            {
+                CheckRawValues(source.Raw, request.Edits, options, cancellationToken);
+                CheckRawConsents(source, options);
+                return new Prepared(
+                    new[] { new ReplayItem(null, null, null, null, Raw: source.Raw, Provenance: source.ProvenanceOrigin) },
+                    null,
+                    null,
+                    null);
+            }
+
             Prepared prepared = Gather(request, options, diagnostics, cancellationToken);
             if (prepared.Failure != null)
             {
@@ -545,9 +594,11 @@ namespace XMAT.Operations.Replay
             }
         }
 
-        // The GUI selects rows itself; rows that cannot be replayed are skipped with a warning.
+        // The GUI selects rows itself; rows that cannot be replayed are skipped with a warning. A row's captured origin, when
+        // the caller gives one (ReplaySource.CapturedOrigins), replaces the capture's own before any check.
         private static List<ReplayItem> SelectCaptures(
             IReadOnlyList<ProxyConnectionModel> captures,
+            IReadOnlyList<Uri> capturedOrigins,
             List<OperationDiagnostic> diagnostics,
             CancellationToken cancellationToken)
         {
@@ -558,7 +609,10 @@ namespace XMAT.Operations.Replay
                 ProxyConnectionModel capture = captures[index];
                 if (RequestReplayDraft.CanReplay(capture))
                 {
-                    items.Add(new ReplayItem(null, capture.RequestNumber, capture, CreateDraft(capture), index));
+                    RequestReplayDraft draft = CreateDraft(capture);
+                    Uri origin = capturedOrigins?[index];
+                    items.Add(new ReplayItem(
+                        null, capture.RequestNumber, capture, origin == null ? draft : draft.WithCapturedOrigin(origin), index));
                 }
             }
 
@@ -738,18 +792,12 @@ namespace XMAT.Operations.Replay
 
             if (!options.AllowOriginChange && items.Any(item => item.Draft.ChangesOrigin))
             {
-                throw new ReplayInputException(
-                    "replay.policy.origin-change",
-                    "A selected request would go to another origin than the one it was captured for, with its captured " +
-                        "headers, and origin changes are not allowed; nothing was sent.");
+                throw OriginChangeRefused();
             }
 
             if (transport.ConnectTo != null && !options.AllowConnectTo)
             {
-                throw new ReplayInputException(
-                    ConnectToPolicyCode,
-                    "Connecting to another endpoint than the URL's host sends the requests, with their headers and body, " +
-                        "to that endpoint, and that was not allowed; nothing was sent.");
+                throw ConnectToRefused();
             }
 
             if (transport.Proxy != null && !options.AllowProxy)
@@ -910,17 +958,12 @@ namespace XMAT.Operations.Replay
         {
             if (connectTo.IsDenied)
             {
-                throw new ReplayInputException(
-                    ConnectToDeniedCode,
-                    "The connect-to endpoint is an unspecified, multicast or broadcast address; nothing was sent.");
+                throw ConnectToDenied();
             }
 
             if (!drafts.All(IsHttps))
             {
-                throw new ReplayInputException(
-                    ConnectToHttpsCode,
-                    "Connecting to another endpoint needs HTTPS URLs, so the endpoint must prove that it is the URL's " +
-                        "host; nothing was sent.");
+                throw ConnectToHttpsRequired();
             }
 
             // One origin (ReplayAuthority.SameOrigin): every request's is the first's. A request whose host has no canonical
@@ -936,6 +979,106 @@ namespace XMAT.Operations.Replay
 
         private static bool IsHttps(RequestReplayDraft draft) =>
             Uri.TryCreate(draft.Url, UriKind.Absolute, out Uri uri) && uri.Scheme == Uri.UriSchemeHttps;
+
+        // Stage 2 of a raw request's checks (contract 2.5), on its frozen values: the image's SHA-256 recomputed (defense in
+        // depth: admission is the image's type), the options that Raw mode never takes, connect-to's own rules, and a target
+        // that no request may go to. Nothing is resolved, connected or written before every stage has passed.
+        private void CheckRawValues(
+            RawRequestImage image, ReplayEdits edits, ReplayOptions options, CancellationToken cancellationToken)
+        {
+            string digest = RawDigest != null ? RawDigest(image, cancellationToken) : image.ComputeSha256(cancellationToken);
+            if (!string.Equals(digest, image.Sha256, StringComparison.Ordinal))
+            {
+                throw RawRefusal(RawCodes.Changed);
+            }
+
+            ReplayTransportOptions transport = options.EffectiveTransport;
+            string refused =
+                transport.Proxy != null ? RawCodes.Proxy :
+                transport.ClientCertificate != null ? RawCodes.ClientCert :
+                transport.WindowsAuth ? RawCodes.WindowsAuth :
+                transport.HttpVersion != ReplayHttpVersion.Http11 ? RawCodes.HttpVersion :
+                options.MaxRedirects != 0 ? RawCodes.Redirects :
+                options.Verify || options.VerifyDiff || !(edits ?? ReplayEdits.None).Equals(ReplayEdits.None)
+                    ? RawCodes.UnsupportedOption
+                    : null;
+            if (refused != null)
+            {
+                throw RawRefusal(refused);
+            }
+
+            if (transport.ConnectTo != null && transport.ConnectTo.IsDenied)
+            {
+                throw ConnectToDenied();
+            }
+
+            if (transport.ConnectTo != null && !image.Target.IsHttps)
+            {
+                throw ConnectToHttpsRequired();
+            }
+
+            if (image.Target.IsDenied)
+            {
+                throw RawRefusal(RawCodes.TargetDenied);
+            }
+        }
+
+        // Stage 3 of a raw request's checks (contract 2.5): each consent on its own, in this order. The raw consent covers
+        // this image and target only (ReplayRawConsent.Covers).
+        private static void CheckRawConsents(ReplaySource source, ReplayOptions options)
+        {
+            RawRequestImage image = source.Raw;
+            if (options.AllowRaw?.Covers(image) != true)
+            {
+                throw RawRefusal(RawCodes.PolicyRaw);
+            }
+
+            if (image.UsesUnsafeMethod && !options.AllowUnsafeMethods)
+            {
+                throw RawRefusal(RawCodes.PolicyRawUnsafe);
+            }
+
+            if (RawChangesOrigin(source) && !options.AllowOriginChange)
+            {
+                throw OriginChangeRefused();
+            }
+
+            if (options.EffectiveTransport.ConnectTo != null && !options.AllowConnectTo)
+            {
+                throw ConnectToRefused();
+            }
+        }
+
+        // A raw request inherits its provenance origin (contract 2.8), and a send to a target of another origin needs consent.
+        private static bool RawChangesOrigin(ReplaySource source) =>
+            source.ProvenanceOrigin != null &&
+            !ReplayAuthority.SameOrigin(source.ProvenanceOrigin, source.Raw.Target.Origin);
+
+        private static ReplayInputException RawRefusal(string code) => new(code, RawRequest.Message(code));
+
+        // One wording for every mode (O5): the three baselines that a request inherits its origin from.
+        private static ReplayInputException OriginChangeRefused() =>
+            new(
+                "replay.policy.origin-change",
+                "A selected request would go to another origin than the one it was captured or saved for, or first sent " +
+                    "to, with its headers, and origin changes are not allowed; nothing was sent.");
+
+        private static ReplayInputException ConnectToRefused() =>
+            new(
+                ConnectToPolicyCode,
+                "Connecting to another endpoint than the URL's host sends the requests, with their headers and body, to " +
+                    "that endpoint, and that was not allowed; nothing was sent.");
+
+        private static ReplayInputException ConnectToDenied() =>
+            new(
+                ConnectToDeniedCode,
+                "The connect-to endpoint is an unspecified, multicast or broadcast address; nothing was sent.");
+
+        private static ReplayInputException ConnectToHttpsRequired() =>
+            new(
+                ConnectToHttpsCode,
+                "Connecting to another endpoint needs HTTPS URLs, so the endpoint must prove that it is the URL's host; " +
+                    "nothing was sent.");
 
         // The origin that a request's credentials would go to, compared as the consent is (ReplayCredentialOrigin); null
         // when the URL cannot have one.
@@ -1003,22 +1146,59 @@ namespace XMAT.Operations.Replay
             var results = new ReplayItemResult[plan.Count];
             var gate = new object();
             int done = 0;
+
+            // The sink's first failure that is not a cancellation, kept apart from the loop's outcome: Parallel.ForEachAsync
+            // reports a loop whose token was cancelled as cancelled, whatever its bodies threw (ForEachAsyncState.Complete),
+            // so a sink that failed while the run was being cancelled would go unreported, and the caller would take the
+            // sends that its sink holds for every send that began. Once the sink threw anything, a cancellation included, it
+            // takes no later send.
+            Exception sinkFailure = null;
+            bool sinkStopped = false;
             ReplaySendOptions sendOptions = options.ToSendOptions();
             ReplayTransportOptions transport = options.EffectiveTransport;
+            Func<int, Task> rawSendEnded = RawSendEnded;
             cancellationToken.ThrowIfCancellationRequested();
-            using ReplaySender sender =
-                (transport.NeedsOwnSender
+
+            // A raw run, whose one request is raw, sends through a raw sender with the normalized request made once for the
+            // run (contract 2.8); any other run through a ReplaySender.
+            RawRequestImage raw = items[0].Raw;
+            RawSender rawSender = null;
+            RawSendOptions rawOptions = null;
+            if (raw != null)
+            {
+                rawSender = RawSenderFactory(new RawSenderSetup(transport.ConnectTo, ServerChainPolicyFactory)) ??
+                    throw new InvalidOperationException("The raw sender factory returned no sender.");
+                rawOptions = new RawSendOptions(
+                    options.EffectiveTimeout, options.MaxResponseBytes, raw.ToMessage(), items[0].Provenance);
+            }
+
+            using ReplaySender sender = raw != null
+                ? null
+                : (transport.NeedsOwnSender
                     ? OwnSenderFactory(ReplaySenderSetup.For(transport, credential, ServerChainPolicyFactory, options.AllowWindowsAuth))
                     : SenderFactory()) ??
-                throw new InvalidOperationException("The replay sender factory returned no sender.");
+                    throw new InvalidOperationException("The replay sender factory returned no sender.");
             ReportProgress(context, 0, plan.Count);
-            await Parallel.ForEachAsync(
+            Task loop = Parallel.ForEachAsync(
                 plan,
                 new ParallelOptions { MaxDegreeOfParallelism = options.Parallelism, CancellationToken = cancellationToken },
                 async (step, token) =>
                 {
-                    ReplayExchange exchange =
-                        await sender.SendAsync(step.Item.Draft, sendOptions, token).ConfigureAwait(false);
+                    ReplayExchange exchange;
+                    if (step.Item.Raw != null)
+                    {
+                        // Only a cancellation before the send began throws; a send that began returns its exchange.
+                        exchange = await rawSender.SendAsync(step.Item.Raw, rawOptions, token).ConfigureAwait(false);
+                        if (rawSendEnded != null)
+                        {
+                            await rawSendEnded(step.Id).ConfigureAwait(false);
+                        }
+                    }
+                    else
+                    {
+                        exchange = await sender.SendAsync(step.Item.Draft, sendOptions, token).ConfigureAwait(false);
+                    }
+
                     ReplayVerification verification = null;
                     if (options.Verify && step.Item.Verifiable && exchange.Outcome == ReplayOutcome.Completed)
                     {
@@ -1057,18 +1237,36 @@ namespace XMAT.Operations.Replay
                         ReplayTransportOptions.ResponseVersionName(exchange.Version),
                         transport.ClientCertificate != null,
                         transport.WindowsAuth,
-                        exchange.AuthHeaderSchemeObserved);
+                        exchange.AuthHeaderSchemeObserved,
+                        exchange.Raw,
+                        exchange.RequestBytesWritten,
+                        exchange.RequestWrite,
+                        exchange.ResponseFraming);
                     lock (gate)
                     {
-                        token.ThrowIfCancellationRequested();
-                        if (sink != null)
+                        // A raw send that began is always recorded, even when the run is being cancelled (contract 2.6): it
+                        // goes to the sink without the token check that other sends pass, and the cancellation propagates
+                        // when the loop ends. A sink that failed ends the run with its failure, cancelled or not.
+                        if (!exchange.Raw)
+                        {
+                            token.ThrowIfCancellationRequested();
+                        }
+
+                        if (sink != null && !sinkStopped)
                         {
                             try
                             {
                                 sink.Add(result, exchange);
                             }
-                            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex) && ex is not OperationCanceledException)
+                            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
                             {
+                                sinkStopped = true;
+                                if (ex is OperationCanceledException)
+                                {
+                                    throw;
+                                }
+
+                                sinkFailure = ex;
                                 throw new ReplaySinkException(ex);
                             }
                         }
@@ -1077,7 +1275,16 @@ namespace XMAT.Operations.Replay
                         done++;
                         ReportProgress(context, done, plan.Count);
                     }
-                }).ConfigureAwait(false);
+                });
+            try
+            {
+                await loop.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (sinkFailure != null)
+            {
+                throw new ReplaySinkException(sinkFailure);
+            }
+
             return results;
         }
 
@@ -1097,13 +1304,17 @@ namespace XMAT.Operations.Replay
             OperationOutcome outcome, string code, OperationDiagnosticSeverity severity, string message) =>
             OperationResult<ReplayResult>.Failure(outcome, new OperationDiagnostic(code, severity, message));
 
+        // Raw is a raw request's admitted image and Provenance the origin that it inherits (contract 2.8); a raw item has no
+        // Draft, and is the run's only request.
         private sealed record ReplayItem(
             string DeviceId,
             long? RequestNumber,
             ProxyConnectionModel Original,
             RequestReplayDraft Draft,
             int? SourceIndex = null,
-            long? Sequence = null)
+            long? Sequence = null,
+            RawRequestImage Raw = null,
+            Uri Provenance = null)
         {
             // Whether verify can compare a replay with the captured response: there is one, with a status, and its body was
             // kept. The GUI records a response without its body with a marker (RequestReplayDraft.ResponseBodyNotKeptHeader),

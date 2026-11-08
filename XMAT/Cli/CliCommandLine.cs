@@ -51,7 +51,9 @@ namespace XMAT.Cli
     // (--allow-proxy) lets the run send through. ClientCertificate is the certificate of --client-cert, which only
     // AllowClientCertificate (--allow-client-cert), naming the run's one origin, lets the run offer. WindowsAuth is
     // --windows-auth, which only AllowWindowsAuth (--allow-windows-auth), naming the run's one origin, lets the run use; an
-    // allowance without its option is still checked and grants nothing.
+    // allowance without its option is still checked and grants nothing. RawFile is compose --raw's file, read when the run
+    // starts and sent as its exact bytes to RawTarget (--target) once AllowRaw (--allow-raw) consents; FixContentLength
+    // (--fix-content-length) makes its one Content-Length equal to its body first.
     internal sealed record CliReplay(
         string Selection = null,
         int Repeat = 1,
@@ -86,7 +88,11 @@ namespace XMAT.Cli
         ReplayClientCertificate ClientCertificate = null,
         ReplayCredentialOrigin AllowClientCertificate = null,
         bool WindowsAuth = false,
-        ReplayCredentialOrigin AllowWindowsAuth = null)
+        ReplayCredentialOrigin AllowWindowsAuth = null,
+        string RawFile = null,
+        ReplayRawTarget RawTarget = null,
+        bool AllowRaw = false,
+        bool FixContentLength = false)
     {
         internal static CliReplay Default { get; } = new();
     }
@@ -154,6 +160,10 @@ namespace XMAT.Cli
         internal const string FormStringOption = "--form-string";
         internal const string FormTypeOption = "--form-type";
         internal const string SaveSazSwitch = "--save-saz";
+        internal const string RawOption = "--raw";
+        internal const string TargetOption = "--target";
+        internal const string AllowRawSwitch = "--allow-raw";
+        internal const string FixContentLengthSwitch = "--fix-content-length";
 
         internal const string HttpVersionMessage = "--http-version takes auto, 1.1 or 2.";
 
@@ -201,6 +211,25 @@ namespace XMAT.Cli
             "--url cannot have a fragment; to send one request per number, put # in its path or query and " +
             "add --sequence.";
 
+        internal const string RawNeedsTargetMessage = "--raw needs --target ORIGIN, the origin that the raw request is sent to.";
+
+        internal const string TargetNeedsRawMessage = "--target applies only with --raw.";
+
+        internal const string RawSwitchesNeedRawMessage = "--allow-raw and --fix-content-length apply only with --raw.";
+
+        internal const string RawUrlMessage = "--raw sends the request in its file to --target; it takes no --url.";
+
+        internal const string RawOptionsMessage =
+            "With --raw, the file is the whole request, sent over HTTP/1.1 directly or through --connect-to, without " +
+                "following redirects: --method, --header, --remove-header, --clear-headers, --body-file, --empty-body, " +
+                "--form, --form-string, --form-type, --request-file, --sequence, --proxy, --allow-proxy, --client-cert, " +
+                "--allow-client-cert, --windows-auth, --allow-windows-auth and --allow-origin-change do not apply, nor " +
+                "--http-version other than 1.1 or --follow-redirects other than 0.";
+
+        internal const string TargetMessage =
+            "--target takes an origin, http://HOST or https://HOST with an optional :PORT: a host name or an IP address (an " +
+                "IPv6 address in brackets), with no user name, password, path, query or fragment.";
+
         // Unknown commands, options and doctor targets get fixed messages.
         internal const string UnknownCommandMessage = "Unknown command. Run xmat help for the commands.";
         internal const string UnknownOptionMessage = "Unknown option. Run xmat help for the options.";
@@ -243,7 +272,8 @@ namespace XMAT.Cli
         };
 
         private static readonly HashSet<string> ComposeCommandOptions = new(
-            SendOptions.Concat(new[] { UrlOption, SequenceOption, RequestFileOption, RemoveHeaderOption }), StringComparer.Ordinal);
+            SendOptions.Concat(new[] { UrlOption, SequenceOption, RequestFileOption, RemoveHeaderOption, RawOption, TargetOption }),
+            StringComparer.Ordinal);
 
         private static readonly HashSet<string> ReplayCommandOptions = new(
             SendOptions.Concat(new[]
@@ -287,8 +317,36 @@ namespace XMAT.Cli
         };
 
         private static readonly HashSet<string> ComposeCommandSwitches = new(
-            ComposeSwitches.Concat(new[] { AllowOriginChangeSwitch, ClearHeadersSwitch, EmptyBodySwitch }),
+            ComposeSwitches.Concat(new[]
+            {
+                AllowOriginChangeSwitch, ClearHeadersSwitch, EmptyBodySwitch, AllowRawSwitch, FixContentLengthSwitch,
+            }),
             StringComparer.Ordinal);
+
+        // What compose --raw never takes: the file is the whole request, and Raw mode sends it over HTTP/1.1, directly or
+        // through --connect-to, without a proxy, a client certificate, Windows authentication or redirects. The command line
+        // has no provenance, so it has no origin change to allow either (the operation still accepts the GUI's grant).
+        private static readonly string[] RawExcluded =
+        {
+            MethodOption,
+            HeaderOption,
+            RemoveHeaderOption,
+            ClearHeadersSwitch,
+            BodyFileOption,
+            EmptyBodySwitch,
+            FormOption,
+            FormStringOption,
+            FormTypeOption,
+            RequestFileOption,
+            SequenceOption,
+            ProxyOption,
+            AllowProxySwitch,
+            ClientCertOption,
+            AllowClientCertOption,
+            WindowsAuthSwitch,
+            AllowWindowsAuthOption,
+            AllowOriginChangeSwitch,
+        };
 
         private static readonly HashSet<string> ReplaySwitches = new(
             ComposeSwitches.Concat(new[] { AllowOriginChangeSwitch, UnconditionalSwitch, VerifySwitch, VerifyDiffSwitch }),
@@ -683,6 +741,23 @@ namespace XMAT.Cli
                     command, "cli.usage.unexpected-argument", "compose takes no arguments besides its options.");
             }
 
+            // --raw sends the request in a file as its exact bytes to --target (Raw mode); everything else composes a parsed
+            // request.
+            if (arguments.Options.TryGetValue(RawOption, out string rawFile))
+            {
+                return ParseRawCompose(command, arguments, rawFile);
+            }
+
+            if (Has(arguments, TargetOption))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.missing-option", TargetNeedsRawMessage);
+            }
+
+            if (Has(arguments, AllowRawSwitch) || Has(arguments, FixContentLengthSwitch))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.missing-option", RawSwitchesNeedRawMessage);
+            }
+
             // --url is the request to compose, or with --request-file an edit of the file's request.
             bool fromFile = arguments.Options.TryGetValue(RequestFileOption, out string requestFile);
             if (!fromFile && !arguments.Options.ContainsKey(UrlOption))
@@ -733,6 +808,51 @@ namespace XMAT.Cli
                     ClearHeaders = arguments.Switches.Contains(ClearHeadersSwitch),
                     EmptyBody = arguments.Switches.Contains(EmptyBodySwitch),
                     Form = form,
+                }));
+        }
+
+        // compose --raw FILE --target ORIGIN --out DIR: the file is read when the run starts. --raw itself selects HTTP/1.1,
+        // so --http-version may only say 1.1 and --follow-redirects only 0, and RawExcluded is what Raw mode never takes.
+        private static CliParseResult ParseRawCompose(string command, CliArguments arguments, string rawFile)
+        {
+            if (!arguments.Options.TryGetValue(TargetOption, out string targetText))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.missing-option", RawNeedsTargetMessage);
+            }
+
+            if (Has(arguments, UrlOption))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.conflicting-options", RawUrlMessage);
+            }
+
+            if (RawExcluded.Any(name => Has(arguments, name)) ||
+                (arguments.Options.TryGetValue(HttpVersionOption, out string version) && version != "1.1") ||
+                (arguments.Options.TryGetValue(FollowRedirectsOption.Name, out string redirects) && redirects != "0"))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.conflicting-options", RawOptionsMessage);
+            }
+
+            if (!ReplayRawTarget.TryParse(targetText, out ReplayRawTarget target))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", TargetMessage);
+            }
+
+            if (!arguments.Options.TryGetValue(OutOption, out string output))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.missing-option", "compose needs --out DIR.");
+            }
+
+            CliParseResult error = ReadSendOptions(command, arguments, out CliReplay replay);
+            return error ?? CliParseResult.Success(new CliRequest(
+                command,
+                Output: output,
+                Replay: replay with
+                {
+                    HttpVersion = ReplayHttpVersion.Http11,
+                    RawFile = rawFile,
+                    RawTarget = target,
+                    AllowRaw = Has(arguments, AllowRawSwitch),
+                    FixContentLength = Has(arguments, FixContentLengthSwitch),
                 }));
         }
 

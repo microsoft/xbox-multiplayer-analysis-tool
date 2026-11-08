@@ -26,7 +26,8 @@ namespace XMAT.Operations.Replay
         internal const string ArgumentsTooLarge = "replay.curl.arguments-too-large";
     }
 
-    // What curl is not known to send the way XMAT does, so an export refuses it rather than leave it out.
+    // What curl is not known to send the way XMAT does, so an export refuses it rather than leave it out. Raw is a raw
+    // request (slice L): curl builds a request of its own, never these prepared bytes, so Raw mode offers no cURL export.
     internal enum CurlUnsupported
     {
         Http2Exact,
@@ -36,6 +37,7 @@ namespace XMAT.Operations.Replay
         Proxy,
         ClientCertificate,
         WindowsAuth,
+        Raw,
     }
 
     internal sealed class CurlExportException : Exception

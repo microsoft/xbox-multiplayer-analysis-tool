@@ -147,6 +147,26 @@ namespace XMAT.Operations.Replay
         // succeeded nor the package that was negotiated.
         internal string AuthHeaderSchemeObserved { get; init; }
 
+        // A raw send (slice L), whose request went out as its prepared bytes.
+        internal bool Raw { get; init; }
+
+        // A raw send's plaintext bytes in write calls to the connection's stream that completed: what XMAT handed to that
+        // stream, not what reached the peer. Null for a Parsed send.
+        internal long? RequestBytesWritten { get; init; }
+
+        // A raw send's write state: none, partial, uncertain or complete (RawWriteState). Null for a Parsed send.
+        internal string RequestWrite { get; init; }
+
+        // A raw send's response framing: content-length, chunked, close or none. Null for a Parsed send, and when no
+        // response was read.
+        internal string ResponseFraming { get; init; }
+
+        // The fields of a raw response's chunked trailer section: counted, never merged and not kept.
+        internal int ResponseTrailerFields { get; init; }
+
+        // The origin that the request inherits (contract 2.8): its captured origin, or else the origin that it was sent to.
+        internal Uri ProvenanceOrigin { get; init; }
+
         // The send's verification differences, set once by ReplayOperation before the sink sees the exchange when the run
         // asked for them (ReplayOptions.VerifyDiff) and the send was verified; null otherwise. They can hold captured
         // content, so they travel with the exchange to the sink and never into ReplayResult.

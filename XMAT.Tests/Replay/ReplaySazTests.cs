@@ -185,6 +185,67 @@ namespace XMAT.Tests.Replay
             Assert.Equal(expected, flags);
         }
 
+        // A raw send's session is its normalized request (RawRequestImage.ToMessage), read back as any send's: the target in
+        // absolute form, Host first with the target origin's authority whatever Host was sent (EXAMPLE.test:8080 here), a
+        // chunked body's framing replaced in place by Content-Length, and the entity. Its flags end with x-xmat-replay-raw
+        // and its write state, whatever came back.
+        [Theory]
+        [InlineData(RawWriteState.Complete, true)]
+        [InlineData(RawWriteState.Partial, false)]
+        [InlineData(RawWriteState.Uncertain, false)]
+        [InlineData(RawWriteState.None, false)]
+        public void ARawSend_IsSavedNormalized_WithTheRawFlagAndItsWriteState(string write, bool responded)
+        {
+            Assert.True(ReplayRawTarget.TryParse("http://example.test:8080", out ReplayRawTarget target));
+            RawRequestImage image = RawRequest.FromBytes(
+                target,
+                Encoding.Latin1.GetBytes(
+                    "POST /p?q HTTP/1.1\r\nHost: EXAMPLE.test:8080\r\nTransfer-Encoding: chunked\r\nX-A:  a  \r\n\r\n5\r\nhello\r\n0\r\n\r\n"),
+                false,
+                CancellationToken.None).Image;
+            string code = responded ? null : RawCodes.SendCancelled;
+            var exchange = new ReplayExchange
+            {
+                Outcome = responded ? ReplayOutcome.Completed : ReplayOutcome.Failed,
+                Code = code,
+                Request = image.ToMessage(),
+                RequestUri = image.RequestUri,
+                Started = Started,
+                Response = responded ? Response("HTTP/1.1 200 OK", new[] { Header("Content-Length", "0") }, []) : null,
+                StatusCode = responded ? 200 : 0,
+                Duration = TimeSpan.FromMilliseconds(25),
+                Raw = true,
+                RequestWrite = write,
+            };
+            ReplayItemResult result = Result(1, exchange.Outcome, code: code) with { Raw = true, RequestWrite = write };
+
+            using ZipArchive archive = Archive((result, exchange));
+
+            IEnumerable<string> expected = new[]
+            {
+                "x-clientip=0.0.0.0", "x-xmat-replay-id=1", "x-xmat-replay-outcome=" + (responded ? "completed" : "failed"),
+            };
+            expected = expected
+                .Concat(code == null ? Array.Empty<string>() : new[] { "x-xmat-replay-code=" + code })
+                .Concat(new[] { "x-xmat-replay-redirects=0", "x-xmat-replay-raw=true", "x-xmat-replay-request-write=" + write });
+            Assert.Equal(expected, Flags(archive, 1));
+            const string head = "POST http://example.test:8080/p?q HTTP/1.1\r\nHost: example.test:8080\r\nContent-Length: 5\r\nX-A: a\r\n\r\n";
+            using (var request = new StreamReader(archive.GetEntry("raw/1_c.txt").Open(), Encoding.Latin1))
+            {
+                Assert.Equal(head + "hello", request.ReadToEnd());
+            }
+
+            Assert.Equal(responded, archive.GetEntry("raw/1_s.txt") != null);
+            if (responded)
+            {
+                Assert.All(RoundTrip(result, exchange), record =>
+                {
+                    Assert.Equal(head, record.RequestLineAndHeaders);
+                    Assert.Equal("hello"u8.ToArray(), record.RequestBody);
+                });
+            }
+        }
+
         // The command line's flags keep to their alphabet, so a value outside it is a bug that stops the run.
         [Theory]
         [InlineData("d 1")]

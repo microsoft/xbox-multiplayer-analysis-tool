@@ -167,8 +167,9 @@ namespace XMAT.Cli
             return stream.ToArray();
         }
 
-        // summary.json of replay and compose: the results of every send and the run's warnings, without its status (the
-        // results are published whatever the responses were).
+        // summary.json of replay and compose: the results of every send, the run's status and its warnings and errors. The
+        // results are published whatever the responses were, and a raw run cancelled after a send began publishes the sends
+        // that began, with the status cancelled and its errors (compose --raw).
         internal static byte[] SerializeReplaySummary(CliReport report)
         {
             using var stream = new MemoryStream();
@@ -179,8 +180,10 @@ namespace XMAT.Cli
                 writer.WriteString("command", report.Command);
                 writer.WriteString("runId", report.RunId);
                 writer.WriteString("version", CliReport.ToolVersion);
+                writer.WriteString("status", report.Status);
                 WriteReplay(writer, report.Replay ?? new CliReplayReport(null, null), includeFiles: true);
                 WriteDiagnostics(writer, "warnings", report.Warnings);
+                WriteDiagnostics(writer, "errors", report.Errors);
                 writer.WriteEndObject();
             }
 
@@ -351,8 +354,9 @@ namespace XMAT.Cli
         // headers or bodies, which are in the request and response files.
         private static void WriteReplay(Utf8JsonWriter writer, CliReplayReport replay, bool includeFiles)
         {
-            // A capture file's kind and hash with its limits, or a request file's kind and hash (compose --request-file).
-            if (replay.Limits != null || replay.InputKind == CliReplayCommand.RequestFileInputKind)
+            // A capture file's kind and hash with its limits, a request file's kind and hash (compose --request-file), or a
+            // raw request file's (compose --raw).
+            if (replay.Limits != null || replay.InputKind is CliReplayCommand.RequestFileInputKind or CliReplayCommand.RawFileInputKind)
             {
                 writer.WriteStartObject("input");
                 writer.WriteString("kind", replay.InputKind);
@@ -394,6 +398,11 @@ namespace XMAT.Cli
             writer.WriteBoolean("windowsAuth", options.WindowsAuth);
             writer.WriteBoolean("allowWindowsAuth", options.AllowWindowsAuth != null);
             writer.WriteBoolean("saveSaz", options.SaveSaz);
+
+            // Whether --raw, --allow-raw and --fix-content-length were given, never the file or the --target origin.
+            writer.WriteBoolean("raw", options.RawFile != null);
+            writer.WriteBoolean("allowRaw", options.AllowRaw);
+            writer.WriteBoolean("fixContentLength", options.FixContentLength);
             writer.WriteEndObject();
 
             writer.WriteStartArray("replays");
@@ -441,6 +450,21 @@ namespace XMAT.Cli
                 // The Authorization label that a Windows-authentication send's final request carried ("Negotiate" or
                 // "NTLM"), null otherwise: a header label only, never a token, the package or an identity.
                 writer.WriteString("authHeaderSchemeObserved", item.AuthHeaderSchemeObserved);
+
+                // A raw send's write state, how much of its image XMAT handed to the connection, and its response's framing:
+                // none of them proves what the server received. Null for other sends.
+                writer.WriteBoolean("raw", item.Raw);
+                writer.WriteString("requestWrite", item.RequestWrite);
+                if (item.RequestBytesWritten is long written)
+                {
+                    writer.WriteNumber("requestBytesWritten", written);
+                }
+                else
+                {
+                    writer.WriteNull("requestBytesWritten");
+                }
+
+                writer.WriteString("responseFraming", item.ResponseFraming);
                 writer.WriteString("code", item.Code);
                 if (item.Verification == null)
                 {

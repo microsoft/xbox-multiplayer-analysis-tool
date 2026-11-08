@@ -248,6 +248,10 @@ namespace XMAT.Operations.Replay
             HttpRequestMessage request = draft.CreateRequestToSend();
             ApplyVersion(request, options.HttpVersion);
 
+            // The origin that the request inherits (contract 2.8): the one that it was captured, saved or first sent for, or
+            // else the URL that it is sent to, kept whole as the draft keeps its origin, so an IPv6 zone survives.
+            Uri provenance = draft.CapturedOrigin ?? request.RequestUri;
+
             // The same bytes as the request content: a body from SetBodyBytes is shared, not copied.
             byte[] body = draft.GetBodyBytes();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -298,7 +302,7 @@ namespace XMAT.Operations.Replay
                     {
                         return Failure(
                             ReplayOutcome.Failed, ProxyAuthRequiredCode, sent, hop.Uri, started, redirects, stopwatch, error: null,
-                            observed);
+                            observed, provenance);
                     }
 
                     string stopCode = null;
@@ -346,13 +350,15 @@ namespace XMAT.Operations.Replay
                         Duration = stopwatch.Elapsed,
                         Redirects = redirects,
                         AuthHeaderSchemeObserved = observed,
+                        ProvenanceOrigin = provenance,
                     };
                 }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 return Failure(
-                    ReplayOutcome.TimedOut, TimeoutCode, sent, request.RequestUri, started, redirects, stopwatch, error: null, observed);
+                    ReplayOutcome.TimedOut, TimeoutCode, sent, request.RequestUri, started, redirects, stopwatch, error: null, observed,
+                    provenance);
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException)
             {
@@ -361,14 +367,14 @@ namespace XMAT.Operations.Replay
                 string code = FailureCode(ex);
                 return Failure(
                     ReplayOutcome.Failed, code, sent, request.RequestUri, started, redirects, stopwatch,
-                    code == ProxyAuthRequiredCode || _setup.WindowsAuth ? null : ex, observed);
+                    code == ProxyAuthRequiredCode || _setup.WindowsAuth ? null : ex, observed, provenance);
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex) && ex is not OperationCanceledException)
             {
                 // Anything else a server can provoke, such as a Location the URL parser refuses, ends this send only.
                 return Failure(
                     ReplayOutcome.Failed, SendFailedCode, sent, request.RequestUri, started, redirects, stopwatch,
-                    _setup.WindowsAuth ? null : ex, observed);
+                    _setup.WindowsAuth ? null : ex, observed, provenance);
             }
             finally
             {
@@ -393,7 +399,8 @@ namespace XMAT.Operations.Replay
             int redirects,
             Stopwatch stopwatch,
             Exception error,
-            string observed) =>
+            string observed,
+            Uri provenance) =>
             new()
             {
                 Outcome = outcome,
@@ -405,6 +412,7 @@ namespace XMAT.Operations.Replay
                 Redirects = redirects,
                 Error = error,
                 AuthHeaderSchemeObserved = observed,
+                ProvenanceOrigin = provenance,
             };
 
         // Windows authentication: the scheme label of the Authorization header that the HTTP stack put on the live message,

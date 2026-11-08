@@ -77,7 +77,7 @@ namespace XMAT.Tests.Replay
             (bool ipv6, ReplayHttpVersion version, Func<string, RequestReplayDraft> make) = Case(name);
             using var server = new RawLoopback(ipv6);
             RequestReplayDraft draft = make(server.Origin);
-            Task<RawRequest> sent = server.AcceptAsync();
+            Task<ReceivedRequest> sent = server.AcceptAsync();
             using (var sender = new ReplaySender())
             {
                 _ = await sender.SendAsync(
@@ -86,7 +86,7 @@ namespace XMAT.Tests.Replay
                     CancellationToken.None);
             }
 
-            RawRequest xmat = await sent;
+            ReceivedRequest xmat = await sent;
             CurlRequest request = RequestCurlExporter.Prepare(draft, new ReplayTransportOptions(version), 0, CancellationToken.None);
             var scripts = new List<(string Form, string Path)>
             {
@@ -108,9 +108,9 @@ namespace XMAT.Tests.Replay
 
             foreach ((string form, string script) in scripts)
             {
-                Task<RawRequest> received = server.AcceptAsync();
+                Task<ReceivedRequest> received = server.AcceptAsync();
                 ScriptRun run = await CurlScripts.RunAsync(script, _folder);
-                RawRequest curl = await received;
+                ReceivedRequest curl = await received;
 
                 _output.WriteLine($"{name} {form}: {run}");
                 Assert.True(run.ExitCode == 0, $"{form}: {run}");
@@ -165,9 +165,9 @@ namespace XMAT.Tests.Replay
             using var server = new RawLoopback();
             var wire = new RequestReplayDraft { Method = "POST", Url = server.Origin + "/x", HeadersText = "X-Hostile: " + Hostile, BodyText = Hostile };
             CurlRequest wireRequest = RequestCurlExporter.Prepare(wire, new ReplayTransportOptions(), 0, CancellationToken.None);
-            Task<RawRequest> received = server.AcceptAsync();
+            Task<ReceivedRequest> received = server.AcceptAsync();
             ScriptRun sent = await CurlScripts.RunAsync(CurlScripts.WriteFile(_folder, "hostile\\wire.ps1", wireRequest, CurlScriptForm.File), _folder);
-            RawRequest curl = await received;
+            ReceivedRequest curl = await received;
 
             Assert.True(sent.ExitCode == 0, sent.ToString());
             Assert.Equal(Encoding.UTF8.GetBytes(Hostile), curl.FieldValueBytes("X-Hostile"));
@@ -501,7 +501,7 @@ namespace XMAT.Tests.Replay
             var draft = new RequestReplayDraft { Method = "GET", Url = server.Origin + "/" };
             CurlRequest request = RequestCurlExporter.Prepare(draft, new ReplayTransportOptions(), 0, CancellationToken.None);
 
-            Task<RawRequest> closed = server.AcceptAsync(closeAtOnce: true);
+            Task<ReceivedRequest> closed = server.AcceptAsync(closeAtOnce: true);
             ScriptRun file = await CurlScripts.RunAsync(CurlScripts.WriteFile(_folder, "closed.ps1", request, CurlScriptForm.File), _folder);
             await closed;
             closed = server.AcceptAsync(closeAtOnce: true);
@@ -620,7 +620,7 @@ namespace XMAT.Tests.Replay
                 CurlScripts.WritePasteableHost(_folder, "output\\pasteable.ps1", request),
             })
             {
-                Task<RawRequest> received = server.AcceptAsync();
+                Task<ReceivedRequest> received = server.AcceptAsync();
                 ScriptRun run = await CurlScripts.RunAsync(script, _folder);
                 await received;
 

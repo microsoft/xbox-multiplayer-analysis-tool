@@ -12,7 +12,7 @@ using XMAT.WebServiceCapture.Models;
 namespace XMAT.Operations.Replay
 {
     // What to send: requests selected from a capture file, captured requests the caller already holds (the GUI), one
-    // composed request, or one composed request per number of a sequence.
+    // composed request, one composed request per number of a sequence, or one raw request (slice L).
     internal sealed class ReplaySource
     {
         private ReplaySource(
@@ -22,7 +22,10 @@ namespace XMAT.Operations.Replay
             AnalysisLimits limits,
             IReadOnlyList<ProxyConnectionModel> captures,
             RequestReplayDraft draft,
-            ReplaySequence sequence = null)
+            ReplaySequence sequence = null,
+            IReadOnlyList<Uri> capturedOrigins = null,
+            RawRequestImage raw = null,
+            Uri provenanceOrigin = null)
         {
             Path = path;
             Selection = selection;
@@ -31,6 +34,9 @@ namespace XMAT.Operations.Replay
             Captures = captures;
             Draft = draft;
             Sequence = sequence;
+            CapturedOrigins = capturedOrigins;
+            Raw = raw;
+            ProvenanceOrigin = provenanceOrigin;
         }
 
         internal string Path { get; }
@@ -50,6 +56,16 @@ namespace XMAT.Operations.Replay
         // With Draft as the template whose every '#' each number replaces; null for the other sources.
         internal ReplaySequence Sequence { get; }
 
+        // One entry per capture, or null: a non-null entry is the origin that its capture was captured, saved or first sent
+        // for (contract 2.8), which replaces the capture's own before the checks, so a send to another origin needs consent.
+        internal IReadOnlyList<Uri> CapturedOrigins { get; }
+
+        // A raw request, admitted by RawRequest.FromBytes or Prepare and sent as its exact bytes; null for the other sources.
+        internal RawRequestImage Raw { get; }
+
+        // The origin that the raw request inherits (contract 2.8), or null for its target's own.
+        internal Uri ProvenanceOrigin { get; }
+
         internal static ReplaySource FromFile(
             string path, ReplaySelection selection, string deviceId = null, AnalysisLimits limits = null)
         {
@@ -58,10 +74,19 @@ namespace XMAT.Operations.Replay
             return new ReplaySource(path, selection, deviceId, limits, null, null);
         }
 
-        internal static ReplaySource FromCaptures(IReadOnlyList<ProxyConnectionModel> captures)
+        // capturedOrigins, when given, has one entry per capture, each null or an absolute URL (Reissue of Replays rows).
+        internal static ReplaySource FromCaptures(
+            IReadOnlyList<ProxyConnectionModel> captures, IReadOnlyList<Uri> capturedOrigins = null)
         {
             ArgumentNullException.ThrowIfNull(captures);
-            return new ReplaySource(null, null, null, null, captures, null);
+            if (capturedOrigins != null &&
+                (capturedOrigins.Count != captures.Count || capturedOrigins.Any(origin => origin is { IsAbsoluteUri: false })))
+            {
+                throw new ArgumentException(
+                    "The captured origins need one entry per capture, each null or an absolute URL.", nameof(capturedOrigins));
+            }
+
+            return new ReplaySource(null, null, null, null, captures, null, capturedOrigins: capturedOrigins?.ToArray());
         }
 
         // The draft becomes the only request; it has no captured response to verify against.
@@ -79,6 +104,44 @@ namespace XMAT.Operations.Replay
             ArgumentNullException.ThrowIfNull(sequence);
             return new ReplaySource(null, null, null, null, null, template, sequence);
         }
+
+        // One raw request (slice L). Only an admitted image can be sent, so admission is a matter of type (contract 2.4).
+        internal static ReplaySource FromRaw(RawRequestImage image, Uri provenanceOrigin = null)
+        {
+            ArgumentNullException.ThrowIfNull(image);
+            if (provenanceOrigin is { IsAbsoluteUri: false })
+            {
+                throw new ArgumentException("The provenance origin is not an absolute URL.", nameof(provenanceOrigin));
+            }
+
+            return new ReplaySource(null, null, null, null, null, null, raw: image, provenanceOrigin: provenanceOrigin);
+        }
+    }
+
+    // Consent to send one raw request (contract 2.4): given for a raw plan that Preview checked, it covers that plan's image
+    // only, compared by its target and SHA-256, never another request or another target.
+    internal sealed class ReplayRawConsent
+    {
+        private ReplayRawConsent(ReplayRawTarget target, string sha256)
+        {
+            Target = target;
+            Sha256 = sha256;
+        }
+
+        internal ReplayRawTarget Target { get; }
+
+        internal string Sha256 { get; }
+
+        internal static ReplayRawConsent For(ReplayPlanPreview rawPlan)
+        {
+            ArgumentNullException.ThrowIfNull(rawPlan);
+            RawRequestImage image = rawPlan.Raw ??
+                throw new ArgumentException("The plan is not a raw request's.", nameof(rawPlan));
+            return new ReplayRawConsent(image.Target, image.Sha256);
+        }
+
+        internal bool Covers(RawRequestImage image) =>
+            image != null && Target.Equals(image.Target) && string.Equals(Sha256, image.Sha256, StringComparison.Ordinal);
     }
 
     // Changes applied to every selected request before anything is sent. Url replaces the whole URL (one request only);
@@ -112,7 +175,7 @@ namespace XMAT.Operations.Replay
     // exchange (ReplayExchange.VerifyDiff), never in the result; it needs Verify. AllowClientCertificate is the one origin
     // that the transport's client certificate may go to, and AllowWindowsAuth the one origin whose challenges Windows
     // authentication may answer; the run must be to exactly that origin. An allowance that the transport does not use
-    // grants nothing.
+    // grants nothing. AllowRaw is the consent to send one raw request, bound to its image and target.
     internal sealed record ReplayOptions(
         int Repeat = 1,
         int Parallelism = 1,
@@ -127,7 +190,8 @@ namespace XMAT.Operations.Replay
         bool VerifyDiff = false,
         bool AllowProxy = false,
         ReplayCredentialOrigin AllowClientCertificate = null,
-        ReplayCredentialOrigin AllowWindowsAuth = null)
+        ReplayCredentialOrigin AllowWindowsAuth = null,
+        ReplayRawConsent AllowRaw = null)
     {
         internal const int MaxRepeat = 1000;
         internal const int MaxParallelism = 16;
@@ -186,13 +250,14 @@ namespace XMAT.Operations.Replay
         ReplayEdits Edits = null,
         IReplayExchangeSink Sink = null);
 
-    // What a composed request, or one per number of a sequence, would send (ReplayOperation.Preview). Template is a copy
-    // of the draft that was checked, so later edits to that draft change nothing here; send it with ToSource and
+    // What a composed request, one per number of a sequence, or a raw request would send (ReplayOperation.Preview). Template
+    // is a copy of the draft that was checked, so later edits to that draft change nothing here; send it with ToSource and
     // Transport, which is how the plan was checked to reach the server. Sends counts every send, repeats included.
     // UsesUnsafeMethod, ChangesOrigin, UsesConnectTo, UsesProxy, UsesClientCertificate and UsesWindowsAuth say which consent
     // the options must carry (AllowUnsafeMethods, AllowOriginChange, AllowConnectTo, AllowProxy, and AllowClientCertificate
     // and AllowWindowsAuth naming CredentialOrigin, the one origin of the plan) for the operation to send them; it checks
-    // them again when it runs.
+    // them again when it runs. A raw plan has no Template: Raw is its image, which AllowRaw must cover
+    // (ReplayRawConsent.For), and ProvenanceOrigin the origin that it inherits (ReplaySource.FromRaw).
     internal sealed record ReplayPlanPreview(
         RequestReplayDraft Template,
         ReplaySequence Sequence,
@@ -200,8 +265,12 @@ namespace XMAT.Operations.Replay
         bool UsesUnsafeMethod,
         bool ChangesOrigin,
         ReplayTransportOptions Transport = null,
-        ReplayCredentialOrigin CredentialOrigin = null)
+        ReplayCredentialOrigin CredentialOrigin = null,
+        RawRequestImage Raw = null,
+        Uri ProvenanceOrigin = null)
     {
+        internal bool UsesRaw => Raw != null;
+
         internal bool UsesConnectTo => Transport?.ConnectTo != null;
 
         internal bool UsesProxy => Transport?.Proxy != null;
@@ -211,6 +280,7 @@ namespace XMAT.Operations.Replay
         internal bool UsesWindowsAuth => Transport?.WindowsAuth == true;
 
         internal ReplaySource ToSource() =>
+            Raw != null ? ReplaySource.FromRaw(Raw, ProvenanceOrigin) :
             Sequence == null ? ReplaySource.FromDraft(Template) : ReplaySource.FromTemplate(Template, Sequence);
     }
 
@@ -224,7 +294,10 @@ namespace XMAT.Operations.Replay
     // that does not ask for one, or that fails the check, receives none. WindowsAuthConfigured says that the send could
     // answer its origin's Negotiate and NTLM challenges, never that it did; AuthHeaderSchemeObserved is the Authorization
     // label ("Negotiate" or "NTLM") that its final request carried, or null when it carried neither, which proves neither
-    // that authentication succeeded nor which package was negotiated, and null is no proof that none was used.
+    // that authentication succeeded nor which package was negotiated, and null is no proof that none was used. A raw send
+    // (Raw) also has RequestBytesWritten and RequestWrite, how much of its image was handed to the connection and whether
+    // all of it was ("none", "partial", "uncertain" or "complete"), and ResponseFraming ("content-length", "chunked", "close"
+    // or "none", null without a response); all three are null for other sends.
     internal sealed record ReplayItemResult(
         int Id,
         string DeviceId,
@@ -244,7 +317,11 @@ namespace XMAT.Operations.Replay
         string ResponseVersion = null,
         bool ClientCertificateConfigured = false,
         bool WindowsAuthConfigured = false,
-        string AuthHeaderSchemeObserved = null);
+        string AuthHeaderSchemeObserved = null,
+        bool Raw = false,
+        long? RequestBytesWritten = null,
+        string RequestWrite = null,
+        string ResponseFraming = null);
 
     // InputKind and InputSha256 describe a capture file and are null for other sources.
     internal sealed record ReplayResult(string InputKind, string InputSha256, IReadOnlyList<ReplayItemResult> Items)

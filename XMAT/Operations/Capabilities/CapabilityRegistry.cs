@@ -235,7 +235,8 @@ namespace XMAT.Operations.Capabilities
                 }),
             Capability.Supported(
                 "request.compose", "Compose and send a new request", "S9",
-                cli: "compose --url URL | --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD] " +
+                cli: "compose --url URL | --request-file FILE | --raw FILE --target ORIGIN --out DIR [--save-saz] [--allow-raw] " +
+                    "[--fix-content-length] [--sequence START-END] [--method METHOD] " +
                     "[--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] " +
                     "[--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] " +

@@ -91,6 +91,22 @@ authentication added, and the `WWW-Authenticate` and `Proxy-Authenticate` header
 response keep only the scheme names of their `Negotiate`, `NTLM` and `Kerberos`
 challenges, without their tokens; other challenges are saved as received.
 
+A raw send of `xmat compose --raw` is saved normalized, as other replayed sends are: its
+method and HTTP version as sent, with its target in absolute form, the target origin in
+ASCII followed by the path and query as sent; `Host` first, written as that origin's
+authority whatever `Host` the request had; its other fields without the spaces around
+their values; a chunked body's `Transfer-Encoding` replaced by `Content-Length` with the
+decoded length; and the decoded body. Only `replays/NNNNN/request.http` holds its exact
+bytes, the request as attempted. Its session has two
+more flags: `x-xmat-replay-raw` (`true`) and `x-xmat-replay-request-write` (`none`,
+`partial`, `uncertain` or `complete`): how much of the request XMAT handed to the
+connection, never proof of what the server received.
+
+XMAT keeps the origin that a replayed send inherits, the one that it was captured,
+saved or first sent for, only in memory with its row in the **Replays** tab, so that a
+later send of it to another origin asks for consent. Saved and exported captures do not
+keep it.
+
 ## Export a sanitized capture
 
 1. Stop all captures and select the web proxy capture to share.
