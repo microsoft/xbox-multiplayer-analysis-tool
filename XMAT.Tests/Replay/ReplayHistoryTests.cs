@@ -515,8 +515,9 @@ namespace XMAT.Tests.Replay
         });
 
         // H10: the URL that a preview shows is where Load sends the request: the port only when it is not the default, an
-        // IPv6 host in brackets, a path that is a URL as stored, and, for a scheme that no sent URL has, the parts as stored.
-        // Where nothing is escaped or cut, a preview of a request that can be sent is the URL of the draft that Load makes.
+        // IPv6 host in brackets, a path that is a URL as stored, and, for a scheme that no sent URL has, the parts as stored,
+        // without any scheme when it is unknown. Where nothing is escaped or cut, a preview of a request that can be sent is
+        // the URL of the draft that Load makes.
         [Theory]
         [InlineData("http", "127.0.0.1:8080", "/a?b=c", "http://127.0.0.1:8080/a?b=c", true)]
         [InlineData("http", "example.test:80", "/a", "http://example.test/a", true)]
@@ -526,6 +527,11 @@ namespace XMAT.Tests.Replay
         [InlineData("http", "example.test", "HTTP://Other.TEST/stored", "HTTP://Other.TEST/stored", false)]
         [InlineData("ftp", "example.test:21", "/f", "ftp://example.test:21/f", false)]
         [InlineData("ftp", "[::1]:21", "/f", "ftp://[::1]:21/f", false)]
+        [InlineData("", "example.test:8080", "/a", "example.test:8080/a", false)]
+        [InlineData("", "[::1]:8080", "/v6", "[::1]:8080/v6", false)]
+        [InlineData("", "example.test", "*", "example.test/*", false)]
+        [InlineData("", "", "/a", "/a", false)]
+        [InlineData("", ":8080", "/a", "/a", false)]
         public Task UrlPreview_NamesWhereLoadSends(string scheme, string authority, string path, string expected, bool sameAsLoad) =>
             _application.RunAsync(async () =>
             {

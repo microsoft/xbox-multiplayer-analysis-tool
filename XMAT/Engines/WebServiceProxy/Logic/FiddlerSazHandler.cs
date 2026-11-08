@@ -8,6 +8,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Xml.Linq;
@@ -129,6 +130,7 @@ namespace XMAT.WebServiceCapture
             TimeSpan duration = TimeSpan.FromMilliseconds(0);
             string scheme = string.Empty;
             string hostAndPort = string.Empty;
+            string targetAuthority = null;
             string method = string.Empty;
             string call = string.Empty;
             string requestHeaders = string.Empty;
@@ -162,24 +164,15 @@ namespace XMAT.WebServiceCapture
                         // METHOD
                         method = firstLineSplit[0];
 
-                        // CALL & SCHEME
-                        if (method == "CONNECT")
+                        // CALL & SCHEME: an absolute http, https or ftp URL gives the scheme, the path and query, and the
+                        // authority, which takes precedence over the Host header (RFC 9112 3.2.2). Any other target, such as a
+                        // path, *, a CONNECT's authority, or what Uri reads as a file or UNC path, is kept as written, with an
+                        // unknown scheme rather than a guess.
+                        call = firstLineSplit[1];
+                        if (TryReadAbsoluteTarget(method, call, out Uri target, out targetAuthority))
                         {
-                            call = firstLineSplit[1];
-                            scheme = @"http";
-                        }
-                        else
-                        {
-                            if (Uri.TryCreate(firstLineSplit[1], UriKind.Absolute, out Uri uri))
-                            {
-                                call = uri.PathAndQuery;
-                                scheme = uri.Scheme;
-                            }
-                            else
-                            {
-                                scheme = firstLineSplit[0];
-                                call = firstLineSplit[1];
-                            }
+                            call = target.PathAndQuery;
+                            scheme = target.Scheme;
                         }
                     }
 
@@ -188,7 +181,7 @@ namespace XMAT.WebServiceCapture
                         ref requestHeaderBytes,
                         ref skippedMalformedHeaderLines);
 
-                    hostAndPort = reqHeaders["Host"];
+                    hostAndPort = targetAuthority ?? reqHeaders["Host"];
 
                     // REQUEST BODY
                     requestBody = cFile.ReadToEnd();
@@ -275,9 +268,14 @@ namespace XMAT.WebServiceCapture
                     {
                         if ((string)flag.Attribute("N") == "x-clientip")
                         {
-                            // CLIENT IP
-                            clientIP = (string)flag.Attribute("V");
-                            clientIP = clientIP.Substring(clientIP.LastIndexOf(':') + 1);
+                            // CLIENT IP, as written, except that an IPv4 address written in its IPv6 form (::ffff:a.b.c.d)
+                            // is kept as IPv4.
+                            clientIP = (string)flag.Attribute("V") ??
+                                throw new FormatException("x-clientip has no value");
+                            if (IPAddress.TryParse(clientIP, out IPAddress address) && address.IsIPv4MappedToIPv6)
+                            {
+                                clientIP = address.MapToIPv4().ToString();
+                            }
                             break;
                         }
                     }
@@ -300,6 +298,54 @@ namespace XMAT.WebServiceCapture
                 clientIP);
 
             return model;
+        }
+
+        // A request target in absolute form whose scheme makes a URL (UriUtils.IsUrlScheme), and its authority written as a
+        // Host header would be: the host as Uri reads it (a name in lower case, an IDN in punycode, an IPv4 address dotted,
+        // an IPv6 address canonical and in brackets, with its zone), and the port only when it is not the scheme's default.
+        // User information is no part of it. A CONNECT's target is not one, nor is a target whose host is no host identity,
+        // has no IDN form, or whose port is outside 1-65535.
+        private static bool TryReadAbsoluteTarget(string method, string target, out Uri uri, out string authority)
+        {
+            authority = null;
+            if (method != "CONNECT" &&
+                Uri.TryCreate(target, UriKind.Absolute, out uri) &&
+                UriUtils.IsUrlScheme(uri.Scheme) &&
+                TryGetHostText(uri, out string hostText) &&
+                HostAuthority.TryNormalizeHost(hostText, out string host))
+            {
+                string written = uri.HostNameType == UriHostNameType.IPv6 ? "[" + host + "]" : host;
+                if (!uri.IsDefaultPort)
+                {
+                    written += ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
+                }
+
+                if (HostAuthority.TryParse(written, out _, out _))
+                {
+                    authority = written;
+                    return true;
+                }
+            }
+
+            uri = null;
+            return false;
+        }
+
+        // The host text that Uri gives a host identity: an IPv4 address dotted, an IPv6 address with its zone, or a name in
+        // lower case and punycode. A name that Uri parses but whose IDN conversion fails, such as a label longer than 63
+        // characters in punycode, has none (Uri.IdnHost throws UriFormatException for it).
+        private static bool TryGetHostText(Uri uri, out string host)
+        {
+            try
+            {
+                host = uri.HostNameType == UriHostNameType.IPv6 ? uri.DnsSafeHost : uri.IdnHost;
+                return true;
+            }
+            catch (UriFormatException)
+            {
+                host = null;
+                return false;
+            }
         }
 
         public static ProxyConnectionsCollection ImportSazFile(

@@ -91,14 +91,20 @@ xmat --version
   contain an apostrophe, as HTTP allows. The header limits cover the sanitized exports that were
   tested, not every archive that can be written: XMAT can record messages whose headers exceed them and export them in a
   plain or sanitized Fiddler archive; xmat refuses such an archive (`analysis.input.limit`) and the GUI does not import
-  it, rather than truncating it. A request without a usable `Host` header (missing, empty, whitespace-only or on a
-  malformed line) is kept and analyzed with an empty host: xmat reports it as an unknown service (`service-<n>`), and
-  the GUI's Block and Bypass actions do not apply to it. A frame whose non-empty request line or status line has no
-  second field (the URL or the status code) is skipped like an incomplete frame, one without its request or its
-  metadata, with the warning `analysis.input.incomplete-frame`. The other frames are still analyzed; when no frame is
-  left, there is nothing to analyze (`analysis.no-data`, exit code 3) and nothing is published. A request whose time is
-  unknown, such as a timer that Fiddler never set, or earlier than 1601 is read but not analyzed, as the rules compare
-  calls by their time.
+  it, rather than truncating it. A request whose request line, other than a `CONNECT`'s, names an absolute `http`,
+  `https` or `ftp` URL with a valid host name or address and a port from 1 to 65535 takes its host and port from that
+  URL, as HTTP requires, whatever its `Host` header says; analysis still names its service by its `Host` header when
+  the request has a well-formed one, even an empty one, and by the URL's host otherwise. Any other request line, such
+  as a path, leaves the scheme unknown, and analysis keeps the request's path rather than making up a URL. A request
+  with neither such a URL nor a usable `Host` header (missing, empty, whitespace-only or on a malformed line) is kept
+  without a host, and the GUI's Block and Bypass actions do not apply to it. xmat analyzes such a request with an
+  empty host and its path only, as it does a request with such a URL whose `Host` header is empty or whitespace-only,
+  and reports either as an unknown service (`service-<n>`). A session flag `x-clientip` without a value is malformed
+  (`analysis.input.malformed`). A frame whose non-empty request line or status line has no second field (the URL or
+  the status code) is skipped like an incomplete frame, one without its request or its metadata, with the warning
+  `analysis.input.incomplete-frame`. The other frames are still analyzed; when no frame is left, there is nothing to
+  analyze (`analysis.no-data`, exit code 3) and nothing is published. A request whose time is unknown, such as a timer
+  that Fiddler never set, or earlier than 1601 is read but not analyzed, as the rules compare calls by their time.
 - Before hashing or reading an XMAT capture, xmat opens the same guarded file identity that SQLite reads immutable.
   A `-journal`, `-wal` or `-shm` file or a WAL-mode database is refused as
   `analysis.input.live-database`; a location for which Windows cannot provide a normalized final path is refused as

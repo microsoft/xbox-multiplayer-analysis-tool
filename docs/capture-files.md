@@ -58,8 +58,25 @@ XMAT checks capture files before reading them and never changes them:
   of header data (its first line, the header lines and the empty line that ends them);
   a larger message stops the import rather than being truncated. Malformed header
   lines and incomplete frames are skipped, and the status bar notes that data was
-  skipped. A request without a usable `Host` header is imported without a host;
-  analysis keeps its path, and the Block and Bypass actions do not apply to it.
+  skipped. A request whose request line, other than a `CONNECT`'s, names an absolute
+  `http`, `https` or `ftp` URL with a valid host name or address and a port from 1 to
+  65535 takes its scheme, host and port from that URL, as HTTP requires, even when its
+  `Host` header is missing, malformed or names another host; its request line and
+  headers are kept as they are. Any other request line, such as one with a path, `*`
+  or a `CONNECT`'s target, gives an unknown scheme, shown blank rather than guessed,
+  and its request can't be replayed. Earlier versions of XMAT showed the method
+  instead for a path, `*` or text that is no URL, `http` for a `CONNECT`, and
+  otherwise what .NET read as the target's scheme, such as `file` for a drive or UNC
+  path; captures they saved keep it. A request with neither such a URL nor a usable
+  `Host` header is imported without a host, and the Block and Bypass actions do not
+  apply to it. Analysis names a request that has a host by its `Host` header when it
+  has one, even an empty one, and otherwise by that host, and a request without a host
+  by an empty host. It analyzes a request named by an empty host, or whose scheme is
+  unknown, with its path only.
+- A session's client address (its `x-clientip` flag) is kept as written, except that
+  an IPv4 address written in its IPv6 form, such as `::ffff:10.0.0.1`, is kept as
+  `10.0.0.1`. A session without the flag has the address `0.0.0.0`, and an archive
+  with a flag that has no value is malformed and is not imported.
 - Header lines are read as Latin-1, so a byte from 0x80 to 0xFF shows as that
   character rather than `?`, and a line of such characters alone, such as 0x85 or 0xA0,
   is a malformed header line rather than the empty line that ends the headers. A header

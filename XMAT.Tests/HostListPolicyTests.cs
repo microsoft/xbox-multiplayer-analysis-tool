@@ -490,8 +490,9 @@ namespace XMAT.Tests
             Assert.Equal(host, row.ActionableHost);
         }
 
-        // A frame without a Host header is imported with no host to act on, and the frames
-        // around it import as usual.
+        // A frame without a Host header or an absolute URL is imported with no host to act on, one whose request line has an
+        // absolute URL takes that URL's host whatever its headers (RFC 9112 3.2.2), and the frames around them import as
+        // usual.
         [Fact]
         public void SazImport_KeepsAFrameWithoutAHostHeaderAndTheFramesAroundIt()
         {
@@ -501,22 +502,23 @@ namespace XMAT.Tests
                 using (ZipArchive archive = ZipFile.Open(path, ZipArchiveMode.Create))
                 {
                     AddSazRequest(archive, 1, "GET http://api.example.test:8080/first HTTP/1.1\r\nHost: api.example.test:8080\r\n\r\n");
-                    AddSazRequest(archive, 2, "GET http://no-host.example.test/missing HTTP/1.0\r\nAccept: */*\r\n\r\n");
+                    AddSazRequest(archive, 2, "GET /missing HTTP/1.0\r\nAccept: */*\r\n\r\n");
                     AddSazRequest(archive, 3, "GET http://Reg~Name.Example.Test/legacy HTTP/1.1\r\nHost: Reg~Name.Example.Test\r\n\r\n");
                     AddSazRequest(archive, 4, "GET http://[2001:db8::1]:8443/last HTTP/1.1\r\nHost: [2001:db8::1]:8443\r\n\r\n");
+                    AddSazRequest(archive, 5, "GET http://no-host.example.test/missing HTTP/1.0\r\nAccept: */*\r\n\r\n");
                 }
 
                 List<ProxyConnectionModel> rows = FiddlerSazHandler.ImportSazFile(path, CancellationToken.None)
                     .OrderBy(row => row.Id)
                     .ToList();
 
-                Assert.Equal(new long[] { 1, 2, 3, 4 }, rows.Select(row => row.Id));
+                Assert.Equal(new long[] { 1, 2, 3, 4, 5 }, rows.Select(row => row.Id));
                 Assert.Equal(
-                    new[] { "api.example.test", string.Empty, "Reg~Name.Example.Test", "2001:db8::1" },
+                    new[] { "api.example.test", string.Empty, "Reg~Name.Example.Test", "2001:db8::1", "no-host.example.test" },
                     rows.Select(row => row.Host));
-                Assert.Equal(new[] { "8080", string.Empty, string.Empty, "8443" }, rows.Select(row => row.Port));
+                Assert.Equal(new[] { "8080", string.Empty, string.Empty, "8443", string.Empty }, rows.Select(row => row.Port));
                 Assert.Equal(
-                    new[] { "api.example.test", null, null, "2001:db8::1" },
+                    new[] { "api.example.test", null, null, "2001:db8::1", "no-host.example.test" },
                     rows.Select(row => row.ActionableHost));
             }
             finally
