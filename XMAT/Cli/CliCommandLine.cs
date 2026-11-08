@@ -5,6 +5,8 @@
 using System;
 using System.Collections.Generic;
 using XMAT.Operations;
+using XMAT.Operations.Analysis;
+using XMAT.Operations.CaptureFiles;
 
 namespace XMAT.Cli
 {
@@ -13,10 +15,17 @@ namespace XMAT.Cli
         internal const string Analyze = "analyze";
         internal const string Doctor = "doctor";
         internal const string Help = "help";
+        internal const string MarkCaptureText = "mark-capture-text";
         internal const string Version = "version";
 
         // The commands xmat.exe runs. Each one needs a Supported capability in the registry (XMAT.Tests/Cli checks it).
-        internal static IReadOnlyList<string> Implemented { get; } = new[] { Analyze, Doctor };
+        internal static IReadOnlyList<string> Implemented { get; } =
+            new[]
+            {
+                Analyze,
+                Doctor,
+                MarkCaptureText,
+            };
     }
 
     internal sealed record CliRequest(
@@ -27,7 +36,9 @@ namespace XMAT.Cli
         bool FailOnFindings = false,
         string Target = null,
         string Topic = null,
-        CliLimits Limits = null);
+        CliLimits Limits = null,
+        CaptureTextInterpretation? Interpretation = null,
+        int MaxInputMib = 0);
 
     // A parsed request, or a data-free usage error (exit code 2).
     internal sealed record CliParseResult(CliRequest Request, string Command, OperationDiagnostic Error)
@@ -49,8 +60,11 @@ namespace XMAT.Cli
         internal const string DeviceOption = "--device";
         internal const string FailOnOption = "--fail-on";
         internal const string ForOption = "--for";
+        internal const string InterpretOption = "--interpret";
         internal const string VersionSwitch = "--version";
         internal const string FindingsValue = "findings";
+        internal const string AsStoredValue = "as-stored";
+        internal const string LegacyOneLayerValue = "legacy-one-layer";
 
         // Unknown commands, options and doctor targets get fixed messages.
         internal const string UnknownCommandMessage = "Unknown command. Run xmat help for the commands.";
@@ -70,8 +84,19 @@ namespace XMAT.Cli
 
         private static readonly HashSet<string> DoctorOptions = new(StringComparer.Ordinal) { ForOption };
 
+        private static readonly HashSet<string> MarkCaptureTextOptions =
+            new(StringComparer.Ordinal)
+            {
+                OutOption,
+                InterpretOption,
+                CliLimits.InputOption,
+            };
+
         // The options that analyze accepts; its command line in the capability registry names exactly these.
         internal static IReadOnlySet<string> AnalyzeOptionNames => AnalyzeOptions;
+
+        internal static IReadOnlySet<string> MarkCaptureTextOptionNames =>
+            MarkCaptureTextOptions;
 
         internal static CliParseResult Parse(IReadOnlyList<string> args)
         {
@@ -101,6 +126,11 @@ namespace XMAT.Cli
             if (first == CliCommands.Doctor)
             {
                 return ParseDoctor(args);
+            }
+
+            if (first == CliCommands.MarkCaptureText)
+            {
+                return ParseMarkCaptureText(args);
             }
 
             if (first.StartsWith('-'))
@@ -227,6 +257,110 @@ namespace XMAT.Cli
                     command,
                     "cli.usage.unknown-target",
                     UnknownTargetMessage);
+        }
+
+        private static CliParseResult ParseMarkCaptureText(
+            IReadOnlyList<string> args)
+        {
+            const string command =
+                CliCommands.MarkCaptureText;
+            var arguments = new CliArguments();
+            CliParseResult error =
+                arguments.Read(
+                    args,
+                    command,
+                    MarkCaptureTextOptions);
+            if (error != null)
+            {
+                return error;
+            }
+
+            if (arguments.HelpRequested)
+            {
+                return HelpFor(command);
+            }
+
+            if (arguments.Positionals.Count == 0)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-argument",
+                    "mark-capture-text needs the INPUT capture file.");
+            }
+
+            if (arguments.Positionals.Count > 1)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.unexpected-argument",
+                    "mark-capture-text takes a single INPUT capture file.");
+            }
+
+            if (!arguments.Options.TryGetValue(
+                    OutOption,
+                    out string output))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-option",
+                    "mark-capture-text needs --out DIR.");
+            }
+
+            if (!arguments.Options.TryGetValue(
+                    InterpretOption,
+                    out string interpretation))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-option",
+                    "mark-capture-text needs --interpret as-stored or legacy-one-layer.");
+            }
+
+            CaptureTextInterpretation parsedInterpretation;
+            if (interpretation == AsStoredValue)
+            {
+                parsedInterpretation =
+                    CaptureTextInterpretation.AsStored;
+            }
+            else if (interpretation ==
+                LegacyOneLayerValue)
+            {
+                parsedInterpretation =
+                    CaptureTextInterpretation.LegacyOneLayer;
+            }
+            else
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    "--interpret takes as-stored or legacy-one-layer.");
+            }
+
+            int maxInputMib =
+                AnalysisLimits.DefaultInputMib;
+            if (arguments.Options.TryGetValue(
+                    CliLimits.InputOption,
+                    out string maxInput) &&
+                (!int.TryParse(
+                    maxInput,
+                    System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out maxInputMib) ||
+                 maxInputMib is < 1 or > 2048))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    "--max-input-mib takes a whole number from 1 through 2048.");
+            }
+
+            return CliParseResult.Success(
+                new CliRequest(
+                    command,
+                    Input: arguments.Positionals[0],
+                    Output: output,
+                    Interpretation: parsedInterpretation,
+                    MaxInputMib: maxInputMib));
         }
 
         // Ordinal device ids from a previous summary: d1, d2, ...

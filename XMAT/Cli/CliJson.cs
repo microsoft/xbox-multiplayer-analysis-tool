@@ -6,8 +6,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
 
 namespace XMAT.Cli
@@ -19,6 +21,8 @@ namespace XMAT.Cli
     {
         // summary.json in a published --out folder.
         internal const string SummarySchema = "xmat-analysis/1";
+        internal const string MarkCaptureTextSummarySchema =
+            "xmat-mark-capture-text/1";
 
         // The only error of the fallback document (SerializeFallback).
         internal static readonly OperationDiagnostic OutputFailure = new(
@@ -54,6 +58,16 @@ namespace XMAT.Cli
                 if (report.Doctor != null)
                 {
                     WriteDoctor(writer, report.Doctor);
+                }
+
+                if (report.MarkCaptureText != null)
+                {
+                    writer.WriteStartObject(
+                        "markCaptureText");
+                    WriteMarkCaptureText(
+                        writer,
+                        report.MarkCaptureText);
+                    writer.WriteEndObject();
                 }
 
                 if (report.Commands != null)
@@ -141,6 +155,43 @@ namespace XMAT.Cli
             return stream.ToArray();
         }
 
+        internal static byte[] SerializeMarkCaptureTextSummary(
+            CliReport report)
+        {
+            using var stream =
+                new MemoryStream();
+            using (var writer =
+                new Utf8JsonWriter(
+                    stream,
+                    Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString(
+                    "schema",
+                    MarkCaptureTextSummarySchema);
+                writer.WriteString(
+                    "command",
+                    report.Command);
+                writer.WriteString(
+                    "runId",
+                    report.RunId);
+                writer.WriteString(
+                    "version",
+                    CliReport.ToolVersion);
+                WriteMarkCaptureText(
+                    writer,
+                    report.MarkCaptureText ??
+                        new CliMarkCaptureTextReport());
+                WriteDiagnostics(
+                    writer,
+                    "warnings",
+                    report.Warnings);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+
         private static void WriteAnalysis(Utf8JsonWriter writer, CliAnalysisReport analysis)
         {
             writer.WriteStartObject("input");
@@ -154,6 +205,19 @@ namespace XMAT.Cli
                 writer.WriteNumber("maxDataMib", analysis.Limits.MaxDataMib);
                 writer.WriteNumber("maxRecordMib", analysis.Limits.MaxRecordMib);
                 writer.WriteNumber("maxRecords", analysis.Limits.MaxRecords);
+                writer.WriteEndObject();
+            }
+
+            if (analysis.StoredText != null)
+            {
+                writer.WriteStartObject(
+                    "storedText");
+                writer.WriteString(
+                    "semantics",
+                    analysis.StoredText.Semantics);
+                writer.WriteString(
+                    "policy",
+                    analysis.StoredText.Policy);
                 writer.WriteEndObject();
             }
 
@@ -191,6 +255,80 @@ namespace XMAT.Cli
             writer.WriteStartObject("totals");
             writer.WriteNumber("calls", analysis.TotalCalls);
             writer.WriteNumber("findings", analysis.TotalFindings);
+            writer.WriteEndObject();
+        }
+
+        private static void WriteMarkCaptureText(
+            Utf8JsonWriter writer,
+            CliMarkCaptureTextReport report)
+        {
+            if (report.InputKind != null ||
+                report.InputSha256 != null)
+            {
+                writer.WriteStartObject(
+                    "input");
+                writer.WriteString(
+                    "kind",
+                    report.InputKind);
+                writer.WriteString(
+                    "sha256",
+                    report.InputSha256);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteStartObject(
+                "limits");
+            writer.WriteNumber(
+                "maxInputMib",
+                report.MaxInputMib);
+            writer.WriteEndObject();
+            writer.WriteString(
+                "interpretation",
+                report.Interpretation ==
+                    CaptureTextInterpretation.LegacyOneLayer
+                    ? "legacyOneLayer"
+                    : "asStored");
+            if (report.OutputSha256 == null ||
+                report.Counts == null)
+            {
+                return;
+            }
+
+            writer.WriteStartObject(
+                "source");
+            writer.WriteNumber(
+                "userVersion",
+                CaptureTextFormat.AmbiguousUserVersion);
+            writer.WriteString(
+                "semantics",
+                "ambiguousUnmarked");
+            writer.WriteEndObject();
+            writer.WriteStartObject(
+                "output");
+            writer.WriteString(
+                "file",
+                CliMarkCaptureTextCommand.CapturePath);
+            writer.WriteString(
+                "sha256",
+                report.OutputSha256);
+            writer.WriteNumber(
+                "userVersion",
+                CaptureTextFormat.LiteralUserVersion);
+            writer.WriteEndObject();
+            writer.WriteStartObject(
+                "counts");
+            writer.WriteNumber(
+                "tables",
+                report.Counts.Tables);
+            writer.WriteNumber(
+                "rows",
+                report.Counts.Rows);
+            writer.WriteNumber(
+                "valuesExamined",
+                report.Counts.ValuesExamined);
+            writer.WriteNumber(
+                "valuesChanged",
+                report.Counts.ValuesChanged);
             writer.WriteEndObject();
         }
 

@@ -31,6 +31,11 @@ namespace XMAT.Tests.Operations.Analysis
 
             Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
             Assert.Equal("saz", result.Value.Summary.InputKind);
+            Assert.Equal(
+                new StoredTextSummary(
+                    "notApplicable",
+                    "notNeeded"),
+                result.Value.Summary.StoredText);
             Assert.Matches("^[0-9a-f]{64}$", result.Value.Summary.InputSha256);
             var device = Assert.Single(result.Value.Summary.Devices);
             Assert.Equal("d1", device.Id);
@@ -102,6 +107,79 @@ namespace XMAT.Tests.Operations.Analysis
 
             Assert.Equal("saz", sazResult.Value.Summary.InputKind);
             Assert.Equal("xmatcap", xmatResult.Value.Summary.InputKind);
+            Assert.Equal(
+                new StoredTextSummary(
+                    "notApplicable",
+                    "notNeeded"),
+                sazResult.Value.Summary.StoredText);
+            Assert.Equal(
+                new StoredTextSummary(
+                    "literal",
+                    "notNeeded"),
+                xmatResult.Value.Summary.StoredText);
+        }
+
+        [Fact]
+        public async Task UnmarkedXmatCapture_IsAnalyzedAsStoredWithAWarning()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                SyntheticCaptures.WriteXmatcap(
+                    directory.Path,
+                    "unmarked.xmatcap",
+                    new SyntheticXmatcapOptions(
+                        RequestsPerDevice: 1,
+                        UserVersion:
+                            CaptureTextFormat.AmbiguousUserVersion));
+
+            OperationResult<AnalysisResult> result =
+                await AnalyzeFile(path);
+
+            Assert.True(result.Succeeded);
+            Assert.Equal(
+                new StoredTextSummary(
+                    "ambiguousUnmarked",
+                    "notNeeded"),
+                result.Value.Summary.StoredText);
+            OperationDiagnostic warning =
+                Assert.Single(
+                    result.Diagnostics,
+                    diagnostic =>
+                        diagnostic.Code ==
+                        "capture.text.ambiguous");
+            Assert.Equal(
+                OperationDiagnosticSeverity.Warning,
+                warning.Severity);
+            Assert.Equal(
+                "This capture has no XMAT text-format marker. XMAT treats its stored text as ambiguous and will use it " +
+                    "unchanged; adjacent double quotation marks may be original data or may have been added by an older " +
+                    "XMAT version.",
+                warning.Message);
+        }
+
+        [Fact]
+        public async Task FutureXmatCapture_IsRefusedWithItsFixedCode()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                SyntheticCaptures.WriteXmatcap(
+                    directory.Path,
+                    "future.xmatcap",
+                    new SyntheticXmatcapOptions(
+                        RequestsPerDevice: 1,
+                        UserVersion: 2));
+
+            OperationResult<AnalysisResult> result =
+                await AnalyzeFile(path);
+
+            Assert.Equal(
+                OperationOutcome.InvalidInput,
+                result.Outcome);
+            Assert.Equal(
+                "capture.format.future",
+                Assert.Single(
+                    result.Diagnostics)
+                    .Code);
         }
 
         [Fact]

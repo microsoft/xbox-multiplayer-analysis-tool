@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
 
 namespace XMAT.Cli
@@ -38,11 +39,28 @@ namespace XMAT.Cli
         // The effective limits of the run, once its command line was valid.
         internal CliLimits Limits { get; set; }
 
+        internal StoredTextSummary StoredText { get; set; }
+
         internal IReadOnlyList<DeviceSummary> Devices { get; set; } = Array.Empty<DeviceSummary>();
 
         internal int TotalCalls { get; set; }
 
         internal int TotalFindings { get; set; }
+    }
+
+    internal sealed class CliMarkCaptureTextReport
+    {
+        internal CaptureTextInterpretation Interpretation { get; set; }
+
+        internal int MaxInputMib { get; set; }
+
+        internal string InputKind { get; set; }
+
+        internal string InputSha256 { get; set; }
+
+        internal string OutputSha256 { get; set; }
+
+        internal MarkCaptureTextCounts Counts { get; set; }
     }
 
     internal sealed class CliDoctorReport
@@ -101,6 +119,8 @@ namespace XMAT.Cli
 
         internal CliDoctorReport Doctor { get; set; }
 
+        internal CliMarkCaptureTextReport MarkCaptureText { get; set; }
+
         internal IReadOnlyList<CliCommandHelp> Commands { get; set; }
 
         internal string Version { get; set; }
@@ -144,14 +164,30 @@ namespace XMAT.Cli
             return report;
         }
 
-        // parsed is null when the error happened while the command line was parsed. An analyze run whose command line
-        // was valid still reports its effective limits, as every other analyze failure does.
+        // parsed is null when the error happened while the command line was parsed. A parsed command keeps its public
+        // option fields even when an internal failure prevented the command adapter from constructing its full report.
         internal static CliReport ForInternalError(string runId, CliParseResult parsed, Exception exception)
         {
             var report = new CliReport(parsed?.Command, runId);
             if (parsed is { Succeeded: true, Request.Command: CliCommands.Analyze })
             {
                 report.Analysis = new CliAnalysisReport { Limits = parsed.Request.Limits ?? CliLimits.Default };
+            }
+            else if (parsed is
+                {
+                    Succeeded: true,
+                    Request.Command:
+                        CliCommands.MarkCaptureText,
+                })
+            {
+                report.MarkCaptureText =
+                    new CliMarkCaptureTextReport
+                    {
+                        Interpretation =
+                            parsed.Request.Interpretation.Value,
+                        MaxInputMib =
+                            parsed.Request.MaxInputMib,
+                    };
             }
 
             report.Fail(CliExitCodes.Internal, "cli.internal", "xmat stopped because of an internal error.");

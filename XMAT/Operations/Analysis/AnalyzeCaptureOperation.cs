@@ -328,6 +328,7 @@ namespace XMAT.Operations.Analysis
             var summary = new AnalysisSummary(
                 InputKindName(loaded.Kind),
                 loaded.InputSha256,
+                loaded.StoredText,
                 deviceSummaries,
                 totalCalls,
                 totalFindings);
@@ -379,6 +380,7 @@ namespace XMAT.Operations.Analysis
             {
                 return new LoadedInput(
                     AnalysisInputKind.Records,
+                    null,
                     null,
                     new[]
                     {
@@ -452,6 +454,9 @@ namespace XMAT.Operations.Analysis
                     AnalysisInputKind.Saz => new LoadedInput(
                         AnalysisInputKind.Saz,
                         hash,
+                        new StoredTextSummary(
+                            "notApplicable",
+                            "notNeeded"),
                         new[]
                         {
                             new LoadedDevice(
@@ -582,6 +587,25 @@ namespace XMAT.Operations.Analysis
                     ComputeSha256(
                         database,
                         cancellationToken);
+                StoredTextSummary storedText =
+                    database.CaptureTextSource.Semantics ==
+                        CaptureTextSemantics.Literal
+                        ? new StoredTextSummary(
+                            "literal",
+                            "notNeeded")
+                        : new StoredTextSummary(
+                            "ambiguousUnmarked",
+                            "notNeeded");
+                if (database.CaptureTextSource.Semantics ==
+                    CaptureTextSemantics.AmbiguousUnmarked)
+                {
+                    AddDiagnostic(
+                        diagnostics,
+                        new OperationDiagnostic(
+                            "capture.text.ambiguous",
+                            OperationDiagnosticSeverity.Warning,
+                            "This capture has no XMAT text-format marker. XMAT treats its stored text as ambiguous and will use it unchanged; adjacent double quotation marks may be original data or may have been added by an older XMAT version."));
+                }
                 var deviceTable = database.TableByName(CaptureDevicesTableName);
                 var webProxyTable = database.TableByName(WebServiceCaptureMethod.TableName);
                 ValidateTable(deviceTable, CaptureDeviceFields);
@@ -675,6 +699,7 @@ namespace XMAT.Operations.Analysis
                 return new LoadedInput(
                     AnalysisInputKind.XmatCapture,
                     inputSha256,
+                    storedText,
                     devices);
             }
             catch (OperationCanceledException)
@@ -734,6 +759,11 @@ namespace XMAT.Operations.Analysis
                         new AnalysisInputException(
                             "analysis.input.location-unsupported",
                             "The capture database location cannot be opened safely.",
+                            ex),
+                    SqLtSchemaFailure.UnsupportedVersion =>
+                        new AnalysisInputException(
+                            "capture.format.future",
+                            "The capture file uses a newer XMAT capture format and cannot be opened by this version of XMAT.",
                             ex),
                     _ => new AnalysisInputException(
                         "analysis.input.schema",
@@ -1294,16 +1324,20 @@ namespace XMAT.Operations.Analysis
             internal LoadedInput(
                 AnalysisInputKind kind,
                 string inputSha256,
+                StoredTextSummary storedText,
                 IReadOnlyList<LoadedDevice> devices)
             {
                 Kind = kind;
                 InputSha256 = inputSha256;
+                StoredText = storedText;
                 Devices = devices;
             }
 
             internal AnalysisInputKind Kind { get; }
 
             internal string InputSha256 { get; }
+
+            internal StoredTextSummary StoredText { get; }
 
             internal IReadOnlyList<LoadedDevice> Devices { get; }
 

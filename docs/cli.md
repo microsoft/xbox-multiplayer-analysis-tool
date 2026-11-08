@@ -15,6 +15,7 @@ both. Other capabilities move over time; the [capability table](#what-runs-headl
 ```
 xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N]
              [--max-record-mib N] [--max-records N]
+xmat mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer [--max-input-mib N]
 xmat doctor --for analyze
 xmat help [COMMAND]
 xmat --version
@@ -24,11 +25,24 @@ xmat --version
   the Xbox Live service call rules on it. It writes `summary.json` (schema `xmat-analysis/1`) to `DIR`, which must not
   exist yet: xmat prepares the results in a private `.xmat-staging-<run id>` folder next to `DIR` and renames that
   folder to `DIR` only when the run completes successfully, so `DIR` is either complete or absent. Only the user who
-  ran xmat can open it, so `DIR` must be on a file system with Windows permissions, such as NTFS: xmat reads the
-  staging folder's permissions back before it writes anything and otherwise refuses (`cli.output.unprotected`, exit
-  code 6); FAT and exFAT drives and some network shares do not keep permissions. `--device` limits a capture of several
-  devices to one, by the id (`d1`, `d2`, ...) that an earlier run reported. With `--fail-on findings`, xmat exits with
-  code 10 when the rules report findings (the results are still written).
+  ran xmat can open it, so `DIR` must be on a local NTFS volume and reached without a network path, a mapped or
+  substituted drive, a junction, a mounted folder or a symbolic link. xmat holds each folder from the volume root
+  through publication, reads the staging folder's storage and permissions back before it writes anything and otherwise
+  refuses (`cli.output.unprotected`, exit code 6). Network shares, FAT, exFAT and ReFS are refused even where their
+  permissions could be read. `--device` limits a capture of several devices to one, by the id (`d1`, `d2`, ...) that an
+  earlier run reported. With `--fail-on findings`, xmat exits with code 10 when the rules report findings (the results
+  are still written).
+- `xmat mark-capture-text` creates a new marked `.xmatcap`; it never changes `INPUT`. The input must be an unmarked
+  native XMAT capture. `--interpret as-stored` preserves every stored value and marks the copy as literal storage.
+  `--interpret legacy-one-layer` first requires every known text value to be valid UTF-8 whose runs of `"` have even
+  length, then removes exactly one historical XMAT quote-doubling layer. It never repairs a `.saz`, request file or
+  arbitrary SQLite file. `--max-input-mib` defaults to 512 and permits 1 through 2,048. The command validates all known
+  tables, rewrites no extension column and can use about twice the largest value plus SQLite overhead while rewriting.
+  It publishes `capture.xmatcap` and `summary.json` (schema `xmat-mark-capture-text/1`) at the root of `DIR`.
+  `DIR` has the same link-free local-NTFS requirement as `analyze`. It refuses a non-XMAT SQLite input
+  (`capture.repair.input-not-xmatcap`), a future marker (`capture.format.future`), a marked input
+  (`capture.repair.already-marked`), data outside the one-layer domain (`capture.repair.not-legacy-encoding`) or an
+  invalid prepared output entry (`capture.repair.output-invalid`); no refusal publishes `DIR`.
 - xmat treats its input as untrusted. By default it refuses an input (exit code 3) larger than 512 MiB
   (`analysis.input.too-large`), or one with more than 100,000 requests (a Fiddler archive) or rows in its device and
   connection tables together (an XMAT capture), an archive entry or row over 32 MiB, or more than 256 MiB of data in
@@ -176,10 +190,10 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 |---|---|
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
-| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device |
+| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, or capture-text marking refuses the input or interpretation |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists |
-| 6 | The operation failed, for example the output could not be written, or `--out` is on storage without Windows permissions (`cli.output.unprotected`) |
+| 6 | The operation failed, for example the output could not be written, or `--out` is not on link-free local NTFS storage (`cli.output.unprotected`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
 | 70 | Internal error, including a `help`, `--version` or passing `doctor` run whose JSON document could not be produced (`cli.internal.output`) |
@@ -218,6 +232,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Export captures as Fiddler archives (.saz) (`capture-file.export-saz`) | (not available yet) | Planned (S2, XMAT-021) |
 | Read network traces (.etl) (`capture-file.import-etl`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Read Fiddler archives (.saz) (`capture-file.import-saz`) | `xmat analyze INPUT.saz --out DIR` | Supported (S1) |
+| Mark or repair capture text storage (`capture-file.mark-text`) | `xmat mark-capture-text INPUT --out DIR --interpret as-stored\|legacy-one-layer [--max-input-mib N]` | Supported (S10) |
 | Read XMAT capture files (.xmatcap) (`capture-file.read-xmatcap`) | `xmat analyze INPUT.xmatcap --out DIR` | Supported (S1) |
 | Sanitize a capture into a Fiddler archive (`capture-file.sanitize`) | (not available yet) | Planned (S2, XMAT-021) |
 | Save captures (.xmatcap) (`capture-file.save-xmatcap`) | (not available yet) | Planned (S5, XMAT-021) |

@@ -76,6 +76,7 @@ namespace XMAT.DataAbstractionLayer
             private int _usablePageSize;
             private uint _pageCount;
             private int _totalPayloadBytes;
+            private CaptureTextSemantics _textSemantics;
 
             internal Reader(
                 Stream input,
@@ -147,7 +148,9 @@ namespace XMAT.DataAbstractionLayer
                     }
                 }
 
-                return new SqLtValidatedSchema(tables);
+                return new SqLtValidatedSchema(
+                    tables,
+                    _textSemantics);
             }
 
             private void ReadHeader()
@@ -260,6 +263,21 @@ namespace XMAT.DataAbstractionLayer
                 {
                     throw Unsupported();
                 }
+
+                uint userVersion =
+                    BinaryPrimitives.ReadUInt32BigEndian(
+                        header.AsSpan(
+                            60,
+                            4));
+                _textSemantics = userVersion switch
+                {
+                    CaptureTextFormat.AmbiguousUserVersion =>
+                        CaptureTextSemantics.AmbiguousUnmarked,
+                    CaptureTextFormat.LiteralUserVersion =>
+                        CaptureTextSemantics.Literal,
+                    _ => throw new SqLtSchemaException(
+                        SqLtSchemaFailure.UnsupportedVersion),
+                };
             }
 
             private void ReadBtreePage(

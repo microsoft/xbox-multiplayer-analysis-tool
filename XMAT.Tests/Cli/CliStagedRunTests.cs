@@ -217,10 +217,10 @@ namespace XMAT.Tests.Cli
             Assert.Equal("failed", report.Status);
         }
 
-        // Storage without Windows permissions (FAT, exFAT, some shares) silently drops the access control that Reserve sets,
-        // and storage that maps permissions imperfectly can drop their inheritance. A staging folder whose access control
-        // changed after Reserve stands in for both: the run refuses before it produces anything, publishes nothing and
-        // removes the staging folder. The folder as Reserve made it reads back as private.
+        // Storage without Windows permissions (FAT, exFAT) is refused by its file system, but storage that maps permissions
+        // imperfectly can still drop the access control that Reserve sets, or its inheritance. A staging folder whose access
+        // control changed after Reserve stands in for that: the run refuses before it produces anything, publishes nothing
+        // and removes the staging folder. The folder as Reserve made it reads back as private.
         [Theory]
         [InlineData("inherits")]
         [InlineData("grants-everyone")]
@@ -277,6 +277,113 @@ namespace XMAT.Tests.Cli
             Assert.Empty(report.Artifacts);
             Assert.Equal(CliCleanupStates.Completed, report.CleanupState);
             Assert.Empty(directory.Entries());
+        }
+
+        [Fact]
+        public void StreamingWrite_CreatesOneNewFileWithoutBuildingItsContents()
+        {
+            using var directory = new CliTestDirectory();
+            var report = NewReport();
+            using CliOutputFolder output = Reserve(
+                directory,
+                report);
+            byte[] expected =
+                Encoding.ASCII.GetBytes(
+                    "streamed");
+
+            output.WriteFile(
+                "nested/streamed.bin",
+                stream =>
+                    stream.Write(
+                        expected,
+                        0,
+                        expected.Length));
+
+            Assert.Equal(
+                expected,
+                File.ReadAllBytes(
+                    Path.Join(
+                        output.StagingPath,
+                        "nested",
+                        "streamed.bin")));
+            Assert.True(output.TryDiscard());
+        }
+
+        [Fact]
+        public async Task AFileWrittenDuringTheRun_IsPublishedWithoutBeingWrittenAgain()
+        {
+            using var directory = new CliTestDirectory();
+            var report = NewReport();
+            CliOutputFolder output = Reserve(directory, report);
+            byte[] capture = Encoding.ASCII.GetBytes("capture");
+            byte[] summary = Encoding.ASCII.GetBytes("{}");
+
+            await CliStagedRun.CompleteAsync(
+                report,
+                output,
+                _ =>
+                {
+                    using (FileStream stream =
+                        output.CreateFile(
+                            "capture.xmatcap"))
+                    {
+                        stream.Write(
+                            capture,
+                            0,
+                            capture.Length);
+                        stream.Flush(
+                            flushToDisk: true);
+                    }
+                    report.SetExitCode(
+                        CliExitCodes.Success);
+                    return Task.FromResult<IReadOnlyList<CliStagedFile>>(
+                        new[]
+                        {
+                            new CliStagedFile(
+                                "capture",
+                                "capture.xmatcap",
+                                null),
+                            new CliStagedFile(
+                                "summary",
+                                "summary.json",
+                                summary),
+                        });
+                },
+                null,
+                CancellationToken.None);
+
+            string published =
+                Path.Join(
+                    directory.Root,
+                    Results);
+            Assert.Equal(
+                capture,
+                File.ReadAllBytes(
+                    Path.Join(
+                        published,
+                        "capture.xmatcap")));
+            Assert.Equal(
+                summary,
+                File.ReadAllBytes(
+                    Path.Join(
+                        published,
+                        "summary.json")));
+            Assert.False(
+                Directory.Exists(
+                    Path.Join(
+                        published,
+                        "work")));
+            Assert.Equal(
+                new[]
+                {
+                    "capture:capture.xmatcap",
+                    "summary:summary.json",
+                },
+                report.Artifacts.Select(
+                    artifact =>
+                        artifact.Kind +
+                        ":" +
+                        artifact.Path));
         }
 
         // A report that cannot be serialized (here a null warning, which also breaks the text on standard error) is replaced
@@ -336,8 +443,23 @@ namespace XMAT.Tests.Cli
 
         private static CliReport NewReport() => new(CliCommands.Analyze, Guid.NewGuid().ToString("N"));
 
-        private static CliOutputFolder Reserve(CliTestDirectory directory, CliReport report) =>
-            CliOutputFolder.Reserve(Path.Combine(directory.Root, Results), report.RunId);
+        private static CliOutputFolder Reserve(
+            CliTestDirectory directory,
+            CliReport report)
+        {
+            Assert.Null(
+                CliOutputFolder.CheckTarget(
+                    Path.Combine(
+                        directory.Root,
+                        Results),
+                    out CliOutputTarget target));
+            Assert.Null(
+                CliOutputFolder.TryReserve(
+                    target,
+                    report.RunId,
+                    out CliOutputFolder output));
+            return output;
+        }
 
         private static Task<IReadOnlyList<CliStagedFile>> Produce(CliReport report, int exitCode)
         {

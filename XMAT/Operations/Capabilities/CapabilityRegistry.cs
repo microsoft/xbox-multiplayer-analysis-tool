@@ -14,6 +14,8 @@ namespace XMAT.Operations.Capabilities
     internal static class CapabilityRegistry
     {
         internal const string AnalyzeCaptureOperation = "XMAT.Operations.Analysis.AnalyzeCaptureOperation";
+        internal const string MarkCaptureTextOperation =
+            "XMAT.Operations.CaptureFiles.MarkCaptureTextOperation";
 
         private const string Owner = "XMAT-021";
         private const string MainWindowXaml = "Windows/MainWindow.xaml";
@@ -100,6 +102,12 @@ namespace XMAT.Operations.Capabilities
                     EnumValue("XMAT.Models.ImportType", "NetTrace"),
                     EnumValue(DeviceTypeEnum, "Unknown"),
                 }),
+            Capability.Supported(
+                "capture-file.mark-text",
+                "Mark or repair capture text storage",
+                "S10",
+                cli: "mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer [--max-input-mib N]",
+                operation: MarkCaptureTextOperation),
             Capability.Planned(
                 "capture-file.export-saz", "Export captures as Fiddler archives (.saz)", "S2", Owner,
                 gui: new[]

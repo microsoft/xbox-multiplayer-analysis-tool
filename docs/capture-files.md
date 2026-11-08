@@ -61,6 +61,35 @@ XMAT checks capture files before reading them and never changes them:
   skipped. A request without a usable `Host` header is imported without a host;
   analysis keeps its path, and the Block and Bypass actions do not apply to it.
 
+## Capture text markers and marked copies
+
+Current `.XMATCAP` files carry SQLite `user_version = 1`, which means XMAT
+stored their text literally. This is a storage classification only; it does
+not certify that every attempted network byte was transmitted or recorded
+without omission. An older or foreign file with marker `0` is
+**AmbiguousUnmarked**. XMAT opens it read-only and uses every stored character
+unchanged, with a warning: adjacent double quotation marks may be original data
+or may have been added by an older XMAT version. Any other marker is a future
+format and is refused.
+
+Create a separate marked copy from the command line:
+
+```text
+xmat mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer
+```
+
+`as-stored` preserves the file's stored values. `legacy-one-layer` is
+explicit: it accepts only TEXT values that are strict UTF-8 and whose every run
+of `"` has even length, then removes one quote-doubling layer. The source
+remains unchanged, extension columns are untouched, and marker 1 is written
+only after the selected interpretation succeeds. XMAT never guesses an
+interpretation and never applies this repair to a Fiddler archive or request
+file.
+
+Versions before capture-text fidelity cannot reliably filter a marked capture
+whose device name contains a double quotation mark, so such a tab can appear
+empty; open it with the current XMAT version.
+
 ## Export a sanitized capture
 
 1. Stop all captures and select the web proxy capture to share.

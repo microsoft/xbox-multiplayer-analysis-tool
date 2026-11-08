@@ -23,7 +23,8 @@ namespace XMAT.Tests.Fixtures
         int Devices = 1,
         int RequestsPerDevice = 4,
         bool IncludeCanaries = false,
-        bool IncludeXr049Violation = false);
+        bool IncludeXr049Violation = false,
+        uint UserVersion = CaptureTextFormat.LiteralUserVersion);
 
     public enum SyntheticSazFrameKind
     {
@@ -174,6 +175,13 @@ namespace XMAT.Tests.Fixtures
             }
 
             database.SaveToFile(path);
+            if (options.UserVersion !=
+                CaptureTextFormat.LiteralUserVersion)
+            {
+                HostileSqliteSchemas.SetUserVersion(
+                    path,
+                    options.UserVersion);
+            }
             return path;
         }
 

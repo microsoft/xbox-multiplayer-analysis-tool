@@ -6,13 +6,13 @@ using System.Text;
 using System.Text.Json;
 using XMAT.Cli;
 using XMAT.Operations;
+using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
 
 namespace XMAT.Tests.Cli
 {
-    // The parser, the registry-driven command catalog, help and the JSON documents, in process. analyze runs in its own
-    // process (XmatAnalyzeTests): it must configure HeadlessStorage before anything uses PublicUtilities, which this test
-    // host already does.
+    // The parser, the registry-driven command catalog, help and the JSON documents, in process. Commands that configure
+    // HeadlessStorage run in child-process tests because this test host already used PublicUtilities.
     public class CliCommandLineTests
     {
         [Theory]
@@ -35,6 +35,14 @@ namespace XMAT.Tests.Cli
         [InlineData("doctor", "cli.usage.missing-option")]
         [InlineData("doctor analyze", "cli.usage.unexpected-argument")]
         [InlineData("doctor --for frobnicate", "cli.usage.unknown-target")]
+        [InlineData("mark-capture-text", "cli.usage.missing-argument")]
+        [InlineData("mark-capture-text a.xmatcap b.xmatcap --out results --interpret as-stored", "cli.usage.unexpected-argument")]
+        [InlineData("mark-capture-text a.xmatcap --interpret as-stored", "cli.usage.missing-option")]
+        [InlineData("mark-capture-text a.xmatcap --out results", "cli.usage.missing-option")]
+        [InlineData("mark-capture-text a.xmatcap --out results --interpret repair", "cli.usage.invalid-value")]
+        [InlineData("mark-capture-text a.xmatcap --out results --interpret as-stored --max-input-mib 0", "cli.usage.invalid-value")]
+        [InlineData("mark-capture-text a.xmatcap --out results --interpret as-stored --max-input-mib 2049", "cli.usage.invalid-value")]
+        [InlineData("mark-capture-text a.xmatcap --out results --interpret as-stored --accept-stored-text", "cli.usage.unknown-option")]
         [InlineData("--proxy-guard 42", "cli.usage.unknown-option")]
         [InlineData("analyze a.saz --out results --telemetry-sample", "cli.usage.unknown-option")]
         // Commands, options, values and doctor targets planned for later releases are usage errors until they ship.
@@ -77,6 +85,63 @@ namespace XMAT.Tests.Cli
         }
 
         [Theory]
+        [InlineData("as-stored", (int)CaptureTextInterpretation.AsStored)]
+        [InlineData("legacy-one-layer", (int)CaptureTextInterpretation.LegacyOneLayer)]
+        public void Parse_ReadsMarkCaptureTextOptions(
+            string value,
+            int expected)
+        {
+            CliParseResult result =
+                CliCommandLine.Parse(
+                    new[]
+                    {
+                        "mark-capture-text",
+                        "capture.xmatcap",
+                        "--out",
+                        "results",
+                        "--interpret",
+                        value,
+                        "--max-input-mib",
+                        "2048",
+                    });
+
+            Assert.Equal(
+                new CliRequest(
+                    CliCommands.MarkCaptureText,
+                    Input: "capture.xmatcap",
+                    Output: "results",
+                    Interpretation:
+                        (CaptureTextInterpretation)expected,
+                    MaxInputMib: 2048),
+                result.Request);
+        }
+
+        [Fact]
+        public void MarkCaptureTextParseErrorHasNoCommandReportObject()
+        {
+            CliParseResult parsed =
+                CliCommandLine.Parse(
+                    new[]
+                    {
+                        "mark-capture-text",
+                        "capture.xmatcap",
+                    });
+            CliReport report =
+                CliReport.ForParseError(
+                    "run",
+                    parsed);
+            using JsonDocument document =
+                JsonDocument.Parse(
+                    CliJson.Serialize(
+                        report));
+
+            Assert.False(
+                document.RootElement.TryGetProperty(
+                    "markCaptureText",
+                    out _));
+        }
+
+        [Theory]
         [InlineData("help", null)]
         [InlineData("--help", null)]
         [InlineData("-h", null)]
@@ -85,6 +150,8 @@ namespace XMAT.Tests.Cli
         [InlineData("--help doctor", "doctor")]
         [InlineData("analyze --help", "analyze")]
         [InlineData("doctor -?", "doctor")]
+        [InlineData("help mark-capture-text", "mark-capture-text")]
+        [InlineData("mark-capture-text --help", "mark-capture-text")]
         public void Parse_RecognizesHelp(string commandLine, string topic)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));
@@ -171,7 +238,15 @@ namespace XMAT.Tests.Cli
         {
             CliReport report = CliHelp.Create("run", topic: null);
 
-            Assert.Equal(new[] { CliCommands.Analyze, CliCommands.Doctor }, report.Commands.Select(command => command.Name));
+            Assert.Equal(
+                new[]
+                {
+                    CliCommands.Analyze,
+                    CliCommands.Doctor,
+                    CliCommands.MarkCaptureText,
+                },
+                report.Commands.Select(
+                    command => command.Name));
             foreach (Capability capability in CapabilityRegistry.All.Where(item => item.Status == CapabilityStatus.Supported))
             {
                 Assert.Contains("  xmat " + capability.CliRoute, report.HumanLines);
@@ -208,6 +283,97 @@ namespace XMAT.Tests.Cli
             JsonElement warning = Assert.Single(summary.RootElement.GetProperty("warnings").EnumerateArray());
             Assert.Equal("analysis.device.skipped", warning.GetProperty("code").GetString());
             Assert.Equal("A non-web-proxy device was skipped.", warning.GetProperty("message").GetString());
+        }
+
+        [Fact]
+        public void MarkSummaryAndStandardOutputHaveTheFrozenSchemas()
+        {
+            var report =
+                new CliReport(
+                    CliCommands.MarkCaptureText,
+                    "0123456789abcdef0123456789abcdef")
+                {
+                    MarkCaptureText =
+                        new CliMarkCaptureTextReport
+                        {
+                            Interpretation =
+                                CaptureTextInterpretation.LegacyOneLayer,
+                            MaxInputMib = 512,
+                            InputKind = "xmatcap",
+                            InputSha256 = new string('a', 64),
+                            OutputSha256 = new string('b', 64),
+                            Counts =
+                                new MarkCaptureTextCounts(
+                                    2,
+                                    3,
+                                    4,
+                                    5),
+                        },
+                };
+            report.SetExitCode(
+                CliExitCodes.Success);
+            report.Artifacts.Add(
+                new CliArtifact(
+                    "capture",
+                    "capture.xmatcap"));
+            report.Artifacts.Add(
+                new CliArtifact(
+                    "summary",
+                    "summary.json"));
+
+            using JsonDocument output =
+                JsonDocument.Parse(
+                    CliJson.Serialize(
+                        report));
+            using JsonDocument summary =
+                JsonDocument.Parse(
+                    CliJson.SerializeMarkCaptureTextSummary(
+                        report));
+
+            JsonElement mark =
+                output.RootElement.GetProperty(
+                    "markCaptureText");
+            Assert.Equal(
+                "legacyOneLayer",
+                mark.GetProperty(
+                    "interpretation")
+                    .GetString());
+            Assert.Equal(
+                5,
+                mark.GetProperty(
+                    "counts")
+                    .GetProperty(
+                        "valuesChanged")
+                    .GetInt64());
+            Assert.Equal(
+                "xmat-mark-capture-text/1",
+                summary.RootElement.GetProperty(
+                    "schema")
+                    .GetString());
+            Assert.Equal(
+                CliReport.ToolVersion,
+                summary.RootElement.GetProperty(
+                    "version")
+                    .GetString());
+            Assert.Equal(
+                new[]
+                {
+                    "schema",
+                    "command",
+                    "runId",
+                    "version",
+                    "input",
+                    "limits",
+                    "interpretation",
+                    "source",
+                    "output",
+                    "counts",
+                    "warnings",
+                },
+                summary.RootElement.EnumerateObject()
+                    .Select(
+                        property =>
+                            property.Name));
         }
 
         [Fact]

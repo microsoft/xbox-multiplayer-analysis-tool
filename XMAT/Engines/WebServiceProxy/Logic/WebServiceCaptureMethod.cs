@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
@@ -163,6 +164,7 @@ namespace XMAT.WebServiceCapture
                 var rows = connections.Select(
                     connection => connection.ToDataTableValues(captureController.DeviceName));
                 var rowIds = importTable.ReplaceImportedRows(
+                    CaptureTextSource.Literal,
                     new FieldValue<string>(FieldKey_DeviceName, captureController.DeviceName),
                     rows);
                 for (int index = 0; index < connections.Count; index++)

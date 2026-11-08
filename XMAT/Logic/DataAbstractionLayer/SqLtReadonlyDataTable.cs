@@ -10,11 +10,16 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtReadonlyDataTable : IReadonlyDataTable, IDisposable
+    internal class SqLtReadonlyDataTable :
+        IReadonlyDataTable,
+        IDisposable,
+        ICaptureTextSourceProvider
     {
         public string Name { get { return _name; } }
 
         public IDataset Dataset { get { return GetDataset(); } }
+
+        public CaptureTextSource CaptureTextSource { get; }
 
         public IDataset Subset(params string[] fieldNames)
         {
@@ -30,7 +35,8 @@ namespace XMAT.DataAbstractionLayer
                 new SqLtDataset(
                     _connection,
                     Name,
-                    _fieldDefinitions);
+                    _fieldDefinitions,
+                    CaptureTextSource);
             _datasets.Add(dataset);
             return dataset;
         }
@@ -46,7 +52,8 @@ namespace XMAT.DataAbstractionLayer
                     {
                         return fieldNames.Contains(x.Key);
                     }
-                ).ToDictionary(dict => dict.Key, dict => dict.Value));
+                ).ToDictionary(dict => dict.Key, dict => dict.Value),
+                CaptureTextSource);
             _datasets.Add(dataset);
             return dataset;
         }
@@ -54,9 +61,12 @@ namespace XMAT.DataAbstractionLayer
         internal SqLtReadonlyDataTable(
             SqliteConnection connection,
             string name,
-            IEnumerable<IFieldDefinition> fieldDefinitions)
+            IEnumerable<IFieldDefinition> fieldDefinitions,
+            CaptureTextSource captureTextSource)
         {
+            ArgumentNullException.ThrowIfNull(captureTextSource);
             _name = name;
+            CaptureTextSource = captureTextSource;
 
             var columnIndex = 0;
             foreach (var fieldDef in fieldDefinitions)

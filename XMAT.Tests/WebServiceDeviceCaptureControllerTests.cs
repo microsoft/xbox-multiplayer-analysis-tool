@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Reflection;
 using System.Text.Json;
+using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
@@ -1049,6 +1050,40 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void ExportTextSource_ComesFromTheDatasetThatRecordsUse()
+        {
+            const string deviceName = "Saved Capture";
+            var source =
+                CaptureTextSource.CreateFile(
+                    CaptureTextSemantics.AmbiguousUnmarked,
+                    new SqLtFileIdentity(
+                        1,
+                        2),
+                    _ => new byte[32],
+                    () => true);
+            var controller =
+                new WebServiceDeviceCaptureController(
+                    deviceName,
+                    DeviceType.Unknown,
+                    true);
+            controller.LoadCaptureDataset(
+                new TestDataset(
+                    CreateAnalyzableRecord(deviceName),
+                    source));
+
+            Assert.Same(
+                source,
+                controller.ExportTextSource);
+
+            controller.LoadCaptureDataset(
+                new TestDataset(
+                    CreateAnalyzableRecord(deviceName)));
+            Assert.Same(
+                CaptureTextSource.Unknown,
+                controller.ExportTextSource);
+        }
+
+        [Fact]
         public void BeginTransition_TracksAndReleasesTransitionState()
         {
             var controller = new WebServiceDeviceCaptureController(
@@ -1166,17 +1201,25 @@ namespace XMAT.Tests
                 });
         }
 
-        private sealed class TestDataset : IDataset
+        private sealed class TestDataset :
+            IDataset,
+            ICaptureTextSourceProvider
         {
             private readonly IDataRecord _record;
 
             public IEnumerable<IFieldDefinition> FieldDefs => Array.Empty<IFieldDefinition>();
             public IEnumerable<IDataRecord> DataRecords => new[] { _record };
             public int FilteredReadCount { get; private set; }
+            public CaptureTextSource CaptureTextSource { get; }
 
-            internal TestDataset(IDataRecord record)
+            internal TestDataset(
+                IDataRecord record,
+                CaptureTextSource captureTextSource = null)
             {
                 _record = record;
+                CaptureTextSource =
+                    captureTextSource ??
+                    global::XMAT.DataAbstractionLayer.CaptureTextSource.Unknown;
             }
 
             public IEnumerable<IDataRecord> DataRecordsFrom(long firstRowId)

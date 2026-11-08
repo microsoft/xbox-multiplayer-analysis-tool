@@ -16,6 +16,7 @@ namespace XMAT.DataAbstractionLayer
         Sidecar,
         UnsupportedLocation,
         WriteAheadLog,
+        UnsupportedVersion,
     }
 
     internal sealed class SqLtSchemaException : Exception
@@ -34,6 +35,8 @@ namespace XMAT.DataAbstractionLayer
                         "The capture database's location has no normalized path and cannot be opened safely.",
                     SqLtSchemaFailure.WriteAheadLog =>
                         "The capture database uses write-ahead logging.",
+                    SqLtSchemaFailure.UnsupportedVersion =>
+                        "The capture file uses a newer XMAT capture format and cannot be opened by this version of XMAT.",
                     _ => "The capture database schema is unsupported or invalid.",
                 },
                 innerException)
@@ -70,12 +73,16 @@ namespace XMAT.DataAbstractionLayer
     internal sealed class SqLtValidatedSchema
     {
         internal SqLtValidatedSchema(
-            IReadOnlyDictionary<string, SqLtValidatedTable> tables)
+            IReadOnlyDictionary<string, SqLtValidatedTable> tables,
+            CaptureTextSemantics textSemantics)
         {
             Tables = tables;
+            TextSemantics = textSemantics;
         }
 
         internal IReadOnlyDictionary<string, SqLtValidatedTable> Tables { get; }
+
+        internal CaptureTextSemantics TextSemantics { get; }
     }
 
     internal sealed record SqLtExpectedColumn(
@@ -216,6 +223,19 @@ namespace XMAT.DataAbstractionLayer
                 checked(
                     (int)maxRecordBytes +
                     SqliteRowOverheadBytes));
+        }
+
+        // The mark operation validates every known table that is present, but materializes none.
+        internal static SqLtSchemaProfile CreateRepair(
+            long maxDatabaseBytes)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+                maxDatabaseBytes);
+            return new SqLtSchemaProfile(
+                new[] { "CaptureDevices" },
+                Array.Empty<string>(),
+                maxDatabaseBytes,
+                null);
         }
 
         internal static SqLtExpectedTable GetKnownTable(string name)

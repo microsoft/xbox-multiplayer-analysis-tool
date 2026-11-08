@@ -36,6 +36,9 @@ namespace XMAT.Tests.Cli
             Assert.Equal(0, json.GetProperty("exitCode").GetInt32());
             Assert.Equal("saz", json.GetProperty("input").GetProperty("kind").GetString());
             Assert.Equal(inputHash, json.GetProperty("input").GetProperty("sha256").GetString());
+            Assert.Equal(
+                ("notApplicable", "notNeeded"),
+                StoredText(json));
             JsonElement device = Assert.Single(json.GetProperty("devices").EnumerateArray());
             Assert.Equal("d1", device.GetProperty("id").GetString());
             Assert.Equal(
@@ -60,6 +63,9 @@ namespace XMAT.Tests.Cli
                 Assert.Equal("xmat-analysis/1", summary.RootElement.GetProperty("schema").GetString());
                 Assert.Equal(json.GetProperty("runId").GetString(), summary.RootElement.GetProperty("runId").GetString());
                 Assert.Equal(calls, summary.RootElement.GetProperty("totals").GetProperty("calls").GetInt32());
+                Assert.Equal(
+                    StoredText(json),
+                    StoredText(summary.RootElement));
                 Assert.Equal(Diagnostics(json.GetProperty("warnings")), Diagnostics(summary.RootElement.GetProperty("warnings")));
             }
 
@@ -263,11 +269,60 @@ namespace XMAT.Tests.Cli
             CliAssert.ExitCode(0, all);
             CliAssert.ExitCode(0, one);
             Assert.Equal("xmatcap", all.Json().GetProperty("input").GetProperty("kind").GetString());
+            Assert.Equal(
+                ("literal", "notNeeded"),
+                StoredText(all.Json()));
             Assert.Equal(new[] { "d1", "d2" }, DeviceIds(all));
             Assert.Equal(new[] { "d2" }, DeviceIds(one));
             CliAssert.NoLeaks(all, directory, Path.Combine(directory.Root, "all"));
             CliAssert.NoLeaks(one, directory, Path.Combine(directory.Root, "one"));
             Assert.Equal(inputHash, CliAssert.Sha256(input));
+        }
+
+        [Fact]
+        public async Task Analyze_UnmarkedXmatcapReportsAmbiguousStoredTextAndWarning()
+        {
+            using var directory = new CliTestDirectory();
+            string input =
+                SyntheticCaptures.WriteXmatcap(
+                    directory.Root,
+                    "unmarked.xmatcap",
+                    new SyntheticXmatcapOptions(
+                        RequestsPerDevice: 1,
+                        UserVersion:
+                            CaptureTextFormat.AmbiguousUserVersion));
+
+            XmatRun run =
+                await XmatProcess.RunAsync(
+                    directory.Root,
+                    "analyze",
+                    input,
+                    "--out",
+                    "results");
+
+            CliAssert.ExitCode(0, run);
+            JsonElement json =
+                run.Json();
+            Assert.Equal(
+                ("ambiguousUnmarked", "notNeeded"),
+                StoredText(json));
+            Assert.Contains(
+                json.GetProperty("warnings")
+                    .EnumerateArray(),
+                warning =>
+                    warning.GetProperty("code")
+                        .GetString() ==
+                    "capture.text.ambiguous");
+            using JsonDocument summary =
+                JsonDocument.Parse(
+                    File.ReadAllBytes(
+                        Path.Join(
+                            directory.Root,
+                            "results",
+                            "summary.json")));
+            Assert.Equal(
+                StoredText(json),
+                StoredText(summary.RootElement));
         }
 
         [Fact]
@@ -402,6 +457,160 @@ namespace XMAT.Tests.Cli
             Assert.Equal(before, directory.Entries());
         }
 
+        // --out below a junction is refused before anything is created (exit code 6), and so is a network path, before xmat
+        // could reach it: 192.0.2.1 is reserved for documentation and never routed.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task Analyze_OutWhereOutputCannotStayPrivate_Returns6AndCreatesNothing(bool network)
+        {
+            using var directory = new CliTestDirectory();
+            string input = SyntheticCaptures.WriteSaz(
+                directory.Root,
+                "capture.saz");
+            string real = Path.Join(
+                directory.Root,
+                "real");
+            Directory.CreateDirectory(real);
+            string link = Path.Join(
+                directory.Root,
+                "link");
+            Links.Junction(
+                link,
+                real);
+            string[] before =
+                directory.Entries();
+            try
+            {
+                XmatRun run = await XmatProcess.RunAsync(
+                    directory.Root,
+                    "analyze",
+                    input,
+                    "--out",
+                    network
+                        ? @"\\192.0.2.1\share\results"
+                        : Path.Join(
+                            "link",
+                            "results"));
+
+                CliAssert.ExitCode(6, run);
+                Assert.Equal(
+                    new[] { "cli.output.unprotected" },
+                    run.ErrorCodes());
+                Assert.Equal(
+                    "xmat cannot keep its output private there: the --out folder must be on a local NTFS volume and " +
+                        "reached without a network path, a mapped or substituted drive, a junction, a mounted folder " +
+                        "or a symbolic link.",
+                    Assert.Single(
+                        run.Json()
+                            .GetProperty("errors")
+                            .EnumerateArray())
+                        .GetProperty("message")
+                        .GetString());
+                Assert.Equal(
+                    before,
+                    directory.Entries());
+                Assert.Empty(
+                    Directory.GetFileSystemEntries(
+                        real));
+            }
+            finally
+            {
+                Links.Remove(link);
+            }
+        }
+
+        // --out as a verbatim path to a folder whose name ends with a dot, next to the decoy that the ordinary path would
+        // name, or by its volume's name: the analysis, whose legacy parts keep files in the staging folder while it runs,
+        // writes and publishes only there.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task Analyze_VerbatimOut_WritesAndPublishesOnlyThere(bool volume)
+        {
+            using var directory = new CliTestDirectory();
+            string input = SyntheticCaptures.WriteSaz(
+                directory.Root,
+                "capture.saz");
+            string decoy = Path.Join(
+                directory.Root,
+                "real");
+            string real = Path.Join(
+                @"\\?\" + directory.Root,
+                "real.");
+            Directory.CreateDirectory(decoy);
+            Directory.CreateDirectory(real);
+            string output = volume
+                ? Path.Join(
+                    Volumes.NameOf(directory.Root),
+                    Volumes.Relative(directory.Root),
+                    "results")
+                : Path.Join(
+                    real,
+                    "results");
+            try
+            {
+                XmatRun run = await XmatProcess.RunAsync(
+                    directory.Root,
+                    "analyze",
+                    input,
+                    "--out",
+                    output);
+
+                CliAssert.ExitCode(0, run);
+                string published = volume
+                    ? Path.Join(
+                        directory.Root,
+                        "results")
+                    : Path.Join(
+                        real,
+                        "results");
+                Assert.Equal(
+                    new[] { "summary.json" },
+                    Directory.GetFileSystemEntries(
+                            published)
+                        .Select(Path.GetFileName));
+                Assert.Equal(
+                    volume
+                        ? Array.Empty<string>()
+                        : new[] { "results" },
+                    Directory.GetFileSystemEntries(
+                            real)
+                        .Select(Path.GetFileName));
+                Assert.Empty(
+                    Directory.GetFileSystemEntries(
+                        decoy));
+                CliAssert.NoStagingFolders(
+                    directory.Root);
+            }
+            finally
+            {
+                DeleteDirectory(real);
+            }
+        }
+
+        private static void DeleteDirectory(
+            string path)
+        {
+            for (int attempt = 1;
+                Directory.Exists(path);
+                attempt++)
+            {
+                try
+                {
+                    Directory.Delete(
+                        path,
+                        true);
+                }
+                catch (Exception ex) when (
+                    (ex is IOException or UnauthorizedAccessException) &&
+                    attempt < 20)
+                {
+                    Thread.Sleep(100);
+                }
+            }
+        }
+
         private static string[] DeviceIds(XmatRun run) =>
             run.Json().GetProperty("devices").EnumerateArray().Select(device => device.GetProperty("id").GetString()).ToArray();
 
@@ -409,5 +618,20 @@ namespace XMAT.Tests.Cli
             diagnostics.EnumerateArray()
                 .Select(diagnostic => diagnostic.GetProperty("code").GetString() + ": " + diagnostic.GetProperty("message").GetString())
                 .ToArray();
+
+        private static (string Semantics, string Policy) StoredText(
+            JsonElement root)
+        {
+            JsonElement stored =
+                root.GetProperty(
+                    "storedText");
+            return (
+                stored.GetProperty(
+                        "semantics")
+                    .GetString(),
+                stored.GetProperty(
+                        "policy")
+                    .GetString());
+        }
     }
 }

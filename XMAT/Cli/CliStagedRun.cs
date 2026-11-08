@@ -9,7 +9,8 @@ using System.Threading.Tasks;
 
 namespace XMAT.Cli
 {
-    // A file that a run publishes. Path is relative to --out and uses '/', as in the JSON document.
+    // A file that a run publishes. Path is relative to --out and uses '/', as in the JSON document. Contents is null for
+    // a folder or file that the run already wrote into the staging folder itself.
     internal sealed record CliStagedFile(string Kind, string Path, byte[] Contents);
 
     // Points in the publication of a run where tests synchronize; production passes none.
@@ -24,8 +25,9 @@ namespace XMAT.Cli
 
     // The publication boundary of a run that writes output. The results are produced in the private staging folder and
     // published by one atomic rename of that folder to --out: the commit.
-    // - The staging folder must be private: its access control is read back before anything is produced, and a folder
-    //   that is not private (storage without Windows permissions) fails the run with exit code 6 and publishes nothing.
+    // - The staging folder must be private: it must be on a local NTFS volume and its owner and access control are read
+    //   back through its handle before anything is produced; otherwise the run fails with exit code 6 and publishes
+    //   nothing.
     // - Cancellation is checked while the results are produced and written, and before each commit attempt. A run
     //   cancelled at one of these checks publishes nothing, removes the staging folder and exits with code 130.
     // - An attempt that passed its check may still complete the rename although a signal races with it. A published run
@@ -52,8 +54,9 @@ namespace XMAT.Cli
                     report.Fail(
                         CliExitCodes.Failed,
                         "cli.output.unprotected",
-                        "xmat cannot keep its output private to your account where the --out folder would be created; it " +
-                            "needs a file system with Windows permissions, such as NTFS. Nothing was published.");
+                        "xmat cannot keep its output private there: the --out folder must be on a local NTFS volume and " +
+                            "reached without a network path, a mapped or substituted drive, a junction, a mounted folder " +
+                            "or a symbolic link.");
                     return report;
                 }
 
@@ -63,7 +66,11 @@ namespace XMAT.Cli
                     cancellationToken.ThrowIfCancellationRequested();
                     foreach (CliStagedFile file in files)
                     {
-                        output.WriteFile(file.Path, file.Contents);
+                        if (file.Contents != null)
+                        {
+                            output.WriteFile(file.Path, file.Contents);
+                        }
+
                         cancellationToken.ThrowIfCancellationRequested();
                     }
 

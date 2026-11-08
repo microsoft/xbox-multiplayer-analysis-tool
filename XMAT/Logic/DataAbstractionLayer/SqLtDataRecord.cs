@@ -16,8 +16,11 @@ namespace XMAT.DataAbstractionLayer
 
     internal class SqLtDataRecord :
         IDataRecord,
-        INullableDataRecord
+        INullableDataRecord,
+        ICaptureTextSourceProvider
     {
+        public CaptureTextSource CaptureTextSource { get; }
+
         public int RowId { get; private set; }
 
         public Int64 Int(string fieldName)
@@ -59,11 +62,26 @@ namespace XMAT.DataAbstractionLayer
             }
         }
 
-        internal SqLtDataRecord(SqliteDataReader recordReader, IDictionary<string, IFieldDefinition> fieldDefs)
+        internal SqLtDataRecord(
+            SqliteDataReader recordReader,
+            IDictionary<string, IFieldDefinition> fieldDefs)
+            : this(
+                recordReader,
+                fieldDefs,
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Unknown)
         {
+        }
+
+        internal SqLtDataRecord(
+            SqliteDataReader recordReader,
+            IDictionary<string, IFieldDefinition> fieldDefs,
+            CaptureTextSource captureTextSource)
+        {
+            ArgumentNullException.ThrowIfNull(captureTextSource);
             RowId = recordReader.GetInt32(0);
 
             _fieldDefs = fieldDefs;
+            CaptureTextSource = captureTextSource;
             _fieldValues = new Dictionary<int, object>();
 
             foreach (var fieldDef in _fieldDefs)
