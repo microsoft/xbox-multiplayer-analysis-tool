@@ -264,12 +264,20 @@ namespace XMAT.DataAbstractionLayer
 
         private static bool IsProtectedDestination(
             string normalized,
-            SqLtFileIdentity? identity) =>
-            (identity.HasValue &&
-                Databases.Keys.Any(database => database.Identity == identity.Value)) ||
-            ImportedSources.Values.Any(source =>
-                string.Equals(source.SourcePath, normalized, StringComparison.OrdinalIgnoreCase) ||
-                (identity.HasValue && source.Identity == identity.Value));
+            SqLtFileIdentity? identity)
+        {
+            if (ImportedSources.Values.Any(source =>
+                    string.Equals(source.SourcePath, normalized, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+            if (identity is not SqLtFileIdentity resolved)
+            {
+                return false;
+            }
+            return Databases.Keys.Any(database => database.Identity == resolved) ||
+                ImportedSources.Values.Any(source => source.Identity == resolved);
+        }
 
         private static SqLtReadonlyDatabase RemoveSqlOwner(
             IDeviceCaptureController controller)

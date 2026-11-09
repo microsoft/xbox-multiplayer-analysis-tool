@@ -279,9 +279,8 @@ namespace XMAT.Operations.Export
             catch (CaptureExportCleanupException exception)
             {
                 AddUnavailableDiagnostic(diagnostics, unavailable);
-                if (exception.Publication != null && selected != null)
-                {
-                    result = result with
+                result = exception.Publication != null && selected != null
+                    ? result with
                     {
                         Counts = CompletedCounts(selected.Counts, exported, unavailable),
                         Devices = CompletedDevices(
@@ -294,12 +293,8 @@ namespace XMAT.Operations.Export
                         OutputSha256 = exception.Publication.Sha256,
                         Published = true,
                         OutputProtected = exception.Publication.Protected,
-                    };
-                }
-                else
-                {
-                    result = FailedResult(result, selected, unavailable, unavailableByDevice);
-                }
+                    }
+                    : FailedResult(result, selected, unavailable, unavailableByDevice);
                 return Failure(
                     OperationOutcome.CleanupFailed,
                     result,

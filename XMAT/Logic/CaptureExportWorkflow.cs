@@ -80,6 +80,7 @@ namespace XMAT
                 return;
             }
 
+            using IDisposable operationLease = lease;
             ICaptureExportSnapshot snapshot = null;
             try
             {
@@ -153,18 +154,19 @@ namespace XMAT
             }
             finally
             {
-                try
-                {
-                    snapshot?.Dispose();
-                }
-                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
-                {
-                    PublicUtilities.AppLog(LogLevel.ERROR, $"Capture export snapshot could not be closed: {ex}");
-                }
-                finally
-                {
-                    lease.Dispose();
-                }
+                CloseSnapshot(snapshot);
+            }
+        }
+
+        private static void CloseSnapshot(ICaptureExportSnapshot snapshot)
+        {
+            try
+            {
+                snapshot?.Dispose();
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Capture export snapshot could not be closed: {ex}");
             }
         }
 

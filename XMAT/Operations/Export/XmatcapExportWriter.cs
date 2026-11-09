@@ -59,12 +59,13 @@ namespace XMAT.Operations.Export
                 CreateTable(WebServiceCaptureMethod.TableName, captureFields);
                 _deviceInsert = CreateInsert("CaptureDevices", deviceFields);
                 _captureInsert = CreateInsert(WebServiceCaptureMethod.TableName, captureFields);
-                foreach (RawExportRow descriptor in deviceDescriptors.Values)
+                foreach (var entry in deviceDescriptors.Values
+                    .Select(descriptor => (
+                        Descriptor: descriptor,
+                        Name: descriptor.Values.TryGetValue("DeviceName", out object value) ? value as string : null))
+                    .Where(entry => entry.Name != null))
                 {
-                    if (descriptor.Values.TryGetValue("DeviceName", out object value) && value is string name)
-                    {
-                        _deferredDescriptors.TryAdd(name, descriptor);
-                    }
+                    _deferredDescriptors.TryAdd(entry.Name, entry.Descriptor);
                 }
             }
             catch (SqliteException exception) when (exception.SqliteErrorCode == raw.SQLITE_TOOBIG)

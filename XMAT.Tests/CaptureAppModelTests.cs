@@ -850,7 +850,7 @@ namespace XMAT.Tests
         public async Task ImportDataCapturesAsync_FailedReimportPreservesExistingTabSelectionAndRows()
         {
             string path = CreateRepositoryLocalSazPath();
-            string alias = Path.Combine(
+            string alias = Path.Join(
                 Path.GetDirectoryName(path),
                 Path.GetFileNameWithoutExtension(path) + "-alias.saz");
             string deviceName = $"Fiddler - {Path.GetFileName(path)}";
@@ -942,7 +942,7 @@ namespace XMAT.Tests
         public async Task ImportDataCapturesAsync_SuccessfulReimportReplacesRowsWithoutAppending()
         {
             string path = CreateRepositoryLocalSazPath();
-            string oldAlias = Path.Combine(
+            string oldAlias = Path.Join(
                 Path.GetDirectoryName(path),
                 Path.GetFileNameWithoutExtension(path) + "-old.saz");
             string deviceName = $"Fiddler - {Path.GetFileName(path)}";
@@ -1019,7 +1019,7 @@ namespace XMAT.Tests
         public async Task ImportDataCapturesAsync_SharedImportedSourceProtectedUntilLastOwnerReleasesIt()
         {
             string path = CreateRepositoryLocalSazPath();
-            string alias = Path.Combine(
+            string alias = Path.Join(
                 Path.GetDirectoryName(path),
                 Path.GetFileNameWithoutExtension(path) + "-shared.saz");
             using var database = CreateCaptureDatabase(out var table);

@@ -240,12 +240,10 @@ namespace XMAT.Operations.Export
             IDictionary<string, object> values,
             ClientProcessInfo process)
         {
-            foreach (IFieldValue field in ClientProcessRecordCodec.ToFields(process))
+            foreach (IFieldValue field in ClientProcessRecordCodec.ToFields(process)
+                .Where(field => values.ContainsKey(field.Name)))
             {
-                if (values.ContainsKey(field.Name))
-                {
-                    values[field.Name] = field.Value;
-                }
+                values[field.Name] = field.Value;
             }
         }
 

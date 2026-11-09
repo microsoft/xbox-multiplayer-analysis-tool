@@ -61,11 +61,10 @@ namespace XMAT
         {
             try
             {
-                await _operation;
-            }
-            catch
-            {
                 // The command handler awaits the same task and reports errors.
+                await _operation.ConfigureAwait(
+                    ConfigureAwaitOptions.ContinueOnCapturedContext | ConfigureAwaitOptions.SuppressThrowing);
+                _ = _operation.Exception;
             }
             finally
             {
