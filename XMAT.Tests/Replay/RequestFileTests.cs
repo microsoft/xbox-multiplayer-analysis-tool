@@ -44,6 +44,24 @@ namespace XMAT.Tests.Replay
             Assert.False(Encoding.UTF8.GetString(first).StartsWith('\uFEFF'));
         }
 
+        [Theory]
+        [InlineData("http://[fe80::1%12]/item")]
+        [InlineData("http://[fe80::1%Ethernet]/item")]
+        [InlineData("http://[fe80::1%2518]/item")]
+        [InlineData("http://[fe80::1%0]/item")]
+        public void ContentFiles_RoundTripAnIpv6ZoneAsExactData(string url)
+        {
+            var draft = new RequestReplayDraft { Method = "GET", Url = url };
+
+            byte[] first = Write(draft, RequestFileProfile.Content);
+            RequestFileContent content = Read(first);
+            byte[] second = Write(
+                RequestReplayDraft.FromRequestFile(content), RequestFileProfile.Content, content.HttpVersion);
+
+            Assert.Equal(url, content.Url);
+            Assert.Equal(first, second);
+        }
+
         [Fact]
         public void Templates_KeepNoCapturedValueOrStructure()
         {

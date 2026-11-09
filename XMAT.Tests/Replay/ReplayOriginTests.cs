@@ -183,12 +183,11 @@ namespace XMAT.Tests.Replay
             Assert.Equal((changes, changes, changes), (file.ChangesOrigin, completed.ChangesOrigin, copy.ChangesOrigin));
         }
 
-        // A request file's URL with an IPv6 zone is sent as it came without consent for another origin, and needs that
-        // consent once its zone changed.
+        // A request file keeps its IPv6 zone as origin data, but neither that destination nor another scoped edit is sent.
         [Theory]
-        [InlineData("http://[fe80::1%25A]/item", null)]
-        [InlineData("http://[fe80::1%25B]/item", "replay.policy.origin-change")]
-        public async Task ARequestFilesZone_NeedsConsentOnlyOnceItChanged(string edited, string code)
+        [InlineData("http://[fe80::1%25A]/item")]
+        [InlineData("http://[fe80::1%25B]/item")]
+        public async Task ARequestFilesZone_IsAlwaysRefusedForSending(string edited)
         {
             int sends = 0;
             var operation = new ReplayOperation
@@ -201,8 +200,8 @@ namespace XMAT.Tests.Replay
             OperationResult<ReplayResult> result = await operation.ExecuteAsync(
                 new ReplayRequest(ReplaySource.FromDraft(draft)), OperationContext.None, CancellationToken.None);
 
-            Assert.Equal(code, result.Diagnostics.SingleOrDefault()?.Code);
-            Assert.Equal(code == null ? 1 : 0, sends);
+            Assert.Equal(ReplayDestination.ScopedIpv6Code, Assert.Single(result.Diagnostics).Code);
+            Assert.Equal(0, sends);
         }
 
         // A connect-to run serves one origin: the two sigmas are two, and a host without a canonical form is none, so a run

@@ -48,6 +48,11 @@ xmat help [COMMAND]
 xmat --version
 ```
 
+After parsing `replay`, `compose`, `curl` or `save-request`, xmat first checks that `--out` names a valid local drive
+or volume target, without reading input or touching the file system. It then reads, freezes and admits the input. Only
+an admitted run tries to reserve private output; that later step discovers a missing parent, an existing output or a
+reservation-time storage failure.
+
 - `xmat analyze` reads a Fiddler archive (`.saz`) or an XMAT capture (`.xmatcap`), recognized by its content, and runs
   the Xbox Live service call rules on it. It writes `summary.json` (schema `xmat-analysis/1`) to `DIR`, which must not
   exist yet: xmat prepares the results in a private `.xmat-staging-<run id>` folder next to `DIR` and renames that
@@ -230,7 +235,19 @@ xmat --version
   a redirect from HTTPS to HTTP, to anything other than HTTP and HTTPS, to a URL with credentials, or without exactly
   one usable `Location`. With `--follow-redirects 0`, a redirect is the result as it is, without a code; otherwise a
   redirect that is not followed is the result, with the code `replay.redirect.origin-change`,
-  `replay.redirect.insecure`, `replay.redirect.unsupported` or `replay.redirect.limit`.
+  `replay.redirect.insecure`, `replay.redirect.unsupported`, `replay.redirect.limit` or
+  `replay.destination.scoped-ipv6`. A scoped redirect is not followed, so that redirect is the result with the scoped
+  code.
+- An initial HTTP or HTTPS destination whose IPv6 address has a zone identifier is refused as
+  `replay.destination.scoped-ipv6` (exit code 3):
+  `IPv6 zone identifiers are not supported for sending requests or exporting cURL commands.` This applies to capture
+  and request-file destinations, typed URLs, sequences, `--url` and `--origin`, including numeric, named or unknown
+  zones, `%25` spellings and explicit zone zero. xmat checks every initial destination before output reservation,
+  client-certificate lookup or sender creation; one replayable scoped destination refuses the whole eligible plan,
+  while a selected row that replay already skips for another reason remains skipped. A typed numeric zone or interface
+  alias that an earlier version could send is therefore no longer sent. Percent escapes in paths and queries are
+  unaffected. A request-file omission is reported before the scoped-destination refusal, for both sending and cURL
+  export.
 - Wherever xmat compares origins (a redirect, a changed origin, the requests of a `--connect-to` run), two URLs are of
   one origin when their schemes and ports are the same and so are their hosts, compared both as written, ignoring case,
   and in their canonical ASCII (IDN) form. So `ασ.example` and `ας.example`, which differ only in a Greek final sigma,
@@ -406,7 +423,7 @@ xmat --version
   `curl` use such a capture's text only as stored, and only with `--accept-stored-text`, which covers this run's
   `INPUT` alone. Without it, they refuse before they select or prepare any request (`replay.capture-text.ambiguous`
   for `replay`, `capture.text.ambiguous-export` for `save-request` and `curl`, exit code 3), send and publish nothing,
-  and remove their staging folder; or make a marked copy with `xmat mark-capture-text` and use that. With it, the run
+  and reserve no output; or make a marked copy with `xmat mark-capture-text` and use that. With it, the run
   warns `capture.text.ambiguous`. `--url` and the other edits change the selected request, not where its text came
   from, so an unmarked `INPUT` needs the flag with them too. The flag changes nothing for a marked capture, a Fiddler
   archive, a `--request-file` or a `--url` request; `compose`, which reads no capture, does not take it (exit code
@@ -427,6 +444,8 @@ xmat --version
   `INPUT --request SPEC` selects, the request of a `--request-file`, or a new request with `--url`, after the same edits
   as `replay`. It publishes `DIR/summary.json` (schema `xmat-save-request/1`) and `DIR/requests/NNNNN.json`, one file
   per request, at most 10,000 of them (`replay.plan.too-large`, exit code 3, checked before any request is built).
+  A scoped IPv6 URL is retained exactly as data, including its zone spelling; saving or loading the file never grants
+  permission to send it, and a later replay is still refused.
 - A request file is a template by default. It keeps the HTTP version, the method when it is `GET`, `HEAD`, `OPTIONS`,
   `POST`, `PUT`, `PATCH`, `DELETE` or `TRACE`, and an empty header block or body only when there is none. It leaves out
   the URL, every header name and value, any other method and the body, and its `omitted` member lists what it left out.
@@ -531,16 +550,22 @@ xmat --version
   JSON output and `summary.json` give, for each script, its body's size, the HTTP version it asks for, whether it needs
   a `curl.exe` with Unicode support, and how many header and query parameter names the sanitized export would treat as
   secret: never a name or a value.
+- Before output reservation, cURL preparation retains every prepared script request and its decoded body in addition
+  to the source and drafts already held for the run. The existing cumulative input limits and 10,000-script ceiling
+  bound those inputs, but the 512 MiB maximum data setting is not a bound on total process memory. No peak-memory figure
+  has been measured for this path.
 - A request that curl is not known to send the same way is refused (exit code 3): a request file that asks for HTTP/2
   only (`replay.curl.unsupported`; pass `--http-version auto` or `1.1` to export it), a URL with a `#`
   (`replay.curl.unsupported`), HEAD with a body (`replay.curl.head-body`), a URL and headers too long for a Windows
   command line (`replay.curl.arguments-too-large`), a Fiddler control header (`replay.request.control-header`), a
   request that still leaves anything out (`replay.request.incomplete`) and an invalid request
-  (`replay.request.invalid`), such as one with a header value that is not well-formed Unicode. `--http-version 2` is a
-  usage error, and so are the options that only sending uses: `--repeat`, `--parallel`, `--timeout`,
-  `--max-response-mib`, `--follow-redirects`, `--connect-to`, `--allow-connect-to`, `--proxy`, `--allow-proxy`,
-  `--client-cert`, `--allow-client-cert`, `--windows-auth`, `--allow-windows-auth`, `--sequence`,
-  `--allow-unsafe-methods`, `--verify`, `--verify-diff` and `--origin` (`cli.usage.unsupported-option`, exit code 2).
+  (`replay.request.invalid`), such as one with a header value that is not well-formed Unicode, or a scoped IPv6
+  destination (`replay.destination.scoped-ipv6`). The scoped-destination check happens before staging or script
+  production. `--http-version 2` is a usage error, and so are the options that only sending uses: `--repeat`,
+  `--parallel`, `--timeout`, `--max-response-mib`, `--follow-redirects`, `--connect-to`, `--allow-connect-to`,
+  `--proxy`, `--allow-proxy`, `--client-cert`, `--allow-client-cert`, `--windows-auth`, `--allow-windows-auth`,
+  `--sequence`, `--allow-unsafe-methods`, `--verify`, `--verify-diff` and `--origin` (`cli.usage.unsupported-option`,
+  exit code 2).
 - A script needs PowerShell 7.2 or later on Windows. It refuses to send unless `curl.exe` is at least version 8.21.0
   and, when the URL or a header is not ASCII, supports Unicode. It runs curl without a configuration file (`-q`) and
   with only `SystemRoot`, `windir`, `SystemDrive`, `TEMP` and `TMP` in its environment, so no proxy, CA bundle or other
@@ -668,7 +693,8 @@ For native captures, analyze reports `storedText.semantics` as `literal` or `amb
 `--accept-stored-text` was given, and, in a run that published, the same `storedText` in the JSON output and in
 `summary.json`: `ambiguousUnmarked` with the policy `acceptedAsStored` for an unmarked capture used as stored,
 `literal` for a marked capture, and `notApplicable` for a Fiddler archive, a request file or a `--url` request, each
-with the policy `notNeeded`. A run that published nothing reports no `storedText`.
+with the policy `notNeeded`. Once a capture is admitted, its input kind, SHA-256 and read warnings are reported even
+when output reservation then fails. A run that published nothing reports no `storedText`.
 
 On standard output, `mark-capture-text` reports these fields under `markCaptureText`: `limits.maxInputMib` and
 `interpretation`, and `input` (`kind`, `sha256`) once the input's kind and SHA-256 are known. A published run also
@@ -716,6 +742,12 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
   invalid input with exit code 3.
 - `analyze --out` now requires link-free local NTFS storage and refuses network, mapped/substituted, reparse-point and
   non-NTFS output locations before analysis.
+- Replay and request-export commands now check the shape and protection of `--out` before cURL consent or any capture,
+  request-file, body-file or form input is read, but admit that input before reserving output. Invalid input can
+  therefore replace an existing-output conflict (exit code 5) with its exit-code-3 diagnostic, including an unmarked
+  capture's stored-text decision. If reservation fails after admission, replay, save-request and curl still report the
+  admitted input's kind, SHA-256 and read warnings. Initial scoped IPv6 destinations, which earlier versions could
+  send, are now refused as `replay.destination.scoped-ipv6`.
 
 ## What runs headless
 

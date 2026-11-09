@@ -603,7 +603,9 @@ any character that could hide or reorder text shown as `\uXXXX`.
   the composer, stops it and loads nothing. A body larger than 64 KiB is kept as its
   exact bytes and shown only by its size: **Copy as cURL** does not copy it, and **Save
   as cURL script** saves it whole. **Load** is not available for CONNECT tunnels,
-  protocol upgrades, and requests recorded without their body.
+  protocol upgrades, requests recorded without their body, scoped IPv6 destinations,
+  or destinations whose effective authority is malformed or cannot be established
+  within the bounded history check.
 - **Show in Replays** selects the request in its tab, also when it cannot be loaded.
 - **Clear history** empties the history in every composer. The requests stay in the
   **XMAT Replays** tab, and a request that you loaded stays in its composer.

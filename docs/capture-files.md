@@ -102,6 +102,14 @@ XMAT checks capture files before reading them and never changes them:
   stored head unchanged. Characters inside header values, double quotation marks
   included, are kept.
 
+An IPv6 zone identifier in a captured destination is retained as capture data. The
+Replays preview shows that retained, escaped and bounded destination and marks it as
+unsupported for replay; analysis also keeps the zone in its URL. XMAT does not put a
+zone into an HTTP `Host` header, CONNECT target or TLS server name. It refuses to send
+any such destination, or to export it as executable cURL, rather than silently choose
+another interface. Request-file save and load retain the exact zone spelling as data,
+but do not grant permission to send it.
+
 ### Replays saved by xmat
 
 `xmat replay` and `xmat compose` with `--save-saz` also save their sends as

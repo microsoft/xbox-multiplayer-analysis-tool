@@ -302,27 +302,42 @@ namespace XMAT.WebServiceCapture
 
         // A request target in absolute form whose scheme makes a URL (UriUtils.IsUrlScheme), and its authority written as a
         // Host header would be: the host as Uri reads it (a name in lower case, an IDN in punycode, an IPv4 address dotted,
-        // an IPv6 address canonical and in brackets, with its zone), and the port only when it is not the scheme's default.
-        // User information is no part of it. A CONNECT's target is not one, nor is a target whose host is no host identity,
-        // has no IDN form, or whose port is outside 1-65535.
+        // an IPv6 address canonical and in brackets, with its zone's lexical spelling kept), and the port only when it is
+        // not the scheme's default. User information is no part of it. A CONNECT's target is not one, nor is a target whose
+        // host is no host identity, has no IDN form, or whose port is outside 1-65535.
         private static bool TryReadAbsoluteTarget(string method, string target, out Uri uri, out string authority)
         {
             authority = null;
             if (method != "CONNECT" &&
+                StoredAuthority.TryParseAbsoluteTarget(target, out _, out _) &&
                 Uri.TryCreate(target, UriKind.Absolute, out uri) &&
                 UriUtils.IsUrlScheme(uri.Scheme) &&
-                TryGetHostText(uri, out string hostText) &&
-                HostAuthority.TryNormalizeHost(hostText, out string host))
+                TryGetHostText(uri, out string hostText))
             {
-                string written = uri.HostNameType == UriHostNameType.IPv6 ? "[" + host + "]" : host;
+                string written;
+                if (uri.HostNameType == UriHostNameType.IPv6)
+                {
+                    written = "[" + hostText + "]";
+                }
+                else
+                {
+                    if (!HostAuthority.TryNormalizeHost(hostText, out string normalizedHost))
+                    {
+                        uri = null;
+                        return false;
+                    }
+
+                    written = normalizedHost;
+                }
+
                 if (!uri.IsDefaultPort)
                 {
                     written += ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
                 }
 
-                if (HostAuthority.TryParse(written, out _, out _))
+                if (StoredAuthority.TryParse(written, out string storedHost, out int? storedPort))
                 {
-                    authority = written;
+                    authority = StoredAuthority.Format(storedHost, storedPort);
                     return true;
                 }
             }

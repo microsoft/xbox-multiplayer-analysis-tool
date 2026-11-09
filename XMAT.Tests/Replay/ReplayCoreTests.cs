@@ -262,6 +262,7 @@ namespace XMAT.Tests.Replay
         [InlineData("http://127.0.0.1:8080", "http://127.0.0.1:8080")]
         [InlineData("https://example.test/", "https://example.test")]
         [InlineData("HTTPS://Example.Test:443", "https://example.test")]
+        [InlineData("http://[fe80::1%12]/", "http://[fe80::1%12]")]
         [InlineData("http://example.test/path", null)]
         [InlineData("http://example.test/?q=1", null)]
         [InlineData("http://example.test/#f", null)]

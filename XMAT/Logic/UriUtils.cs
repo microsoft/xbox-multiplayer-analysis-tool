@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using XMAT.Operations.Replay;
 
 namespace XMAT
 {
@@ -53,7 +54,7 @@ namespace XMAT
                     query);
                 uri = ub.Uri;
             }
-            return uri.ToString();
+            return ReplayDestination.ToStringKeepingZone(uri);
         }
     }
 }

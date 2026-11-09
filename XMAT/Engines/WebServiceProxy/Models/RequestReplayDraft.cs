@@ -98,18 +98,7 @@ namespace XMAT.WebServiceCapture
                 throw new ArgumentException(
                     "Only HTTP requests without a protocol upgrade, recorded with their request body, can be replayed.");
 
-            // Captures can store either an absolute proxy URL or a path relative to the recorded host.
-            string path = capture.Path ?? "";
-            string url;
-            if (Uri.TryCreate(path, UriKind.Absolute, out var absolute) &&
-                (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps))
-            {
-                url = absolute.AbsoluteUri;
-            }
-            else
-            {
-                url = CaptureAuthority(capture) + (path.StartsWith('/') ? path : "/" + path);
-            }
+            string url = CaptureUrl(capture);
 
             // Keep the raw header lines: the capture's dictionary collapses repeated header names.
             string rawHeaders = capture.RequestLineAndHeaders ?? "";
@@ -171,16 +160,68 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // The scheme, host and port that FromCapture sends a request to when its path is relative to the recorded host, as
-        // Uri gives them: an IPv6 host in brackets, and the port only when it is not the scheme's default. It throws when
-        // the row's scheme, host or port make no URL, as FromCapture then does.
+        // The scheme, host and port of a capture whose path is relative: an IPv6 host is bracketed and keeps its stored zone,
+        // and a port is present only when it is not the scheme's default. The URL must round-trip without interpreting any
+        // host text as user information, path, query or fragment, or changing the stored port; otherwise it throws.
         internal static string CaptureAuthority(ProxyConnectionModel capture)
         {
             ArgumentNullException.ThrowIfNull(capture);
-            var authority = new UriBuilder(capture.Scheme, capture.Host);
-            if (!string.IsNullOrEmpty(capture.Port))
-                authority.Port = int.Parse(capture.Port);
-            return authority.Uri.GetLeftPart(UriPartial.Authority);
+            try
+            {
+                string storedHost = capture.Host ?? string.Empty;
+                if (!storedHost.Contains(':') &&
+                    !storedHost.StartsWith('[') &&
+                    storedHost.AsSpan().IndexOfAny('/', '\\') >= 0)
+                {
+                    throw new UriFormatException();
+                }
+
+                var authority = new UriBuilder(capture.Scheme, capture.Host);
+                int? storedPort = null;
+                if (!string.IsNullOrEmpty(capture.Port))
+                {
+                    storedPort = int.Parse(capture.Port);
+                    authority.Port = storedPort.Value;
+                }
+
+                Uri uri = authority.Uri;
+                string userInfoWithDelimiter = uri.GetComponents(
+                    UriComponents.UserInfo | UriComponents.KeepDelimiter,
+                    UriFormat.UriEscaped);
+                bool hasEmptyUserInfoDelimiter =
+                    string.IsNullOrEmpty(uri.UserInfo) && userInfoWithDelimiter.Length != 0;
+                if (hasEmptyUserInfoDelimiter ||
+                    !string.IsNullOrEmpty(uri.UserInfo) ||
+                    (capture.Host?.StartsWith('[') == true && !capture.Host.EndsWith(']')) ||
+                    uri.PathAndQuery != "/" ||
+                    !string.IsNullOrEmpty(uri.Fragment) ||
+                    (storedPort.HasValue ? uri.Port != storedPort.Value : !uri.IsDefaultPort))
+                {
+                    throw new UriFormatException();
+                }
+
+                return ReplayDestination.AuthorityKeepingZone(uri);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException or FormatException or InvalidOperationException or OverflowException)
+            {
+                throw new UriFormatException("The captured host and port do not make a URL authority.");
+            }
+        }
+
+        // The effective URL of a capture, without reading its body: an absolute target wins over the structured authority,
+        // and either form keeps an IPv6 zone as stored data.
+        internal static string CaptureUrl(ProxyConnectionModel capture)
+        {
+            ArgumentNullException.ThrowIfNull(capture);
+            string path = capture.Path ?? string.Empty;
+            if (Uri.TryCreate(path, UriKind.Absolute, out Uri absolute) &&
+                (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps))
+            {
+                return ReplayDestination.AbsoluteUriKeepingZone(absolute);
+            }
+
+            return CaptureAuthority(capture) + (path.StartsWith('/') ? path : "/" + path);
         }
 
         // A draft from a request file. What the file left out stays omitted (Omissions) and shows as empty until it is

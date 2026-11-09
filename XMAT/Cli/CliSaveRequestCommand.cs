@@ -39,6 +39,12 @@ namespace XMAT.Cli
             {
                 SaveRequest = new CliSaveRequestReport(save, request.Input != null ? request.Limits ?? CliLimits.Default : null),
             };
+            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
+            if (targetFailure != null)
+            {
+                report.Fail(targetFailure.ExitCode, targetFailure.Code, targetFailure.Message);
+                return report;
+            }
 
             // The body (the --body-file, or the --form files) and the request file are read before anything is reserved;
             // their paths and content never reach the output, and a file that cannot be used is refused with exit code 3.
@@ -73,10 +79,9 @@ namespace XMAT.Cli
                 return report;
             }
 
-            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
-            if (targetFailure != null)
+            ReplayExport prepared = Prepare(request, requestBody, file, report, cancellationToken);
+            if (prepared == null)
             {
-                report.Fail(targetFailure.ExitCode, targetFailure.Code, targetFailure.Message);
                 return report;
             }
 
@@ -110,7 +115,7 @@ namespace XMAT.Cli
                 await CliStagedRun.CompleteAsync(
                     report,
                     output,
-                    token => Task.FromResult(Save(request, requestBody, file, output, report, token)),
+                    token => Task.FromResult(Save(request, file, prepared, output, report, token)),
                     null,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -129,35 +134,32 @@ namespace XMAT.Cli
             return report;
         }
 
-        // Writes every request file inside the staging folder; null when the run saved nothing (the report says why).
-        private static IReadOnlyList<CliStagedFile> Save(
+        // Gathers and checks every frozen request before the command reserves output.
+        private static ReplayExport Prepare(
             CliRequest request,
             CliRequestBody requestBody,
             RequestFileReadResult file,
-            CliOutputFolder output,
             CliReport report,
             CancellationToken cancellationToken)
         {
-            // Isolation comes first, as for analyze: legacy statics that keep files use the private staging folder.
-            HeadlessStorage.Configure(output.WorkPath);
             CliReplay save = request.Replay;
-            OperationResult<ReplayExport> prepared = new ReplayOperation().PrepareForExport(
+            OperationResult<ReplayExport> result = new ReplayOperation().PrepareForExport(
                 CreateRequest(request, requestBody, file?.Content, save.AcceptStoredText), cancellationToken);
-            foreach (OperationDiagnostic diagnostic in prepared.Diagnostics)
+            foreach (OperationDiagnostic diagnostic in result.Diagnostics)
             {
                 if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
                 {
                     report.Warnings.Add(diagnostic);
                 }
-                else if (diagnostic.Severity == OperationDiagnosticSeverity.Error || !prepared.Succeeded)
+                else if (diagnostic.Severity == OperationDiagnosticSeverity.Error || !result.Succeeded)
                 {
                     report.Errors.Add(diagnostic);
                 }
             }
 
-            if (!prepared.Succeeded)
+            if (!result.Succeeded)
             {
-                report.SetExitCode(CliExitCodes.FromOutcome(prepared.Outcome));
+                report.SetExitCode(CliExitCodes.FromOutcome(result.Outcome));
                 if (report.Errors.Count == 0)
                 {
                     report.Errors.Add(new OperationDiagnostic(
@@ -169,15 +171,15 @@ namespace XMAT.Cli
 
             if (file == null)
             {
-                report.SaveRequest.InputKind = prepared.Value.InputKind;
-                report.SaveRequest.InputSha256 = prepared.Value.InputSha256;
+                report.SaveRequest.InputKind = result.Value.InputKind;
+                report.SaveRequest.InputSha256 = result.Value.InputSha256;
             }
 
-            report.SaveRequest.StoredText = prepared.Value.StoredText ?? CliStoredText.NotApplicable;
+            report.SaveRequest.StoredText = result.Value.StoredText ?? CliStoredText.NotApplicable;
 
             RequestFileProfile profile = save.IncludeSensitive ? RequestFileProfile.Content : RequestFileProfile.Template;
             if (profile == RequestFileProfile.Content && !save.AllowOriginChange &&
-                prepared.Value.Items.Any(item => item.Draft.ChangesOrigin))
+                result.Value.Items.Any(item => item.Draft.ChangesOrigin))
             {
                 report.Fail(
                     CliExitCodes.InvalidInput,
@@ -187,10 +189,27 @@ namespace XMAT.Cli
                 return null;
             }
 
-            ReplayHttpVersion httpVersion =
-                file != null && !save.HttpVersionSet ? file.Content.HttpVersion : save.HttpVersion;
+            return result.Value;
+        }
+
+        // Writes every prepared request file inside the staging folder.
+        private static IReadOnlyList<CliStagedFile> Save(
+            CliRequest request,
+            RequestFileReadResult file,
+            ReplayExport prepared,
+            CliOutputFolder output,
+            CliReport report,
+            CancellationToken cancellationToken)
+        {
+            // Isolation comes first, as for analyze: legacy statics that keep files use the private staging folder.
+            HeadlessStorage.Configure(output.WorkPath);
+            CliReplay save = request.Replay;
+            RequestFileProfile profile = save.IncludeSensitive ? RequestFileProfile.Content : RequestFileProfile.Template;
+            ReplayHttpVersion httpVersion = file != null && !save.HttpVersionSet
+                ? file.Content.HttpVersion
+                : save.HttpVersion;
             int id = 0;
-            foreach (ReplayExportItem item in prepared.Value.Items)
+            foreach (ReplayExportItem item in prepared.Items)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 id++;

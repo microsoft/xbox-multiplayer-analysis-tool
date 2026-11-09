@@ -124,10 +124,11 @@ namespace XMAT.Operations.Replay
         private static readonly Regex SidecarSegment = new("^(\\.\\.|[A-Za-z0-9_-][A-Za-z0-9._-]*)$", RegexOptions.CultureInvariant);
 
         // The request as curl.exe's arguments and its body, or why it cannot be exported. In this order: a part that a
-        // request file left out (RequestIncompleteException); the request file limits on the method, URL, headers and
-        // body (FormatException); a Fiddler control header; a transport that curl is not known to send the same way, or
-        // a numbered URL; HEAD with a body; a header value that is not well-formed Unicode (FormatException); arguments
-        // beyond the command line. Only then is the body made, once. An invalid draft throws as CreateRequest does.
+        // request file left out (RequestIncompleteException); a scoped IPv6 destination; the request file limits on the
+        // method, URL, headers and body (FormatException); a Fiddler control header; a transport that curl is not known to
+        // send the same way, or a numbered URL; HEAD with a body; a header value that is not well-formed Unicode
+        // (FormatException); arguments beyond the command line. Only then is the body made, once. An invalid draft throws
+        // as CreateRequest does.
         internal static CurlRequest Prepare(
             RequestReplayDraft draft,
             ReplayTransportOptions transport,
@@ -137,10 +138,7 @@ namespace XMAT.Operations.Replay
             ArgumentNullException.ThrowIfNull(draft);
             transport ??= new ReplayTransportOptions();
             cancellationToken.ThrowIfCancellationRequested();
-            if (draft.Omissions.Any)
-            {
-                throw new RequestIncompleteException();
-            }
+            CheckDestination(draft);
 
             draft.ValidateStructure();
             if (ReplayControlHeaders.Has(draft))
@@ -222,6 +220,22 @@ namespace XMAT.Operations.Replay
 
             cancellationToken.ThrowIfCancellationRequested();
             return new CurlRequest(arguments, draft.GetBodyBytes());
+        }
+
+        // Shared by the GUI's pre-confirmation check and Prepare: request-file omissions, then the destination, before
+        // either can produce executable cURL text.
+        internal static void CheckDestination(RequestReplayDraft draft)
+        {
+            ArgumentNullException.ThrowIfNull(draft);
+            if (draft.Omissions.Any)
+            {
+                throw new RequestIncompleteException();
+            }
+
+            if (ReplayDestination.IsScopedIpv6(draft.Url))
+            {
+                throw new CurlExportException(ReplayDestination.ScopedIpv6Code, ReplayDestination.ScopedIpv6Message);
+            }
         }
 
         internal static void Write(

@@ -154,7 +154,7 @@ namespace XMAT.WebServiceCapture.Models
             RequestTime = requestTime;
             Duration = duration;
             Scheme = scheme;
-            if (HostAuthority.TryParse(hostAndPort, out string host, out int? port))
+            if (StoredAuthority.TryParse(hostAndPort, out string host, out int? port))
             {
                 Host = host;
                 Port = port?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;

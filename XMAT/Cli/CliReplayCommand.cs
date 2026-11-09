@@ -63,10 +63,16 @@ namespace XMAT.Cli
             {
                 Replay = new CliReplayReport(request.Replay, fromCapture ? request.Limits ?? CliLimits.Default : null),
             };
+            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
+            if (targetFailure != null)
+            {
+                report.Fail(targetFailure.ExitCode, targetFailure.Code, targetFailure.Message);
+                return report;
+            }
 
             if (request.Replay.RawFile != null)
             {
-                await RunRawAsync(request, report, runId, configureStorage, cancellationToken).ConfigureAwait(false);
+                await RunRawAsync(request, report, target, runId, configureStorage, cancellationToken).ConfigureAwait(false);
                 ReportPublished(request, report);
                 return report;
             }
@@ -118,7 +124,20 @@ namespace XMAT.Cli
                 report.Replay.HttpVersion = RequestedHttpVersion(request.Replay, file.Content);
             }
 
-            CliOutputFolder output = Reserve(request, report, runId, cancellationToken);
+            // After the non-mutating target check, freeze and admit every parsed destination before output is reserved.
+            // Execution below uses this plan without reopening the capture or request file.
+            var operation = new ReplayOperation();
+            ReplayOperation.PreparedRun preparedRun = await operation.PrepareRunAsync(
+                CreateRequest(request, prepared, file?.Content, sink: null),
+                cancellationToken).ConfigureAwait(false);
+            if (preparedRun.Failure != null)
+            {
+                Apply(report, preparedRun.Failure);
+                return report;
+            }
+
+            ReportPreparedInput(report, preparedRun);
+            CliOutputFolder output = Reserve(target, report, runId, cancellationToken);
             if (output == null)
             {
                 return report;
@@ -129,7 +148,8 @@ namespace XMAT.Cli
                 await CliStagedRun.CompleteAsync(
                     report,
                     output,
-                    token => SendAsync(request, prepared, file, output, report, configureStorage, token),
+                    token => SendAsync(
+                        request, operation, preparedRun, file, output, report, configureStorage, token),
                     null,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -138,17 +158,10 @@ namespace XMAT.Cli
             return report;
         }
 
-        // Checks --out and reserves the private staging folder next to it; null when it cannot, and the report says why.
+        // Reserves the private staging folder for a target that CheckTarget accepted; null when it cannot.
         private static CliOutputFolder Reserve(
-            CliRequest request, CliReport report, string runId, CancellationToken cancellationToken)
+            CliOutputTarget target, CliReport report, string runId, CancellationToken cancellationToken)
         {
-            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
-            if (targetFailure != null)
-            {
-                report.Fail(targetFailure.ExitCode, targetFailure.Code, targetFailure.Message);
-                return null;
-            }
-
             if (cancellationToken.IsCancellationRequested)
             {
                 report.Cancel();
@@ -217,7 +230,12 @@ namespace XMAT.Cli
         // --fix-content-length) before anything is reserved or sent; only its kind and SHA-256 reach the output, never its
         // path or bytes. Once a send began, the run's sends are published even if it is cancelled (CompleteAfterSendsAsync).
         private static async Task RunRawAsync(
-            CliRequest request, CliReport report, string runId, bool configureStorage, CancellationToken cancellationToken)
+            CliRequest request,
+            CliReport report,
+            CliOutputTarget target,
+            string runId,
+            bool configureStorage,
+            CancellationToken cancellationToken)
         {
             CliReplay replay = request.Replay;
             report.Replay.InputKind = RawFileInputKind;
@@ -253,7 +271,7 @@ namespace XMAT.Cli
                 return;
             }
 
-            CliOutputFolder output = Reserve(request, report, runId, cancellationToken);
+            CliOutputFolder output = Reserve(target, report, runId, cancellationToken);
             if (output == null)
             {
                 return;
@@ -444,7 +462,8 @@ namespace XMAT.Cli
         // or abandoned, before this returns, so that a discard can remove it.
         private static async Task<IReadOnlyList<CliStagedFile>> SendAsync(
             CliRequest request,
-            CliRequestBody prepared,
+            ReplayOperation operation,
+            ReplayOperation.PreparedRun prepared,
             RequestFileReadResult file,
             CliOutputFolder output,
             CliReport report,
@@ -459,11 +478,12 @@ namespace XMAT.Cli
             }
 
             using SazSink saz = request.Replay.SaveSaz ? SazSink.Create(output, cancellationToken) : null;
-            OperationResult<ReplayResult> result = await new ReplayOperation().ExecuteAsync(
-                CreateRequest(request, prepared, file?.Content, new FileSink(output, report.Replay, saz)),
+            OperationResult<ReplayResult> result = await operation.ExecuteAsync(
+                prepared,
+                new FileSink(output, report.Replay, saz),
                 OperationContext.None,
                 cancellationToken).ConfigureAwait(false);
-            Apply(report, result);
+            Apply(report, result, prepared.Diagnostics);
             if (file != null)
             {
                 report.Replay.InputKind = RequestFileInputKind;
@@ -555,16 +575,41 @@ namespace XMAT.Cli
                 sink);
         }
 
-        // Copies the allow-listed results and maps the outcome to the exit code. On failure an informational
+        // A successfully admitted capture is reportable before output reservation: its kind, hash and read warnings are
+        // known. StoredText remains publication-only (CliJson).
+        private static void ReportPreparedInput(CliReport report, ReplayOperation.PreparedRun prepared)
+        {
+            if (prepared.Plan.InputKind != null)
+            {
+                report.Replay.InputKind = prepared.Plan.InputKind;
+                report.Replay.InputSha256 = prepared.Plan.InputSha256;
+            }
+
+            foreach (OperationDiagnostic diagnostic in prepared.Diagnostics.Where(
+                item => item.Severity == OperationDiagnosticSeverity.Warning))
+            {
+                report.Warnings.Add(diagnostic);
+            }
+        }
+
+        // Copies the allow-listed results and maps the outcome to the exit code. alreadyReported is the warnings that
+        // ReportPreparedInput reported before reservation; those same objects are skipped here. On failure an informational
         // diagnostic (for example replay.cancelled) explains the exit code, so it is reported as an error.
-        private static void Apply(CliReport report, OperationResult<ReplayResult> result)
+        private static void Apply(
+            CliReport report,
+            OperationResult<ReplayResult> result,
+            IReadOnlyList<OperationDiagnostic> alreadyReported = null)
         {
             bool failed = result.Outcome != OperationOutcome.Succeeded;
             foreach (OperationDiagnostic diagnostic in result.Diagnostics)
             {
                 if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
                 {
-                    report.Warnings.Add(diagnostic);
+                    if (alreadyReported == null ||
+                        !alreadyReported.Any(reported => ReferenceEquals(reported, diagnostic)))
+                    {
+                        report.Warnings.Add(diagnostic);
+                    }
                 }
                 else if (diagnostic.Severity == OperationDiagnosticSeverity.Error || failed)
                 {

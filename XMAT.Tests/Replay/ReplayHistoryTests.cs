@@ -57,6 +57,15 @@ namespace XMAT.Tests.Replay
                 Assert.Equal(new[] { "/not-kept", "/failed", "/reissued", "/composed" }, Paths(previews));
                 Assert.Equal(new long[] { 4, 3, 2, 1 }, previews.Select(preview => preview.RequestNumber));
                 Assert.Equal(new[] { false, true, true, true }, previews.Select(preview => preview.CanLoad));
+                Assert.Equal(
+                    new[]
+                    {
+                        ReplayHistoryLoadReason.NotReplayable,
+                        ReplayHistoryLoadReason.None,
+                        ReplayHistoryLoadReason.None,
+                        ReplayHistoryLoadReason.None,
+                    },
+                    previews.Select(preview => preview.LoadReason));
                 Assert.Equal(new[] { "200", "", "200", "200" }, previews.Select(preview => preview.StatusPreview));
                 Assert.All(previews, preview => Assert.Equal(CaptureAppModel.ReplayContextName, preview.TabNamePreview));
             }
@@ -465,8 +474,8 @@ namespace XMAT.Tests.Replay
             }
         });
 
-        // H9: a Snapshot costs what it shows, not what its rows hold: rows whose path, request line or host has 16 Mi
-        // characters, read cold, allocate under 1 MiB, and their header dictionaries are not made.
+        // H9: a Snapshot costs what it shows, not what its rows hold: ordinary and scoped rows whose path, request line or
+        // host has 16 Mi characters, read cold, allocate under 1 MiB, and their header dictionaries are not made.
         [Fact]
         public Task Snapshot_AllocatesWhatItShows_NotWhatItsRowsHold() => _application.RunAsync(async () =>
         {
@@ -491,8 +500,26 @@ namespace XMAT.Tests.Replay
                 ProxyConnectionModel longPath = Row("/" + huge, "example.test", "GET /short HTTP/1.1\r\nHost: example.test\r\n");
                 ProxyConnectionModel longRequestLine = Row("/short", "example.test", "GET /" + huge + " HTTP/1.1\r\nHost: example.test\r\n");
                 ProxyConnectionModel longHost = Row("/short", huge, "GET /short HTTP/1.1\r\n\r\n");
+                ProxyConnectionModel scopedLongPath =
+                    Row("http://[fe80::1%12]:8080/" + huge, "example.test", "GET /short HTTP/1.1\r\n\r\n");
+                ProxyConnectionModel scopedLongHost =
+                    Row("/short", "example.test", "GET /short HTTP/1.1\r\n\r\n");
+                ProxyConnectionModel longAbsoluteAuthority =
+                    Row("http://" + huge, "example.test", "GET /short HTTP/1.1\r\n\r\n");
+                typeof(ProxyConnectionModel)
+                    .GetProperty(nameof(ProxyConnectionModel.Host))
+                    .SetValue(scopedLongHost, "fe80::1%12" + huge);
                 ICaptureDeviceContext tab = AddTab(model, "Huge");
-                foreach (ProxyConnectionModel row in new[] { longPath, longRequestLine, longHost })
+                ProxyConnectionModel[] hugeRows =
+                {
+                    longPath,
+                    longRequestLine,
+                    longHost,
+                    scopedLongPath,
+                    scopedLongHost,
+                    longAbsoluteAuthority,
+                };
+                foreach (ProxyConnectionModel row in hugeRows)
                 {
                     RowsOf(tab).Add(row);
                     model.ReplayHistory.Add(tab, row);
@@ -502,10 +529,11 @@ namespace XMAT.Tests.Replay
                 IReadOnlyList<ReplayHistoryPreview> previews = model.ReplayHistory.Snapshot();
                 long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-                Assert.Equal(3, previews.Count);
+                Assert.Equal(6, previews.Count);
                 Assert.True(allocated < 1024 * 1024, $"A Snapshot of the huge rows allocated {allocated} bytes.");
-                Assert.All(new[] { longPath, longRequestLine, longHost }, row => Assert.False(row.HeaderCollectionsMaterialized));
+                Assert.All(hugeRows, row => Assert.False(row.HeaderCollectionsMaterialized));
                 Assert.All(previews, preview => Assert.True(preview.UrlPreview.Length <= ReplayHistory.MaxUrlPreviewChars));
+                Assert.All(previews.Take(3), preview => Assert.False(preview.CanLoad));
             }
             finally
             {
@@ -552,6 +580,220 @@ namespace XMAT.Tests.Replay
                     {
                         Assert.Equal(RequestReplayDraft.FromCapture(row).Url, shown);
                     }
+                }
+                finally
+                {
+                    await RemoveAllAsync(model);
+                }
+            });
+
+        [Fact]
+        public Task ScopedUrlPreview_KeepsEscapedZoneTextAndMarksLoadUnsupported() =>
+            _application.RunAsync(async () =>
+            {
+                var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+                try
+                {
+                    ICaptureDeviceContext tab = AddTab(model, "Tab");
+                    var row = new ProxyConnectionModel(
+                        1, "200", DateTime.UtcNow, TimeSpan.Zero, "http", "example.test:8080", "GET", "/a\u0007b",
+                        "GET /a HTTP/1.1\r\n\r\n", Array.Empty<byte>(), "HTTP/1.1 200 OK\r\n\r\n",
+                        Array.Empty<byte>(), "127.0.0.1");
+                    typeof(ProxyConnectionModel)
+                        .GetProperty(nameof(ProxyConnectionModel.Host))
+                        .SetValue(row, "fe80::1%Ethernet");
+                    RowsOf(tab).Add(row);
+                    model.ReplayHistory.Add(tab, row);
+
+                    ReplayHistoryPreview preview = Assert.Single(model.ReplayHistory.Snapshot());
+
+                    Assert.Equal("http://[fe80::1%Ethernet]:8080/a\\u0007b", preview.UrlPreview);
+                    Assert.False(preview.CanLoad);
+                    Assert.Equal(ReplayHistoryLoadReason.ScopedIpv6, preview.LoadReason);
+                    Assert.True(RequestReplayDraft.CanReplay(row));
+                }
+                finally
+                {
+                    await RemoveAllAsync(model);
+                }
+            });
+
+        [Fact]
+        public Task MalformedEffectiveAuthorities_AreShownEscapedButCannotLoad() =>
+            _application.RunAsync(async () =>
+            {
+                var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+                try
+                {
+                    ICaptureDeviceContext tab = AddTab(model, "Tab");
+                    ProxyConnectionModel structured = Row("/small", "example.test", "GET /small HTTP/1.1\r\n\r\n");
+                    SetAuthority(structured, "bad\u0007host", "x");
+                    ProxyConnectionModel absolute = Row(
+                        "http://[fe80::1%12/bad\u0007", "example.test", "GET /small HTTP/1.1\r\n\r\n");
+                    foreach (ProxyConnectionModel row in new[] { structured, absolute })
+                    {
+                        RowsOf(tab).Add(row);
+                        model.ReplayHistory.Add(tab, row);
+                    }
+
+                    IReadOnlyList<ReplayHistoryPreview> previews = model.ReplayHistory.Snapshot();
+
+                    Assert.Equal("http://[fe80::1%12/bad\\u0007", previews[0].UrlPreview);
+                    Assert.Equal("http://bad\\u0007host:x/small", previews[1].UrlPreview);
+                    Assert.All(previews, preview => Assert.False(preview.CanLoad));
+                    Assert.All(
+                        previews,
+                        preview => Assert.Equal(ReplayHistoryLoadReason.UnreadableDestination, preview.LoadReason));
+                    Assert.All(new[] { structured, absolute }, row => Assert.False(row.HeaderCollectionsMaterialized));
+                }
+                finally
+                {
+                    await RemoveAllAsync(model);
+                }
+            });
+
+        [Fact]
+        public Task HistoryAuthorityBounds_Cover512And513And255And256Characters() =>
+            _application.RunAsync(async () =>
+            {
+                var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+                try
+                {
+                    ICaptureDeviceContext tab = AddTab(model, "Tab");
+                    ProxyConnectionModel absolute512 = Row(
+                        "http://" + new string('u', 499) + "@example.test/p",
+                        "structured.test",
+                        "GET /p HTTP/1.1\r\n\r\n");
+                    ProxyConnectionModel absolute513 = Row(
+                        "http://" + new string('u', 500) + "@example.test/p",
+                        "structured.test",
+                        "GET /p HTTP/1.1\r\n\r\n");
+                    ProxyConnectionModel host255 = Row("/p", "example.test", "GET /p HTTP/1.1\r\n\r\n");
+                    ProxyConnectionModel host256 = Row("/p", "example.test", "GET /p HTTP/1.1\r\n\r\n");
+                    string acceptedHost = string.Join(".", Enumerable.Repeat(new string('a', 63), 4));
+                    SetAuthority(host255, acceptedHost, "");
+                    SetAuthority(host256, acceptedHost + ".", "");
+                    ProxyConnectionModel port5 = Row("/p", "example.test", "GET /p HTTP/1.1\r\n\r\n");
+                    ProxyConnectionModel port6 = Row("/p", "example.test", "GET /p HTTP/1.1\r\n\r\n");
+                    SetAuthority(port5, "example.test", "08080");
+                    SetAuthority(port6, "example.test", "008080");
+                    ProxyConnectionModel[] rows = { absolute512, absolute513, host255, host256, port5, port6 };
+                    foreach (ProxyConnectionModel row in rows)
+                    {
+                        RowsOf(tab).Add(row);
+                        model.ReplayHistory.Add(tab, row);
+                    }
+
+                    IReadOnlyList<ReplayHistoryPreview> previews = model.ReplayHistory.Snapshot();
+
+                    Assert.Equal(
+                        new[]
+                        {
+                            ReplayHistoryLoadReason.UnreadableDestination,
+                            ReplayHistoryLoadReason.None,
+                            ReplayHistoryLoadReason.UnreadableDestination,
+                            ReplayHistoryLoadReason.None,
+                            ReplayHistoryLoadReason.UnreadableDestination,
+                            ReplayHistoryLoadReason.None,
+                        },
+                        previews.Select(preview => preview.LoadReason));
+                    Assert.All(previews, preview =>
+                        Assert.True(preview.UrlPreview.Length <= ReplayHistory.MaxUrlPreviewChars));
+                    Assert.All(rows, row => Assert.False(row.HeaderCollectionsMaterialized));
+                }
+                finally
+                {
+                    await RemoveAllAsync(model);
+                }
+            });
+
+        [Theory]
+        [InlineData(" http://[fe80::1%12]/p")]
+        [InlineData("http:\\\\[fe80::1%12]/p")]
+        [InlineData("https:\\/[fe80::1%12]/p")]
+        public Task HistoryAbsoluteTargetRecognition_MatchesUri(string target) =>
+            _application.RunAsync(async () =>
+            {
+                var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+                try
+                {
+                    ICaptureDeviceContext tab = AddTab(model, "Tab");
+                    ProxyConnectionModel row = Row(target, "example.test", "GET /p HTTP/1.1\r\n\r\n");
+                    RowsOf(tab).Add(row);
+                    model.ReplayHistory.Add(tab, row);
+
+                    ReplayHistoryPreview preview = Assert.Single(model.ReplayHistory.Snapshot());
+
+                    Assert.Equal(target, preview.UrlPreview);
+                    Assert.Equal(ReplayHistoryLoadReason.ScopedIpv6, preview.LoadReason);
+                    Assert.False(preview.CanLoad);
+                    Assert.True(ReplayDestination.IsScopedIpv6(RequestReplayDraft.CaptureUrl(row)));
+                }
+                finally
+                {
+                    await RemoveAllAsync(model);
+                }
+            });
+
+        [Theory]
+        [InlineData(
+            "http://example.test\\p", "[fe80::1%12]:8080",
+            nameof(ReplayHistoryLoadReason.UnreadableDestination), true)]
+        [InlineData(
+            "\u000Bhttp://example.test/p", "[fe80::1%12]:8080",
+            nameof(ReplayHistoryLoadReason.ScopedIpv6), false)]
+        [InlineData(
+            "                                 http://[fe80::1%12]/p",
+            "example.test", nameof(ReplayHistoryLoadReason.UnreadableDestination), true)]
+        public Task HistoryRecognition_AgreesWithCaptureUrlOrFailsClosed(
+            string path, string authority, string reasonName, bool previewIsStored) =>
+            _application.RunAsync(async () =>
+            {
+                ReplayHistoryLoadReason reason = Enum.Parse<ReplayHistoryLoadReason>(reasonName);
+                var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+                try
+                {
+                    ICaptureDeviceContext tab = AddTab(model, "Tab");
+                    ProxyConnectionModel row = Row(path, authority, "GET /p HTTP/1.1\r\n\r\n");
+                    RowsOf(tab).Add(row);
+                    model.ReplayHistory.Add(tab, row);
+
+                    ReplayHistoryPreview preview = Assert.Single(model.ReplayHistory.Snapshot());
+
+                    Assert.Equal(reason, preview.LoadReason);
+                    Assert.Equal(reason == ReplayHistoryLoadReason.None, preview.CanLoad);
+                    Assert.True(ReplayDestination.IsScopedIpv6(RequestReplayDraft.CaptureUrl(row)));
+                    if (previewIsStored)
+                    {
+                        Assert.Equal(path, preview.UrlPreview);
+                    }
+
+                    Assert.False(row.HeaderCollectionsMaterialized);
+                }
+                finally
+                {
+                    await RemoveAllAsync(model);
+                }
+            });
+
+        [Fact]
+        public Task HistoryAbsoluteTargetPrecedesAScopedStructuredHost() =>
+            _application.RunAsync(async () =>
+            {
+                var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+                try
+                {
+                    ICaptureDeviceContext tab = AddTab(model, "Tab");
+                    ProxyConnectionModel row = Row(
+                        "http://example.test/p", "[fe80::1%12]:8080", "GET /p HTTP/1.1\r\n\r\n");
+                    RowsOf(tab).Add(row);
+                    model.ReplayHistory.Add(tab, row);
+
+                    ReplayHistoryPreview preview = Assert.Single(model.ReplayHistory.Snapshot());
+
+                    Assert.Equal("http://example.test/p", preview.UrlPreview);
+                    Assert.Equal(ReplayHistoryLoadReason.None, preview.LoadReason);
+                    Assert.True(preview.CanLoad);
                 }
                 finally
                 {
@@ -883,6 +1125,12 @@ namespace XMAT.Tests.Replay
 
         private static IEnumerable<string> Paths(IEnumerable<ReplayHistoryPreview> previews) =>
             previews.Select(preview => new Uri(preview.UrlPreview).AbsolutePath);
+
+        private static void SetAuthority(ProxyConnectionModel row, string host, string port)
+        {
+            typeof(ProxyConnectionModel).GetProperty(nameof(ProxyConnectionModel.Host)).SetValue(row, host);
+            typeof(ProxyConnectionModel).GetProperty(nameof(ProxyConnectionModel.Port)).SetValue(row, port);
+        }
 
         private static WebServiceDeviceCaptureController ReplaysOf(CaptureAppModel model) =>
             (WebServiceDeviceCaptureController)model.GetOrAddReplayContext().CaptureController;
