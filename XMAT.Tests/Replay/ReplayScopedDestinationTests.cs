@@ -106,6 +106,118 @@ namespace XMAT.Tests.Replay
             Assert.Equal(0, ineligibleSends);
         }
 
+        // One destination decision for every use of a captured row: Reissue's admission before its question, History's
+        // status, the run and the URL that it makes agree on rows that send, rows refused as scoped and rows refused as
+        // malformed, beyond the decision's limit included. Sol's RB-A1 rows, which History's former bounded checks could not
+        // read, so that Reissue asked about them before the run refused them, are among the scoped ones.
+        [Theory]
+        [InlineData("structured", "sent")]
+        [InlineData("absolute over a scoped stored host", "sent")]
+        [InlineData("refused head over a stored host", "sent")]
+        [InlineData("structured scoped", "scoped")]
+        [InlineData("absolute scoped", "scoped")]
+        [InlineData("refused head over a scoped stored host", "scoped")]
+        [InlineData("stored zone beyond 255", "scoped")]
+        [InlineData("absolute zone beyond 512", "scoped")]
+        [InlineData("stored authority that makes no URL", "malformed")]
+        [InlineData("refused head over a stored authority that makes no URL", "malformed")]
+        [InlineData("head beyond the limit", "malformed")]
+        [InlineData("leading whitespace beyond the limit", "malformed")]
+        [InlineData("stored host beyond the limit", "malformed")]
+        public async Task EveryUseOfARow_AgreesOnItsDestination(string row, string expected)
+        {
+            ProxyConnectionModel capture = Row(row);
+            Assert.True(RequestReplayDraft.CanReplay(capture));
+            int sends = 0;
+
+            OperationDiagnostic admission = ReplayOperation.CheckCaptureDestinations(new[] { capture });
+            ReplayCaptureDestinationStatus status = ReplayDestination.ClassifyCaptureDestination(capture);
+            OperationResult<ReplayResult> run = await Operation(() => sends++).ExecuteAsync(
+                new ReplayRequest(ReplaySource.FromCaptures(new[] { capture })),
+                OperationContext.None,
+                CancellationToken.None);
+
+            switch (expected)
+            {
+                case "sent":
+                    Assert.Null(admission);
+                    Assert.Equal(ReplayCaptureDestinationStatus.Loadable, status);
+                    Assert.True(run.Succeeded, Describe(run));
+                    Assert.Equal(1, sends);
+                    Assert.False(ReplayDestination.IsScopedIpv6(RequestReplayDraft.CaptureUrl(capture)));
+                    break;
+                case "scoped":
+                    Assert.Equal(ReplayDestination.ScopedIpv6Code, admission?.Code);
+                    Assert.Equal(ReplayCaptureDestinationStatus.ScopedIpv6, status);
+                    AssertScoped(run);
+                    Assert.Equal(0, sends);
+                    Assert.True(ReplayDestination.IsScopedIpv6(RequestReplayDraft.CaptureUrl(capture)));
+                    break;
+                default:
+                    Assert.Equal(
+                        (ReplayOperation.RequestMalformedCode, OperationDiagnosticSeverity.Error,
+                            ReplayOperation.RequestMalformedMessage),
+                        (admission?.Code, admission?.Severity, admission?.Message));
+                    Assert.Equal(ReplayCaptureDestinationStatus.Unreadable, status);
+                    Assert.Equal(OperationOutcome.InvalidInput, run.Outcome);
+                    Assert.Equal(ReplayOperation.RequestMalformedCode, Assert.Single(run.Diagnostics).Code);
+                    Assert.Equal(0, sends);
+                    Assert.Throws<UriFormatException>(() => RequestReplayDraft.CaptureUrl(capture));
+                    break;
+            }
+        }
+
+        // A malformed destination refuses the whole plan before a scoped one, in Reissue's admission as in the run, whose
+        // gathering refuses it before its checks would find the scoped one. On its own, the scoped row keeps its own refusal.
+        [Fact]
+        public async Task AMalformedDestination_IsRefusedBeforeAScopedOne()
+        {
+            ProxyConnectionModel scoped = Row("structured scoped");
+            ProxyConnectionModel malformed = Row("head beyond the limit");
+            foreach (ProxyConnectionModel[] selection in new[] { new[] { scoped, malformed }, new[] { malformed, scoped } })
+            {
+                int sends = 0;
+
+                OperationDiagnostic admission = ReplayOperation.CheckCaptureDestinations(selection);
+                OperationResult<ReplayResult> run = await Operation(() => sends++).ExecuteAsync(
+                    new ReplayRequest(ReplaySource.FromCaptures(selection)),
+                    OperationContext.None,
+                    CancellationToken.None);
+
+                Assert.Equal(ReplayOperation.RequestMalformedCode, admission?.Code);
+                Assert.Equal(ReplayOperation.RequestMalformedCode, Assert.Single(run.Diagnostics).Code);
+                Assert.Equal(0, sends);
+            }
+
+            Assert.Equal(ReplayDestination.ScopedIpv6Code, ReplayOperation.CheckCaptureDestinations(new[] { scoped })?.Code);
+        }
+
+        // A row that the run skips is not refused for its destination, however malformed: the rest is admitted and sent.
+        [Fact]
+        public async Task ReissueAdmission_IgnoresAMalformedRowThatReplayWouldSkip()
+        {
+            ProxyConnectionModel upgrade = Stored(
+                new string(' ', ReplayDestination.MaxCaptureDestinationChars) + "http://example.test/p",
+                "example.test",
+                "80",
+                "Upgrade: websocket\r\n");
+            Assert.False(RequestReplayDraft.CanReplay(upgrade));
+            Assert.Equal(CaptureDestination.OverLimit, ReplayDestination.ReadCaptureDestination(upgrade));
+            ProxyConnectionModel[] selection = { Row("structured"), upgrade };
+            int sends = 0;
+
+            OperationDiagnostic admission = ReplayOperation.CheckCaptureDestinations(selection);
+            OperationResult<ReplayResult> run = await Operation(() => sends++).ExecuteAsync(
+                new ReplayRequest(ReplaySource.FromCaptures(selection)),
+                OperationContext.None,
+                CancellationToken.None);
+
+            Assert.Null(admission);
+            Assert.True(run.Succeeded, Describe(run));
+            Assert.Equal(1, sends);
+            Assert.Equal(ReplayOperation.SkippedCode, Assert.Single(run.Diagnostics).Code);
+        }
+
         [Theory]
         [InlineData("proxy")]
         [InlineData("connect-to")]
@@ -271,6 +383,44 @@ namespace XMAT.Tests.Replay
                 1, "200", DateTime.UnixEpoch, TimeSpan.Zero, "http", authority, "GET", path,
                 $"GET {path} HTTP/1.1\r\n{headers}\r\n", Array.Empty<byte>(),
                 "HTTP/1.1 200 OK\r\n\r\n", Array.Empty<byte>(), "127.0.0.1");
+
+        // A captured row with this target and stored host and port, set as a capture file stores them, without the parsing
+        // of a host-and-port string.
+        private static ProxyConnectionModel Stored(string path, string host, string port, string headers = "")
+        {
+            ProxyConnectionModel capture = new(
+                1, "200", DateTime.UnixEpoch, TimeSpan.Zero, "http", "example.test:80", "GET", path,
+                $"GET /p HTTP/1.1\r\n{headers}\r\n", Array.Empty<byte>(),
+                "HTTP/1.1 200 OK\r\n\r\n", Array.Empty<byte>(), "127.0.0.1");
+            typeof(ProxyConnectionModel).GetProperty(nameof(ProxyConnectionModel.Host)).SetValue(capture, host);
+            typeof(ProxyConnectionModel).GetProperty(nameof(ProxyConnectionModel.Port)).SetValue(capture, port);
+            return capture;
+        }
+
+        private static ProxyConnectionModel Row(string name)
+        {
+            const int Limit = ReplayDestination.MaxCaptureDestinationChars;
+            return name switch
+            {
+                "structured" => Stored("/p", "example.test", "80"),
+                "absolute over a scoped stored host" => Stored("http://example.test/p", "fe80::1%12", "8080"),
+                "refused head over a stored host" => Stored("http://example.test\\p", "example.test", "80"),
+                "structured scoped" => Stored("/p", "fe80::1%12", "8080"),
+                "absolute scoped" => Stored("http://[fe80::1%12]/p", "example.test", "80"),
+                "refused head over a scoped stored host" => Stored("http://example.test\\p", "fe80::1%12", "8080"),
+                "stored zone beyond 255" => Stored("/p", "fe80::1%" + new string('z', 300), "8080"),
+                "absolute zone beyond 512" => Stored("http://[fe80::1%" + new string('z', 600) + "]/p", "example.test", "80"),
+                "stored authority that makes no URL" => Stored("/p", "bad\u0007host", "x"),
+                "refused head over a stored authority that makes no URL" =>
+                    Stored("http://[fe80::1%12/p", "bad\u0007host", "x"),
+                "head beyond the limit" =>
+                    Stored("http://" + ReplayCaptures.LongDnsName(Limit) + "/p", "example.test", "80"),
+                "leading whitespace beyond the limit" =>
+                    Stored(new string(' ', Limit) + "http://example.test/p", "example.test", "80"),
+                "stored host beyond the limit" => Stored("/p", ReplayCaptures.LongDnsName(Limit + 1), "80"),
+                _ => throw new ArgumentOutOfRangeException(nameof(name), name, null),
+            };
+        }
 
         private static void AssertScoped<T>(OperationResult<T> result)
         {

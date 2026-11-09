@@ -31,6 +31,8 @@ namespace XMAT.Operations.Replay
     {
         internal const string SkippedCode = "replay.request.skipped";
         internal const string RequestInvalidCode = "replay.request.invalid";
+        internal const string RequestMalformedCode = "replay.request.malformed";
+        internal const string RequestMalformedMessage = "A selected request in the capture is malformed.";
         internal const string VerifySkippedCode = "replay.verify.skipped";
         internal const string SequenceInvalidCode = "replay.sequence.invalid";
         internal const string ControlHeaderCode = ReplayControlHeaders.Code;
@@ -173,24 +175,38 @@ namespace XMAT.Operations.Replay
             }
         }
 
-        // Reissue's pre-confirmation admission. Rows that CanReplay rejects are ignored because the run skips them. Null
-        // means no replayable selected capture has a scoped effective destination; one diagnostic refuses the whole
-        // eligible plan without reading bodies or creating a sender.
+        // Reissue's pre-confirmation admission, by each row's destination decision (ReplayDestination.ReadCaptureDestination),
+        // which the run makes its URL from. Rows that CanReplay rejects are ignored because the run skips them. A malformed
+        // destination among the rest, the decision's limit included, refuses the whole plan as the run's gathering would
+        // (replay.request.malformed), before a scoped one, which the run's checks find only later; otherwise a scoped
+        // destination refuses it (replay.destination.scoped-ipv6). Null when neither does. Only each row's destination
+        // head and stored fields are read: no body, no URL and no sender is made.
         internal static OperationDiagnostic CheckCaptureDestinations(IEnumerable<ProxyConnectionModel> captures)
         {
             ArgumentNullException.ThrowIfNull(captures);
+            bool scoped = false;
             foreach (ProxyConnectionModel capture in captures)
             {
                 ArgumentNullException.ThrowIfNull(capture);
-                if (RequestReplayDraft.CanReplay(capture) && ReplayDestination.IsScopedIpv6(capture))
+                if (!RequestReplayDraft.CanReplay(capture))
+                {
+                    continue;
+                }
+
+                CaptureDestination destination = ReplayDestination.ReadCaptureDestination(capture);
+                if (destination.IsMalformed)
                 {
                     return new OperationDiagnostic(
-                        ReplayDestination.ScopedIpv6Code, OperationDiagnosticSeverity.Error,
-                        ReplayDestination.ScopedIpv6Message);
+                        RequestMalformedCode, OperationDiagnosticSeverity.Error, RequestMalformedMessage);
                 }
+
+                scoped |= ReplayDestination.IsScopedIpv6(destination.Authority);
             }
 
-            return null;
+            return scoped
+                ? new OperationDiagnostic(
+                    ReplayDestination.ScopedIpv6Code, OperationDiagnosticSeverity.Error, ReplayDestination.ScopedIpv6Message)
+                : null;
         }
 
         // Executes one successful prepared run without gathering or reading its source again.
@@ -785,8 +801,7 @@ namespace XMAT.Operations.Replay
             }
             catch (Exception ex) when (ex is FormatException or OverflowException or ArgumentException)
             {
-                throw new ReplayInputException(
-                    "replay.request.malformed", "A selected request in the capture is malformed.", ex);
+                throw new ReplayInputException(RequestMalformedCode, RequestMalformedMessage, ex);
             }
         }
 
@@ -798,8 +813,7 @@ namespace XMAT.Operations.Replay
             }
             catch (Exception ex) when (ex is FormatException or OverflowException or ArgumentException)
             {
-                throw new ReplayInputException(
-                    "replay.request.malformed", "A selected request in the capture is malformed.", ex);
+                throw new ReplayInputException(RequestMalformedCode, RequestMalformedMessage, ex);
             }
         }
 

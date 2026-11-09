@@ -162,12 +162,18 @@ namespace XMAT.WebServiceCapture
 
         // The scheme, host and port of a capture whose path is relative: an IPv6 host is bracketed and keeps its stored zone,
         // and a port is present only when it is not the scheme's default. The URL must round-trip without interpreting any
-        // host text as user information, path, query or fragment, or changing the stored port; otherwise it throws.
+        // host text as user information, path, query or fragment, or changing the stored port; otherwise it throws. A stored
+        // scheme, host or port longer than ReplayDestination.MaxCaptureDestinationChars throws before anything parses it.
         internal static string CaptureAuthority(ProxyConnectionModel capture)
         {
             ArgumentNullException.ThrowIfNull(capture);
             try
             {
+                if (ReplayDestination.StoredFieldsExceedLimit(capture))
+                {
+                    throw new UriFormatException();
+                }
+
                 string storedHost = capture.Host ?? string.Empty;
                 if (!storedHost.Contains(':') &&
                     !storedHost.StartsWith('[') &&
@@ -209,20 +215,46 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // The effective URL of a capture, without reading its body: an absolute target wins over the structured authority,
-        // and either form keeps an IPv6 zone as stored data.
+        // The effective URL of a capture, without reading its body, made from its destination decision
+        // (ReplayDestination.ReadCaptureDestination), which every other use shares: the absolute target, which wins, as Uri
+        // writes it, or the structured authority followed by the target as a path; either keeps an IPv6 zone as stored data.
+        // The whole target is parsed only to make the URL, and must give the authority that the decision read from its head;
+        // it fails rather than choosing another destination. A malformed destination, the decision's limit included, throws.
         internal static string CaptureUrl(ProxyConnectionModel capture)
         {
             ArgumentNullException.ThrowIfNull(capture);
+            CaptureDestination destination = ReplayDestination.ReadCaptureDestination(capture);
             string path = capture.Path ?? string.Empty;
-            if (Uri.TryCreate(path, UriKind.Absolute, out Uri absolute) &&
-                (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps))
+            switch (destination.Kind)
             {
-                return ReplayDestination.AbsoluteUriKeepingZone(absolute);
+                case CaptureDestinationKind.Absolute:
+                    if (Uri.TryCreate(path, UriKind.Absolute, out Uri absolute) &&
+                        string.Equals(
+                            absolute.GetLeftPart(UriPartial.Authority),
+                            destination.Authority.GetLeftPart(UriPartial.Authority),
+                            StringComparison.Ordinal) &&
+                        string.Equals(absolute.DnsSafeHost, destination.Authority.DnsSafeHost, StringComparison.Ordinal))
+                    {
+                        return ReplayDestination.AbsoluteUriKeepingZone(absolute);
+                    }
+
+                    break;
+                case CaptureDestinationKind.Structured:
+                    return destination.AuthorityText + (path.StartsWith('/') ? path : "/" + path);
+                case CaptureDestinationKind.Malformed when !destination.LimitExceeded:
+                    // The stored authority makes none: CaptureAuthority says so in its own fixed words.
+                    _ = CaptureAuthority(capture);
+                    break;
             }
 
-            return CaptureAuthority(capture) + (path.StartsWith('/') ? path : "/" + path);
+            throw new UriFormatException(MalformedDestinationMessage);
         }
+
+        // Why a capture's request has no destination: its target or stored authority makes no URL, or needs more of its
+        // characters than a destination decision reads (ReplayDestination.MaxCaptureDestinationChars). Fixed, so that no
+        // captured text is echoed.
+        internal const string MalformedDestinationMessage =
+            "The captured destination is malformed or exceeds the supported size limit.";
 
         // A draft from a request file. What the file left out stays omitted (Omissions) and shows as empty until it is
         // supplied explicitly. The file's URL is the origin that a change needs consent for; a file without one gives none,

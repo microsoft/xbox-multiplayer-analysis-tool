@@ -679,6 +679,8 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // A row whose destination is malformed is shown escaped, and cannot be loaded: a stored authority that makes no URL,
+        // and an absolute-looking target that Uri refuses, which falls back to such a stored authority, as the run's does.
         [Fact]
         public Task MalformedEffectiveAuthorities_AreShownEscapedButCannotLoad() =>
             _application.RunAsync(async () =>
@@ -691,6 +693,7 @@ namespace XMAT.Tests.Replay
                     SetAuthority(structured, "bad\u0007host", "x");
                     ProxyConnectionModel absolute = Row(
                         "http://[fe80::1%12/bad\u0007", "example.test", "GET /small HTTP/1.1\r\n\r\n");
+                    SetAuthority(absolute, "bad\u0007host", "x");
                     foreach (ProxyConnectionModel row in new[] { structured, absolute })
                     {
                         RowsOf(tab).Add(row);
@@ -713,32 +716,33 @@ namespace XMAT.Tests.Replay
                 }
             });
 
+        // History's Load check is the destination decision's (ReplayDestination.ReadCaptureDestination), and so is its
+        // limit: an absolute target's head of MaxCaptureDestinationChars code units is read, one more is not, and never falls
+        // back to the stored authority; a scoped native host whose zone is beyond History's former 255 characters is scoped,
+        // not too long to check; and a port beyond its former five characters is read. Newest first.
         [Fact]
-        public Task HistoryAuthorityBounds_Cover512And513And255And256Characters() =>
+        public Task HistoryDestinationBounds_AreTheDecisionsLimit() =>
             _application.RunAsync(async () =>
             {
                 var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
                 try
                 {
+                    const int Limit = ReplayDestination.MaxCaptureDestinationChars;
+                    const string Host = "@example.test/";
                     ICaptureDeviceContext tab = AddTab(model, "Tab");
-                    ProxyConnectionModel absolute512 = Row(
-                        "http://" + new string('u', 499) + "@example.test/p",
+                    ProxyConnectionModel headAtLimit = Row(
+                        "http://" + new string('u', Limit - "http://".Length - Host.Length) + Host + "p",
                         "structured.test",
                         "GET /p HTTP/1.1\r\n\r\n");
-                    ProxyConnectionModel absolute513 = Row(
-                        "http://" + new string('u', 500) + "@example.test/p",
+                    ProxyConnectionModel headOverLimit = Row(
+                        "http://" + new string('u', Limit - "http://".Length - Host.Length + 1) + Host + "p",
                         "structured.test",
                         "GET /p HTTP/1.1\r\n\r\n");
-                    ProxyConnectionModel host255 = Row("/p", "example.test", "GET /p HTTP/1.1\r\n\r\n");
-                    ProxyConnectionModel host256 = Row("/p", "example.test", "GET /p HTTP/1.1\r\n\r\n");
-                    string acceptedHost = string.Join(".", Enumerable.Repeat(new string('a', 63), 4));
-                    SetAuthority(host255, acceptedHost, "");
-                    SetAuthority(host256, acceptedHost + ".", "");
-                    ProxyConnectionModel port5 = Row("/p", "example.test", "GET /p HTTP/1.1\r\n\r\n");
+                    ProxyConnectionModel longZone = Row("/p", "example.test", "GET /p HTTP/1.1\r\n\r\n");
+                    SetAuthority(longZone, "fe80::1%" + new string('z', 300), "8080");
                     ProxyConnectionModel port6 = Row("/p", "example.test", "GET /p HTTP/1.1\r\n\r\n");
-                    SetAuthority(port5, "example.test", "08080");
                     SetAuthority(port6, "example.test", "008080");
-                    ProxyConnectionModel[] rows = { absolute512, absolute513, host255, host256, port5, port6 };
+                    ProxyConnectionModel[] rows = { headAtLimit, headOverLimit, longZone, port6 };
                     foreach (ProxyConnectionModel row in rows)
                     {
                         RowsOf(tab).Add(row);
@@ -750,10 +754,8 @@ namespace XMAT.Tests.Replay
                     Assert.Equal(
                         new[]
                         {
-                            ReplayHistoryLoadReason.UnreadableDestination,
                             ReplayHistoryLoadReason.None,
-                            ReplayHistoryLoadReason.UnreadableDestination,
-                            ReplayHistoryLoadReason.None,
+                            ReplayHistoryLoadReason.ScopedIpv6,
                             ReplayHistoryLoadReason.UnreadableDestination,
                             ReplayHistoryLoadReason.None,
                         },
@@ -796,21 +798,18 @@ namespace XMAT.Tests.Replay
                 }
             });
 
+        // History reads a row's destination as the run makes its URL (RequestReplayDraft.CaptureUrl): a target whose head
+        // Uri refuses, such as one whose authority ends in a backslash, falls back to the stored authority; a vertical tab,
+        // which Uri does not trim, makes the target no URL; and any number of the leading spaces that Uri trims is read,
+        // within the decision's limit. The preview shows an absolute-looking target as stored, as before, and any other
+        // target after the stored authority.
         [Theory]
-        [InlineData(
-            "http://example.test\\p", "[fe80::1%12]:8080",
-            nameof(ReplayHistoryLoadReason.UnreadableDestination), true)]
-        [InlineData(
-            "\u000Bhttp://example.test/p", "[fe80::1%12]:8080",
-            nameof(ReplayHistoryLoadReason.ScopedIpv6), false)]
-        [InlineData(
-            "                                 http://[fe80::1%12]/p",
-            "example.test", nameof(ReplayHistoryLoadReason.UnreadableDestination), true)]
-        public Task HistoryRecognition_AgreesWithCaptureUrlOrFailsClosed(
-            string path, string authority, string reasonName, bool previewIsStored) =>
+        [InlineData("http://example.test\\p", "[fe80::1%12]:8080", true)]
+        [InlineData("\u000Bhttp://example.test/p", "[fe80::1%12]:8080", false)]
+        [InlineData("                                 http://[fe80::1%12]/p", "example.test", true)]
+        public Task HistoryRecognition_AgreesWithCaptureUrl(string path, string authority, bool previewIsStored) =>
             _application.RunAsync(async () =>
             {
-                ReplayHistoryLoadReason reason = Enum.Parse<ReplayHistoryLoadReason>(reasonName);
                 var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
                 try
                 {
@@ -821,12 +820,17 @@ namespace XMAT.Tests.Replay
 
                     ReplayHistoryPreview preview = Assert.Single(model.ReplayHistory.Snapshot());
 
-                    Assert.Equal(reason, preview.LoadReason);
-                    Assert.Equal(reason == ReplayHistoryLoadReason.None, preview.CanLoad);
+                    Assert.Equal(ReplayHistoryLoadReason.ScopedIpv6, preview.LoadReason);
+                    Assert.False(preview.CanLoad);
                     Assert.True(ReplayDestination.IsScopedIpv6(RequestReplayDraft.CaptureUrl(row)));
                     if (previewIsStored)
                     {
                         Assert.Equal(path, preview.UrlPreview);
+                    }
+                    else
+                    {
+                        Assert.StartsWith(
+                            RequestReplayDraft.CaptureAuthority(row) + "/", preview.UrlPreview, StringComparison.Ordinal);
                     }
 
                     Assert.False(row.HeaderCollectionsMaterialized);
@@ -862,9 +866,9 @@ namespace XMAT.Tests.Replay
                 }
             });
 
-        // H10: a host too long for any URL that was sent is shown as stored, cut to the bound, without asking Uri.
+        // H10: a host longer than the preview's bound is shown as stored, cut to the bound, without asking Uri.
         [Fact]
-        public Task UrlPreview_ShowsAHostTooLongForAUrlAsStored() => _application.RunAsync(async () =>
+        public Task UrlPreview_ShowsAHostBeyondItsBoundAsStored() => _application.RunAsync(async () =>
         {
             var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
             try

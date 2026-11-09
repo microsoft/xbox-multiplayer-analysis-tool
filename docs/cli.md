@@ -248,6 +248,17 @@ reservation-time storage failure.
   alias that an earlier version could send is therefore no longer sent. Percent escapes in paths and queries are
   unaffected. A request-file omission is reported before the scoped-destination refusal, for both sending and cURL
   export.
+- A captured request goes to its target when the target is an absolute HTTP or HTTPS URL, and otherwise to its captured
+  scheme, host and port, with the target as its path; a target that only looks like such a URL, such as
+  `http://b.test\x`, also goes to its captured host and port. xmat reads only a captured request's destination, within a
+  limit: at most 8,192 characters (UTF-16 code units) of its target, from the first character, leading whitespace
+  included, through the one that ends the host and port, and, when the target is not such a URL, at most 8,192 each of
+  the captured scheme, host and port. A destination that is malformed or exceeds the limit makes the request malformed
+  (`replay.request.malformed`, exit code 3), even with `--url` or `--origin`, before output reservation; it never falls
+  back to the captured host and port. One such replayable request refuses the whole plan, before any scoped destination
+  does, while a request that replay skips for another reason is still skipped. The limit is for captured requests only:
+  it does not apply to the rest of their URLs, or to `--url`, `--origin`, `--target`, `--proxy` or `--connect-to` values
+  or a request file's URL.
 - A URL's host must have the ASCII form that xmat connects to and sends: an IP address, a host name in ASCII, or an
   international host name that xmat can convert to ASCII, which it sends in its IDNA (punycode) form. xmat converts a
   name as .NET's URL parser does, which does not convert every name that IDNA allows. An international name that xmat

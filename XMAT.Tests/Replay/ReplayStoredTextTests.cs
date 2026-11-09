@@ -157,6 +157,32 @@ namespace XMAT.Tests.Replay
                 ExportMessage);
         }
 
+        // The stored-text decision comes before a malformed destination too, the decision's limit included: the request is
+        // refused for its text until the run accepts that for its capture file, and then refused as malformed. A held row of
+        // the capture is refused for its text even so. Nothing is sent.
+        [Fact]
+        public async Task StoredTextDecision_PrecedesAMalformedDestination()
+        {
+            string capture = Write("unmarked", new CapturedExchange("GET", "http://127.0.0.1:9/one", StoredHeaders));
+            SetStoredDestination(
+                capture, "http", "127.0.0.1", "9", new string(' ', ReplayDestination.MaxCaptureDestinationChars) + "/one");
+            ProxyConnectionModel held = Model(capture);
+            Assert.Equal(CaptureDestination.OverLimit, ReplayDestination.ReadCaptureDestination(held));
+            var fileSource = ReplaySource.FromFile(capture, Selection("1"));
+            var accepted = new ReplayOptions(AcceptStoredText: true);
+
+            OperationResult<ReplayResult> refused = await Execute(new ReplayRequest(fileSource));
+            OperationResult<ReplayResult> malformed = await Execute(new ReplayRequest(fileSource, accepted));
+            OperationResult<ReplayResult> heldRefused = await Execute(
+                new ReplayRequest(ReplaySource.FromCaptures(new[] { held }), accepted));
+
+            AssertRefused(refused.Outcome, refused.Diagnostics, ReplayOperation.StoredTextAmbiguousCode, ReplayMessage);
+            Assert.Equal(OperationOutcome.InvalidInput, malformed.Outcome);
+            Assert.Equal(ReplayOperation.RequestMalformedCode, Assert.Single(malformed.Diagnostics).Code);
+            AssertRefused(
+                heldRefused.Outcome, heldRefused.Diagnostics, ReplayOperation.StoredTextAmbiguousCode, ReplayMessage);
+        }
+
         [Fact]
         public async Task UnmarkedCapture_Accepted_SendsAndExportsItsTextAsStored_AndSaysSo()
         {

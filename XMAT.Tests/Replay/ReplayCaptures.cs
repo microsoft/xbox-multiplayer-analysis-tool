@@ -31,6 +31,19 @@ namespace XMAT.Tests.Replay
     {
         private static readonly DateTime Start = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
+        // A DNS host name of exactly this many characters, of 'a' labels no longer than 63 characters, which Uri accepts
+        // whatever its length.
+        internal static string LongDnsName(int length)
+        {
+            char[] name = new char[length];
+            for (int index = 0; index < length; index++)
+            {
+                name[index] = index % 63 == 62 && index < length - 1 ? '.' : 'a';
+            }
+
+            return new string(name);
+        }
+
         // A Fiddler archive whose frames are numbered from 1, in order.
         internal static string WriteSaz(string directory, string fileName, params CapturedExchange[] exchanges)
         {
