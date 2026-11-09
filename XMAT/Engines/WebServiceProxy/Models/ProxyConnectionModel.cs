@@ -49,6 +49,13 @@ namespace XMAT.WebServiceCapture.Models
 
         public bool HasReplayNote => !string.IsNullOrEmpty(ReplayNote);
 
+        // For rows of the Replays tab that a raw send recorded (ReplayRecorder): that the row is the normalized view of a raw
+        // request, and how much of its prepared bytes XMAT handed to the connection (RawWriteState); false and null for other
+        // rows. Kept in memory only.
+        internal bool SentRaw { get; set; }
+
+        internal string RawRequestWrite { get; set; }
+
         // For rows of the Replays tab that Reissue and verify recorded from a send that it verified (ReplayRecorder): the
         // verdict, and the verification differences when the tab kept them; null for other rows. The differences hold
         // captured content: they are kept in memory only, never in the capture table, saved captures or exports, and a
@@ -203,6 +210,8 @@ namespace XMAT.WebServiceCapture.Models
             ClientIP = model.ClientIP;
             Replay = model.Replay;
             ReplayNote = model.ReplayNote;
+            SentRaw = model.SentRaw;
+            RawRequestWrite = model.RawRequestWrite;
 
             // Shared, not copied: they are immutable once published (see RequestBody).
             _requestHeaders = model.RequestHeaders;

@@ -256,6 +256,9 @@ namespace XMAT.Operations.Capabilities
                     Window("XMAT.WebServiceCapture.RequestComposerWindow"),
                     Window("XMAT.WebServiceCapture.SequenceRangeWindow"),
                     Click(SequenceRangeXaml, "Ok_Click"),
+                    // Raw mode (compose --raw) and its Content-Length fix (--fix-content-length).
+                    Click(ComposerXaml, "ModeButton_Click"),
+                    Click(ComposerXaml, "FixContentLength_Click"),
                 }),
 
             // A request file (xmat-request/1) holds one request without sending it: a template, by default, keeps only its

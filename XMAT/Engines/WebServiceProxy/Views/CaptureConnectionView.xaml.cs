@@ -349,8 +349,13 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // Reissues the rows into the Replays tab, sequentially. The rows are copied first; methods that can change server
-        // state need the user's confirmation, which states every send of the run; and the copies are what is sent. Returns
+        // Reissues the rows into the Replays tab, sequentially. The rows are copied first; copies with stored text that is
+        // not known to be literal are refused (RefusesStoredText), then a selection with a destination that is malformed or
+        // over its size limit, or that would send to an IPv6 address with a zone (RefusesCaptureDestinations), before
+        // anything is asked; methods that can change server state, and rows of the Replays tab that would go to another
+        // origin than the one that their request was captured or saved for, or first sent to
+        // (ReplaySnapshot.CapturedOrigins), need the user's confirmation, one question for both, which states every send of
+        // the run; each permission is given only when its own count asks for it; and the copies are what is sent. Returns
         // null when nothing was started.
         internal async Task<ReplayRunResult> ReissueFromMenuAsync(ReissueRequest request)
         {
@@ -372,38 +377,79 @@ namespace XMAT.WebServiceCapture
                 return null;
             }
 
-            if (snapshot.UnsafeSends > 0 && !Confirm(owner, ConfirmationMessage(snapshot)))
+            if (RefusesCaptureDestinations(owner, snapshot.Captures))
             {
                 return null;
             }
 
-            ReplayRunResult run = await ReissueAsync(snapshot, snapshot.UnsafeSends > 0, ReplayTarget);
+            if ((snapshot.UnsafeSends > 0 || snapshot.OriginChangeSends > 0) &&
+                !Confirm(owner, ConfirmationMessage(snapshot)))
+            {
+                return null;
+            }
+
+            ReplayRunResult run = await ReissueAsync(
+                snapshot,
+                snapshot.UnsafeSends > 0,
+                ReplayTarget,
+                allowOriginChange: snapshot.OriginChangeSends > 0);
             ShowReplayOutcome(owner, snapshot, run);
             return run;
         }
 
-        // States every send of the run, repeats included, and how many of them can change server state.
+        // States every send of the run, repeats included, how many of them can change server state, and how many go to
+        // another origin than the one that their request was captured or saved for, or first sent to.
         internal static string ConfirmationMessage(ReplaySnapshot snapshot)
         {
             ArgumentNullException.ThrowIfNull(snapshot);
-            return snapshot.Request.Repeat == 1
-                ? Localization.GetLocalizedString("REPLAY_CONFIRM_UNSAFE", snapshot.Sends, snapshot.UnsafeSends)
-                : Localization.GetLocalizedString(
-                    "REPLAY_CONFIRM_UNSAFE_REPEATED",
+            bool repeated = snapshot.Request.Repeat != 1;
+            if (snapshot.OriginChangeSends == 0)
+            {
+                return repeated
+                    ? Localization.GetLocalizedString(
+                        "REPLAY_CONFIRM_UNSAFE_REPEATED",
+                        snapshot.Sends,
+                        snapshot.Captures.Count,
+                        snapshot.Request.Repeat,
+                        snapshot.UnsafeSends)
+                    : Localization.GetLocalizedString("REPLAY_CONFIRM_UNSAFE", snapshot.Sends, snapshot.UnsafeSends);
+            }
+
+            if (snapshot.UnsafeSends == 0)
+            {
+                return repeated
+                    ? Localization.GetLocalizedString(
+                        "REPLAY_CONFIRM_ORIGIN_REPEATED",
+                        snapshot.Sends,
+                        snapshot.Captures.Count,
+                        snapshot.Request.Repeat,
+                        snapshot.OriginChangeSends)
+                    : Localization.GetLocalizedString("REPLAY_CONFIRM_ORIGIN", snapshot.Sends, snapshot.OriginChangeSends);
+            }
+
+            return repeated
+                ? Localization.GetLocalizedString(
+                    "REPLAY_CONFIRM_UNSAFE_ORIGIN_REPEATED",
                     snapshot.Sends,
                     snapshot.Captures.Count,
                     snapshot.Request.Repeat,
-                    snapshot.UnsafeSends);
+                    snapshot.UnsafeSends,
+                    snapshot.OriginChangeSends)
+                : Localization.GetLocalizedString(
+                    "REPLAY_CONFIRM_UNSAFE_ORIGIN", snapshot.Sends, snapshot.UnsafeSends, snapshot.OriginChangeSends);
         }
 
         // Runs a Replay menu snapshot through the shared ReplayOperation, recorded through target; Busy, with nothing sent,
         // while another run, an analysis or another capture-data operation is running. IsReissueRunning holds while it
-        // runs; a failure of the Replays tab ends it as failed.
+        // runs; a failure of the Replays tab ends it as failed. The origins that the snapshot restores go with its rows
+        // (ReplaySource.FromCaptures), so a row sent to another origin than its own is refused, with nothing sent, unless
+        // allowOriginChange.
         internal static async Task<ReplayRunResult> ReissueAsync(
             ReplaySnapshot snapshot,
             bool allowUnsafeMethods,
             ReplayRecordingTarget target,
-            Func<ReplaySender> senderFactory = null)
+            Func<ReplaySender> senderFactory = null,
+            bool allowOriginChange = false)
         {
             ArgumentNullException.ThrowIfNull(snapshot);
             ArgumentNullException.ThrowIfNull(target);
@@ -433,11 +479,12 @@ namespace XMAT.WebServiceCapture
 
                 result = await operation.ExecuteAsync(
                     new ReplayRequest(
-                        ReplaySource.FromCaptures(snapshot.Captures),
+                        ReplaySource.FromCaptures(snapshot.Captures, snapshot.CapturedOrigins),
                         new ReplayOptions(
                             Repeat: snapshot.Request.Repeat,
                             Verify: snapshot.Request.Verify,
                             AllowUnsafeMethods: allowUnsafeMethods,
+                            AllowOriginChange: allowOriginChange,
                             VerifyDiff: snapshot.Request.Verify),
                         new ReplayEdits(Unconditional: snapshot.Request.Unconditional),
                         recording.Recorder),
@@ -490,6 +537,31 @@ namespace XMAT.WebServiceCapture
             Tell(
                 owner, RequestComposerWindow.StoredTextRefusalText(ReplayOperation.StoredTextAmbiguousCode),
                 MessageBoxImage.Warning, Localization.GetLocalizedString("CAPTURE_TEXT_AMBIGUOUS_TITLE"));
+            return true;
+        }
+
+        // XMAT sends nothing to a destination that is malformed or exceeds the size limit (replay.request.malformed), or
+        // to an IPv6 address with a zone (replay.destination.scoped-ipv6): a selection in which any request that Reissue
+        // would send has one is refused whole, as the operation would refuse it and with its precedence, but before
+        // anything is asked, in the words for its code; the requests that Reissue skips are no destinations
+        // (ReplayOperation.CheckCaptureDestinations). It reads only each copy's destination, as far as the shared decision
+        // does and within its bound (ReplayDestination.ReadCaptureDestination, MaxCaptureDestinationChars), and does so
+        // on the UI thread, so nothing can start another Reissue meanwhile. True when refused.
+        private bool RefusesCaptureDestinations(Window owner, IEnumerable<ProxyConnectionModel> captures)
+        {
+            OperationDiagnostic refusal = ReplayOperation.CheckCaptureDestinations(captures);
+            if (refusal == null)
+            {
+                return false;
+            }
+
+            string reason = refusal.Code switch
+            {
+                ReplayOperation.RequestMalformedCode => Localization.GetLocalizedString("REPLAY_DESTINATION_MALFORMED"),
+                ReplayDestination.ScopedIpv6Code => Localization.GetLocalizedString("REPLAY_DESTINATION_SCOPED_IPV6"),
+                _ => refusal.Message,
+            };
+            Tell(owner, Localization.GetLocalizedString("REPLAY_FAILED", reason), MessageBoxImage.Warning);
             return true;
         }
 

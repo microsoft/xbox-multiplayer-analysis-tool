@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations.Analysis;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
@@ -25,7 +26,8 @@ namespace XMAT.Operations.Replay
             ReplaySequence sequence = null,
             IReadOnlyList<Uri> capturedOrigins = null,
             RawRequestImage raw = null,
-            Uri provenanceOrigin = null)
+            Uri provenanceOrigin = null,
+            CaptureTextSource rawTextSource = null)
         {
             Path = path;
             Selection = selection;
@@ -37,6 +39,7 @@ namespace XMAT.Operations.Replay
             CapturedOrigins = capturedOrigins;
             Raw = raw;
             ProvenanceOrigin = provenanceOrigin;
+            RawTextSource = rawTextSource;
         }
 
         internal string Path { get; }
@@ -65,6 +68,11 @@ namespace XMAT.Operations.Replay
 
         // The origin that the raw request inherits (contract 2.8), or null for its target's own.
         internal Uri ProvenanceOrigin { get; }
+
+        // The source of the text that the raw request was made from: Literal for independent input, such as a raw file or
+        // a new request, and the draft's own source for a request that Raw mode made from a draft. The operation refuses a
+        // raw request whose source is not Literal (ReplayOperation.StoredTextAmbiguousCode); null for the other sources.
+        internal CaptureTextSource RawTextSource { get; }
 
         internal static ReplaySource FromFile(
             string path, ReplaySelection selection, string deviceId = null, AnalysisLimits limits = null)
@@ -106,15 +114,18 @@ namespace XMAT.Operations.Replay
         }
 
         // One raw request (slice L). Only an admitted image can be sent, so admission is a matter of type (contract 2.4).
-        internal static ReplaySource FromRaw(RawRequestImage image, Uri provenanceOrigin = null)
+        // textSource is required, so that every caller says where the request's text came from; Literal is never assumed.
+        internal static ReplaySource FromRaw(RawRequestImage image, CaptureTextSource textSource, Uri provenanceOrigin = null)
         {
             ArgumentNullException.ThrowIfNull(image);
+            ArgumentNullException.ThrowIfNull(textSource);
             if (provenanceOrigin is { IsAbsoluteUri: false })
             {
                 throw new ArgumentException("The provenance origin is not an absolute URL.", nameof(provenanceOrigin));
             }
 
-            return new ReplaySource(null, null, null, null, null, null, raw: image, provenanceOrigin: provenanceOrigin);
+            return new ReplaySource(
+                null, null, null, null, null, null, raw: image, provenanceOrigin: provenanceOrigin, rawTextSource: textSource);
         }
     }
 
@@ -263,7 +274,8 @@ namespace XMAT.Operations.Replay
     // the options must carry (AllowUnsafeMethods, AllowOriginChange, AllowConnectTo, AllowProxy, and AllowClientCertificate
     // and AllowWindowsAuth naming CredentialOrigin, the one origin of the plan) for the operation to send them; it checks
     // them again when it runs. A raw plan has no Template: Raw is its image, which AllowRaw must cover
-    // (ReplayRawConsent.For), and ProvenanceOrigin the origin that it inherits (ReplaySource.FromRaw).
+    // (ReplayRawConsent.For), ProvenanceOrigin the origin that it inherits and RawTextSource the source of its text
+    // (ReplaySource.FromRaw). A raw plan without a source runs as Unknown, so it is refused, never sent as Literal.
     internal sealed record ReplayPlanPreview(
         RequestReplayDraft Template,
         ReplaySequence Sequence,
@@ -273,7 +285,8 @@ namespace XMAT.Operations.Replay
         ReplayTransportOptions Transport = null,
         ReplayCredentialOrigin CredentialOrigin = null,
         RawRequestImage Raw = null,
-        Uri ProvenanceOrigin = null)
+        Uri ProvenanceOrigin = null,
+        CaptureTextSource RawTextSource = null)
     {
         internal bool UsesRaw => Raw != null;
 
@@ -286,7 +299,7 @@ namespace XMAT.Operations.Replay
         internal bool UsesWindowsAuth => Transport?.WindowsAuth == true;
 
         internal ReplaySource ToSource() =>
-            Raw != null ? ReplaySource.FromRaw(Raw, ProvenanceOrigin) :
+            Raw != null ? ReplaySource.FromRaw(Raw, RawTextSource ?? CaptureTextSource.Unknown, ProvenanceOrigin) :
             Sequence == null ? ReplaySource.FromDraft(Template) : ReplaySource.FromTemplate(Template, Sequence);
     }
 

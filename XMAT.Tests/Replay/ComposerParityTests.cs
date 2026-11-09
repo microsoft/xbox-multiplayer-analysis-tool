@@ -565,7 +565,8 @@ namespace XMAT.Tests.Replay
         });
 
         // A send that got no response is recorded and inspected too. A send whose row could not be recorded, because its
-        // tab was closed meanwhile, selects nothing: not the older row of the earlier send.
+        // tab was closed meanwhile, selects nothing: not the older row of the earlier send. Its status says how that send
+        // went, from the recorder's last item, then that the tab could not take it.
         [Fact]
         public Task InspectSession_SelectsAFailedSendsRow_AndNothingWhenTheSendWasNotRecorded() => _application.RunAsync(async () =>
         {
@@ -604,8 +605,10 @@ namespace XMAT.Tests.Replay
                 Assert.Same(other, model.SelectedDeviceContext);
                 Assert.Null(ControllerOf(replays).SelectedConnectionModel);
                 Assert.Same(failed, Assert.Single(ControllerOf(replays).ProxyConnections));
-                Assert.Contains(
-                    Localization.GetLocalizedString("COMPOSER_NOT_RECORDED", replays.DeviceName), Status(window));
+                Assert.StartsWith("HTTP 200 | ", Status(window));
+                Assert.EndsWith(
+                    " ms | 0 bytes " + Localization.GetLocalizedString("COMPOSER_NOT_RECORDED", replays.DeviceName),
+                    Status(window));
             }
             finally
             {

@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture.Proxy;
@@ -77,6 +78,7 @@ namespace XMAT.WebServiceCapture
         // that the user confirmed gets the permission that its preview said it needs, and no other: Connect to another
         // endpoint and Upstream proxy only for a plan that uses them, and a client certificate and Windows authentication
         // each only for a plan that uses it, and only for the one origin that the preview found for it (CredentialOrigin).
+        // A raw plan's consent covers its own image and target only (ReplayRawConsent.For).
         internal static ReplayOptions ComposerOptions(
             int maxRedirects, ReplayTransportOptions transport = null, ReplayPlanPreview confirmed = null) =>
             new(
@@ -87,7 +89,8 @@ namespace XMAT.WebServiceCapture
                 Transport: transport,
                 AllowProxy: confirmed?.UsesProxy == true,
                 AllowClientCertificate: confirmed?.UsesClientCertificate == true ? confirmed.CredentialOrigin : null,
-                AllowWindowsAuth: confirmed?.UsesWindowsAuth == true ? confirmed.CredentialOrigin : null);
+                AllowWindowsAuth: confirmed?.UsesWindowsAuth == true ? confirmed.CredentialOrigin : null,
+                AllowRaw: confirmed?.UsesRaw == true ? ReplayRawConsent.For(confirmed) : null);
 
         // Checks a composed request, or one per number of a sequence, as sending it would, without sending anything or
         // expanding the sequence: the size of the plan, the request, the transport and the permission they need, with a
@@ -95,6 +98,22 @@ namespace XMAT.WebServiceCapture
         internal OperationResult<ReplayPlanPreview> Preview(
             ReplaySource source, int maxRedirects, ReplayTransportOptions transport = null) =>
             CreateOperation().Preview(source, ComposerOptions(maxRedirects, transport));
+
+        // Checks a raw request's prepared image as sending it would (contract 2.5, stage 2), without sending anything: over
+        // HTTP/1.1 only, directly or to connectTo, with no redirects, against the origin that the request inherits
+        // (capturedOrigin, the draft's CapturedOrigin, or null for the target's own) and with the source of the text that it
+        // was made from (textSource, the draft's CaptureTextSource), which the operation refuses unless it is Literal.
+        // cancellationToken stops recomputing the image's SHA-256, and throws.
+        internal OperationResult<ReplayPlanPreview> PreviewRaw(
+            RawRequestImage image,
+            Uri capturedOrigin,
+            CaptureTextSource textSource,
+            ReplayConnectTo connectTo,
+            CancellationToken cancellationToken = default) =>
+            CreateOperation().Preview(
+                ReplaySource.FromRaw(image, textSource, capturedOrigin),
+                ComposerOptions(0, new ReplayTransportOptions(ReplayHttpVersion.Http11, connectTo, Proxy: null)),
+                cancellationToken);
 
         // Sends a previewed plan in one operation, which checks it all again first, over the transport that the preview
         // checked (ReplayPlanPreview.Transport), never the composer's controls as they are now. confirmed says that the user

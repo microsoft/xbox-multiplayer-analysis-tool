@@ -158,6 +158,46 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // Neither export is available in Raw mode, whose prepared bytes curl would not send as they are: each button says
+        // why, and neither export prepares, copies, asks or saves anything. Both come back with Parsed mode.
+        [Fact]
+        public Task NeitherExport_IsAvailableInRawMode_AndBothComeBackWithParsedMode() => _application.RunAsync(async () =>
+        {
+            var window = RequestComposerWindow.ForNewRequest(confirm: NoQuestion);
+            var copied = new List<string>();
+            window.CopyText = copied.Add;
+            window.PrepareCurl = (_, _, _, _) => throw new Xunit.Sdk.XunitException("Raw mode prepares no export.");
+            window.ChooseCurlScriptPath = () => throw new Xunit.Sdk.XunitException("Raw mode saves no script.");
+            try
+            {
+                var copy = Find<Button>(window, "CopyCurlButton");
+                var script = Find<Button>(window, "SaveCurlButton");
+                string raw = Localization.GetLocalizedString("COMPOSER_CURL_RAW");
+                (bool, object, bool, object) Buttons() => (copy.IsEnabled, copy.ToolTip, script.IsEnabled, script.ToolTip);
+                (bool, object, bool, object) neither = (false, raw, false, raw);
+                (bool, object, bool, object) both = (true, null, true, null);
+                ChooseVersion(window, ReplayHttpVersion.Http11);
+                Find<TextBox>(window, "UrlBox").Text = Url;
+                await window.SwitchModeAsync();
+
+                Assert.Equal(neither, Buttons());
+                await window.CopyAsCurlAsync();
+                Assert.Equal(raw, Status(window));
+                Find<TextBlock>(window, "StatusText").Text = "-";
+                await window.SaveCurlScriptAsync();
+                Assert.Equal(raw, Status(window));
+                Assert.Empty(copied);
+
+                await window.SwitchModeAsync();
+
+                Assert.Equal(both, Buttons());
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
         // Copy as cURL fixes the request and its options when it is selected, then prepares and renders the command off the
         // UI thread, with the window busy, and copies it; nothing is asked for the request's own origin, whatever its
         // method. Edits made meanwhile change nothing in the command: HTTP/1.1 only reaches it.

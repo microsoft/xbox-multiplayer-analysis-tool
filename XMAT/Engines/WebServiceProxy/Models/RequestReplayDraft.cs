@@ -58,10 +58,12 @@ namespace XMAT.WebServiceCapture
         internal RequestOmissions Omissions { get; private set; } = RequestOmissions.None;
 
         // The source of the stored text that the draft was made from (FromCapture): its capture's, AmbiguousUnmarked for a
-        // capture without XMAT's text-format marker; Literal for every other draft, such as a new request, a request
-        // file's or a raw request's. Every copy keeps it and no edit changes it, so the operation can refuse to send or
-        // export unmarked text without a decision (ReplayOperation.StoredTextAmbiguousCode).
-        internal global::XMAT.DataAbstractionLayer.CaptureTextSource CaptureTextSource { get; private set; } =
+        // capture without XMAT's text-format marker. A draft that Raw mode converts back (RawConversion.ToDraft) keeps the
+        // source of the draft that it was converted from, and Literal is the source of independent input only: a new
+        // request, a request file's or a raw file's. Every copy keeps it and no edit changes it: only an object initializer
+        // sets it, so the operation can refuse to send or export unmarked text without a decision
+        // (ReplayOperation.StoredTextAmbiguousCode).
+        internal global::XMAT.DataAbstractionLayer.CaptureTextSource CaptureTextSource { get; init; } =
             global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal;
 
         // Only exactly GET, HEAD and OPTIONS are safe; any other method, in any case, can change server state. Shared by

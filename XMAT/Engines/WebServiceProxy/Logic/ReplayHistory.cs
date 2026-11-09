@@ -242,7 +242,8 @@ namespace XMAT.WebServiceCapture
                 UntrustedText.ShowParts(MaxMethodPreviewChars, row.Method),
                 UrlPreview(row),
                 UntrustedText.ShowParts(MaxStatusPreviewChars, row.Status),
-                loadReason);
+                loadReason,
+                RawSendWording.HistoryMarker(row.SentRaw, row.RawRequestWrite));
         }
 
         // The row's retained effective destination (RequestReplayDraft.FromCapture), including an IPv6 zone even though
@@ -476,7 +477,9 @@ namespace XMAT.WebServiceCapture
 
     // What a history view shows of one live entry, made from its row when the view is built (ReplayHistory.Snapshot). Each
     // text is escaped and bounded for display only: Load and Show in Replays act on the row that TryResolve gives, never on
-    // these. LoadReason says why Load is unavailable; CanLoad is true only for None.
+    // these. LoadReason says why Load is unavailable; CanLoad is true only for None. RawMarker says, for a row that a raw
+    // send recorded, Raw mode and what XMAT wrote of its request, from the row's SentRaw and RawRequestWrite
+    // (RawSendWording.HistoryMarker); null for any other row.
     internal sealed record ReplayHistoryPreview(
         ReplayHistoryEntry Entry,
         string TabNamePreview,
@@ -485,7 +488,8 @@ namespace XMAT.WebServiceCapture
         string MethodPreview,
         string UrlPreview,
         string StatusPreview,
-        ReplayHistoryLoadReason LoadReason)
+        ReplayHistoryLoadReason LoadReason,
+        string RawMarker)
     {
         internal bool CanLoad => LoadReason == ReplayHistoryLoadReason.None;
     }

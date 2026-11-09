@@ -4,6 +4,7 @@
 
 using System.Globalization;
 using System.Text;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture;
 
@@ -251,6 +252,41 @@ namespace XMAT.Tests.Replay
             Assert.Same(origin, draft.CapturedOrigin);
             Assert.True(draft.ChangesOrigin);
             Assert.Null(RawConversion.ToDraft(parse, new RequestReplayDraft(), 1024, false, CancellationToken.None).Value.Draft.CapturedOrigin);
+        }
+
+        // Raw to Parsed keeps the stored-text source of the draft that the request came from, through both conversions and
+        // next to its captured origin, so a mode switch cannot relabel unmarked text as Literal (L2-QP-RAW). Without a
+        // draft, the source is Unknown, never Literal.
+        [Fact]
+        public void ToDraft_KeepsTheProvenancesStoredTextSource_SoAModeSwitchCannotRelabelIt()
+        {
+            CaptureTextSource unmarked = CaptureTextSource.CreateFile(
+                CaptureTextSemantics.AmbiguousUnmarked, default, _ => new byte[32], () => true);
+            var origin = new Uri("https://captured.example/");
+            RequestReplayDraft provenance = new RequestReplayDraft
+            {
+                Method = "GET",
+                Url = "https://captured.example/x",
+                CaptureTextSource = unmarked,
+            }.WithCapturedOrigin(origin);
+            RawFromDraft raw = RawConversion.FromDraft(provenance, 0, false, CancellationToken.None).Value;
+            RawEditorParse parse = RawRequest.ParseForEditor(raw.HeadText, Array.Empty<byte>(), raw.Target, CancellationToken.None).Parse;
+
+            RequestReplayDraft back = RawConversion.ToDraft(parse, provenance, 1024, false, CancellationToken.None).Value.Draft;
+
+            Assert.Same(unmarked, back.CaptureTextSource);
+            Assert.Same(origin, back.CapturedOrigin);
+            Assert.Same(unmarked, back.WithUrl(back.Url).CaptureTextSource);
+            Assert.Same(
+                CaptureTextSource.Unknown,
+                RawConversion.ToDraft(parse, new RequestReplayDraft { CaptureTextSource = CaptureTextSource.Unknown }, 1024, false, CancellationToken.None)
+                    .Value.Draft.CaptureTextSource);
+            Assert.Same(
+                CaptureTextSource.Literal,
+                RawConversion.ToDraft(parse, new RequestReplayDraft(), 1024, false, CancellationToken.None).Value.Draft.CaptureTextSource);
+            Assert.Same(
+                CaptureTextSource.Unknown,
+                RawConversion.ToDraft(parse, null, 1024, false, CancellationToken.None).Value.Draft.CaptureTextSource);
         }
 
         [Fact]

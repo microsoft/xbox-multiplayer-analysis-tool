@@ -318,6 +318,7 @@ namespace XMAT.Operations.Replay
 
                 if (source.Raw != null)
                 {
+                    CheckRawStoredText(source);
                     CheckRawValues(source.Raw, null, options, cancellationToken);
                     return OperationResult<ReplayPlanPreview>.Success(new ReplayPlanPreview(
                         null,
@@ -327,7 +328,8 @@ namespace XMAT.Operations.Replay
                         RawChangesOrigin(source),
                         options.EffectiveTransport,
                         Raw: source.Raw,
-                        ProvenanceOrigin: source.ProvenanceOrigin));
+                        ProvenanceOrigin: source.ProvenanceOrigin,
+                        RawTextSource: source.RawTextSource));
                 }
 
                 RequestReplayDraft template = source.Draft.WithUrl(source.Draft.Url);
@@ -554,6 +556,17 @@ namespace XMAT.Operations.Replay
             }
         }
 
+        // A raw request keeps the source of the text that it was made from (ReplaySource.RawTextSource): one that is not
+        // Literal is refused before any raw check, consent or sender. The run's acceptance of a capture file
+        // (ReplayOptions.AcceptStoredText) never covers it, as it never covers a held draft.
+        private static void CheckRawStoredText(ReplaySource source)
+        {
+            if (!IsLiteral(source.RawTextSource))
+            {
+                throw StoredTextAmbiguous(StoredTextAmbiguousCode);
+            }
+        }
+
         private static ReplayInputException StoredTextAmbiguous(string code) =>
             new(code, code == StoredTextAmbiguousExportCode ? StoredTextAmbiguousExportMessage : StoredTextAmbiguousMessage);
 
@@ -569,6 +582,7 @@ namespace XMAT.Operations.Replay
             ReplaySource source = request.Source;
             if (source.Raw != null)
             {
+                CheckRawStoredText(source);
                 CheckRawValues(source.Raw, request.Edits, options, cancellationToken);
                 CheckRawConsents(source, options);
                 return new Prepared(

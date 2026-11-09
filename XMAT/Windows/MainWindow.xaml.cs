@@ -104,10 +104,7 @@ namespace XMAT
         // Each new request gets its own non-modal composer, like Edit and resend; its sends are recorded in the Replays tab.
         private void ComposeRequest_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            var composer = RequestComposerWindow.ForNewRequest(
-                recording: CaptureConnectionView.ApplicationReplayTarget(Dispatcher));
-            composer.Owner = this;
-            composer.Show();
+            RequestComposerWindow.OpenForApplication(this);
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)

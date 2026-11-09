@@ -357,7 +357,8 @@ namespace XMAT.Cli
             var sink = new FileSink(output, report.Replay, saz, image);
             var operation = new ReplayOperation();
             RawOperationSeam.Value?.Invoke(operation);
-            ReplaySource source = ReplaySource.FromRaw(image);
+            // A raw file is independent input: its bytes are the request as written, so its text is Literal.
+            ReplaySource source = ReplaySource.FromRaw(image, global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal);
             var options = new ReplayOptions(
                 Repeat: replay.Repeat,
                 Parallelism: replay.Parallel,

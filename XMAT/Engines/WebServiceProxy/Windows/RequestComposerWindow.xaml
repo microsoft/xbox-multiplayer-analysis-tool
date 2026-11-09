@@ -33,6 +33,11 @@
         </WrapPanel>
       </StackPanel>
     </Border>
+    <!-- Raw mode's warning, shown whenever Raw mode is, in the place of the parts left out, which Raw mode never has. -->
+    <Border x:Name="RawWarningPanel" Grid.Row="1" Margin="0,0,0,10" Padding="8" BorderThickness="1"
+            BorderBrush="{DynamicResource BorderBrush}" Visibility="Collapsed">
+      <TextBlock x:Name="RawWarningText" TextWrapping="Wrap"/>
+    </Border>
     <Grid Grid.Row="2">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="*"/>
@@ -44,13 +49,17 @@
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
           <RowDefinition Height="2*"/>
+          <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="3*"/>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-        <Grid Grid.RowSpan="2">
+        <!-- Switches between Parsed and Raw mode, first in the editor's Tab order; it converts and asks before any loss. -->
+        <Button x:Name="ModeButton" HorizontalAlignment="Left" Margin="0,0,0,6" Padding="8,2" Click="ModeButton_Click"/>
+        <Grid Grid.Row="1" Grid.RowSpan="2">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="100"/>
             <ColumnDefinition Width="*"/>
@@ -65,52 +74,74 @@
                    AutomationProperties.LabeledBy="{Binding ElementName=MethodLabel}"/>
           <TextBox x:Name="UrlBox" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center"
                    TextChanged="UrlBox_TextChanged" AutomationProperties.LabeledBy="{Binding ElementName=UrlLabel}"/>
+          <!-- Raw mode's target origin takes the method's and the URL's place; the URL keeps its text for Parsed mode. -->
+          <Label x:Name="RawTargetLabel" Grid.ColumnSpan="2" Target="{Binding ElementName=RawTargetBox}"
+                 Visibility="Collapsed"/>
+          <TextBox x:Name="RawTargetBox" Grid.Row="1" Grid.ColumnSpan="2" VerticalContentAlignment="Center"
+                   Visibility="Collapsed" AutomationProperties.LabeledBy="{Binding ElementName=RawTargetLabel}"/>
         </Grid>
-        <Label x:Name="HeadersLabel" Grid.Row="2" Target="{Binding ElementName=HeadersBox}"/>
-        <TextBox x:Name="HeadersBox" Grid.Row="3" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
+        <Label x:Name="HeadersLabel" Grid.Row="3" Target="{Binding ElementName=HeadersBox}"/>
+        <Label x:Name="RawHeadLabel" Grid.Row="3" Target="{Binding ElementName=RawHeadBox}" Visibility="Collapsed"/>
+        <TextBox x:Name="HeadersBox" Grid.Row="4" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
                  HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
                  AutomationProperties.LabeledBy="{Binding ElementName=HeadersLabel}"/>
-        <DockPanel Grid.Row="4" Margin="0,6,0,0">
+        <!-- Raw mode's head: the request line and header lines, which keep tabs, never wrap, and are counted below. -->
+        <TextBox x:Name="RawHeadBox" Grid.Row="4" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
+                 TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                 Visibility="Collapsed" TextChanged="RawHeadBox_TextChanged"
+                 AutomationProperties.LabeledBy="{Binding ElementName=RawHeadLabel}"/>
+        <!-- Not live: typing is not announced; refusals go to the status, which is. -->
+        <TextBlock x:Name="RawCountsText" Grid.Row="5" Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+        <DockPanel Grid.Row="6" Margin="0,6,0,0">
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
             <Button x:Name="UploadFileButton" Margin="4,0" Padding="8,2" Click="UploadFile_Click"/>
-          <Button x:Name="BuildFormButton" Margin="4,0" Padding="8,2" Click="BuildForm_Click"/>
+            <Button x:Name="BuildFormButton" Margin="4,0" Padding="8,2" Click="BuildForm_Click"
+                    ToolTipService.ShowOnDisabled="True"/>
+            <Button x:Name="FixContentLengthButton" Margin="4,0" Padding="8,2" Visibility="Collapsed"
+                    Click="FixContentLength_Click"/>
             <Button x:Name="ClearBodyButton" Margin="4,0" Padding="8,2" Click="ClearBody_Click"/>
             <CheckBox x:Name="Base64Box" Margin="8,0,0,0" VerticalAlignment="Center"
                       Checked="BodyFormat_Changed" Unchecked="BodyFormat_Changed"/>
           </StackPanel>
           <Label x:Name="BodyLabel" Target="{Binding ElementName=BodyBox}"/>
         </DockPanel>
-        <Grid Grid.Row="5">
+        <Grid Grid.Row="7">
           <TextBox x:Name="BodyBox" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
-                   HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                   HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" TextChanged="BodyBox_TextChanged"
                    AutomationProperties.LabeledBy="{Binding ElementName=BodyLabel}"/>
           <TextBlock x:Name="BodyFileText" Margin="4" TextWrapping="Wrap" Visibility="Collapsed"/>
         </Grid>
-        <WrapPanel Grid.Row="6" Margin="0,8,0,0" Orientation="Horizontal">
-          <CheckBox x:Name="FollowRedirectsBox" VerticalAlignment="Center"
+        <!-- The options that Raw mode never uses are disabled there, each with the reason in its tooltip. -->
+        <WrapPanel Grid.Row="8" Margin="0,8,0,0" Orientation="Horizontal">
+          <CheckBox x:Name="FollowRedirectsBox" VerticalAlignment="Center" ToolTipService.ShowOnDisabled="True"
                     Checked="FollowRedirects_Changed" Unchecked="FollowRedirects_Changed"/>
-          <ComboBox x:Name="RedirectLimitBox" MinWidth="56" Margin="6,0,0,0" VerticalAlignment="Center" IsEnabled="False"/>
+          <ComboBox x:Name="RedirectLimitBox" MinWidth="56" Margin="6,0,0,0" VerticalAlignment="Center" IsEnabled="False"
+                    ToolTipService.ShowOnDisabled="True"/>
           <CheckBox x:Name="InspectSessionBox" Margin="18,0,0,0" VerticalAlignment="Center"/>
         </WrapPanel>
-        <WrapPanel Grid.Row="7" Margin="0,6,0,0" Orientation="Horizontal">
+        <WrapPanel Grid.Row="9" Margin="0,6,0,0" Orientation="Horizontal">
           <Label x:Name="HttpVersionLabel" Padding="0,0,6,0" VerticalAlignment="Center"
                  Target="{Binding ElementName=HttpVersionBox}"/>
           <ComboBox x:Name="HttpVersionBox" MinWidth="130" VerticalAlignment="Center" SelectionChanged="HttpVersion_Changed"
+                    ToolTipService.ShowOnDisabled="True"
                     AutomationProperties.LabeledBy="{Binding ElementName=HttpVersionLabel}"/>
           <CheckBox x:Name="ConnectToBox" Margin="18,0,0,0" VerticalAlignment="Center"
                     Checked="ConnectTo_Changed" Unchecked="ConnectTo_Changed"/>
           <TextBox x:Name="ConnectToText" MinWidth="190" Margin="6,0,0,0" VerticalContentAlignment="Center"
                    IsEnabled="False"/>
-          <CheckBox x:Name="ProxyBox" Margin="18,0,0,0" VerticalAlignment="Center"
+          <CheckBox x:Name="ProxyBox" Margin="18,0,0,0" VerticalAlignment="Center" ToolTipService.ShowOnDisabled="True"
                     Checked="Proxy_Changed" Unchecked="Proxy_Changed"/>
           <TextBox x:Name="ProxyText" MinWidth="190" Margin="6,0,0,0" VerticalContentAlignment="Center"
-                   IsEnabled="False"/>
+                   IsEnabled="False" ToolTipService.ShowOnDisabled="True"/>
           <!-- The list of client certificates is read only when it is opened (ListCertificatesAsync). -->
           <CheckBox x:Name="ClientCertificateBox" Margin="18,0,0,0" VerticalAlignment="Center"
+                    ToolTipService.ShowOnDisabled="True"
                     Checked="ClientCertificate_Changed" Unchecked="ClientCertificate_Changed"/>
           <ComboBox x:Name="ClientCertificateList" MinWidth="220" MaxWidth="480" Margin="6,0,0,0" VerticalAlignment="Center"
-                    IsEnabled="False" DropDownOpened="ClientCertificateList_DropDownOpened"/>
+                    IsEnabled="False" ToolTipService.ShowOnDisabled="True"
+                    DropDownOpened="ClientCertificateList_DropDownOpened"/>
           <CheckBox x:Name="WindowsAuthBox" Margin="18,0,0,0" VerticalAlignment="Center"
+                    ToolTipService.ShowOnDisabled="True"
                     Checked="WindowsAuth_Changed" Unchecked="WindowsAuth_Changed"/>
         </WrapPanel>
       </Grid>
@@ -131,7 +162,8 @@
     <DockPanel Grid.Row="5" LastChildFill="False">
       <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
         <Button x:Name="OpenRequestButton" MinWidth="110" Margin="4" Padding="8,4" Click="OpenRequest_Click"/>
-        <Button x:Name="SaveRequestButton" MinWidth="110" Margin="4" Padding="8,4" Click="SaveRequest_Click"/>
+        <Button x:Name="SaveRequestButton" MinWidth="110" Margin="4" Padding="8,4" Click="SaveRequest_Click"
+                ToolTipService.ShowOnDisabled="True"/>
         <!-- History lists the requests that the Replays tab recorded, from the history as it is when the menu opens, and
              keeps them current only while it is open; closing it keeps nothing of them. -->
         <Button x:Name="HistoryButton" MinWidth="90" Margin="4" Padding="8,4" Click="History_Click">
