@@ -14,6 +14,7 @@ namespace XMAT.Operations.Capabilities
     internal static class CapabilityRegistry
     {
         internal const string AnalyzeCaptureOperation = "XMAT.Operations.Analysis.AnalyzeCaptureOperation";
+        internal const string FilterCaptureSessionsOperation = "XMAT.Operations.Captures.FilterCaptureSessionsOperation";
 
         private const string Owner = "XMAT-021";
         private const string MainWindowXaml = "Windows/MainWindow.xaml";
@@ -27,6 +28,7 @@ namespace XMAT.Operations.Capabilities
         private const string PortChangeXaml = "Engines/WebServiceProxy/Windows/ProxyPortChangeWindow.xaml";
         private const string BlockListXaml = "Engines/WebServiceProxy/Views/BlockListView.xaml";
         private const string BypassListXaml = "Engines/WebServiceProxy/Views/BypassListView.xaml";
+        private const string CaptureViewXaml = "Engines/WebServiceProxy/Views/CaptureConnectionView.xaml";
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
         private const string SanitizedExportXaml = "Windows/SanitizedExportProgressWindow.xaml";
 
@@ -48,7 +50,8 @@ namespace XMAT.Operations.Capabilities
             Capability.Supported(
                 "analysis.xbox-live", "Analyze Xbox Live service calls", "S1",
                 cli: "analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] " +
-                    "[--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                    "[--max-data-mib N] [--max-record-mib N] [--max-records N] " +
+                    "[--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...",
                 operation: AnalyzeCaptureOperation,
                 gui: new[]
                 {
@@ -157,6 +160,24 @@ namespace XMAT.Operations.Capabilities
                 {
                     Command("XMAT.NetworkTrace.NetworkTraceCommands.StartStopCapture"),
                     EnumValue(CaptureTypeEnum, "NetworkTrace"),
+                }),
+            // Hides sessions from view and selects the sessions to analyze; it never changes what the proxy forwards or
+            // records. The editor's buttons, the proxy commands that the row and timeline menus run, and the analyzer
+            // window's opt-in all use the same selection.
+            Capability.Supported(
+                "capture.process-filter", "Filter captured sessions by client process", "S9",
+                cli: "analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...",
+                operation: FilterCaptureSessionsOperation,
+                gui: new[]
+                {
+                    Click(CaptureViewXaml, "ApplyProcessFilter_Click"),
+                    Click(CaptureViewXaml, "HideSvchost_Click"),
+                    Click(CaptureViewXaml, "ShowAllProcesses_Click"),
+                    Command(ProxyCommandsPrefix + "ShowOnlyProcess"),
+                    Command(ProxyCommandsPrefix + "HideProcess"),
+                    Command(ProxyCommandsPrefix + "ShowAllProcesses"),
+                    Command(AppCommandsPrefix + "AnalyzeCaptures"),
+                    Window("XMAT.CaptureAnalyzerWindow"),
                 }),
             Capability.Planned(
                 "capture.scripts", "Run capture scripts", "S8a", Owner,

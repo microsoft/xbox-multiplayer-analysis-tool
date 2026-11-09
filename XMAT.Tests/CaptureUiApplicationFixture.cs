@@ -173,6 +173,9 @@ namespace XMAT.Tests
             return host;
         }
 
+        // Runs a test on the shared application's dispatcher, starting the application first if this process has not.
+        internal static void RunOnApplication(Action<Window> test) => GetOrCreateHost().Run(test);
+
         internal void Run(Action<Window> test)
         {
             var host = _shared ?? this;
@@ -183,7 +186,15 @@ namespace XMAT.Tests
                     "The WPF test application has stopped; run the tests in a new process.");
             }
 
-            host._application.Dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
+            var dispatcher = host._application.Dispatcher;
+            if (dispatcher.CheckAccess())
+            {
+                // A caller already on the application's dispatcher runs the test in place, not through a nested call.
+                WpfTestHost.RunOnCurrentDispatcher(test);
+                return;
+            }
+
+            dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
         }
 
         public void Dispose()

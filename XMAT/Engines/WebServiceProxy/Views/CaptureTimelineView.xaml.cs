@@ -13,6 +13,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using XMAT.Operations.Processes;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -87,6 +88,21 @@ namespace XMAT.WebServiceCapture
             set => SetValue(HostListPolicyProperty, value);
         }
 
+        public static readonly DependencyProperty ProcessFilterProperty =
+            DependencyProperty.Register(nameof(ProcessFilter), typeof(ProcessFilterSpec), typeof(CaptureTimelineView),
+                new PropertyMetadata(null, OnProcessFilterChanged));
+
+        // The tab's process filter. Unlike the grid, the timeline ignores the Status, Host and Method filters.
+        public ProcessFilterSpec ProcessFilter
+        {
+            get => (ProcessFilterSpec)GetValue(ProcessFilterProperty);
+            set => SetValue(ProcessFilterProperty, value);
+        }
+
+        // Whether a bar's context menu offers the process filter items; the capture view that hosts the timeline handles
+        // their commands.
+        internal bool OffersProcessFilterItems { get; set; }
+
         internal int RenderCount { get; private set; }
         internal bool HasPendingRefresh => _refreshTimer.IsEnabled ||
             _pendingRender?.Status == DispatcherOperationStatus.Pending;
@@ -120,6 +136,14 @@ namespace XMAT.WebServiceCapture
 
         private static void OnSelectionChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
             ((CaptureTimelineView)d).RequestRefresh(true);
+
+        // A filter edit rebuilds the rows once; a request whose process resolves later is shown or hidden on its own.
+        private static void OnProcessFilterChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            var view = (CaptureTimelineView)d;
+            view._layout.SetFilter(CaptureProcessViewAdapter.CreatePredicate(e.NewValue as ProcessFilterSpec));
+            view.RequestRefresh(true);
+        }
 
         private static void OnCaptureRunningChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
@@ -475,6 +499,10 @@ namespace XMAT.WebServiceCapture
                 _ => null
             };
             HostListContextMenu.Populate(_hostListMenu, HostListPolicy, host, "HOST_LIST_NO_HOST", owner);
+            if (owner.Tag is ProxyConnectionModel request && OffersProcessFilterItems)
+            {
+                CaptureProcessViewAdapter.AddMenuItems(_hostListMenu, request, ProcessFilter, owner);
+            }
         }
 
         private TextBlock GetHostLabel(int index)

@@ -133,6 +133,17 @@ namespace XMAT.DataAbstractionLayer
                     throw Unsupported();
                 }
             }
+            for (var index = expected.RequiredColumns.Count; index < columns.Count; index++)
+            {
+                SqLtSchemaColumn actual = columns[index];
+                SqLtExpectedColumn optional = SqLtSchemaProfile.GetKnownOptionalColumn(expected.Name, actual.Name);
+                if (optional != null &&
+                    (!actual.Name.Equals(optional.Name, StringComparison.Ordinal) || actual.DeclaredType !=
+                        optional.DeclaredType))
+                {
+                    throw Unsupported();
+                }
+            }
 
             return new SqLtValidatedTable(
                 expected.Name,

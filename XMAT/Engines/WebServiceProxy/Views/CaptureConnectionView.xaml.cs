@@ -8,6 +8,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -15,6 +16,9 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
 using XMAT.Models;
+using XMAT.Operations;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 
@@ -27,16 +31,43 @@ namespace XMAT.WebServiceCapture
     {
         private static readonly TimeSpan StopDialogDelay =
             TimeSpan.FromMilliseconds(500);
+        // Typing in the process filter editor applies it after this pause; Enter and Apply apply it at once.
+        private static readonly TimeSpan ProcessEditDelay =
+            TimeSpan.FromMilliseconds(250);
+        // A capture tab shows one device; the shared selection counts its sessions under this ordinal id.
+        private const string ProcessSessionsDeviceId = "d1";
         private bool _notAtBottom;
         private readonly Predicate<object> _connectionFilter;
         private readonly HashSet<ProxyConnectionModel> _observedConnections = new(ReferenceEqualityComparer.Instance);
         private readonly CaptureFilterIndex _statusValues = new();
         private readonly CaptureFilterIndex _hostValues = new();
         private readonly CaptureFilterIndex _methodValues = new();
+        // For each observed row: whether the process filter shows it and whether it has a process, decided for the
+        // process that the row had then.
+        private readonly Dictionary<ProxyConnectionModel, ProcessRow> _processRows = new(ReferenceEqualityComparer.Instance);
+        private readonly DispatcherTimer _processEditTimer;
         private WebServiceDeviceCaptureController _attachedController;
         private ProxyConnectionsCollection _attachedConnections;
+        // The grid's own view of the attached rows, so its filter and live shaping never reach another view of them.
+        private ListCollectionView _connectionsView;
         private INotifyCollectionChanged _attachedGridItems;
         private DispatcherOperation _pendingFilterRefresh;
+        private DispatcherOperation _pendingProcessIndicator;
+        private ProcessFilterSpec _processSpec = ProcessFilterSpec.Empty;
+        private ProcessFilter _processMatcher;
+        private long _processIncluded;
+        private long _processUnknown;
+        private bool _showingProcessSpec;
+
+        [Flags]
+        private enum ProcessRowState : byte
+        {
+            None = 0,
+            Included = 1,
+            Unknown = 2,
+        }
+
+        private readonly record struct ProcessRow(ProcessRowState State, ClientProcessInfo Process);
 
         public bool AutoScroll
         {
@@ -56,10 +87,27 @@ namespace XMAT.WebServiceCapture
             get { return Localization.GetLocalizedString("WEBCAP_STOP"); }
         }
 
+        // The shared selection that picks and counts the rows a new process filter shows; tests substitute it.
+        internal Func<FilterCaptureSessionsRequest, CancellationToken, OperationResult<FilterCaptureSessionsResult>>
+            ProcessSelection { get; set; } = FilterCaptureSessionsOperation.Select;
+
         public CaptureConnectionView()
         {
             _connectionFilter = IncludeConnection;
             InitializeComponent();
+            _processEditTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+            {
+                Interval = ProcessEditDelay
+            };
+            _processEditTimer.Tick += ProcessEditTimer_Tick;
+            ProcessIncludeText.TextChanged += ProcessFilterText_TextChanged;
+            ProcessExcludeText.TextChanged += ProcessFilterText_TextChanged;
+            ProcessIncludeText.KeyDown += ProcessFilterText_KeyDown;
+            ProcessExcludeText.KeyDown += ProcessFilterText_KeyDown;
+            // The open popup closes on any click outside it, so the button that opens it ignores clicks meanwhile.
+            ProcessFilterPopup.Opened += (_, _) => ProcessFilterButton.IsHitTestVisible = false;
+            ProcessFilterPopup.Closed += (_, _) => ProcessFilterButton.IsHitTestVisible = true;
+            TimelineView.OffersProcessFilterItems = true;
 
             EnableButton.Content = Localization.GetLocalizedString("WEBCAP_ENABLE");
             DisableButton.Content = Localization.GetLocalizedString("WEBCAP_DISABLE");
@@ -75,6 +123,13 @@ namespace XMAT.WebServiceCapture
             StatusFilters.FilterDesc = Localization.GetLocalizedString("WEBCAP_FILTER_STATUS");
             HostFilters.FilterDesc = Localization.GetLocalizedString("WEBCAP_FILTER_HOST");
             MethodFilters.FilterDesc = Localization.GetLocalizedString("WEBCAP_FILTER_METHOD");
+            ProcessFilterButton.Content = Localization.GetLocalizedString("WEBCAP_FILTER_PROCESS");
+            ProcessIncludeLabel.Text = Localization.GetLocalizedString("PROCESS_FILTER_INCLUDE_LABEL");
+            ProcessExcludeLabel.Text = Localization.GetLocalizedString("PROCESS_FILTER_EXCLUDE_LABEL");
+            ProcessFilterHelp.Text = Localization.GetLocalizedString("PROCESS_FILTER_HELP");
+            HideSvchostButton.Content = Localization.GetLocalizedString("PROCESS_FILTER_HIDE_SVCHOST");
+            ApplyProcessFilterButton.Content = Localization.GetLocalizedString("PROCESS_FILTER_APPLY");
+            ShowAllProcessesButton.Content = Localization.GetLocalizedString("PROCESS_FILTER_SHOW_ALL");
 
             ReqestResponseTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB");
             ScriptEditorTab.Header = Localization.GetLocalizedString("WEBCAP_EDITOR_TAB");
@@ -91,7 +146,8 @@ namespace XMAT.WebServiceCapture
             ConnectionList.Columns[2].Header = Localization.GetLocalizedString("WEBCAP_HEADER_METHOD");
             ConnectionList.Columns[3].Header = Localization.GetLocalizedString("WEBCAP_HEADER_SCHEME");
             ConnectionList.Columns[4].Header = Localization.GetLocalizedString("WEBCAP_HEADER_HOST");
-            ConnectionList.Columns[5].Header = Localization.GetLocalizedString("WEBCAP_HEADER_PATH");
+            ConnectionList.Columns[5].Header = Localization.GetLocalizedString("WEBCAP_HEADER_PROCESS");
+            ConnectionList.Columns[6].Header = Localization.GetLocalizedString("WEBCAP_HEADER_PATH");
         }
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
@@ -99,7 +155,8 @@ namespace XMAT.WebServiceCapture
             AttachContext();
         }
 
-        private void UserControl_Unloaded(object sender, RoutedEventArgs e) => DetachContext();
+        // An unloaded view keeps the grid's view of the rows, so the selection survives until it is shown again.
+        private void UserControl_Unloaded(object sender, RoutedEventArgs e) => DetachContext(releaseView: false);
 
         private void UserControl_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
         {
@@ -109,7 +166,7 @@ namespace XMAT.WebServiceCapture
             }
             else
             {
-                DetachContext();
+                DetachContext(releaseView: true);
             }
             CommandManager.InvalidateRequerySuggested();
         }
@@ -118,7 +175,7 @@ namespace XMAT.WebServiceCapture
         {
             if (!TryGetCaptureContext(DataContext, out var context, out var controller))
             {
-                DetachContext();
+                DetachContext(releaseView: true);
                 return;
             }
             CheckButton.Content = Localization.GetLocalizedString(
@@ -128,20 +185,27 @@ namespace XMAT.WebServiceCapture
             {
                 return;
             }
-            DetachContext();
+            DetachContext(releaseView: false);
             _attachedController = controller;
             controller.PropertyChanged += CaptureConnectionView_ControllerChanged;
             UpdateFilterSources();
             AttachConnections(controller.ProxyConnections);
+            ShowConnections(controller.ProxyConnections, startOnSelection: true);
             _attachedGridItems = ConnectionList.Items;
             _attachedGridItems.CollectionChanged += CaptureConnectionView_CollectionChanged;
+            UpdateProcessSpec(reselect: true);
             RequestFilterRefresh();
         }
 
-        private void DetachContext()
+        // Stops following the capture. releaseView also gives up the grid's view of the rows, when the view no longer
+        // shows any capture.
+        private void DetachContext(bool releaseView)
         {
             _pendingFilterRefresh?.Abort();
             _pendingFilterRefresh = null;
+            _pendingProcessIndicator?.Abort();
+            _pendingProcessIndicator = null;
+            _processEditTimer?.Stop();
             if (_attachedGridItems != null)
             {
                 _attachedGridItems.CollectionChanged -= CaptureConnectionView_CollectionChanged;
@@ -153,11 +217,23 @@ namespace XMAT.WebServiceCapture
                 _attachedController = null;
             }
             DetachConnections();
-            if (ConnectionList != null && ReferenceEquals(ConnectionList.Items.Filter, _connectionFilter))
+            if (ConnectionList != null)
             {
-                ConnectionList.Items.Filter = null;
+                if (ReferenceEquals(ConnectionList.Items.Filter, _connectionFilter))
+                {
+                    ConnectionList.Items.Filter = null;
+                }
+                SetLiveProcessFiltering(false);
+                if (releaseView)
+                {
+                    ReleaseConnectionsView();
+                }
             }
             UpdateFilterSources();
+            if (ProcessFilterIndicator != null)
+            {
+                UpdateProcessSpec(reselect: true);
+            }
         }
 
         private void AttachConnections(ProxyConnectionsCollection connections)
@@ -171,6 +247,61 @@ namespace XMAT.WebServiceCapture
                 {
                     ObserveConnection(model);
                 }
+            }
+        }
+
+        // The grid shows its own view of the rows for as long as it shows that collection, and follows that view's
+        // current row. Like the bindings it replaces, a view shown on attach starts on the capture's selected row, or on
+        // none, and the view of a replacing collection starts on its first row.
+        private void ShowConnections(ProxyConnectionsCollection connections, bool startOnSelection)
+        {
+            if (_connectionsView != null && ReferenceEquals(_connectionsView.SourceCollection, connections))
+            {
+                return;
+            }
+            if (connections == null)
+            {
+                ReleaseConnectionsView();
+                return;
+            }
+            var view = new ListCollectionView(connections);
+            if (startOnSelection)
+            {
+                view.MoveCurrentTo(_attachedController?.SelectedConnectionModel);
+            }
+            SetLiveProcessFiltering(false);
+            ListCollectionView previous = _connectionsView;
+            _connectionsView = view;
+            ConnectionList.ItemsSource = view;
+            RetireConnectionsView(previous);
+        }
+
+        private void ReleaseConnectionsView()
+        {
+            ListCollectionView retired = _connectionsView;
+            if (retired == null)
+            {
+                return;
+            }
+            SetLiveProcessFiltering(false);
+            _connectionsView = null;
+            if (ReferenceEquals(ConnectionList.ItemsSource, retired))
+            {
+                ConnectionList.ItemsSource = null;
+            }
+            RetireConnectionsView(retired);
+        }
+
+        // The grid no longer shows the retired view, but that view may be handling the rows' notification that retired
+        // it, and detaching it from the rows during that notification breaks it. It stops observing the rows once the
+        // notification has finished; the operation holds that view, never the one that replaced it.
+        private void RetireConnectionsView(ListCollectionView retired)
+        {
+            if (retired != null)
+            {
+                _ = Dispatcher.BeginInvoke(
+                    DispatcherPriority.Background,
+                    new Action(retired.DetachFromSourceCollection));
             }
         }
 
@@ -191,6 +322,10 @@ namespace XMAT.WebServiceCapture
                 model.PropertyChanged -= ProxyConnectionModel_PropertyChanged;
             }
             _observedConnections.Clear();
+            _processRows.Clear();
+            _processIncluded = 0;
+            _processUnknown = 0;
+            RequestProcessIndicatorUpdate();
         }
 
         private void ObserveConnection(ProxyConnectionModel model)
@@ -199,6 +334,10 @@ namespace XMAT.WebServiceCapture
             {
                 model.PropertyChanged += ProxyConnectionModel_PropertyChanged;
                 UpdateFilters(model);
+                if (_observedConnections.Contains(model))
+                {
+                    TrackProcess(model);
+                }
             }
         }
 
@@ -215,6 +354,10 @@ namespace XMAT.WebServiceCapture
                 {
                     ObserveConnection(model);
                 }
+                if (_processMatcher != null && _observedConnections.Count != 0)
+                {
+                    SelectProcesses();
+                }
                 return;
             }
             if (e.OldItems != null)
@@ -224,6 +367,7 @@ namespace XMAT.WebServiceCapture
                     if (_observedConnections.Remove(model))
                     {
                         model.PropertyChanged -= ProxyConnectionModel_PropertyChanged;
+                        UntrackProcess(model);
                     }
                 }
             }
@@ -247,8 +391,16 @@ namespace XMAT.WebServiceCapture
                 (!HostFilters.IsFilterEnabled ||
                 _hostValues.IsChecked(model.Host)) &&
                 (!MethodFilters.IsFilterEnabled ||
-                _methodValues.IsChecked(model.Method));
+                _methodValues.IsChecked(model.Method)) &&
+                (_processMatcher == null ||
+                IsShownByProcessFilter(model));
         }
+
+        // The process filter's decision for a row: the shared selection's, until the row's process changes.
+        private bool IsShownByProcessFilter(ProxyConnectionModel model) =>
+            _processRows.TryGetValue(model, out ProcessRow row) && Equals(row.Process, model.ClientProcess)
+                ? row.State.HasFlag(ProcessRowState.Included)
+                : _processMatcher.Matches(model.ClientProcess);
 
         private void CaptureConnectionView_ControllerChanged(object sender, PropertyChangedEventArgs args)
         {
@@ -263,10 +415,19 @@ namespace XMAT.WebServiceCapture
                     nameof(WebServiceDeviceCaptureController.MethodFilterList))
             {
                 UpdateFilterSources();
-                if (!ReferenceEquals(_attachedConnections, _attachedController.ProxyConnections))
+                bool replaced = !ReferenceEquals(_attachedConnections, _attachedController.ProxyConnections);
+                if (replaced)
                 {
                     AttachConnections(_attachedController.ProxyConnections);
+                    ShowConnections(_attachedController.ProxyConnections, startOnSelection: false);
                 }
+                UpdateProcessSpec(reselect: replaced);
+                RequestFilterRefresh();
+            }
+            else if (args.PropertyName == nameof(WebServiceDeviceCaptureController.ProcessFilter) &&
+                UpdateProcessSpec(reselect: false))
+            {
+                // A notification without new selectors changes nothing.
                 RequestFilterRefresh();
             }
             if (string.IsNullOrEmpty(args.PropertyName) ||
@@ -300,6 +461,14 @@ namespace XMAT.WebServiceCapture
             {
                 UpdateFilters(model);
             }
+            // A late process resolution only updates the counts; live filtering moves that one row in or out of the grid.
+            if ((string.IsNullOrEmpty(args.PropertyName) ||
+                args.PropertyName is nameof(ProxyConnectionModel.ClientProcess) or
+                    nameof(ProxyConnectionModel.IsProcessResolving)) &&
+                _observedConnections.Contains(model))
+            {
+                TrackProcess(model);
+            }
         }
 
         private void OnFiltersChanged(object sender, RoutedEventArgs e)
@@ -324,18 +493,304 @@ namespace XMAT.WebServiceCapture
             {
                 return;
             }
-            var filter = StatusFilters.IsFilterEnabled || HostFilters.IsFilterEnabled || MethodFilters.IsFilterEnabled
+            bool processFilterActive = _processMatcher != null;
+            var filter = StatusFilters.IsFilterEnabled || HostFilters.IsFilterEnabled || MethodFilters.IsFilterEnabled ||
+                processFilterActive
                 ? _connectionFilter
                 : null;
-            if (!ReferenceEquals(ConnectionList.Items.Filter, filter))
+            // One refresh for the whole change, when the deferral ends: assigning the filter, even the one already set,
+            // refreshes the view, and WPF refuses an explicit Refresh while the refresh is deferred. While a process
+            // filter is set, live filtering re-evaluates a row whose process resolves later, so that row is added or
+            // removed without refreshing the others.
+            using (ConnectionList.Items.DeferRefresh())
             {
-                ConnectionList.Items.Filter = filter;
-            }
-            else if (filter != null)
-            {
-                CollectionViewSource.GetDefaultView(ConnectionList.ItemsSource).Refresh();
+                SetLiveProcessFiltering(processFilterActive);
+                if (filter != null || ConnectionList.Items.Filter != null)
+                {
+                    ConnectionList.Items.Filter = filter;
+                }
             }
         }
+
+        // Live filtering re-evaluates one row when its process changes. It is on only while a process filter is set, and
+        // only on the grid's own view.
+        private void SetLiveProcessFiltering(bool active)
+        {
+            ListCollectionView view = _connectionsView;
+            if (view == null || !view.CanChangeLiveFiltering)
+            {
+                return;
+            }
+            const string property = nameof(ProxyConnectionModel.ClientProcess);
+            if (active)
+            {
+                if (!view.LiveFilteringProperties.Contains(property))
+                {
+                    view.LiveFilteringProperties.Add(property);
+                }
+                if (view.IsLiveFiltering != true)
+                {
+                    view.IsLiveFiltering = true;
+                }
+            }
+            else if (view.IsLiveFiltering == true || view.LiveFilteringProperties.Contains(property))
+            {
+                view.IsLiveFiltering = false;
+                view.LiveFilteringProperties.Remove(property);
+            }
+        }
+
+        // Takes the attached capture's process filter. New selectors, or new rows when reselect is set, get a new
+        // selection from the shared operation. Returns whether the rows that the grid shows may have changed.
+        private bool UpdateProcessSpec(bool reselect)
+        {
+            ProcessFilterSpec spec = _attachedController?.ProcessFilter ?? ProcessFilterSpec.Empty;
+            bool changed = !CaptureProcessViewAdapter.SameSelectors(spec, _processSpec);
+            _processSpec = spec;
+            if (!changed && !reselect)
+            {
+                return false;
+            }
+            _processMatcher = CaptureProcessViewAdapter.CreateMatcher(spec);
+            SelectProcesses();
+            if (changed)
+            {
+                ShowProcessSpec(spec);
+            }
+            return true;
+        }
+
+        private void ShowProcessSpec(ProcessFilterSpec spec)
+        {
+            _processEditTimer?.Stop();
+            _showingProcessSpec = true;
+            try
+            {
+                ProcessIncludeText.Text = CaptureProcessViewAdapter.Join(spec.Include);
+                ProcessExcludeText.Text = CaptureProcessViewAdapter.Join(spec.Exclude);
+            }
+            finally
+            {
+                _showingProcessSpec = false;
+            }
+            ProcessFilterError.Visibility = Visibility.Collapsed;
+        }
+
+        // The rows that the process filter shows and its counts, as the shared selection computes them over the
+        // controller's snapshot of the tab's sessions. Later rows and process changes update both incrementally.
+        private void SelectProcesses()
+        {
+            _processRows.Clear();
+            FilterCaptureSessionsResult selected = _processMatcher != null && _attachedController != null
+                ? SelectSessions(_attachedController, _processSpec)
+                : null;
+            HashSet<CaptureRowKey> included = selected == null
+                ? null
+                : new HashSet<CaptureRowKey>(selected.IncludedKeys);
+            long includedRows = 0;
+            long unknownRows = 0;
+            foreach (ProxyConnectionModel model in _observedConnections)
+            {
+                ClientProcessInfo process = model.ClientProcess;
+                ProcessRowState state = included == null
+                    ? ProcessStateOf(process)
+                    : (included.Contains(model.RowKey) ? ProcessRowState.Included : ProcessRowState.None) |
+                        UnknownState(process);
+                _processRows[model] = new ProcessRow(state, process);
+                includedRows += state.HasFlag(ProcessRowState.Included) ? 1 : 0;
+                unknownRows += state.HasFlag(ProcessRowState.Unknown) ? 1 : 0;
+            }
+            _processIncluded = selected?.Scope.Counts.Included ?? includedRows;
+            _processUnknown = selected?.Scope.Counts.Unknown ?? unknownRows;
+            UpdateProcessIndicator();
+        }
+
+        // The shared selection over the controller's snapshot of the tab's sessions. It completes synchronously; when it
+        // fails, the matcher places the rows instead.
+        private FilterCaptureSessionsResult SelectSessions(
+            WebServiceDeviceCaptureController controller,
+            ProcessFilterSpec spec)
+        {
+            OperationResult<FilterCaptureSessionsResult> selected = ProcessSelection(
+                new FilterCaptureSessionsRequest(controller.SnapshotProcessSessions(ProcessSessionsDeviceId), spec),
+                default);
+            return selected.Succeeded &&
+                selected.Value?.IncludedKeys != null &&
+                selected.Value.Scope?.Counts != null
+                ? selected.Value
+                : null;
+        }
+
+        private ProcessRowState ProcessStateOf(ClientProcessInfo process) =>
+            (_processMatcher == null || _processMatcher.Matches(process)
+                ? ProcessRowState.Included
+                : ProcessRowState.None) |
+            UnknownState(process);
+
+        private static ProcessRowState UnknownState(ClientProcessInfo process) =>
+            ProcessFilter.IsUnknown(process) ? ProcessRowState.Unknown : ProcessRowState.None;
+
+        // A new row, or a row whose process changed, is placed by the incremental matcher; a row whose process did not
+        // change keeps its decision.
+        private void TrackProcess(ProxyConnectionModel model)
+        {
+            ClientProcessInfo process = model.ClientProcess;
+            bool tracked = _processRows.TryGetValue(model, out ProcessRow previous);
+            if (tracked && Equals(previous.Process, process))
+            {
+                return;
+            }
+            var row = new ProcessRow(ProcessStateOf(process), process);
+            if (tracked)
+            {
+                Tally(previous.State, -1);
+            }
+            _processRows[model] = row;
+            Tally(row.State, 1);
+            RequestProcessIndicatorUpdate();
+        }
+
+        private void UntrackProcess(ProxyConnectionModel model)
+        {
+            if (_processRows.Remove(model, out ProcessRow previous))
+            {
+                Tally(previous.State, -1);
+                RequestProcessIndicatorUpdate();
+            }
+        }
+
+        private void Tally(ProcessRowState state, int delta)
+        {
+            if (state.HasFlag(ProcessRowState.Included))
+            {
+                _processIncluded += delta;
+            }
+            if (state.HasFlag(ProcessRowState.Unknown))
+            {
+                _processUnknown += delta;
+            }
+        }
+
+        // Rows arrive in bursts during a capture; the indicator text changes at most once per dispatcher pass.
+        private void RequestProcessIndicatorUpdate()
+        {
+            if (_attachedController != null &&
+                _pendingProcessIndicator?.Status != DispatcherOperationStatus.Pending)
+            {
+                _pendingProcessIndicator = Dispatcher.BeginInvoke(
+                    DispatcherPriority.Background, new Action(UpdateProcessIndicator));
+            }
+        }
+
+        private void UpdateProcessIndicator()
+        {
+            _pendingProcessIndicator?.Abort();
+            _pendingProcessIndicator = null;
+            bool active = _attachedController != null && !ProcessFilter.IsEmpty(_processSpec);
+            if (active)
+            {
+                long total = _processRows.Count;
+                ProcessFilterIndicator.Text = Localization.GetLocalizedString(
+                    "PROCESS_FILTER_INDICATOR",
+                    _processIncluded,
+                    total,
+                    total - _processIncluded,
+                    _processUnknown);
+            }
+            var visibility = active ? Visibility.Visible : Visibility.Collapsed;
+            ProcessFilterIndicator.Visibility = visibility;
+            ShowAllProcessesButton.Visibility = visibility;
+        }
+
+        private void SetProcessFilter(ProcessFilterSpec spec)
+        {
+            _attachedController?.SetProcessFilter(spec ?? ProcessFilterSpec.Empty);
+        }
+
+        // The selectors in the editor, applied or not.
+        private OperationResult<ProcessFilterSpec> ParseProcessEditor() =>
+            ProcessFilter.Parse(
+                CaptureProcessViewAdapter.Selectors(ProcessIncludeText.Text),
+                CaptureProcessViewAdapter.Selectors(ProcessExcludeText.Text));
+
+        private void ApplyProcessEditor()
+        {
+            _processEditTimer.Stop();
+            ApplyProcessSpec(ParseProcessEditor());
+        }
+
+        // Applies selectors that came from the editor; invalid selectors stay in the editor next to the error.
+        private bool ApplyProcessSpec(OperationResult<ProcessFilterSpec> parsed)
+        {
+            if (!parsed.Succeeded || parsed.Value == null)
+            {
+                ShowProcessFilterError();
+                return false;
+            }
+            ProcessFilterError.Visibility = Visibility.Collapsed;
+            SetProcessFilter(parsed.Value);
+            return true;
+        }
+
+        private void ShowProcessFilterError()
+        {
+            ProcessFilterError.Text = Localization.GetLocalizedString("PROCESS_FILTER_INVALID");
+            ProcessFilterError.Visibility = Visibility.Visible;
+        }
+
+        private void ApplyProcessFilter_Click(object sender, RoutedEventArgs e) => ApplyProcessEditor();
+
+        private void ShowAllProcesses_Click(object sender, RoutedEventArgs e) => SetProcessFilter(ProcessFilterSpec.Empty);
+
+        // Hides svchost.exe on top of the selectors in the editor, including any not applied yet.
+        private void HideSvchost_Click(object sender, RoutedEventArgs e)
+        {
+            _processEditTimer.Stop();
+            OperationResult<ProcessFilterSpec> typed = ParseProcessEditor();
+            OperationResult<ProcessFilterSpec> hidden = typed.Succeeded && typed.Value != null
+                ? CaptureProcessViewAdapter.WithExcluded(typed.Value, CaptureProcessViewAdapter.ServiceHostSelector)
+                : typed;
+            if (ApplyProcessSpec(hidden) && _attachedController != null)
+            {
+                // The capture keeps an equal filter without a notification, so the editor shows it here.
+                ShowProcessSpec(_attachedController.ProcessFilter);
+            }
+        }
+
+        // The row and timeline menus' process commands carry the filter to apply, decided when the menu opened.
+        private void ProcessFilterCommand_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = _attachedController != null && e.Parameter is ProcessFilterSpec;
+            e.Handled = true;
+        }
+
+        private void ProcessFilterCommand_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (e.Parameter is ProcessFilterSpec spec)
+            {
+                SetProcessFilter(spec);
+            }
+        }
+
+        private void ProcessFilterText_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (!_showingProcessSpec && _attachedController != null)
+            {
+                _processEditTimer.Stop();
+                _processEditTimer.Start();
+            }
+        }
+
+        private void ProcessFilterText_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter)
+            {
+                e.Handled = true;
+                ApplyProcessEditor();
+            }
+        }
+
+        private void ProcessEditTimer_Tick(object sender, EventArgs e) => ApplyProcessEditor();
 
         private void UpdateFilterSources()
         {
@@ -873,6 +1328,11 @@ namespace XMAT.WebServiceCapture
                 controller.HostListPolicy,
                 (row.Item as ProxyConnectionModel)?.ActionableHost,
                 "HOST_LIST_NO_HOST",
+                row);
+            CaptureProcessViewAdapter.AddMenuItems(
+                row.ContextMenu,
+                row.Item as ProxyConnectionModel,
+                controller.ProcessFilter,
                 row);
         }
 

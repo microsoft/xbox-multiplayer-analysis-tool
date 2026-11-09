@@ -4,6 +4,7 @@
 
 using System.Net.WebSockets;
 using System.Text;
+using XMAT.Operations.Captures;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
 
@@ -15,6 +16,7 @@ namespace XMAT.Tests
         public void Constructor_MapsMessageMetadata()
         {
             var timestamp = new DateTime(2026, 9, 8, 8, 30, 0, DateTimeKind.Utc);
+            var rowKey = new CaptureRowKey(Guid.NewGuid(), 1, 7, 7);
             var args = new WebSocketMessageEventArgs
             {
                 Timestamp = timestamp,
@@ -22,7 +24,8 @@ namespace XMAT.Tests
                 RequestNumber = 7,
                 FromHost = true,
                 MessageType = WebSocketMessageType.Text,
-                Message = Encoding.UTF8.GetBytes("hello")
+                Message = Encoding.UTF8.GetBytes("hello"),
+                RowKey = rowKey,
             };
 
             var model = new WebSocketMessageModel(args);
@@ -30,6 +33,7 @@ namespace XMAT.Tests
             Assert.Equal(timestamp, model.Timestamp);
             Assert.Equal(42, model.ConnectionID);
             Assert.Equal(7, model.RequestNumber);
+            Assert.Equal(rowKey, model.RowKey);
             Assert.Equal("Server → Client", model.Direction);
             Assert.Equal("Text", model.MessageType);
             Assert.Equal(5, model.PayloadLength);
