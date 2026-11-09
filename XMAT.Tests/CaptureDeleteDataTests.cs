@@ -8,10 +8,12 @@ using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Operations.Export;
+using XMAT.Tests.Proxy;
 using XMAT.WebServiceCapture;
 
 namespace XMAT.Tests
 {
+    [Collection(IsolatedProxyTests.Name)]
     public sealed class CaptureDeleteDataTests
     {
         private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(30);
@@ -67,7 +69,11 @@ namespace XMAT.Tests
                 "CREATE TEMP TRIGGER HoldExactDelete BEFORE DELETE ON WebProxyConnections " +
                 "BEGIN SELECT hold_exact_delete(old.id); END");
 
-            Task<IReadOnlyList<long>> deletion = Task.Run(() => Delete(captures, "console-a", rowId));
+            Task<IReadOnlyList<long>> deletion = Task.Factory.StartNew(
+                () => Delete(captures, "console-a", rowId),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
             Task<long> writer = null;
             try
             {
@@ -75,11 +81,15 @@ namespace XMAT.Tests
                     entered.Task,
                     await Task.WhenAny(deletion, entered.Task).WaitAsync(CompletionTimeout));
                 var writerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                writer = Task.Run(() =>
-                {
-                    writerStarted.SetResult();
-                    return trace.AddRow("packet");
-                });
+                writer = Task.Factory.StartNew(
+                    () =>
+                    {
+                        writerStarted.SetResult();
+                        return trace.AddRow("packet");
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default);
                 await writerStarted.Task.WaitAsync(CompletionTimeout);
                 release.Set();
                 await Task.WhenAll(deletion, writer).WaitAsync(CompletionTimeout);
