@@ -768,17 +768,24 @@ namespace XMAT.Tests.Replay
             Assert.True(RawRequest.CountHead(new string('M', RawRequest.MaxMethodChars + 1) + " / HTTP/1.1").OverLimit);
         }
 
+        // Alongside other tests a single measurement has occasionally come out at about 8 KB, for a cause not established,
+        // so the scan is warmed up on the same text and the least of three measurements is taken: an allocation in
+        // proportion to the text would be in every one.
         [Fact]
         public void CountHead_AllocatesNothingInProportionToTheText()
         {
             string text = "GET / HTTP/1.1\n" + string.Concat(Enumerable.Repeat("X-A: 1\n", 200_000));
-            RawRequest.CountHead("GET / HTTP/1.1\n");
+            Assert.True(RawRequest.CountHead(text).OverLimit);
 
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            RawHeadCounts counts = RawRequest.CountHead(text);
-            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            long allocated = long.MaxValue;
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                RawHeadCounts counts = RawRequest.CountHead(text);
+                allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
+                Assert.True(counts.OverLimit);
+            }
 
-            Assert.True(counts.OverLimit);
             Assert.InRange(allocated, 0, 1024);
         }
 
