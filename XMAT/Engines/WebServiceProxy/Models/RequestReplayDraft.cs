@@ -321,9 +321,11 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(body);
             if (!Uri.TryCreate(Url, UriKind.Absolute, out var uri) ||
                 (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
-                !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment))
+                !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment) || !ReplayAuthority.HasIdnHost(uri))
             {
-                throw new ArgumentException("Enter an absolute HTTP or HTTPS URL without embedded credentials or a fragment.");
+                throw new ArgumentException(
+                    "Enter an absolute HTTP or HTTPS URL with an IP address, a host name in ASCII or an international host " +
+                    "name that XMAT can convert to ASCII (punycode), without embedded credentials or a fragment.");
             }
             if (!IsValidMethod(Method))
             {
@@ -502,7 +504,9 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(url);
             if (!IsValidRequestFileUrl(url))
                 throw new ArgumentException(
-                    "Enter an absolute HTTP or HTTPS URL without embedded credentials, with a '#' only in its path or query.",
+                    "Enter an absolute HTTP or HTTPS URL with an IP address, a host name in ASCII or an international host " +
+                        "name that XMAT can convert to ASCII (punycode), without embedded credentials, with a '#' " +
+                        "only in its path or query.",
                     nameof(url));
             Url = url;
             _origin ??= OriginOf(url);
@@ -537,8 +541,9 @@ namespace XMAT.WebServiceCapture
                 throw new FormatException("Enter a valid HTTP method other than CONNECT, of at most 64 characters.");
             if (!Omissions.Url && !IsValidRequestFileUrl(Url))
                 throw new FormatException(
-                    "Enter an absolute HTTP or HTTPS URL without embedded credentials, of at most 65,536 characters, " +
-                    "with a '#' only in its path or query.");
+                    "Enter an absolute HTTP or HTTPS URL with an IP address, a host name in ASCII or an international host " +
+                    "name that XMAT can convert to ASCII (punycode), without embedded credentials, of at most " +
+                    "65,536 characters, with a '#' only in its path or query.");
             if (!Omissions.Headers)
                 CheckHeaderLimits(HeadersText);
             if (!Omissions.Body && GetBodyLength() > RequestFileLimits.MaxBodyBytes)
@@ -784,9 +789,9 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // An absolute HTTP or HTTPS URL without user info or a fragment, of at most MaxUrlChars characters; a URL with a
-        // '#' is a sequence template, which has its every '#' in its path or query and is checked with a number in their
-        // place.
+        // An absolute HTTP or HTTPS URL without user info or a fragment, of at most MaxUrlChars characters, whose host Uri
+        // gives in ASCII (ReplayAuthority.HasIdnHost); a URL with a '#' is a sequence template, which has its every '#' in its
+        // path or query and is checked with a number in their place.
         internal static bool IsValidRequestFileUrl(string url)
         {
             if (url == null || url.Length > RequestFileLimits.MaxUrlChars)
@@ -801,7 +806,7 @@ namespace XMAT.WebServiceCapture
 
             return Uri.TryCreate(probe, UriKind.Absolute, out var uri) &&
                 (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
-                string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment);
+                string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment) && ReplayAuthority.HasIdnHost(uri);
         }
 
         // The header lines as name and value pairs, in order; FormatException when a line is not a valid header.

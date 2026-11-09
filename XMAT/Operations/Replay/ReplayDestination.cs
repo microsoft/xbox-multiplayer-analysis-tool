@@ -142,8 +142,9 @@ namespace XMAT.Operations.Replay
         }
 
         // Snapshot admission reads at most a 512-character absolute authority, or a 255-character structured host and
-        // five-character port. A longer or invalid authority is not offered for Load. Only the authority prefix is parsed,
-        // so an arbitrarily large path costs no more than the displayed preview.
+        // five-character port. A longer or invalid authority, or one whose international host name Uri does not convert to
+        // ASCII (ReplayAuthority.HasIdnHost), is not offered for Load. Only the authority prefix is parsed, so an arbitrarily
+        // large path costs no more than the displayed preview.
         internal static ReplayCaptureDestinationStatus ClassifyCaptureDestination(ProxyConnectionModel capture)
         {
             ArgumentNullException.ThrowIfNull(capture);
@@ -165,7 +166,7 @@ namespace XMAT.Operations.Replay
                 ReadOnlySpan<char> authority = path.AsSpan(target.AuthorityStart, target.AuthorityLength);
                 string scheme = target.Https ? "https://" : "http://";
                 string probe = string.Concat(scheme, authority.ToString(), "/");
-                if (!Uri.TryCreate(probe, UriKind.Absolute, out Uri uri))
+                if (!Uri.TryCreate(probe, UriKind.Absolute, out Uri uri) || !ReplayAuthority.HasIdnHost(uri))
                 {
                     return ReplayCaptureDestinationStatus.Unreadable;
                 }
@@ -184,7 +185,13 @@ namespace XMAT.Operations.Replay
 
             try
             {
-                return IsScopedIpv6(RequestReplayDraft.CaptureAuthority(capture))
+                string authority = RequestReplayDraft.CaptureAuthority(capture);
+                if (Uri.TryCreate(authority, UriKind.Absolute, out Uri uri) && !ReplayAuthority.HasIdnHost(uri))
+                {
+                    return ReplayCaptureDestinationStatus.Unreadable;
+                }
+
+                return IsScopedIpv6(authority)
                     ? ReplayCaptureDestinationStatus.ScopedIpv6
                     : ReplayCaptureDestinationStatus.Loadable;
             }

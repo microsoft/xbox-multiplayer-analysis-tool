@@ -685,8 +685,10 @@ namespace XMAT.Operations.Replay
         }
 
         // One request per number of the sequence, in ascending order: the template with every '#' in its URL replaced. The
-        // numbers may change only the path and query, so the template has its '#' there, and every expanded URL must keep
-        // the scheme, host and port of the first. The header text and body are shared, not copied; the expanded URLs,
+        // numbers may change only the path and query, so the template has its '#' there, and every expanded URL must keep the
+        // origin of the first (ReplayAuthority.TryOriginKey). A URL without one, such as one whose international host name Uri
+        // does not convert, is refused as invalid, as Validate refuses it, never as an internal failure; a scoped IPv6 URL has
+        // an origin, and Check refuses it as Validate does. The header text and body are shared, not copied; the expanded URLs,
         // which are kept until the run ends, are checked to fit maxUrlCharacters together before any is made.
         private static List<ReplayItem> ExpandSequence(
             RequestReplayDraft template,
@@ -701,12 +703,12 @@ namespace XMAT.Operations.Replay
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string url = sequence.Expand(template.Url, value);
-                if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+                if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri) ||
+                    !ReplayAuthority.TryOriginKey(uri, out string current))
                 {
                     throw Invalid(null);
                 }
 
-                string current = uri.Scheme + "://" + uri.IdnHost + ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
                 origin ??= current;
                 if (!string.Equals(current, origin, StringComparison.Ordinal))
                 {
@@ -901,14 +903,16 @@ namespace XMAT.Operations.Replay
 
         private static bool IsContentType(string name) => string.Equals(name, "Content-Type", StringComparison.OrdinalIgnoreCase);
 
-        // An origin is an absolute HTTP or HTTPS URL with nothing after its authority but an optional "/". Its canonical
-        // authority keeps an IPv6 zone, so data export can retain it and send admission can refuse it later.
+        // An origin is an absolute HTTP or HTTPS URL with nothing after its authority but an optional "/", whose host Uri gives
+        // in ASCII (ReplayAuthority.HasIdnHost). Its canonical authority keeps an IPv6 zone, so data export can retain it and
+        // send admission can refuse it later.
         internal static bool TryParseOrigin(string text, out string origin)
         {
             origin = null;
             if (!Uri.TryCreate(text, UriKind.Absolute, out Uri uri) ||
                 (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
-                !string.IsNullOrEmpty(uri.UserInfo) || uri.PathAndQuery != "/" || !string.IsNullOrEmpty(uri.Fragment))
+                !string.IsNullOrEmpty(uri.UserInfo) || uri.PathAndQuery != "/" || !string.IsNullOrEmpty(uri.Fragment) ||
+                !ReplayAuthority.HasIdnHost(uri))
             {
                 return false;
             }

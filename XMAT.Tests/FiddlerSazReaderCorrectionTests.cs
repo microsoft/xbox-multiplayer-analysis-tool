@@ -690,6 +690,7 @@ namespace XMAT.Tests
         [InlineData("GET", "http://" + Label64 + ".example.test/x")]
         [InlineData("GET", "http://" + Name254 + "/x")]
         [InlineData("GET", "http://" + Fixtures.SyntheticCaptures.IdnTooLongHost + "/x")]
+        [InlineData("GET", "http://" + Fixtures.SyntheticCaptures.NonAsciiBasicHost + "/x")]
         [InlineData("GET_X", "/v1/items")]
         [InlineData("CONNECT", "api.example.test:443")]
         [InlineData("CONNECT", "https://api.example.test/")]
@@ -707,8 +708,9 @@ namespace XMAT.Tests
             Assert.False(RequestReplayDraft.CanReplay(record));
         }
 
-        // The URL above that has no IDN form is one: Uri parses it, as a DNS name, but reading its IDN host throws, which
-        // once failed the whole archive.
+        // The first URL above whose host has no IDN form is one: Uri parses it, as a DNS name, but reading its IDN host
+        // throws, which once failed the whole archive. The second Uri keeps as a Basic host, whose IDN host is the name
+        // unconverted, which no host identity takes since it is not in ASCII.
         [Fact]
         public void AUrlWhoseHostHasNoIdnForm_ParsesButHasNoIdnHost()
         {

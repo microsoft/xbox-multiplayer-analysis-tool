@@ -348,7 +348,9 @@ namespace XMAT.WebServiceCapture
 
         // The host text that Uri gives a host identity: an IPv4 address dotted, an IPv6 address with its zone, or a name in
         // lower case and punycode. A name that Uri parses but whose IDN conversion fails, such as a label longer than 63
-        // characters in punycode, has none (Uri.IdnHost throws UriFormatException for it).
+        // characters in punycode, has none: Uri.IdnHost throws UriFormatException for it or, for a name that Uri keeps as a
+        // Basic host, gives it unconverted, which the caller's HostAuthority.TryNormalizeHost then refuses, as it refuses
+        // any name that is not in ASCII.
         private static bool TryGetHostText(Uri uri, out string host)
         {
             try

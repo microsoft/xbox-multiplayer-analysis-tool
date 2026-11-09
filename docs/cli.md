@@ -248,12 +248,23 @@ reservation-time storage failure.
   alias that an earlier version could send is therefore no longer sent. Percent escapes in paths and queries are
   unaffected. A request-file omission is reported before the scoped-destination refusal, for both sending and cURL
   export.
+- A URL's host must have the ASCII form that xmat connects to and sends: an IP address, a host name in ASCII, or an
+  international host name that xmat can convert to ASCII, which it sends in its IDNA (punycode) form. xmat converts a
+  name as .NET's URL parser does, which does not convert every name that IDNA allows. An international name that xmat
+  cannot convert, such as one with a label longer than 63 characters once converted, one with a character that IDNA does
+  not allow, or one with a label of 30 Chinese characters, which IDNA does allow, is not a URL that xmat takes, wherever
+  it comes from, and nothing is sent or saved: `--url` and `--origin` refuse it as any other invalid value
+  (`cli.usage.invalid-value`, exit code 2), a request file as `replay.request-file.invalid`, and a captured request as
+  `replay.request.invalid` (exit code 3). This is xmat's requirement for a request's host, not a statement about DNS or
+  IDNA: xmat does not check a host name in ASCII against DNS's rules, and an international name that it refuses may
+  still have an IDNA form.
 - Wherever xmat compares origins (a redirect, a changed origin, the requests of a `--connect-to` run), two URLs are of
   one origin when their schemes and ports are the same and so are their hosts, compared both as written, ignoring case,
   and in their canonical ASCII (IDN) form. So `ασ.example` and `ας.example`, which differ only in a Greek final sigma,
   are two origins, as DNS has them, and so are an IPv6 address with two zones, or with one zone written two ways, such
-  as `[fe80::1%25A]` and `[fe80::1%25a]`. A host that has no canonical form is of no origin: a redirect to it is not
-  followed, and a `--connect-to` run with it is refused (`replay.connect-to.origin-count`).
+  as `[fe80::1%25A]` and `[fe80::1%25a]`: a zone is data, compared exactly as written, whatever its characters, so a
+  request file's scoped URL is its own origin. A host name that has no canonical form is of no origin, so a redirect to
+  it is not followed; a request's own URL with such a host is refused before any origin is compared, as above.
 - A request that carries one of Fiddler's control headers, `Fiddler-Host`, `X-OverrideHost`,
   `X-IgnoreCertCNMismatch` or `X-OverrideGateway`, is refused (`replay.request.control-header`): xmat never acts on
   a captured header, so a capture never chooses where its requests go or which certificate is accepted. Remove the

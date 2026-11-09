@@ -10,6 +10,7 @@ using XMAT.Models;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -617,6 +618,66 @@ namespace XMAT.Tests.Replay
                     await RemoveAllAsync(model);
                 }
             });
+
+        // A row whose international host name has no IDNA (punycode) form, in an absolute target or in its structured
+        // authority, is shown as retained but not offered for Load, as an unreadable destination: nothing could send its
+        // draft. That is so whether Uri's IDN host for it throws or is the name unconverted. Only the authority is read, so a
+        // 16 Mi-character path, read cold, costs no more than its preview, and the header dictionaries are not made.
+        [Theory]
+        [InlineData(SyntheticCaptures.IdnTooLongHost)]
+        [InlineData(SyntheticCaptures.NonAsciiBasicHost)]
+        public Task AHostWithoutAnIdnForm_IsAnUnreadableDestination(string host) => _application.RunAsync(async () =>
+        {
+            var warm = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            try
+            {
+                ICaptureDeviceContext warmTab = AddTab(warm, "Warm");
+                ProxyConnectionModel warmAbsolute = Row("http://" + host + "/w", "warm.test", "GET /w HTTP/1.1\r\n\r\n");
+                ProxyConnectionModel warmStructured = Row("/w", "warm.test", "GET /w HTTP/1.1\r\n\r\n");
+                SetAuthority(warmStructured, host, "");
+                foreach (ProxyConnectionModel row in new[] { warmAbsolute, warmStructured })
+                {
+                    RowsOf(warmTab).Add(row);
+                    warm.ReplayHistory.Add(warmTab, row);
+                }
+
+                Assert.Equal(2, warm.ReplayHistory.Snapshot().Count);
+
+                string path = "/" + new string('p', 16 * 1024 * 1024);
+                ProxyConnectionModel absolute = Row("http://" + host + path, "example.test", "GET /p HTTP/1.1\r\n\r\n");
+                ProxyConnectionModel structured = Row(path, "example.test", "GET /p HTTP/1.1\r\n\r\n");
+                SetAuthority(structured, host, "");
+                ICaptureDeviceContext tab = AddTab(model, "Tab");
+                ProxyConnectionModel[] rows = { absolute, structured };
+                foreach (ProxyConnectionModel row in rows)
+                {
+                    RowsOf(tab).Add(row);
+                    model.ReplayHistory.Add(tab, row);
+                }
+
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                IReadOnlyList<ReplayHistoryPreview> previews = model.ReplayHistory.Snapshot();
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+                Assert.Equal(2, previews.Count);
+                Assert.True(allocated < 1024 * 1024, $"A Snapshot of the rows allocated {allocated} bytes.");
+                Assert.All(previews, preview =>
+                {
+                    Assert.StartsWith("http://" + host + "/ppp", preview.UrlPreview, StringComparison.Ordinal);
+                    Assert.True(preview.UrlPreview.Length <= ReplayHistory.MaxUrlPreviewChars);
+                    Assert.False(preview.CanLoad);
+                    Assert.Equal(ReplayHistoryLoadReason.UnreadableDestination, preview.LoadReason);
+                });
+                Assert.All(rows, row => Assert.False(row.HeaderCollectionsMaterialized));
+                Assert.All(rows, row => Assert.True(RequestReplayDraft.CanReplay(row)));
+            }
+            finally
+            {
+                await RemoveAllAsync(model);
+                await RemoveAllAsync(warm);
+            }
+        });
 
         [Fact]
         public Task MalformedEffectiveAuthorities_AreShownEscapedButCannotLoad() =>

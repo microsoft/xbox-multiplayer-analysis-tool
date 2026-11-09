@@ -674,12 +674,22 @@ namespace XMAT.Cli
             public void Add(ReplayItemResult result, ReplayExchange exchange)
             {
                 _begun++;
+                exchange = ExchangeSeam.Value?.Invoke(exchange) ?? exchange;
+
+                // Every send that reaches the outputs has its request, which summary.json names: a raw send's image, or the
+                // request as replay described it. One without it would name a file that was never written, so the run fails
+                // as an internal error and publishes nothing (CliStagedRun).
+                if (exchange.Raw ? _raw == null : exchange.Request == null)
+                {
+                    throw new InvalidOperationException("A send reached the outputs without its request.");
+                }
+
                 string folder = FolderOf(result.Id);
-                if (exchange.Raw && _raw != null)
+                if (exchange.Raw)
                 {
                     _output.WriteFile(folder + "/" + RequestFile, _raw.WriteTo);
                 }
-                else if (exchange.Request != null)
+                else
                 {
                     _output.WriteFile(folder + "/" + RequestFile, exchange.Request.WriteTo);
                 }
@@ -768,5 +778,9 @@ namespace XMAT.Cli
         // Test seam, null in production: given compose --raw's operation before it runs, so a test can order its sends'
         // events (ReplayOperation.RawSenderFactory and RawSendEnded). AsyncLocal, as SazStreamSeam.
         internal static readonly AsyncLocal<Action<ReplayOperation>> RawOperationSeam = new();
+
+        // Test seam, null in production: gives the file sink another exchange in place of each one that a send gives it,
+        // so a test can hand it one without its request. AsyncLocal, as SazStreamSeam.
+        internal static readonly AsyncLocal<Func<ReplayExchange, ReplayExchange>> ExchangeSeam = new();
     }
 }

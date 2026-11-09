@@ -605,7 +605,8 @@ any character that could hide or reorder text shown as `\uXXXX`.
   as cURL script** saves it whole. **Load** is not available for CONNECT tunnels,
   protocol upgrades, requests recorded without their body, scoped IPv6 destinations,
   or destinations whose effective authority is malformed or cannot be established
-  within the bounded history check.
+  within the bounded history check. Nor is it for requests whose international host
+  name XMAT cannot convert to ASCII (punycode), which it never sends.
 - **Show in Replays** selects the request in its tab, also when it cannot be loaded.
 - **Clear history** empties the history in every composer. The requests stay in the
   **XMAT Replays** tab, and a request that you loaded stays in its composer.
