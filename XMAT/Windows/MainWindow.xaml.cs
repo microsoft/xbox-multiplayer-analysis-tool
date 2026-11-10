@@ -5,13 +5,13 @@
 using System;
 using System.ComponentModel;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
@@ -394,8 +394,17 @@ namespace XMAT
             {
                 try
                 {
-                    CaptureAppModel.AppModel.SaveDataCaptures(
-                        saveFileDialog.FileName);
+                    if (!CaptureAppModel.AppModel.TrySaveDataCaptures(
+                        saveFileDialog.FileName))
+                    {
+                        MessageBox.Show(
+                            Localization.GetLocalizedString(
+                                "CAPTURE_SAVE_ERROR_BUSY"),
+                            Localization.GetLocalizedString(
+                                "CAPTURE_SAVE_ERROR_TITLE"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                    }
                 }
                 catch (CaptureSaveException ex)
                 {
@@ -484,93 +493,6 @@ namespace XMAT
             }
         }
 
-        private void Export_Executed(object sender, RoutedEventArgs e)
-        {
-            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
-            {
-                return;
-            }
-
-            var saveFileDialog = new SaveFileDialog
-            {
-                Filter = FiddlerFilter
-            };
-
-            if (saveFileDialog.ShowDialog() == true && !string.IsNullOrEmpty(saveFileDialog.FileName))
-            {
-                // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
-                // setup the filter above and call export with the appropriate type
-                CaptureAppModel.AppModel.ExportDataCaptures(ExportType.Fiddler, saveFileDialog.FileName);
-            }
-        }
-
-        private void ExportSanitized_CanExecute(object sender, CanExecuteRoutedEventArgs e)
-        {
-            e.CanExecute = CaptureAppModel.AppModel.CanExportSanitizedCaptures;
-        }
-
-        private async void ExportSanitized_Executed(object sender, ExecutedRoutedEventArgs e)
-        {
-            if (!CaptureAppModel.AppModel.CanExportSanitizedCaptures)
-            {
-                return;
-            }
-            if (MessageBox.Show(
-                Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM"),
-                Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
-            {
-                return;
-            }
-            var dialog = new SaveFileDialog
-            {
-                Filter = FiddlerFilter,
-                DefaultExt = ".saz",
-                AddExtension = true,
-                FileName = "sanitized-capture.saz",
-                Title = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED")
-            };
-            if (dialog.ShowDialog(this) != true)
-            {
-                return;
-            }
-            using var cancellation = new CancellationTokenSource();
-            try
-            {
-                WebServiceCapture.SanitizedExportSummary summary;
-                using (PublicUtilities.BlockingOperation())
-                {
-                    var operation = CaptureAppModel.AppModel.ExportSanitizedDataCapturesAsync(dialog.FileName, cancellation.Token);
-                    if (await Task.WhenAny(operation, Task.Delay(250)) != operation && !operation.IsCompleted)
-                    {
-                        var progress = new SanitizedExportProgressWindow(operation, cancellation.Cancel) { Owner = this };
-                        progress.ShowDialog();
-                    }
-                    summary = await operation;
-                }
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_COMPLETE",
-                        summary.Sessions, summary.RedactedValues, summary.OmittedBodies, summary.OmittedHeaders),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-            {
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLED"),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
-            {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"Sanitized export failed: {exception}");
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_FAILED", exception.Message),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
         private void Exit_Executed(object sender, RoutedEventArgs e)
         {
             Close();
@@ -620,7 +542,15 @@ namespace XMAT
                 return;
             }
 
-            CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController.ClearAllCaptures();
+            if (!CaptureAppModel.AppModel.TryClearAllCaptures(
+                CaptureAppModel.AppModel.SelectedDeviceContext.CaptureController))
+            {
+                MessageBox.Show(
+                    Localization.GetLocalizedString("PROXY_OPERATION_BUSY"),
+                    Localization.GetLocalizedString("VIEW_CLEAR_CAPTURES"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
         }
 
         private void AnalyzeCaptures_CanExecute(object sender, CanExecuteRoutedEventArgs e)
@@ -655,7 +585,9 @@ namespace XMAT
                 list.First().IsSelected = true;
             }
 
-            var selectorWindow = new CaptureAnalyzerWindow
+            var selectorWindow = new CaptureAnalyzerWindow(
+                (captureDeviceContext.CaptureController as WebServiceDeviceCaptureController)?.ProcessFilter ??
+                    ProcessFilterSpec.Empty)
             {
                 Owner = this,
                 DataContext = list
@@ -675,7 +607,9 @@ namespace XMAT
 
                 using (analysisLease)
                 {
-                    var analysisRun = CaptureAppModel.AppModel.AddAnalysisRun(selected);
+                    var analysisRun = CaptureAppModel.AppModel.AddAnalysisRun(
+                        selected,
+                        selectorWindow.ProcessFilterForRun);
                     CaptureErrorsPanel.AddedAnalysis(analysisRun);
                     await HandleAnalyzerChosen(
                         analysisRun,

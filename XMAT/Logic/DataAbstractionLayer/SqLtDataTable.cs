@@ -7,17 +7,20 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Threading;
 using Microsoft.Data.Sqlite;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtDataTable : IDataTable, IImportedCaptureTable
+    internal class SqLtDataTable : IDataTable, IImportedCaptureTable, IVersionedCaptureTable, IExactCaptureRowDelete
     {
         public event Action<IDataTable, Int64> RowAdded;
         public event Action<IDataTable, Int64> RowUpdated;
         public event Action<IDataTable, Int64> RowsRemoved;
-        private readonly object _lockObj = new object();
+        private readonly object _lockObj;
 
         public string Name { get { return _name; } }
 
@@ -72,6 +75,7 @@ namespace XMAT.DataAbstractionLayer
                     {
                         _command.CommandText = "SELECT last_insert_rowid()";
                         lastRowId = (Int64)_command.ExecuteScalar();
+                        _rowVersions[lastRowId] = 1;
                         RowAdded?.Invoke(this, lastRowId);
                     }
                     else
@@ -109,6 +113,10 @@ namespace XMAT.DataAbstractionLayer
 
                 if (rowsModified > 0)
                 {
+                    if (fieldNamesAndValues.Any(field => !IsProcessField(field.Name)))
+                    {
+                        _rowVersions[rowId] = VersionOfCore(rowId) + 1;
+                    }
                     RowUpdated?.Invoke(this, rowsModified);
                 }
             }
@@ -142,8 +150,60 @@ namespace XMAT.DataAbstractionLayer
 
                 if (rowsModified > 0)
                 {
+                    _rowVersions.Clear();
                     RowsRemoved?.Invoke(this, rowsModified);
                 }
+            }
+        }
+
+        public IReadOnlyList<long> DeleteRows(string deviceName, IReadOnlyList<long> rowIds)
+        {
+            ArgumentNullException.ThrowIfNull(rowIds);
+            if (rowIds.Count == 0)
+            {
+                return Array.Empty<long>();
+            }
+            lock (_lockObj)
+            {
+                var deleted = new List<long>();
+                FieldDefinition device =
+                    (FieldDefinition)_fieldDefinitions[WebServiceCaptureMethod.FieldKey_DeviceName];
+                using (SqliteCommand command = _connection.CreateCommand())
+                {
+                    command.CommandText =
+                        $"DELETE FROM {_name} " +
+                        $"WHERE {device.Name} = $device " +
+                        "AND id IN (SELECT value FROM json_each($ids)) " +
+                        "RETURNING id";
+                    command.Parameters.AddWithValue("$device", ImportedFieldValueAsParameter(device, deviceName));
+                    command.Parameters.AddWithValue(
+                        "$ids",
+                        JsonSerializer.Serialize(rowIds));
+                    using SqliteDataReader reader = command.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        deleted.Add(reader.GetInt64(0));
+                    }
+                }
+                foreach (long rowId in deleted)
+                {
+                    _rowVersions.Remove(rowId);
+                }
+                return deleted;
+            }
+        }
+
+        public IDisposable EnterRead()
+        {
+            Monitor.Enter(_lockObj);
+            return new ReadLease(_lockObj);
+        }
+
+        public long VersionOf(long rowId)
+        {
+            lock (_lockObj)
+            {
+                return VersionOfCore(rowId);
             }
         }
 
@@ -233,7 +293,7 @@ namespace XMAT.DataAbstractionLayer
         {
             lock (_lockObj)
             {
-                return new SqLtDataset(_connection, Name, _fieldDefinitions);
+                return new SqLtDataset(_connection, Name, _fieldDefinitions, _columns);
             }
         }
 
@@ -241,13 +301,14 @@ namespace XMAT.DataAbstractionLayer
         {
             lock (_lockObj)
             {
-                return new SqLtDataset(_connection, Name,
-                    _fieldDefinitions.Where(
-                        (x) =>
-                        {
-                            return fieldNames.Contains(x.Key);
-                        }
-                    ).ToDictionary(dict => dict.Key, dict => dict.Value));
+                Dictionary<string, IFieldDefinition> fields = _fieldDefinitions
+                    .Where(item => fieldNames.Contains(item.Key))
+                    .ToDictionary(item => item.Key, item => item.Value);
+                return new SqLtDataset(
+                    _connection,
+                    Name,
+                    fields,
+                    _columns.Where(column => fields.ContainsKey(column.Name)).ToList());
             }
         }
 
@@ -255,12 +316,23 @@ namespace XMAT.DataAbstractionLayer
             SqliteConnection connection,
             string name,
             IEnumerable<IField> fields)
+            : this(connection, new object(), name, fields)
         {
+        }
+
+        internal SqLtDataTable(
+            SqliteConnection connection, object connectionGate, string name, IEnumerable<IField> fields)
+        {
+            ArgumentNullException.ThrowIfNull(connectionGate);
             _name = name;
+            _lockObj = connectionGate;
 
             var columnIndex = 1;
             foreach (var field in fields)
             {
+                _columns.Add(new SqLtSchemaColumn(
+                    field.Name,
+                    field.ValueType == typeof(long) ? SqLtDeclaredType.Integer : SqLtDeclaredType.Text));
                 _fieldDefinitions.Add(
                     field.Name,
                     FieldDefinition.CreateFromSchema(field.Name, field.ValueType, columnIndex));
@@ -291,9 +363,39 @@ namespace XMAT.DataAbstractionLayer
             _command.ExecuteNonQuery();
         }
 
+        private long VersionOfCore(long rowId) =>
+            _rowVersions.TryGetValue(rowId, out long version) ? version : 0;
+
+        private static bool IsProcessField(string name) =>
+            name == WebProxyCaptureSchema.ClientProcessName ||
+            name == WebProxyCaptureSchema.ClientProcessId ||
+            name == WebProxyCaptureSchema.ClientProcessStartTime ||
+            name == WebProxyCaptureSchema.ClientProcessStatus;
+
+        private sealed class ReadLease : IDisposable
+        {
+            private object _gate;
+
+            internal ReadLease(object gate)
+            {
+                _gate = gate;
+            }
+
+            public void Dispose()
+            {
+                object gate = Interlocked.Exchange(ref _gate, null);
+                if (gate != null)
+                {
+                    Monitor.Exit(gate);
+                }
+            }
+        }
+
         private string _name;
         private readonly Dictionary<string, IFieldDefinition> _fieldDefinitions =
             new Dictionary<string, IFieldDefinition>();
+        private readonly List<SqLtSchemaColumn> _columns = new();
+        private readonly Dictionary<long, long> _rowVersions = new();
         private SqliteConnection _connection;
         private SqliteCommand _command;
         private StringBuilder _commandBuilder;

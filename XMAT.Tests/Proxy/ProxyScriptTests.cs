@@ -1016,22 +1016,7 @@ namespace XMAT.Tests.Proxy
             private static IDataTable CreateConnectionsTable(SqLtDatabase database) =>
                 database.CreateTable(
                     WebServiceCaptureMethod.TableName,
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_DeviceName),
-                    new Field<long>(WebServiceCaptureMethod.FieldKey_RequestNumber),
-                    new Field<long>(WebServiceCaptureMethod.FieldKey_ConnectionId),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestTimestamp),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestScheme),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestHost),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPort),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestMethod),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPath),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestStatus),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestBody),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseBody),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ClientIP));
+                    WebProxyCaptureSchema.CreateFields());
         }
     }
 }

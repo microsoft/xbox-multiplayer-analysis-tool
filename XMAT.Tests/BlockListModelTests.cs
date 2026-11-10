@@ -72,6 +72,108 @@ namespace XMAT.Tests
             Assert.False(list.IsBlocked("example.com"));
         }
 
+        [Theory]
+        [InlineData("http")]
+        [InlineData("HTTPS")]
+        public void IsBlocked_AbsoluteHttpTargetsUseSuppliedHostPathAndQuery(string scheme)
+        {
+            var list = new BlockListModel();
+            list.Add("example.com/private/item?token=*");
+            string target = $"{scheme}://ignored.example/private/item?token=secret";
+
+            Assert.True(list.IsBlocked("example.com", target));
+            Assert.False(list.IsBlocked("other.example", target));
+            Assert.False(list.IsBlocked(
+                "example.com",
+                $"{scheme}://ignored.example/private/item?other=secret"));
+            Assert.False(list.IsBlocked(
+                "example.com",
+                $"{scheme}://ignored.example/public/item?token=secret"));
+        }
+
+        [Theory]
+        [InlineData("/public/../private/dot")]
+        [InlineData("/%70rivate/encoded")]
+        public void IsBlocked_CanonicalizesForwardedOriginPaths(string path)
+        {
+            var list = new BlockListModel();
+            list.Add("example.com/private/*");
+
+            Assert.False(list.IsBlocked("example.com", "/%2Fprivate/reserved"));
+            Assert.False(list.IsBlocked("example.com", "/public/item"));
+            Assert.False(list.IsBlocked("other.example", path));
+            Assert.True(list.IsBlocked("example.com", path));
+        }
+
+        [Fact]
+        public void IsBlocked_OtherSchemeAndMalformedAbsoluteTextKeepLegacyMatching()
+        {
+            var fallback = new BlockListModel();
+            fallback.Add("example.com/ftp://origin.example/private/item");
+            fallback.Add("example.com/http://[broken/private/item");
+            Assert.True(fallback.IsBlocked("example.com", "ftp://origin.example/private/item"));
+            Assert.True(fallback.IsBlocked("example.com", "http://[broken/private/item"));
+        }
+
+        [Fact]
+        public void IsBlocked_AbsoluteTargetMatchesSuppliedOrUriHost()
+        {
+            const string target = "http://destination.example/private/item";
+            var supplied = new BlockListModel();
+            supplied.Add("claimed.example/private/*");
+            var destination = new BlockListModel();
+            destination.Add("destination.example/private/*");
+
+            Assert.True(supplied.IsBlocked("claimed.example", target));
+            Assert.True(destination.IsBlocked("claimed.example", target));
+            Assert.False(destination.IsBlocked("claimed.example", "http://other.example/private/item"));
+        }
+
+        [Theory]
+        [InlineData("ws", "destination.example", "/public")]
+        [InlineData("wss", "destination.example", "/public")]
+        [InlineData("ws", "destination.example/private/*", "/private/item")]
+        [InlineData("wss", "destination.example/private/*", "/private/item")]
+        public void IsBlocked_WebSocketAbsoluteTargetMatchesDestinationHostOrPath(
+            string scheme,
+            string pattern,
+            string path)
+        {
+            var list = new BlockListModel();
+            list.Add(pattern);
+
+            Assert.True(list.IsBlocked("decoy.example", $"{scheme}://destination.example{path}"));
+        }
+
+        [Theory]
+        [InlineData("api\u3002example.com", "api.example.com")]
+        [InlineData("\uFF45\uFF58\uFF41\uFF4D\uFF50\uFF4C\uFF45.com", "example.com")]
+        [InlineData("exam\u00ADple.com", "example.com")]
+        public void IsBlocked_AbsoluteTargetUsesIdnDestinationSpelling(string destination, string canonical)
+        {
+            var list = new BlockListModel();
+            list.Add(canonical + "/private/*");
+
+            Assert.True(list.IsBlocked("decoy.example", $"http://{destination}/private/item"));
+        }
+
+        [Theory]
+        [InlineData("0177.0.0.1", null, false)]
+        [InlineData("127.1", null, false)]
+        [InlineData("2130706433", null, false)]
+        [InlineData("0x7f.0.0.1", null, false)]
+        [InlineData("0177.0.0.1", "x.example:443", true)]
+        public void IsBlocked_NumericHostUsesAliasWithoutInventingPath(string host, string path, bool expectedPathOnly)
+        {
+            var hostOnly = new BlockListModel();
+            hostOnly.Add("127.0.0.1");
+            var pathOnly = new BlockListModel();
+            pathOnly.Add("127.0.0.1/*");
+
+            Assert.Equal(expectedPathOnly, pathOnly.IsBlocked(host, path));
+            Assert.True(hostOnly.IsBlocked(host, path));
+        }
+
         [Fact]
         public void IsBlocked_EmptyHostReturnsFalse()
         {

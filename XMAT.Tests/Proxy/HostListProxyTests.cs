@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Processes;
 using XMAT.Scripting;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
@@ -23,6 +25,23 @@ namespace XMAT.Tests.Proxy
     [Collection(IsolatedProxyTests.Name)]
     public class HostListProxyTests
     {
+        [Fact]
+        public async Task ProcessFilterNeverChangesForwardingOrRecording()
+        {
+            var policy = new HostListPolicy();
+            await using var origin = await LoopbackOrigin.StartAsync();
+            await using var capture = await PolicyCapture.StartAsync(policy, "hide-only");
+            capture.Controller.SetProcessFilter(
+                new ProcessFilterSpec(ImmutableArray.Create("does-not-match.exe"), ImmutableArray<string>.Empty));
+            using HttpClient client = capture.CreateClient();
+
+            Assert.Equal("origin-ok", await client.GetStringAsync(origin.Url("/still-forwarded")));
+            await capture.DrainCallbacksAsync();
+
+            Assert.Single(origin.Requests);
+            Assert.Single(capture.Records("GET"));
+        }
+
         [Fact]
         public async Task BlockAddedThroughOneCapture_IsEnforcedByAnotherCapturesProxy()
         {
@@ -94,19 +113,35 @@ namespace XMAT.Tests.Proxy
             Assert.Empty(capture.Records("GET"));
         }
 
-        // Path patterns need a decrypted request: they apply to intercepted HTTPS requests but
-        // cannot see inside an opaque bypassed tunnel. Plain HTTP is never bypassed.
+        // Path patterns apply to plain and intercepted requests, but cannot see inside an opaque
+        // bypassed tunnel. Bypass never exempts plain HTTP from Block.
         [Fact]
-        public async Task PathOnlyBlock_AppliesToInterceptedRequestsButCannotInspectAnOpaqueTunnel()
+        public async Task PathOnlyBlock_AppliesToPlainAndInterceptedRequestsButCannotInspectAnOpaqueTunnel()
         {
             var policy = new HostListPolicy();
-            Assert.True(policy.BypassList.Add("127.0.0.1"));
             Assert.True(policy.BlockList.Add("127.0.0.1/private/*"));
             Assert.True(policy.BlockList.Add("localhost/private/*"));
             await using var plainOrigin = await LoopbackOrigin.StartAsync();
             await using var tlsOrigin = await LoopbackOrigin.StartAsync(useTls: true);
             await using var capture = await PolicyCapture.StartAsync(policy, "path-block");
 
+            Exception blockedWithoutBypass;
+            using (HttpClient plain = capture.CreateClient())
+            {
+                blockedWithoutBypass = await Record.ExceptionAsync(
+                    () => plain.GetStringAsync(plainOrigin.Url("/private/no-bypass")));
+            }
+            Assert.True(policy.BypassList.Add("127.0.0.1"));
+            Exception blockedWithBypass;
+            using (HttpClient plain = capture.CreateClient())
+            {
+                blockedWithBypass = await Record.ExceptionAsync(
+                    () => plain.GetStringAsync(plainOrigin.Url("/private/with-bypass")));
+            }
+            using (HttpClient plain = capture.CreateClient())
+            {
+                Assert.Equal("origin-ok", await plain.GetStringAsync(plainOrigin.Url("/public")));
+            }
             using (HttpClient intercepted = capture.CreateClient())
             {
                 Exception blocked = await Record.ExceptionAsync(
@@ -117,12 +152,10 @@ namespace XMAT.Tests.Proxy
             {
                 Assert.Equal("origin-ok", await opaque.GetStringAsync(tlsOrigin.Url("/private/item")));
             }
-            using (HttpClient plain = capture.CreateClient())
-            {
-                Assert.Equal("origin-ok", await plain.GetStringAsync(plainOrigin.Url("/public")));
-            }
             await capture.DrainCallbacksAsync();
 
+            Assert.IsAssignableFrom<HttpRequestException>(blockedWithoutBypass);
+            Assert.IsAssignableFrom<HttpRequestException>(blockedWithBypass);
             Assert.Equal(new[] { "/private/item" }, tlsOrigin.Requests.Select(request => request.Path));
             Assert.Equal(new[] { "/public" }, plainOrigin.Requests.Select(request => request.Path));
             // The client retries the aborted intercepted request on new tunnels, while the opaque
@@ -139,10 +172,136 @@ namespace XMAT.Tests.Proxy
             AssertBlockedAttempts(blockedAttempts, "localhost");
             Assert.All(blockedAttempts, row =>
                 Assert.Equal("/private/item", row.Str(WebServiceCaptureMethod.FieldKey_RequestPath)));
-            IDataRecord plainRequest = Assert.Single(
-                requests, row => row.Str(WebServiceCaptureMethod.FieldKey_RequestHost) == "127.0.0.1");
-            Assert.Equal("http", plainRequest.Str(WebServiceCaptureMethod.FieldKey_RequestScheme));
-            Assert.Equal(blockedAttempts.Count + 1, requests.Count);
+            List<IDataRecord> plainRequests = requests
+                .Where(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestHost) == "127.0.0.1")
+                .ToList();
+            List<IDataRecord> blockedPlainRequests = plainRequests
+                .Where(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath).Contains(
+                    "/private/", StringComparison.Ordinal))
+                .ToList();
+            AssertBlockedAttempts(blockedPlainRequests, "127.0.0.1");
+            IDataRecord allowedPlainRequest = Assert.Single(
+                plainRequests,
+                row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath).EndsWith(
+                    "/public", StringComparison.Ordinal));
+            Assert.Equal("http", allowedPlainRequest.Str(WebServiceCaptureMethod.FieldKey_RequestScheme));
+            Assert.Equal(blockedAttempts.Count + blockedPlainRequests.Count + 1, requests.Count);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task PlainHttpPathBlock_UsesCanonicalRawTargetAndEitherAuthority(bool bypass)
+        {
+            var policy = new HostListPolicy();
+            Assert.True(policy.BlockList.Add("127.0.0.1/private/*"));
+            if (bypass)
+            {
+                Assert.True(policy.BypassList.Add("127.0.0.1"));
+                Assert.True(policy.BypassList.Add("claimed.example"));
+            }
+            await using var origin = await LoopbackOrigin.StartAsync();
+            await using var capture = await PolicyCapture.StartAsync(policy, bypass ? "canonical-bypass" : "canonical");
+            string authority = $"127.0.0.1:{origin.Port}";
+            string[] blockedTargets =
+            [
+                "/public/../private/dot?token=1",
+                "/%70rivate/encoded?token=2",
+                $"http://{authority}/private/authority?token=3",
+            ];
+            string[] hosts = [authority, authority, $"claimed.example:{origin.Port}"];
+            var blockedResponses = new List<string>();
+            for (var index = 0; index < blockedTargets.Length; index++)
+            {
+                blockedResponses.Add(await SendRawAsync(
+                    capture.ProxyPort,
+                    $"GET {blockedTargets[index]} HTTP/1.1\r\nHost: {hosts[index]}\r\nConnection: close\r\n\r\n"));
+            }
+            const string allowedTarget = "/public/allowed?token=ok";
+            string allowed = await SendRawAsync(
+                capture.ProxyPort,
+                $"GET {allowedTarget} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
+            await capture.DrainCallbacksAsync();
+
+            Assert.All(blockedResponses, response => Assert.Equal(string.Empty, response));
+            Assert.Matches(@"^HTTP/\d(\.\d)? 200\b", allowed);
+            Assert.Equal(new[] { allowedTarget }, origin.Requests.Select(request => request.Path));
+            IReadOnlyList<IDataRecord> requests = capture.Records("GET").OrderBy(row => row.RowId).ToList();
+            Assert.Equal(
+                blockedTargets.Append(allowedTarget),
+                requests.Select(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath)));
+            Assert.Equal(
+                new[] { "127.0.0.1", "127.0.0.1", "claimed.example", "127.0.0.1" },
+                requests.Select(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestHost)));
+            Assert.All(requests.Take(3), row =>
+                Assert.True(string.IsNullOrEmpty(row.Str(WebServiceCaptureMethod.FieldKey_RequestStatus))));
+            Assert.False(string.IsNullOrEmpty(requests[^1].Str(WebServiceCaptureMethod.FieldKey_RequestStatus)));
+        }
+
+        [Theory]
+        [InlineData("ws", "origin", "/public/socket", "decoy", "127.0.0.1", true)]
+        [InlineData("ws", "origin", "/private/socket", "decoy", "127.0.0.1/private/*", true)]
+        [InlineData("http", "idn", "/private/idn", "decoy", "127.0.0.1/private/*", false)]
+        [InlineData("http", "idn", "/private/no-host", "none", "127.0.0.1/private/*", false)]
+        [InlineData(null, "origin", "/private/numeric", "numeric", "127.0.0.1/private/*", false)]
+        [InlineData("ftp", "origin", "/unsupported", "origin", null, true)]
+        public async Task RawDestinationIdentityBlocksBeforeOriginOrUnsupportedDispatch(
+            string scheme,
+            string destinationKind,
+            string path,
+            string hostKind,
+            string block,
+            bool upgrade)
+        {
+            await using var origin = await LoopbackOrigin.StartAsync();
+            string authority = $"127.0.0.1:{origin.Port}";
+            string destination = destinationKind == "idn"
+                ? $"127\u30020\u30020\u30021:{origin.Port}"
+                : authority;
+            string target = scheme == null ? path : $"{scheme}://{destination}{path}";
+            string host = hostKind switch
+            {
+                "decoy" => $"decoy.example:{origin.Port}",
+                "none" => null,
+                "numeric" => $"0177.0.0.1:{origin.Port}",
+                _ => authority,
+            };
+
+            var policy = new HostListPolicy();
+            if (block != null)
+            {
+                Assert.True(policy.BlockList.Add(block));
+            }
+            await using var capture = await PolicyCapture.StartAsync(
+                policy,
+                $"destination-{scheme}-{destinationKind}-{hostKind}");
+            string hostHeader = host == null ? string.Empty : $"Host: {host}\r\n";
+            string upgradeHeaders = upgrade
+                ? "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                : "Connection: close\r\n";
+            string blocked = await SendRawAsync(
+                capture.ProxyPort,
+                $"GET {target} HTTP/1.1\r\n{hostHeader}{upgradeHeaders}\r\n");
+            const string allowedTarget = "/public/allowed";
+            string allowedHost = block == "127.0.0.1" ? $"localhost:{origin.Port}" : authority;
+            string allowed = await SendRawAsync(
+                capture.ProxyPort,
+                $"GET {allowedTarget} HTTP/1.1\r\nHost: {allowedHost}\r\nConnection: close\r\n\r\n");
+            await capture.DrainCallbacksAsync();
+
+            Assert.Matches(@"^HTTP/\d(\.\d)? 200\b", allowed);
+            Assert.Equal(new[] { allowedTarget }, origin.Requests.Select(request => request.Path));
+            Assert.Equal(string.Empty, blocked);
+            IReadOnlyList<IDataRecord> requests = capture.Records("GET");
+            IDataRecord blockedRecord = Assert.Single(
+                requests,
+                row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath) == target);
+            Assert.True(string.IsNullOrEmpty(blockedRecord.Str(WebServiceCaptureMethod.FieldKey_RequestStatus)));
+            Assert.Contains(
+                requests,
+                row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath) == allowedTarget &&
+                    !string.IsNullOrEmpty(row.Str(WebServiceCaptureMethod.FieldKey_RequestStatus)));
         }
 
         [Fact]
@@ -337,6 +496,36 @@ namespace XMAT.Tests.Proxy
             Assert.All(connects, row => Assert.Equal("443", row.Str(WebServiceCaptureMethod.FieldKey_RequestPort)));
         }
 
+        [Fact]
+        public async Task ConnectBlockUsesNumericClaimedHostBeforeLiteralBypass()
+        {
+            var policy = new HostListPolicy();
+            Assert.True(policy.BypassList.Add("*")); Assert.True(policy.BlockList.Add("127.0.0.1"));
+            using var blockedOrigin = new TcpListener(IPAddress.Loopback, 0);
+            using var allowedOrigin = new TcpListener(IPAddress.IPv6Any, 0);
+            blockedOrigin.Start(); allowedOrigin.Server.DualMode = true; allowedOrigin.Start();
+            int blockedPort = ((IPEndPoint)blockedOrigin.LocalEndpoint).Port,
+                allowedPort = ((IPEndPoint)allowedOrigin.LocalEndpoint).Port;
+            await using var capture = await PolicyCapture.StartAsync(policy, "connect-numeric-host");
+
+            string blocked = await SendRawAsync(capture.ProxyPort,
+                $"CONNECT localhost:{blockedPort} HTTP/1.1\r\nHost: 0177.0.0.1:{blockedPort}\r\n\r\n");
+            string allowed = await SendRawAsync(
+                capture.ProxyPort,
+                $"CONNECT localhost:{allowedPort} HTTP/1.1\r\nHost: localhost:{allowedPort}\r\n\r\n",
+                async () => (await allowedOrigin.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(10))).Dispose());
+            await capture.DrainCallbacksAsync();
+
+            Assert.Contains("200 Connection Established", allowed);
+            IReadOnlyList<IDataRecord> connects = capture.Records("CONNECT").OrderBy(row => row.RowId).ToList();
+            Assert.Equal(new[] { $"localhost:{blockedPort}", $"localhost:{allowedPort}" },
+                connects.Select(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestPath)));
+            Assert.Equal(new[] { "0177.0.0.1", "localhost" },
+                connects.Select(row => row.Str(WebServiceCaptureMethod.FieldKey_RequestHost)));
+            Assert.DoesNotContain("200 Connection Established", blocked);
+            Assert.False(blockedOrigin.Pending());
+        }
+
         // Plain HTTP keeps the client's DNS spelling for scripts, capture rows and forwarding.
         [Fact]
         public async Task PlainHttpHostSpelling_ReachesScriptsCaptureRowsAndForwarding()
@@ -489,7 +678,7 @@ namespace XMAT.Tests.Proxy
             });
         }
 
-        private static async Task<string> SendRawAsync(int proxyPort, string request)
+        private static async Task<string> SendRawAsync(int proxyPort, string request, Func<Task> whileOpen = null)
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             using var client = new TcpClient();
@@ -518,6 +707,7 @@ namespace XMAT.Tests.Proxy
             {
                 // The rejected connection may be reset or held open; only what was sent matters.
             }
+            if (whileOpen != null) await whileOpen();
             return Encoding.ASCII.GetString(response.ToArray());
         }
 
@@ -701,22 +891,7 @@ namespace XMAT.Tests.Proxy
             private static IDataTable CreateConnectionsTable(SqLtDatabase database) =>
                 database.CreateTable(
                     WebServiceCaptureMethod.TableName,
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_DeviceName),
-                    new Field<long>(WebServiceCaptureMethod.FieldKey_RequestNumber),
-                    new Field<long>(WebServiceCaptureMethod.FieldKey_ConnectionId),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestTimestamp),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestScheme),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestHost),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPort),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestMethod),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPath),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestStatus),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestBody),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseBody),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ClientIP));
+                    WebProxyCaptureSchema.CreateFields());
         }
     }
 }

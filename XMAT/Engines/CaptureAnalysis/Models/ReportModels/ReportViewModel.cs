@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Resources;
 using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
 {
@@ -26,6 +27,9 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportModels
         public ICaptureAppModel CaptureAppModel { get; }
         public string SourceCaptureName { get; }
         public ReportDocument ReportDocument { get; }
+
+        // The capture tab and session generation that the analysis read; session links open only that source.
+        internal CaptureSourceStamp SourceStamp { get; set; }
 
         protected ReportViewModel(
             ICaptureAppModel captureAppModel,

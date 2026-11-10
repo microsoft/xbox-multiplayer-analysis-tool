@@ -5,6 +5,7 @@
 using System.Buffers.Binary;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using XMAT.DataAbstractionLayer;
 
 namespace XMAT.Tests.Fixtures
 {
@@ -21,6 +22,12 @@ namespace XMAT.Tests.Fixtures
             "RequestHost TEXT,RequestPort TEXT,RequestMethod TEXT,RequestPath TEXT," +
             "RequestStatus TEXT,RequestLineAndHeaders TEXT,RequestBody TEXT," +
             "ResponseLineAndHeaders TEXT,ResponseBody TEXT,ClientIP TEXT)";
+
+        internal static string WebProxyConnectionsWithProcessDdl { get; } = AppendWebProxyColumns(
+            $"{WebProxyCaptureSchema.ClientProcessName} TEXT",
+            $"{WebProxyCaptureSchema.ClientProcessId} INTEGER",
+            $"{WebProxyCaptureSchema.ClientProcessStartTime} TEXT",
+            $"{WebProxyCaptureSchema.ClientProcessStatus} TEXT");
 
         internal const string NetworkTracePacketsDdl =
             "CREATE TABLE NetworkTracePackets(id INTEGER PRIMARY KEY," +
@@ -342,6 +349,9 @@ namespace XMAT.Tests.Fixtures
             return builder.Append(')')
                 .ToString();
         }
+
+        internal static string AppendWebProxyColumns(params string[] declarations) =>
+            WebProxyConnectionsDdl.TrimEnd(')') + "," + string.Join(",", declarations) + ")";
 
         internal static void CorruptFirstOverflowPage(
             string path,

@@ -18,7 +18,11 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Export;
+using XMAT.Operations.Processes;
 using XMAT.Scripting;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
@@ -152,6 +156,114 @@ namespace XMAT.WebServiceCapture
         public ObservableCollection<CheckedListItem> MethodFilterList { get; set; }
         public WebSocketMessagesCollection WebSocketMessages { get; }
         public string DeviceName { get; }
+        internal bool CanDeleteSessions =>
+            !_readOnly &&
+            _captureDataSource == CaptureDataSource.ActiveTable &&
+            _dataTable is IExactCaptureRowDelete;
+        internal CaptureSourceStamp SourceStamp => new(_sourceId, Interlocked.Read(ref _retirementEpoch));
+        public ProcessFilterSpec ProcessFilter { get; private set; }
+        internal ClientProcessResolver ProcessResolverOverride { get; set; }
+        internal TimeSpan? CaptureCallbackDrainTimeoutOverride { get; set; }
+
+        internal CaptureDeleteResult DeleteSessions(
+            IReadOnlyList<CaptureDeleteTarget> targets,
+            IReadOnlySet<CaptureRowKey> currentlyVisible)
+        {
+            ArgumentNullException.ThrowIfNull(targets);
+            ArgumentNullException.ThrowIfNull(currentlyVisible);
+            if (!CanDeleteSessions)
+            {
+                throw new InvalidOperationException("This capture cannot delete sessions.");
+            }
+
+            var candidates = new List<DeleteCandidate>(targets.Count);
+            var committedIds = new HashSet<long>();
+            var deleted = new List<CaptureRowKey>(targets.Count);
+            var deletedSet = new HashSet<CaptureRowKey>();
+            int retainedHidden = 0;
+            int unavailable = 0;
+            CaptureSourceStamp stamp;
+            using (_captureRows.EnterMutation())
+            {
+                foreach (CaptureDeleteTarget target in targets)
+                {
+                    if (target == null)
+                    {
+                        unavailable++;
+                        continue;
+                    }
+                    if (!currentlyVisible.Contains(target.Key))
+                    {
+                        retainedHidden++;
+                        continue;
+                    }
+                    if (target.Model == null ||
+                        !target.Model.TryGetTarget(out ProxyConnectionModel model) ||
+                        model.RecordRowId != target.Key.RowId ||
+                        !ReferenceEquals(ProxyConnections.ByKey(target.Key), model) ||
+                        _captureRows.Lookup(target.Key) != CaptureRowLookup.Current)
+                    {
+                        unavailable++;
+                        continue;
+                    }
+                    candidates.Add(new DeleteCandidate(target.Key, model.RecordRowId));
+                }
+
+                _captureRows.PrepareRetirement(candidates.Count);
+                committedIds.EnsureCapacity(candidates.Count);
+                deletedSet.EnsureCapacity(candidates.Count);
+                IReadOnlyList<long> committed = ((IExactCaptureRowDelete)_dataTable).DeleteRows(
+                    DeviceName,
+                    candidates.Select(candidate => candidate.RowId).ToArray());
+                if (committed.Count != 0)
+                {
+                    AdvanceSourceStamp();
+                }
+                committedIds.UnionWith(committed);
+                foreach (DeleteCandidate candidate in candidates)
+                {
+                    if (committedIds.Contains(candidate.RowId) &&
+                        deletedSet.Add(candidate.Key))
+                    {
+                        deleted.Add(candidate.Key);
+                    }
+                    else
+                    {
+                        unavailable++;
+                    }
+                }
+                _captureRows.Retire(deleted);
+                stamp = SourceStamp;
+            }
+
+            if (deleted.Count != 0)
+            {
+                if (SelectedConnectionModel != null &&
+                    deletedSet.Contains(SelectedConnectionModel.RowKey))
+                {
+                    SelectedConnectionModel = null;
+                }
+                if (SelectedWebSocketMessage != null &&
+                    deletedSet.Contains(SelectedWebSocketMessage.RowKey))
+                {
+                    SelectedWebSocketMessage = null;
+                }
+                try
+                {
+                    ProxyConnections.RemoveByRowKeys(deletedSet);
+                }
+                finally
+                {
+                    WebSocketMessages.RemoveByRowKeys(deletedSet);
+                }
+            }
+            return new CaptureDeleteResult(
+                targets.Count,
+                deleted.AsReadOnly(),
+                retainedHidden,
+                unavailable,
+                stamp);
+        }
         public ProxyConnectionModel SelectedConnectionModel
         {
             get => _selectedConnectionModel;
@@ -189,6 +301,243 @@ namespace XMAT.WebServiceCapture
             RaisePropertyChange(nameof(ImportNotice));
         }
 
+        internal void SetProcessFilter(ProcessFilterSpec spec)
+        {
+            ProcessFilterSpec normalized = XMAT.Operations.Processes.ProcessFilter.Compile(spec).Specification;
+            if (ProcessFilter.Include.SequenceEqual(normalized.Include, StringComparer.Ordinal) &&
+                ProcessFilter.Exclude.SequenceEqual(normalized.Exclude, StringComparer.Ordinal))
+            {
+                return;
+            }
+            ProcessFilter = normalized;
+            RaisePropertyChange(nameof(ProcessFilter));
+        }
+
+        internal IReadOnlyList<CaptureSessionRef> SnapshotProcessSessions(string ordinalDeviceId)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(ordinalDeviceId);
+            return ProxyConnections
+                .Select(model => new CaptureSessionRef(
+                    EnsureRowKey(model),
+                    ordinalDeviceId,
+                    model.ClientProcess))
+                .ToList();
+        }
+
+        internal ICaptureExportSnapshot CreateExportSnapshot(string ordinalDeviceId)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(ordinalDeviceId);
+            bool ownsDataset = _captureDataSource == CaptureDataSource.ActiveTable;
+            IDataset dataset = _captureDataSource == CaptureDataSource.LoadedDataset
+                ? _loadedCaptureDataset
+                : _dataTable?.Dataset;
+            if (dataset == null)
+            {
+                throw new InvalidOperationException("The capture has no data source.");
+            }
+            try
+            {
+                return CreateExportSnapshotCore(ordinalDeviceId, dataset, ownsDataset);
+            }
+            catch
+            {
+                if (ownsDataset)
+                {
+                    (dataset as IDisposable)?.Dispose();
+                }
+                throw;
+            }
+        }
+
+        private ICaptureExportSnapshot CreateExportSnapshotCore(
+            string ordinalDeviceId,
+            IDataset dataset,
+            bool ownsDataset)
+        {
+            IReadOnlyList<SqLtSchemaColumn> captureFields =
+                ((IRawCaptureDataset)dataset).Columns;
+            ImportedCaptureSource? importedSource =
+                LoadedCaptureDatabaseRegistry.ImportedSourceFor(this);
+            SqLtFileIdentity? inputIdentity = importedSource?.Identity ??
+                LoadedCaptureDatabaseRegistry.DatabaseFor(this)?.Identity;
+            string inputPath = importedSource?.SourcePath;
+            IVersionedCaptureTable versioned = _captureDataSource == CaptureDataSource.ActiveTable
+                ? _dataTable as IVersionedCaptureTable
+                : null;
+            var frozen = new Dictionary<CaptureRowKey, FrozenExportRow>();
+            var sessions = new List<CaptureExportSession>();
+            IDataset freezeDataset = ownsDataset && _dataTable is { } table
+                ? table.Subset(
+                    WebServiceCaptureMethod.FieldKey_DeviceName,
+                    WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
+                    WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders)
+                : null;
+            using (freezeDataset as IDisposable)
+            {
+                using (_captureRows.EnterMutation())
+                using (versioned?.EnterRead())
+                {
+                    Dictionary<long, IDataRecord> records = freezeDataset == null
+                        ? null
+                        : freezeDataset.DataRecordsWhen(
+                            new FieldValue<string>(
+                                WebServiceCaptureMethod.FieldKey_DeviceName,
+                                DeviceName))
+                        .ToDictionary(record => (long)record.RowId);
+                    foreach (ProxyConnectionModel model in ProxyConnections)
+                    {
+                        CaptureRowKey key = EnsureRowKey(model);
+                        IDataRecord record = null;
+                        if (records != null &&
+                            !records.TryGetValue(model.RecordRowId, out record))
+                        {
+                            continue;
+                        }
+                        long version = versioned?.VersionOf(model.RecordRowId) ?? 0;
+                        ClientProcessInfo process = model.ClientProcess;
+                        bool responseHeaders = records == null
+                            ? !string.IsNullOrEmpty(model.ResponseLineAndHeaders)
+                            : !string.IsNullOrEmpty(
+                                record.Str(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders));
+                        bool responseTimestamp = records == null
+                            ? model.HasRecordedResponseTimestamp
+                            : !string.IsNullOrEmpty(
+                                record.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp));
+                        var session = new CaptureExportSession(
+                            key,
+                            ordinalDeviceId,
+                            model.Host ?? string.Empty,
+                            model.Path ?? string.Empty,
+                            model.Status ?? string.Empty,
+                            model.Method ?? string.Empty,
+                            process,
+                            responseHeaders,
+                            responseTimestamp,
+                            version);
+                        sessions.Add(session);
+                        frozen.Add(
+                            key,
+                            new FrozenExportRow(model.RecordRowId, version, process, model));
+                    }
+                }
+            }
+
+            IReadOnlyList<SqLtSchemaColumn> deviceFields =
+                CaptureExportSnapshot.StandardDeviceFields;
+            IReadOnlyDictionary<string, RawExportRow> devices = new Dictionary<string, RawExportRow>
+            {
+                [ordinalDeviceId] = new RawExportRow(
+                    default,
+                    1,
+                    0,
+                    new Dictionary<string, object>(StringComparer.Ordinal)
+                    {
+                        ["DeviceType"] = (long)_deviceType,
+                        ["DeviceName"] = DeviceName,
+                        ["CaptureType"] = (long)CaptureType.WebProxy,
+                    }),
+            };
+
+            CaptureExportChunk ReadRows(
+                IReadOnlyList<CaptureRowKey> keys,
+                CancellationToken cancellationToken)
+            {
+                var consumed = new List<CaptureRowKey>();
+                var result = new List<RawExportRow>();
+                var index = 0;
+                long batchBytes = 0;
+                using (_captureRows.EnterMutation())
+                using (versioned?.EnterRead())
+                {
+                    while (index < keys.Count && result.Count < 64)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        CaptureRowKey key = keys[index];
+                        if (!frozen.TryGetValue(key, out FrozenExportRow expected) ||
+                            !ReferenceEquals(ProxyConnections.ByKey(key), expected.Model))
+                        {
+                            consumed.Add(key);
+                            index++;
+                            continue;
+                        }
+                        IDataRecord record = dataset.DataRecordsFrom(expected.RowId, 1)
+                            .FirstOrDefault(candidate => candidate.RowId == expected.RowId);
+                        if (record == null)
+                        {
+                            consumed.Add(key);
+                            index++;
+                            continue;
+                        }
+                        if (versioned != null && versioned.VersionOf(expected.RowId) != expected.PayloadVersion)
+                        {
+                            throw new InvalidOperationException("The capture row changed after the export snapshot.");
+                        }
+                        Dictionary<string, object> values = CaptureRawValues.Read(record, captureFields);
+                        CaptureRawValues.OverlayProcess(values, expected.Process);
+                        long rowBytes = CaptureRawValues.Measure(values);
+                        if (result.Count != 0 && batchBytes + rowBytes > 8 * 1024 * 1024)
+                        {
+                            break;
+                        }
+                        consumed.Add(key);
+                        result.Add(new RawExportRow(key, expected.RowId, expected.PayloadVersion, values));
+                        batchBytes += rowBytes;
+                        index++;
+                        if (rowBytes > 8 * 1024 * 1024)
+                        {
+                            break;
+                        }
+                    }
+                }
+                return new CaptureExportChunk(consumed.ToArray(), result);
+            }
+
+            return new CaptureExportSnapshot(
+                captureFields,
+                deviceFields,
+                devices,
+                sessions.AsReadOnly(),
+                IsRunning,
+                "records",
+                inputIdentity,
+                null,
+                ReadRows,
+                destination => CaptureExportSnapshot.RejectSourceDestination(
+                    destination,
+                    inputPath,
+                    inputIdentity),
+                () =>
+                {
+                    if (ownsDataset)
+                    {
+                        (dataset as IDisposable)?.Dispose();
+                    }
+                });
+        }
+
+        private CaptureRowKey EnsureRowKey(ProxyConnectionModel model)
+        {
+            if (model.RowKey.SourceId == Guid.Empty)
+            {
+                ProxyConnections.AssignRowKey(
+                    model,
+                    new CaptureRowKey(
+                        _sourceId,
+                        -1,
+                        model.RecordRowId,
+                        checked(++_loadedIncarnation)));
+            }
+            return model.RowKey;
+        }
+
+        private sealed record FrozenExportRow(
+            long RowId,
+            long PayloadVersion,
+            ClientProcessInfo Process,
+            ProxyConnectionModel Model);
+
+        private readonly record struct DeleteCandidate(CaptureRowKey Key, long RowId);
+
         private const int LoadedCapturesPageBreakSize = 100;
         private const int UiUpdateBatchSize = 50;
         private static readonly TimeSpan CaptureCallbackDrainTimeout =
@@ -215,7 +564,12 @@ namespace XMAT.WebServiceCapture
         private readonly object _lockObj = new object();
         private readonly AsyncOperationTracker _captureCallbacks = new();
         private readonly BatchedDispatcherQueue _uiUpdateQueue;
+        private readonly Guid _sourceId = Guid.NewGuid();
+        private readonly CaptureRowRegistry _captureRows;
         private CancellationTokenSource _captureCallbackCancellationTokenSource;
+        private Guid _activeRun;
+        private long _retirementEpoch;
+        private long _loadedIncarnation;
         private bool _isTransitioning;
         private bool _initialized;
         private readonly ProxyPortPool _portPool;
@@ -293,8 +647,10 @@ namespace XMAT.WebServiceCapture
             _deviceType = deviceType;
             _readOnly = readOnly;
             _parameters = new(this);
+            _captureRows = new CaptureRowRegistry(_sourceId, ApplyResolvedProcess);
 
             ProxyConnections = new ProxyConnectionsCollection();
+            ProcessFilter = ProcessFilterSpec.Empty;
 
             StatusFilterList = new ObservableCollection<CheckedListItem>();
             HostFilterList = new ObservableCollection<CheckedListItem>();
@@ -344,6 +700,8 @@ namespace XMAT.WebServiceCapture
                 _webProxy.WebRequestPolicyAsync = WebProxy_ReceivedWebRequestAsync;
                 _webProxy.WebResponsePolicyAsync = WebProxy_ReceivedWebResponseAsync;
                 _webProxy.WebSocketMessage += WebProxy_WebSocketMessage;
+                _webProxy.WebSocketClosed += WebProxy_WebSocketClosed;
+                _webProxy.ConnectionClosed += WebProxy_ConnectionClosed;
                 if (!deferPortAllocation)
                 {
                     RestorePendingPort();
@@ -674,6 +1032,8 @@ namespace XMAT.WebServiceCapture
 
         internal void LoadCaptureDataset(IDataset dataset)
         {
+            _captureRows.AdvanceGeneration();
+            AdvanceSourceStamp();
             ClearCaptureViewModels();
             _captureDataSource = CaptureDataSource.LoadedDataset;
             _loadedCaptureDataset = dataset;
@@ -681,7 +1041,10 @@ namespace XMAT.WebServiceCapture
             {
                 foreach (IDataRecord record in GetCaptureRecords())
                 {
-                    ProxyConnections.AddFromDataRecord(record, true);
+                    ProxyConnections.AddFromDataRecord(
+                        record,
+                        true,
+                        new CaptureRowKey(_sourceId, -1, record.RowId, checked(++_loadedIncarnation)));
                 }
             }
             StatusFilterList = UpdateFilter(
@@ -709,12 +1072,15 @@ namespace XMAT.WebServiceCapture
             WebServiceDeviceCaptureController source)
         {
             ArgumentNullException.ThrowIfNull(source);
+            _captureRows.AdvanceGeneration();
+            AdvanceSourceStamp();
             _captureDataSource = source._captureDataSource;
             _loadedCaptureDataset = source._loadedCaptureDataset;
             ProxyConnections = source.ProxyConnections;
             StatusFilterList = source.StatusFilterList;
             HostFilterList = source.HostFilterList;
             MethodFilterList = source.MethodFilterList;
+            ProcessFilter = source.ProcessFilter;
             _selectedConnectionModel = null;
             _selectedWebSocketMessage = null;
             NotifyPropertyChangesSafely(
@@ -722,6 +1088,7 @@ namespace XMAT.WebServiceCapture
                 nameof(StatusFilterList),
                 nameof(HostFilterList),
                 nameof(MethodFilterList),
+                nameof(ProcessFilter),
                 nameof(SelectedConnectionModel),
                 nameof(SelectedWebSocketMessage));
         }
@@ -752,10 +1119,16 @@ namespace XMAT.WebServiceCapture
             if (ProxyConnections == null)
                 return;
 
-            foreach (var fiddlerProxyConnectionModel in ProxyConnections)
+            IDataset dataset = dataTable.Dataset;
+            using (dataset as IDisposable)
             {
-                cancelToken.ThrowIfCancellationRequested();
-                fiddlerProxyConnectionModel.AddToDataTable(deviceName, dataTable);
+                IFieldDefinition[] fields = dataset.FieldDefs.ToArray();
+                foreach (var fiddlerProxyConnectionModel in ProxyConnections)
+                {
+                    cancelToken.ThrowIfCancellationRequested();
+                    fiddlerProxyConnectionModel.RecordRowId = dataTable.AddRow(
+                        fiddlerProxyConnectionModel.ToDataTableValues(deviceName, fields));
+                }
             }
         }
 
@@ -1186,25 +1559,83 @@ namespace XMAT.WebServiceCapture
             IProgress<WebProxyStopProgress> progress = null)
         {
             var stopStopwatch = Stopwatch.StartNew();
+            WebServiceProxy concreteProxy = _webProxy as WebServiceProxy;
+            ClientProcessResolver resolver = concreteProxy?.ProcessResolver ?? ProcessResolverOverride;
+            Guid runId = concreteProxy?.RunId ?? _activeRun;
+            if (resolver != null && runId != Guid.Empty)
+            {
+                resolver.SealRun(runId);
+            }
+            Task proxyStopped;
+            try
+            {
+                proxyStopped = _webProxy.StopProxyAsync(progress);
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                if (resolver != null && runId != Guid.Empty)
+                {
+                    resolver.UnsealRun(runId);
+                }
+                throw;
+            }
             var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
             if (_captureCallbackCancellationTokenSource != null)
             {
                 await _captureCallbackCancellationTokenSource.CancelAsync();
             }
             Exception proxyStopException = null;
+            var listenerStopped = false;
             try
             {
-                await _webProxy.StopProxyAsync(progress);
+                await proxyStopped;
+                listenerStopped = true;
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 proxyStopException = ex;
             }
 
-            await WaitForCaptureCallbacksAsync(
-                callbacksDrained,
-                progress,
-                stopStopwatch);
+            try
+            {
+                await WaitForCaptureCallbacksAsync(callbacksDrained, progress, stopStopwatch);
+            }
+            catch
+            {
+                if (!listenerStopped && resolver != null && runId != Guid.Empty)
+                {
+                    resolver.UnsealRun(runId);
+                }
+                throw;
+            }
+
+            if (proxyStopException != null)
+            {
+                if (resolver != null && runId != Guid.Empty)
+                {
+                    resolver.UnsealRun(runId);
+                }
+                ExceptionDispatchInfo.Capture(proxyStopException).Throw();
+            }
+
+            if (resolver != null && runId != Guid.Empty)
+            {
+                try
+                {
+                    await resolver.DrainAsync(runId);
+                }
+                catch (TimeoutException)
+                {
+                    PublicUtilities.AppLog(
+                        LogLevel.WARN,
+                        "Client process resolution did not drain before capture stopped.");
+                }
+            }
+            if (_activeRun != Guid.Empty)
+            {
+                _captureRows.FinishRun(_activeRun);
+                _activeRun = Guid.Empty;
+            }
 
             var uiDrainStopwatch = Stopwatch.StartNew();
             var uiUpdatesDrained = _uiUpdateQueue.CompleteAndDrainAsync();
@@ -1217,12 +1648,11 @@ namespace XMAT.WebServiceCapture
                 $"Capture UI updates drained in {uiDrainStopwatch.Elapsed}.");
 
             DisposeCaptureCallbackCancellation();
-            if (proxyStopException != null)
-            {
-                ExceptionDispatchInfo.Capture(proxyStopException).Throw();
-            }
-
             IsRunning = false;
+            if (resolver != null && runId != Guid.Empty)
+            {
+                resolver.ReleaseRun(runId);
+            }
             PublicUtilities.AppLog(
                 LogLevel.INFO,
                 $"Web proxy capture stopped in {stopStopwatch.Elapsed}.");
@@ -1234,7 +1664,8 @@ namespace XMAT.WebServiceCapture
             Stopwatch stopStopwatch)
         {
             var callbackStopwatch = Stopwatch.StartNew();
-            var timeoutTask = Task.Delay(CaptureCallbackDrainTimeout);
+            TimeSpan timeout = CaptureCallbackDrainTimeoutOverride ?? CaptureCallbackDrainTimeout;
+            var timeoutTask = Task.Delay(timeout);
             try
             {
                 while (!callbacksDrained.IsCompleted)
@@ -1267,7 +1698,7 @@ namespace XMAT.WebServiceCapture
             }
             catch (TimeoutException ex)
             {
-                var timeoutSeconds = (int)CaptureCallbackDrainTimeout.TotalSeconds;
+                var timeoutSeconds = (int)timeout.TotalSeconds;
                 throw new TimeoutException(
                     Localization.GetLocalizedString(
                         "PROXY_CAPTURE_CALLBACK_TIMEOUT",
@@ -1343,27 +1774,165 @@ namespace XMAT.WebServiceCapture
 
         private IDataRecord DataRecordFromRow(Int64 rowId)
         {
+            using IDisposable read = (_dataTable as IVersionedCaptureTable)?.EnterRead();
             var records = _dataTable.Dataset.DataRecordsFrom(rowId, 1);
-            return records.FirstOrDefault();
+            return records.FirstOrDefault(record => record.RowId == rowId);
         }
 
-        private void HandleRowAdded(IDataRecord record)
+        private IDataRecord FindCaptureRecord(
+            ClientProcessContext processContext,
+            ClientRequest request,
+            out CaptureRowKey key)
+        {
+            key = request?.RowKey ?? default;
+            CaptureRowLookup lookup =
+                key.SourceId != Guid.Empty
+                    ? _captureRows.Lookup(key)
+                    : processContext == null || request == null
+                        ? CaptureRowLookup.Missing
+                        : _captureRows.Lookup(processContext, request.RequestNumber, out key);
+            if (lookup == CaptureRowLookup.Current)
+            {
+                return DataRecordFromRow(key.RowId);
+            }
+            return null;
+        }
+
+        private bool TryUpdateCaptureRecord(ClientProcessContext processContext, CaptureRowKey key, Action update)
+        {
+            if (key.SourceId == Guid.Empty)
+            {
+                return false;
+            }
+            return _captureRows.TryUpdate(processContext?.RunId ?? Guid.Empty, key, update);
+        }
+
+        private void HandleRowAdded(IDataRecord record, CaptureRowKey key, bool resolving = false)
         {
             if (record != null && record.Str(WebServiceCaptureMethod.FieldKey_DeviceName).Equals(
-                DeviceName))
+                    DeviceName) && _captureRows.IsCurrent(key))
             {
-                ProxyConnections.AddFromDataRecord(record, false);
+                ProxyConnectionModel model = ProxyConnections.AddFromDataRecord(record, false, key);
+                if (resolving && model.ClientProcess.Status == ClientProcessStatus.NotRecorded)
+                {
+                    model.SetClientProcess(model.ClientProcess, true);
+                }
             }
         }
 
-        private void HandleRowUpdated(IDataRecord record)
+        private void HandleRowUpdated(IDataRecord record, CaptureRowKey key)
         {
             if (record != null && record.Str(WebServiceCaptureMethod.FieldKey_DeviceName).Equals(
-                DeviceName))
+                    DeviceName) && _captureRows.IsCurrent(key))
             {
-                ProxyConnections.UpdateFromDataRecord(record);
+                ProxyConnectionModel model = ProxyConnections.UpdateFromDataRecord(key, record);
+                if (model == null)
+                {
+                    ProxyConnections.AddFromDataRecord(record, false, key);
+                }
             }
         }
+
+        private (long RowId, CaptureRowKey Key, bool Resolving) AddCaptureRow(
+            IReadOnlyDictionary<string, object> values,
+            ClientProcessContext processContext,
+            long requestToken)
+        {
+            using (_captureRows.EnterMutation())
+            {
+                ClientProcessInfo process = processContext?.Identity ?? ClientProcessInfo.NotRecorded;
+                long rowId = _dataTable.AddRow(WebProxyCaptureSchema.Project(values, process));
+                CaptureRowKey key = default;
+                ClientProcessInfo catchUp = process;
+                var fallback = false;
+                if (processContext != null)
+                {
+                    try
+                    {
+                        if (_activeRun != Guid.Empty && _activeRun != processContext.RunId)
+                        {
+                            throw new InvalidOperationException("The process context belongs to another capture run.");
+                        }
+                        EnsureRun(processContext.RunId);
+                        key = _captureRows.RegisterInserted(processContext, requestToken, rowId, process, out catchUp);
+                    }
+                    catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+                    {
+                        PublicUtilities.AppLog(
+                            LogLevel.ERROR,
+                            $"Client process row registration failed: {ex.GetType().Name}.");
+                        key = _captureRows.RegisterFallback(processContext, requestToken, rowId, process, out catchUp);
+                        fallback = true;
+                        if (catchUp.Status == ClientProcessStatus.NotRecorded)
+                        {
+                            catchUp = new ClientProcessInfo(string.Empty, 0, null, ClientProcessStatus.Unresolved);
+                        }
+                    }
+                }
+                else
+                {
+                    key = _captureRows.RegisterDetached(rowId);
+                }
+                IDataRecord addedRecord = DataRecordFromRow(rowId);
+                bool resolving = processContext != null && process.Status == ClientProcessStatus.NotRecorded;
+                _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord, key, resolving));
+                if (processContext != null && catchUp != process && catchUp.Status != ClientProcessStatus.NotRecorded)
+                {
+                    if (fallback)
+                    {
+                        _captureRows.ApplyFallback(key, catchUp);
+                    }
+                    else
+                    {
+                        _captureRows.Resolve(processContext, catchUp);
+                    }
+                }
+                return (rowId, key, resolving);
+            }
+        }
+
+        private void EnsureRun(Guid runId)
+        {
+            if (_activeRun == runId)
+            {
+                return;
+            }
+            if (_activeRun != Guid.Empty)
+            {
+                _captureRows.FinishRun(_activeRun);
+            }
+            _captureRows.StartRun(runId);
+            _activeRun = runId;
+        }
+
+        private bool ApplyResolvedProcess(CaptureRowKey key, ClientProcessInfo process)
+        {
+            try
+            {
+                var applied = false;
+                bool updated =
+                    _captureRows.TryUpdate(
+                    _activeRun,
+                    key,
+                    () =>
+                    {
+                        _dataTable.UpdateRow(key.RowId, ClientProcessRecordCodec.ToFields(process).ToArray());
+                        IDataRecord record = DataRecordFromRow(key.RowId);
+                        if (record != null)
+                        {
+                            applied = _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(record, key));
+                        }
+                    });
+                return updated && applied;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Client process capture update failed: {ex}");
+                return false;
+            }
+        }
+
+        private void AdvanceSourceStamp() => Interlocked.Increment(ref _retirementEpoch);
 
         private bool IsRequestBlocked(ClientRequest request)
         {
@@ -1378,7 +1947,7 @@ namespace XMAT.WebServiceCapture
                 // Check if this is an absolute-form URI (e.g., GET http://example.com/path HTTP/1.1)
                 if (Uri.TryCreate(path, UriKind.Absolute, out Uri absoluteUri))
                 {
-                    host = absoluteUri.Host;
+                    host = HostListEntry.DestinationHost(absoluteUri);
                     path = absoluteUri.PathAndQuery;
                 }
                 // Otherwise, assume CONNECT request where Path is the "host:port" authority
@@ -1465,27 +2034,77 @@ namespace XMAT.WebServiceCapture
                     if (connectionEvent.Request.BodyBytes != null)
                         base64Body = Convert.ToBase64String(connectionEvent.Request.BodyBytes);
 
-                    long rowId = _dataTable.AddRow(
-                        DeviceName,
-                        (long)connectionEvent.Request.RequestNumber,
-                        (long)connectionEvent.ConnectionID,
-                        ProxyConnectionModel.ToDateTimeString(connectionEvent.Timestamp),
-                        string.Empty,
-                        connectionEvent.Request.Scheme,
-                        connectionEvent.Request.Host,
-                        connectionEvent.Request.Port,
-                        connectionEvent.Request.Method,
-                        connectionEvent.Request.Path,
-                        string.Empty,
-                        connectionEvent.Request.FirstLineAndHeaders,
-                        base64Body,
-                        string.Empty,
-                        string.Empty,
-                        connectionEvent.ClientIP
-                    );
-
-                    var addedRecord = DataRecordFromRow(rowId);
-                    _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
+                    connectionEvent.Request.RowKey = AddCaptureRow(
+                            new Dictionary<
+                                string,
+                                object>(
+                                StringComparer.Ordinal)
+                            {
+                                [WebServiceCaptureMethod
+                                    .FieldKey_DeviceName] =
+                                    DeviceName,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestNumber] =
+                                    (long)connectionEvent
+                                        .Request
+                                        .RequestNumber,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_ConnectionId] =
+                                    (long)connectionEvent
+                                        .ConnectionID,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestTimestamp] =
+                                    ProxyConnectionModel
+                                        .ToDateTimeString(
+                                            connectionEvent
+                                                .Timestamp),
+                                [WebServiceCaptureMethod
+                                    .FieldKey_ResponseTimestamp] =
+                                    string.Empty,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestScheme] =
+                                    connectionEvent.Request
+                                        .Scheme,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestHost] =
+                                    connectionEvent.Request
+                                        .Host,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestPort] =
+                                    connectionEvent.Request
+                                        .Port,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestMethod] =
+                                    connectionEvent.Request
+                                        .Method,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestPath] =
+                                    connectionEvent.Request
+                                        .Path,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestStatus] =
+                                    string.Empty,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestLineAndHeaders] =
+                                    connectionEvent.Request
+                                        .FirstLineAndHeaders,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestBody] =
+                                    base64Body,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_ResponseLineAndHeaders] =
+                                    string.Empty,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_ResponseBody] =
+                                    string.Empty,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_ClientIP] =
+                                    connectionEvent.ClientIP,
+                            },
+                            connectionEvent
+                                .ProcessContext,
+                            connectionEvent.Request
+                                .RequestNumber).Key;
                     return acceptConnection;
                 },
                 requestCancellation);
@@ -1602,20 +2221,32 @@ namespace XMAT.WebServiceCapture
             }
 
             using var callbackLeaseScope = callbackLease;
-            var record = _dataTable.Dataset.DataRecordsWhen(
-                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName),
-                new FieldValue<long>(WebServiceCaptureMethod.FieldKey_RequestNumber, completionEvent.Request.RequestNumber),
-                new FieldValue<long>(WebServiceCaptureMethod.FieldKey_ConnectionId, completionEvent.ConnectionID)
-            ).First();
-
-            _dataTable.UpdateRow(
-                record.RowId,
-                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp, ProxyConnectionModel.ToDateTimeString(completionEvent.Timestamp)),
-                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, @"200")
-            );
-
-            var updatedRecord = DataRecordFromRow(record.RowId);
-            _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord));
+            IDataRecord record = FindCaptureRecord(
+                completionEvent.ProcessContext,
+                completionEvent.Request,
+                out CaptureRowKey key);
+            if (record == null)
+            {
+                return;
+            }
+            void Update()
+            {
+                _dataTable.UpdateRow(
+                    record.RowId,
+                    new FieldValue<string>(
+                        WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
+                        ProxyConnectionModel.ToDateTimeString(completionEvent.Timestamp)),
+                    new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, "200"));
+            }
+            if (!TryUpdateCaptureRecord(completionEvent.ProcessContext, key, Update))
+            {
+                return;
+            }
+            IDataRecord updatedRecord = DataRecordFromRow(record.RowId);
+            if (updatedRecord != null)
+            {
+                _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord, key));
+            }
         }
 
         private Task<bool> WebProxy_ReceivedWebRequestAsync(
@@ -1657,27 +2288,76 @@ namespace XMAT.WebServiceCapture
                     if (requestEvent.Request.BodyBytes != null)
                         base64Body = Convert.ToBase64String(requestEvent.Request.BodyBytes);
 
-                    long rowId = _dataTable.AddRow(
-                        DeviceName,
-                        (long)requestEvent.Request.RequestNumber,
-                        (long)requestEvent.ConnectionID,
-                        ProxyConnectionModel.ToDateTimeString(requestEvent.Timestamp),
-                        string.Empty,
-                        requestEvent.Request.Scheme,
-                        requestEvent.Request.Host,
-                        requestEvent.Request.Port,
-                        requestEvent.Request.Method,
-                        requestEvent.Request.Path,
-                        string.Empty,
-                        requestEvent.Request.FirstLineAndHeaders,
-                        base64Body,
-                        string.Empty,
-                        string.Empty,
-                        DeviceName
-                    );
-
-                    var addedRecord = DataRecordFromRow(rowId);
-                    _uiUpdateQueue.TryEnqueue(() => HandleRowAdded(addedRecord));
+                    requestEvent.Request.RowKey = AddCaptureRow(
+                            new Dictionary<
+                                string,
+                                object>(
+                                StringComparer.Ordinal)
+                            {
+                                [WebServiceCaptureMethod
+                                    .FieldKey_DeviceName] =
+                                    DeviceName,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestNumber] =
+                                    (long)requestEvent
+                                        .Request
+                                        .RequestNumber,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_ConnectionId] =
+                                    (long)requestEvent
+                                        .ConnectionID,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestTimestamp] =
+                                    ProxyConnectionModel
+                                        .ToDateTimeString(
+                                            requestEvent
+                                                .Timestamp),
+                                [WebServiceCaptureMethod
+                                    .FieldKey_ResponseTimestamp] =
+                                    string.Empty,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestScheme] =
+                                    requestEvent.Request
+                                        .Scheme,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestHost] =
+                                    requestEvent.Request
+                                        .Host,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestPort] =
+                                    requestEvent.Request
+                                        .Port,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestMethod] =
+                                    requestEvent.Request
+                                        .Method,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestPath] =
+                                    requestEvent.Request
+                                        .Path,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestStatus] =
+                                    string.Empty,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestLineAndHeaders] =
+                                    requestEvent.Request
+                                        .FirstLineAndHeaders,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_RequestBody] =
+                                    base64Body,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_ResponseLineAndHeaders] =
+                                    string.Empty,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_ResponseBody] =
+                                    string.Empty,
+                                [WebServiceCaptureMethod
+                                    .FieldKey_ClientIP] =
+                                    DeviceName,
+                            },
+                            requestEvent.ProcessContext,
+                            requestEvent.Request
+                                .RequestNumber).Key;
                     return acceptRequest;
                 },
                 requestCancellation);
@@ -1711,26 +2391,38 @@ namespace XMAT.WebServiceCapture
                         scriptParameters.Continue;
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    var record = _dataTable.Dataset.DataRecordsWhen(
-                        new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName),
-                        new FieldValue<long>(WebServiceCaptureMethod.FieldKey_RequestNumber, responseEvent.Response.RequestNumber),
-                        new FieldValue<long>(WebServiceCaptureMethod.FieldKey_ConnectionId, responseEvent.ConnectionID)
-                    ).FirstOrDefault();
+                    IDataRecord record = FindCaptureRecord(
+                        responseEvent.ProcessContext,
+                        responseEvent.Request,
+                        out CaptureRowKey key);
 
                     if (record != null)
                     {
                         var base64Body = Convert.ToBase64String(responseEvent.Response.BodyBytes);
 
-                        _dataTable.UpdateRow(
-                            record.RowId,
-                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp, ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)),
-                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, responseEvent.Response.Status),
-                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders, responseEvent.Response.FirstLineAndHeaders),
-                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body)
-                        );
-
-                        var updatedRecord = DataRecordFromRow(record.RowId);
-                        _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord));
+                        void Update()
+                        {
+                            _dataTable.UpdateRow(
+                                record.RowId,
+                                new FieldValue<string>(
+                                    WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
+                                    ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)),
+                                new FieldValue<string>(
+                                    WebServiceCaptureMethod.FieldKey_RequestStatus,
+                                    responseEvent.Response.Status),
+                                new FieldValue<string>(
+                                    WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders,
+                                    responseEvent.Response.FirstLineAndHeaders),
+                                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body));
+                        }
+                        if (TryUpdateCaptureRecord(responseEvent.ProcessContext, key, Update))
+                        {
+                            IDataRecord updatedRecord = DataRecordFromRow(record.RowId);
+                            if (updatedRecord != null)
+                            {
+                                _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord, key));
+                            }
+                        }
                     }
 
                     return sendResponse;
@@ -1746,31 +2438,89 @@ namespace XMAT.WebServiceCapture
             }
 
             using var callbackLeaseScope = callbackLease;
+            if (messageEvent.RowKey.SourceId != Guid.Empty)
+            {
+                CaptureRowLookup lookup = _captureRows.Lookup(messageEvent.RowKey);
+                CaptureRowKey current = default;
+                if (lookup == CaptureRowLookup.Retired)
+                {
+                    return;
+                }
+                if (lookup == CaptureRowLookup.Missing &&
+                    (messageEvent.ProcessContext == null ||
+                        !_captureRows.TryGetOrCreateStream(
+                            messageEvent.ProcessContext,
+                            messageEvent.RequestNumber,
+                            out current)))
+                {
+                    return;
+                }
+                if (lookup == CaptureRowLookup.Missing)
+                {
+                    messageEvent.RowKey = current;
+                }
+            }
+            else if (messageEvent.ProcessContext != null)
+            {
+                if (!_captureRows.TryGetOrCreateStream(
+                        messageEvent.ProcessContext,
+                        messageEvent.RequestNumber,
+                        out CaptureRowKey key))
+                {
+                    return;
+                }
+                messageEvent.RowKey = key;
+            }
             _uiUpdateQueue.TryEnqueue(() =>
             {
+                if (messageEvent.RowKey.SourceId != Guid.Empty && !_captureRows.IsCurrent(messageEvent.RowKey))
+                {
+                    return;
+                }
                 var message = new WebSocketMessageModel(messageEvent);
                 WebSocketMessages.AddMessage(message);
                 SelectedWebSocketMessage = message;
             });
         }
 
+        private void WebProxy_WebSocketClosed(object sender, WebSocketClosedEventArgs messageEvent)
+        {
+            _ = sender;
+            if (messageEvent.ProcessContext != null)
+            {
+                _captureRows.CloseStream(messageEvent.ProcessContext, messageEvent.RequestNumber);
+            }
+        }
+
+        private void WebProxy_ConnectionClosed(object sender, ConnectionClosedEventArgs connectionEvent)
+        {
+            _ = sender;
+            if (connectionEvent.ProcessContext != null)
+            {
+                _captureRows.CloseConnection(connectionEvent.ProcessContext);
+            }
+        }
+
         public void ClearAllCaptures()
         {
-            ClearCaptureViewModels();
-            if (_captureDataSource == CaptureDataSource.ActiveTable)
+            using (_captureRows.EnterMutation())
             {
-                _dataTable?.RemoveRowsWhere(
-                    new FieldValue<string>(
-                        WebServiceCaptureMethod.FieldKey_DeviceName,
-                        DeviceName)
-                    );
+                _captureRows.AdvanceGeneration();
+                AdvanceSourceStamp();
+                ClearCaptureViewModels();
+                if (_captureDataSource == CaptureDataSource.ActiveTable)
+                {
+                    _dataTable?.RemoveRowsWhere(
+                        new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName));
+                }
+                _loadedCaptureDataset = null;
             }
-            _loadedCaptureDataset = null;
-            _webProxy?.Reset();
         }
 
         internal void PrepareForActiveCaptureData()
         {
+            _captureRows.AdvanceGeneration();
+            AdvanceSourceStamp();
             _captureDataSource = CaptureDataSource.ActiveTable;
             _loadedCaptureDataset = null;
         }
@@ -1778,6 +2528,7 @@ namespace XMAT.WebServiceCapture
         private void ClearCaptureViewModels()
         {
             ProxyConnections.RemoveAll();
+            SelectedConnectionModel = null;
             WebSocketMessages.Clear();
             SelectedWebSocketMessage = null;
         }

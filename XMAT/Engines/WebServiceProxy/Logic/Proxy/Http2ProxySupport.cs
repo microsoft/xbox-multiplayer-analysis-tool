@@ -22,6 +22,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -174,15 +175,18 @@ namespace XMAT.WebServiceCapture.Proxy
     {
         internal InterceptedTunnelContext(
             int connectionId,
-            ClientRequest connectRequest)
+            ClientRequest connectRequest,
+            ClientProcessContext processContext = null)
         {
             ConnectionId = connectionId;
             ConnectRequest = connectRequest ??
                 throw new ArgumentNullException(nameof(connectRequest));
+            ProcessContext = processContext;
         }
 
         internal int ConnectionId { get; }
         internal ClientRequest ConnectRequest { get; }
+        internal ClientProcessContext ProcessContext { get; }
         private int _tlsCompleted;
 
         internal bool TryMarkTlsCompleted()
@@ -290,13 +294,20 @@ namespace XMAT.WebServiceCapture.Proxy
             if (!await _proxy.RaiseReceivedWebRequestAsync(
                 tunnel.ConnectionId,
                 clientRequest,
-                cancellationToken).ConfigureAwait(false))
+                cancellationToken,
+                tunnel.ProcessContext).ConfigureAwait(false))
             {
                 context.Abort();
                 return;
             }
 
             Uri uri = ProxyUriFactory.Create(clientRequest);
+            if (!HostListEntry.IsSupportedTargetScheme(uri.Scheme))
+            {
+                Log(tunnel.ConnectionId, LogLevel.WARN, "Client request used an unsupported target scheme.");
+                context.Abort();
+                return;
+            }
             if (context.WebSockets.IsWebSocketRequest)
             {
                 await ProxyWebSocketAsync(
@@ -344,7 +355,8 @@ namespace XMAT.WebServiceCapture.Proxy
                     tunnel.ConnectionId,
                     clientRequest,
                     serverResponse,
-                    cancellationToken).ConfigureAwait(false))
+                    cancellationToken,
+                    tunnel.ProcessContext).ConfigureAwait(false))
                 {
                     context.Abort();
                     return;

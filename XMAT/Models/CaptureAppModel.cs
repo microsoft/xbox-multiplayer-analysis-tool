@@ -10,23 +10,18 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.NetworkTrace;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
 namespace XMAT.Models
 {
-    public enum ExportType : int
-    {
-        Fiddler = 0
-    }
-
     public enum ImportType : int
     {
         Fiddler = 0,
@@ -147,9 +142,11 @@ namespace XMAT.Models
         internal bool CanBeginCaptureDataOperation =>
             CanModifyCaptureData &&
             !IsAnyCaptureRunning;
-        internal bool CanStopCaptures => !IsAnalysisRunning;
-        internal bool CanExportSanitizedCaptures =>
-            CanBeginCaptureDataOperation &&
+        // Stop waits for a capture-data operation such as an export, which reads the running capture until it publishes.
+        internal bool CanStopCaptures => !IsAnalysisRunning && !IsCaptureDataOperationRunning;
+        // File > Export and Export Sanitized: the selected web capture, running or not, when it has sessions.
+        internal bool CanExportSelectedCapture =>
+            CanModifyCaptureData &&
             SelectedDeviceContext?.CaptureType == CaptureType.WebProxy &&
             SelectedDeviceContext.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController controller &&
             controller.ProxyConnections.Count > 0;
@@ -200,15 +197,25 @@ namespace XMAT.Models
             return true;
         }
 
-        public ICaptureDeviceContext SelectCaptureDeviceContext(string deviceContextName)
+        // The open capture tab that an analysis read, while it still holds the sessions that the analysis saw; null once
+        // that tab was closed or its sessions were deleted, cleared or reloaded. It never selects a tab.
+        internal ICaptureDeviceContext ResolveCaptureSource(CaptureSourceStamp stamp) =>
+            stamp.SourceId == Guid.Empty
+                ? null
+                : _captureDeviceContexts.FirstOrDefault(context =>
+                    context.CaptureController is WebServiceDeviceCaptureController controller && controller.SourceStamp == stamp);
+
+        // Analyses whose source no longer resolves become historical; called on the UI thread after the tabs or their
+        // sessions change.
+        private void RefreshAnalysisSources()
         {
-            ICaptureDeviceContext context = _captureDeviceContexts.FirstOrDefault(
-                captureDeviceContext => captureDeviceContext.DeviceName == deviceContextName);
-            if (context != null && context != SelectedDeviceContext)
+            foreach (var results in _analysisRuns
+                .Select(run => run.AnalysisData)
+                .OfType<XboxLiveCaptureAnalysis.Models.AnalysisResultsModel>()
+                .Where(candidate => ResolveCaptureSource(candidate.SourceStamp) == null))
             {
-                SelectedDeviceContext = context;
+                results.MarkSourceStale();
             }
-            return context;
         }
 
         internal bool TryBeginAnalysis(out IDisposable analysisLease)
@@ -297,6 +304,7 @@ namespace XMAT.Models
                 }
             }
 
+            RefreshAnalysisSources();
             InvalidateCommands();
         }
 
@@ -615,6 +623,7 @@ namespace XMAT.Models
                 {
                     transfer();
                 }
+                RefreshAnalysisSources();
                 IDeviceCaptureController[] distinctOwners =
                     owners.Where(owner =>
                             _captureDeviceContexts.Any(
@@ -696,9 +705,84 @@ namespace XMAT.Models
                     SqLtSchemaFailure.Unsupported),
             };
 
+        // Saving is a capture data operation: it never overlaps an import, export, close or analysis.
         internal void SaveDataCaptures(string toFilePath)
         {
-            ActiveDatabase.SaveToFile(toFilePath);
+            if (!TrySaveDataCaptures(toFilePath))
+            {
+                throw new InvalidOperationException("Another capture data operation is running.");
+            }
+        }
+
+        // Returns false, without writing, while another capture data operation runs.
+        internal bool TrySaveDataCaptures(string toFilePath)
+        {
+            if (!TryBeginCaptureDataOperation(out IDisposable operation))
+            {
+                return false;
+            }
+
+            using (operation)
+            {
+                ActiveDatabase.SaveToFile(toFilePath);
+            }
+
+            return true;
+        }
+
+        // Clears one capture. Clearing is a capture data operation, so it never overlaps an import, export, save, close or
+        // analysis: returns false, without clearing, while one of them runs, and releases the lease even if it fails.
+        internal bool TryClearAllCaptures(IDeviceCaptureController controller)
+        {
+            ArgumentNullException.ThrowIfNull(controller);
+            if (!TryBeginCaptureDataOperation(out IDisposable operation))
+            {
+                return false;
+            }
+
+            using (operation)
+            {
+                try
+                {
+                    controller.ClearAllCaptures();
+                }
+                finally
+                {
+                    RefreshAnalysisSources();
+                }
+            }
+
+            return true;
+        }
+
+        // Deletes sessions of a writable capture tab on the UI thread. Deleting is a capture data operation: returns false,
+        // deleting nothing, while another one or an analysis runs. Analyses of that capture become historical.
+        internal bool TryDeleteSessions(
+            WebServiceDeviceCaptureController controller,
+            IReadOnlyList<CaptureDeleteTarget> targets,
+            IReadOnlySet<Operations.Captures.CaptureRowKey> currentlyVisible,
+            out CaptureDeleteResult result)
+        {
+            ArgumentNullException.ThrowIfNull(controller);
+            result = null;
+            if (!TryBeginCaptureDataOperation(out IDisposable operation))
+            {
+                return false;
+            }
+
+            using (operation)
+            {
+                try
+                {
+                    result = controller.DeleteSessions(targets, currentlyVisible);
+                }
+                finally
+                {
+                    RefreshAnalysisSources();
+                }
+            }
+
+            return true;
         }
 
         internal Task ImportDataCapturesAsync(
@@ -792,6 +876,11 @@ namespace XMAT.Models
                         }
                         throw;
                     }
+                    finally
+                    {
+                        // Importing again into an existing tab replaces its sessions, so its analyses become historical.
+                        RefreshAnalysisSources();
+                    }
                 }
                 break;
 
@@ -827,41 +916,6 @@ namespace XMAT.Models
             if (captureDevice != null)
             {
                 SelectedDeviceContext = captureDevice;
-            }
-        }
-
-        internal void ExportDataCaptures(ExportType exportType, string toFilePath)
-        {
-            switch (exportType)
-            {
-                case ExportType.Fiddler:
-                    (SelectedDeviceContext.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ExportToFiddler(toFilePath);
-                    break;
-            }
-        }
-
-        internal async Task<WebServiceCapture.SanitizedExportSummary> ExportSanitizedDataCapturesAsync(
-            string toFilePath, CancellationToken cancellationToken = default)
-        {
-            if (!CanExportSanitizedCaptures ||
-                !TryBeginCaptureDataOperation(out var operation, requireAllCapturesStopped: true))
-            {
-                throw new InvalidOperationException(Localization.GetLocalizedString("SANITIZED_EXPORT_UNAVAILABLE"));
-            }
-            using (operation)
-            {
-                var controller = (WebServiceCapture.WebServiceDeviceCaptureController)SelectedDeviceContext.CaptureController;
-                IEnumerable<WebServiceCapture.Models.ProxyConnectionModel> Records()
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    foreach (var record in controller.GetCaptureRecords())
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        yield return new WebServiceCapture.Models.ProxyConnectionModel(record);
-                    }
-                }
-                return await Task.Run(() => WebServiceCapture.FiddlerSazHandler.CreateSanitizedSazFile(toFilePath,
-                    Records(), cancellationToken));
             }
         }
 
@@ -996,13 +1050,25 @@ namespace XMAT.Models
                     StringComparison.OrdinalIgnoreCase)
                 : first == second);
 
-        internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer)
+        internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer) =>
+            AddAnalysisRun(analyzer, ProcessFilterSpec.Empty);
+
+        // A run with a process filter analyzes only the sessions it selects; the specification is immutable, so the run
+        // keeps the filter as it was when the run started.
+        internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer, ProcessFilterSpec processFilter)
         {
+            bool filtered = !ProcessFilter.IsEmpty(processFilter);
             var headerText = $"{analyzer.Description} [{DateTime.Now}]";
+            if (filtered)
+            {
+                headerText += " " + Localization.GetLocalizedString("ANALYSIS_PROCESS_FILTER_TAB");
+            }
+
             var id = (Int64)DateTime.Now.ToFileTimeUtc();
             var analysisRun = new AnalysisRunModel(analyzer, id)
             {
-                Header = headerText
+                Header = headerText,
+                ProcessFilter = filtered ? processFilter : ProcessFilterSpec.Empty,
             };
 
             _analysisRuns.Add(analysisRun);

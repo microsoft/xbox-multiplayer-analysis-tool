@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
@@ -22,6 +23,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using XMAT.Operations.Processes;
 using XMAT.Scripting;
 using XMAT.Tests.Proxy;
 using XMAT.WebServiceCapture.Proxy;
@@ -309,6 +311,80 @@ namespace XMAT.Tests
             Assert.Equal(200, context.Response.StatusCode);
             context.Response.Body.Position = 0;
             Assert.Equal("response-body", await new StreamReader(context.Response.Body).ReadToEndAsync());
+        }
+
+        [Fact]
+        public async Task MultiplexedStreamsKeepTheConnectProcessContext()
+        {
+            var proxy = new WebServiceProxy();
+            proxy.Reset();
+            var registry = new InterceptedTunnelRegistry();
+            var process = new ClientProcessContext(
+                Guid.NewGuid(),
+                9001,
+                new IPEndPoint(IPAddress.Loopback, 51000),
+                new IPEndPoint(IPAddress.Loopback, 8080),
+                DateTimeOffset.UtcNow,
+                Stopwatch.GetTimestamp());
+            process.Publish(
+                new ClientProcessInfo("game.exe", 7788, DateTimeOffset.UtcNow.AddMinutes(-2), ClientProcessStatus.Local)
+            );
+            var connectRequest =
+                new ClientRequest
+                {
+                    RequestNumber = proxy.GetNextRequestID(),
+                    Method = "CONNECT",
+                    Path = "example.com:443",
+                    Version = "HTTP/1.1",
+                    Scheme = "https",
+                    Host = "example.com",
+                    Port = 443,
+                };
+            var tunnel = new InterceptedTunnelContext(1000, connectRequest, process);
+            registry.Register(53000, tunnel);
+            var requestContexts = new List<ClientProcessContext>();
+            var responseContexts = new List<ClientProcessContext>();
+            proxy.ReceivedWebRequest += (_, args) => requestContexts.Add(args.ProcessContext);
+            proxy.ReceivedWebResponse += (_, args) => responseContexts.Add(args.ProcessContext);
+            using var httpClient = new HttpClient(new FreshResponseHandler());
+            var application = new InterceptedProxyApplication(proxy, httpClient, registry);
+
+            foreach (int streamId in new[] { 1, 3, 5 })
+            {
+                var context = new DefaultHttpContext();
+                context.Connection.RemotePort = 53000;
+                context.Request.Protocol = "HTTP/2";
+                context.Request.Scheme = "https";
+                context.Request.Method = "GET";
+                context.Request.Host = new HostString("example.com", 443);
+                context.Request.Path = $"/stream/{streamId}";
+                context.Request.Body = Stream.Null;
+                context.Response.Body = new MemoryStream();
+                context.Features.Set<IHttp2StreamIdFeature>(new Http2StreamIdFeature(streamId));
+
+                await application.InvokeAsync(context);
+            }
+
+            Assert.Same(process, tunnel.ProcessContext);
+            Assert.Equal(3, requestContexts.Count);
+            Assert.Equal(3, responseContexts.Count);
+            Assert.All(requestContexts, context => Assert.Same(process, context));
+            Assert.All(responseContexts, context => Assert.Same(process, context));
+        }
+
+        [Fact]
+        public async Task EndToEndConnectAndInterceptedRequestShareProcessContext()
+        {
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            using HttpClient client = proxy.CreateClient();
+
+            Assert.Equal("origin-ok", await client.GetStringAsync(origin.Url("/connect-process")));
+
+            ClientProcessContext connect = Assert.Single(proxy.CapturedSslProcessContexts);
+            ClientProcessContext request = Assert.Single(proxy.CapturedRequestProcessContexts);
+            Assert.NotNull(connect);
+            Assert.Same(connect, request);
         }
 
         [Fact]
@@ -671,6 +747,7 @@ namespace XMAT.Tests
         {
             using var certificate = CreateCertificate();
             var proxy = new WebServiceProxy();
+            proxy.Reset();
             var registry = new InterceptedTunnelRegistry();
             var upstreamHandler = new RecordingHandler
             {
@@ -1572,6 +1649,55 @@ namespace XMAT.Tests
             });
         }
 
+        [Fact]
+        public async Task InterceptedUnsupportedWebSocketTarget_AbortsBeforeDispatch()
+        {
+            using var certificate = CreateCertificate();
+            var proxy = new WebServiceProxy();
+            var registry = new InterceptedTunnelRegistry();
+            var upstream = new RecordingHandler();
+            using var upstreamClient = new HttpClient(upstream);
+            var application = new InterceptedProxyApplication(proxy, upstreamClient, registry);
+            (string Path, bool Upgrade) observed = default;
+            await using var intercepted = new InterceptedHttpHost(
+                (_, _) => certificate,
+                context =>
+                {
+                    observed = (context.Request.Path.Value, context.WebSockets.IsWebSocketRequest);
+                    registry.Register(context.Connection.RemotePort, new InterceptedTunnelContext(1000, new ClientRequest()));
+                    return application.InvokeAsync(context);
+                });
+            await intercepted.StartAsync(CancellationToken.None);
+            using var client = new HttpClient(new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+            }) { Timeout = TimeSpan.FromSeconds(5) };
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"https://127.0.0.1:{intercepted.Port}//0.0.0.0/x");
+            request.Headers.TryAddWithoutValidation("Upgrade", "websocket");
+            request.Headers.TryAddWithoutValidation("Connection", "Upgrade");
+            request.Headers.TryAddWithoutValidation("Sec-WebSocket-Version", "13");
+            request.Headers.TryAddWithoutValidation("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==");
+            HttpResponseMessage response = null;
+            Exception failure = await Record.ExceptionAsync(async () =>
+            {
+                response = await client.SendAsync(request);
+            });
+            HttpStatusCode? responseStatus = response?.StatusCode;
+            response?.Dispose();
+
+            Assert.Equal("//0.0.0.0/x", observed.Path);
+            Assert.True(observed.Upgrade);
+            Assert.Null(upstream.Request);
+            if (responseStatus.HasValue)
+            {
+                Assert.Equal(HttpStatusCode.BadGateway, responseStatus.Value);
+            }
+            Assert.Null(responseStatus);
+            Assert.IsAssignableFrom<HttpRequestException>(failure);
+        }
+
         // A server that refuses the WebSocket upgrade (for example 401 for an expired token)
         // must have its answer relayed to the client instead of escaping as an exception.
         [Fact]
@@ -1936,6 +2062,24 @@ namespace XMAT.Tests
             {
                 Request = request;
                 return Task.FromResult(Response);
+            }
+        }
+
+        private sealed class FreshResponseHandler : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                _ = request;
+                _ = cancellationToken;
+                return Task.FromResult(
+                    new HttpResponseMessage(
+                        HttpStatusCode.OK)
+                    {
+                        Version = HttpVersion.Version20,
+                        Content = new StringContent("ok"),
+                    });
             }
         }
 

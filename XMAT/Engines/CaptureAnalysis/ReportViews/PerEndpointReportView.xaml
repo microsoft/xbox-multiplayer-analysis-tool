@@ -17,7 +17,7 @@
                      Foreground="{DynamicResource MenuForegroundBrush}"/>
     </UserControl.Resources>
     <UserControl.CommandBindings>
-        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToId}" Executed="GoToEndpoint_Id"/>
+        <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToId}" Executed="GoToEndpoint_Id" CanExecute="GoToId_CanExecute"/>
         <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpoint}" Executed="GoToEndpoint_Executed"/>
         <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBfr}" Executed="GoToEndpointBfr_Executed"/>
         <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBdr}" Executed="GoToEndpointBdr_Executed"/>

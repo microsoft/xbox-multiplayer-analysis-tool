@@ -7,6 +7,8 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using XMAT.Cli;
+using XMAT.Operations;
+using XMAT.Tests.Proxy;
 
 namespace XMAT.Tests.Cli
 {
@@ -15,9 +17,11 @@ namespace XMAT.Tests.Cli
     // --out), a published run keeps its result, and a cleanup failure (exit code 7) wins over everything. XmatSignalTests
     // sends a real console signal. Also what a run reports when its staging folder is not private, or when its report
     // cannot be serialized.
+    [Collection(IsolatedProxyTests.Name)]
     public class CliStagedRunTests
     {
         private const string Results = "results";
+        private static readonly TimeSpan ConcurrencyTimeout = TimeSpan.FromSeconds(30);
 
         [Theory]
         [InlineData("while-producing")]
@@ -277,6 +281,89 @@ namespace XMAT.Tests.Cli
             Assert.Empty(report.Artifacts);
             Assert.Equal(CliCleanupStates.Completed, report.CleanupState);
             Assert.Empty(directory.Entries());
+        }
+
+        [Fact]
+        public async Task PrivateFolder_IsPrivateAndHasExactlyOneOwner()
+        {
+            using var directory = new CliTestDirectory();
+            string parentPath = Path.Join(directory.Root, "broad");
+            Directory.CreateDirectory(parentPath);
+            var parent = new DirectoryInfo(parentPath);
+            DirectorySecurity security = parent.GetAccessControl();
+            security.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                FileSystemRights.ReadAndExecute,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            parent.SetAccessControl(security);
+            string privatePath = Path.Join(parentPath, "private");
+
+            PrivateFolder.Create(privatePath);
+
+            Assert.True(PrivateFolder.IsPrivate(privatePath));
+            string sentinel = Path.Join(privatePath, "sentinel.txt");
+            File.WriteAllText(sentinel, "keep");
+            Assert.Throws<IOException>(() => PrivateFolder.Create(privatePath));
+            Assert.Equal("keep", File.ReadAllText(sentinel));
+
+            string concurrentPath = Path.Join(parentPath, "concurrent");
+            using var barrier = new Barrier(9);
+            Task<bool>[] creators = Enumerable.Range(0, 8).Select(_ =>
+                Task.Factory.StartNew(
+                    () =>
+                    {
+                        Assert.True(
+                            barrier.SignalAndWait(ConcurrencyTimeout),
+                            "A private-folder creator did not reach the barrier.");
+                        try
+                        {
+                            PrivateFolder.Create(concurrentPath);
+                            return true;
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default)).ToArray();
+            Task<bool[]> allCreators = Task.WhenAll(creators);
+            try
+            {
+                Assert.True(
+                    barrier.SignalAndWait(ConcurrencyTimeout),
+                    "The private-folder test did not reach the barrier.");
+                bool[] owners = await allCreators.WaitAsync(ConcurrencyTimeout);
+                Assert.Single(owners, owner => owner);
+                Assert.True(PrivateFolder.IsPrivate(concurrentPath));
+            }
+            finally
+            {
+                try
+                {
+                    await allCreators.WaitAsync(ConcurrencyTimeout);
+                }
+                catch (Exception exception) when (
+                    exception is not TimeoutException &&
+                    !ExceptionUtilities.IsFatal(exception))
+                {
+                    // The primary test path owns worker failures; this wait drains them before barrier disposal.
+                }
+            }
+        }
+
+        [Fact]
+        public void PrivateFolder_UsesExtendedLengthNativePaths()
+        {
+            Assert.Equal(@"\\?\C:\a\b", PrivateFolder.NativePath(@"C:\a\b"));
+            Assert.Equal(@"\\?\UNC\server\share\x", PrivateFolder.NativePath(@"\\server\share\x"));
+            Assert.Equal(@"\\?\C:\x", PrivateFolder.NativePath(@"\\?\C:\x"));
+            Assert.Equal(@"\\.\x", PrivateFolder.NativePath(@"\\.\x"));
+            string relative = Path.Join("relative", "x");
+            Assert.Equal(@"\\?\" + Path.GetFullPath(relative), PrivateFolder.NativePath(relative));
         }
 
         // A report that cannot be serialized (here a null warning, which also breaks the text on standard error) is replaced

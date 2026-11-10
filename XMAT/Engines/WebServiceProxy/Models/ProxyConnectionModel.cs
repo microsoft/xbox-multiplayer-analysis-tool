@@ -5,7 +5,11 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Threading;
+using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.WebServiceCapture.Models
@@ -27,11 +31,15 @@ namespace XMAT.WebServiceCapture.Models
         public const Int64 UnknownRowId = -1;
 
         public Int64 RecordRowId { get; internal set; }
+        public CaptureRowKey RowKey { get; internal set; }
+        public ClientProcessInfo ClientProcess { get; private set; }
+        public bool IsProcessResolving { get; private set; }
 
         public Int64 RequestNumber { get; private set; }
         public Int64 Id { get; private set; }
         public DateTime RequestTime { get; private set; }
         public TimeSpan Duration { get; private set; }
+        internal bool HasRecordedResponseTimestamp { get; private set; }
         public string Status { get; private set; }
         public string Scheme { get; private set; }
         public string Host { get; private set; }
@@ -85,6 +93,7 @@ namespace XMAT.WebServiceCapture.Models
             RequestBody = Array.Empty<byte>();
             ResponseBody = Array.Empty<byte>();
             ClientIP = UnknownStringValue;
+            ClientProcess = ClientProcessInfo.NotRecorded;
 
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
         }
@@ -110,6 +119,7 @@ namespace XMAT.WebServiceCapture.Models
             Status = status;
             RequestTime = requestTime;
             Duration = duration;
+            HasRecordedResponseTimestamp = !string.IsNullOrEmpty(responseLineAndHeaders);
             Scheme = scheme;
             if (HostAuthority.TryParse(hostAndPort, out string host, out int? port))
             {
@@ -132,6 +142,7 @@ namespace XMAT.WebServiceCapture.Models
             RequestBody = requestBody;
             ResponseBody = responseBody;
             ClientIP = clientIP;
+            ClientProcess = ClientProcessInfo.NotRecorded;
 
             // notify whoever is listening that all properties changed (null == all properties)
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
@@ -140,11 +151,13 @@ namespace XMAT.WebServiceCapture.Models
         internal ProxyConnectionModel(ProxyConnectionModel model)
         {
             RecordRowId = model.RecordRowId;
+            RowKey = model.RowKey;
             RequestNumber = model.RequestNumber;
             Id = model.Id;
             Status = model.Status;
             RequestTime = model.RequestTime;
             Duration = model.Duration;
+            HasRecordedResponseTimestamp = model.HasRecordedResponseTimestamp;
             Scheme = model.Scheme;
             Host = model.Host;
             Port = model.Port;
@@ -156,6 +169,8 @@ namespace XMAT.WebServiceCapture.Models
             RequestBody = model.RequestBody;
             ResponseBody = model.ResponseBody;
             ClientIP = model.ClientIP;
+            ClientProcess = model.ClientProcess;
+            IsProcessResolving = model.IsProcessResolving;
 
             _requestHeaders = model.RequestHeaders;
             _responseHeaders = model.ResponseHeaders;
@@ -214,12 +229,36 @@ namespace XMAT.WebServiceCapture.Models
 
         internal ProxyConnectionModel(IDataRecord dataRecord)
         {
+            ClientProcess = ClientProcessInfo.NotRecorded;
             UpdateFromDataRecord(dataRecord);
+        }
+
+        internal void SetImportedIdentity(long requestNumber, long connectionId)
+        {
+            RequestNumber = requestNumber;
+            Id = connectionId;
+        }
+
+        internal void SetClientProcess(ClientProcessInfo info, bool resolving = false)
+        {
+            ClientProcessInfo value = info ?? ClientProcessInfo.NotRecorded;
+            bool processChanged = ClientProcess != value;
+            bool resolvingChanged = IsProcessResolving != resolving;
+            ClientProcess = value;
+            IsProcessResolving = resolving;
+            if (processChanged)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ClientProcess)));
+            }
+            if (resolvingChanged)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsProcessResolving)));
+            }
         }
 
         internal void AddToDataTable(string deviceName, IDataTable dataTable)
         {
-            RecordRowId = dataTable.AddRow(ToDataTableValues(deviceName));
+            RecordRowId = dataTable.AddRow(ToDataTableValues(deviceName, dataTable));
         }
 
         internal object[] ToDataTableValues(string deviceName)
@@ -227,27 +266,90 @@ namespace XMAT.WebServiceCapture.Models
             var requestBodyAsBase64 = RequestBody != null && RequestBody.Length > 0 ? Convert.ToBase64String(RequestBody) : string.Empty;
             var responseBodyAsBase64 = ResponseBody != null && ResponseBody.Length > 0 ? Convert.ToBase64String(ResponseBody) : string.Empty;
 
-            // see layout in WebServiceCaptureMethod.InitializeDataTables()
+            return WebProxyCaptureSchema.Project(
+                new Dictionary<string, object>(
+                    StringComparer.Ordinal)
+                {
+                    [WebServiceCaptureMethod
+                        .FieldKey_DeviceName] =
+                        deviceName,
+                    [WebServiceCaptureMethod
+                        .FieldKey_RequestNumber] =
+                        RequestNumber,
+                    [WebServiceCaptureMethod
+                        .FieldKey_ConnectionId] =
+                        Id,
+                    [WebServiceCaptureMethod
+                        .FieldKey_RequestTimestamp] =
+                        ToDateTimeString(RequestTime),
+                    [WebServiceCaptureMethod
+                        .FieldKey_ResponseTimestamp] =
+                        ToDateTimeString(
+                            RequestTime + Duration),
+                    [WebServiceCaptureMethod
+                        .FieldKey_RequestScheme] =
+                        Scheme,
+                    [WebServiceCaptureMethod
+                        .FieldKey_RequestHost] =
+                        Host,
+                    [WebServiceCaptureMethod
+                        .FieldKey_RequestPort] =
+                        Port,
+                    [WebServiceCaptureMethod
+                        .FieldKey_RequestMethod] =
+                        Method,
+                    [WebServiceCaptureMethod
+                        .FieldKey_RequestPath] =
+                        Path,
+                    [WebServiceCaptureMethod
+                        .FieldKey_RequestStatus] =
+                        Status,
+                    [WebServiceCaptureMethod
+                        .FieldKey_RequestLineAndHeaders] =
+                        RequestLineAndHeaders,
+                    [WebServiceCaptureMethod
+                        .FieldKey_RequestBody] =
+                        requestBodyAsBase64,
+                    [WebServiceCaptureMethod
+                        .FieldKey_ResponseLineAndHeaders] =
+                        ResponseLineAndHeaders,
+                    [WebServiceCaptureMethod
+                        .FieldKey_ResponseBody] =
+                        responseBodyAsBase64,
+                    [WebServiceCaptureMethod
+                        .FieldKey_ClientIP] =
+                        ClientIP,
+                },
+                ClientProcess);
+        }
 
-            return new object[]
+        internal object[] ToDataTableValues(string deviceName, IDataTable dataTable)
+        {
+            ArgumentNullException.ThrowIfNull(dataTable);
+            IDataset dataset = dataTable.Dataset;
+            using (dataset as IDisposable)
             {
-                deviceName,
-                RequestNumber,
-                Id,
-                ToDateTimeString(RequestTime),
-                ToDateTimeString(RequestTime + Duration),
-                Scheme,
-                Host,
-                Port,
-                Method,
-                Path,
-                Status,
-                RequestLineAndHeaders,
-                requestBodyAsBase64,
-                ResponseLineAndHeaders,
-                responseBodyAsBase64,
-                ClientIP
-            };
+                return ToDataTableValues(deviceName, dataset.FieldDefs);
+            }
+        }
+
+        internal object[] ToDataTableValues(string deviceName, IEnumerable<IFieldDefinition> fieldDefinitions)
+        {
+            ArgumentNullException.ThrowIfNull(fieldDefinitions);
+            object[] projected = ToDataTableValues(deviceName);
+            var byName =
+                WebProxyCaptureSchema.Fields
+                    .Select(
+                        (field, index) =>
+                            new
+                            {
+                                field.Name,
+                                Value = projected[index],
+                            }).ToDictionary(item => item.Name,
+                        item => item.Value,
+                        StringComparer.Ordinal);
+            return fieldDefinitions.OrderBy(field => field.ColumnIndex).Select(field => byName.TryGetValue(field.Name,
+                out object value) ? value : field.ValueType == FieldValueType.String ? string.Empty : 0L).ToArray();
         }
 
         internal void UpdateFromDataRecord(IDataRecord dataRecord)
@@ -267,6 +369,7 @@ namespace XMAT.WebServiceCapture.Models
             }
 
             var responseTimestamp = dataRecord.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp);
+            HasRecordedResponseTimestamp = !string.IsNullOrEmpty(responseTimestamp);
             if (!string.IsNullOrEmpty(responseTimestamp))
             {
                 Duration = DateTime.Parse(responseTimestamp) - RequestTime;
@@ -337,6 +440,13 @@ namespace XMAT.WebServiceCapture.Models
             {
                 ClientIP = clientIP;
             }
+
+            ClientProcessInfo process = ClientProcessRecordCodec.Read(dataRecord);
+            if (ClientProcess.Status != ClientProcessStatus.NotRecorded && process != ClientProcess)
+            {
+                process = ClientProcess;
+            }
+            SetClientProcess(process, process.Status == ClientProcessStatus.NotRecorded && IsProcessResolving);
 
             _requestHeaders = null;
             _responseHeaders = null;

@@ -2,12 +2,18 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Reflection;
 using System.Text.Json;
+using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Export;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Proxy;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
@@ -15,6 +21,7 @@ using static XboxClient.XboxClientConnection;
 
 namespace XMAT.Tests
 {
+    [Collection(IsolatedProxyTests.Name)]
     public class WebServiceDeviceCaptureControllerTests
     {
         [Fact]
@@ -830,6 +837,112 @@ namespace XMAT.Tests
             Assert.Same(startFailure, second);
         }
 
+        [Theory]
+        [InlineData(StopAttempt.AsyncFailure, false, true, typeof(InvalidOperationException))]
+        [InlineData(StopAttempt.AsyncFailure, true, true, typeof(TimeoutException))]
+        [InlineData(StopAttempt.SyncFailure, false, true, typeof(InvalidOperationException))]
+        [InlineData(StopAttempt.Success, true, false, typeof(TimeoutException))]
+        public async Task StopFailureLifecycle_IsRetryableAndIsolatesOtherRuns(
+            StopAttempt attempt,
+            bool callbackTimeout,
+            bool expectRunAdmissionAfterFailure,
+            Type expectedException)
+        {
+            var controller = CreateController(new PreferencesModel());
+            var proxy = new FailingProxy(
+                new InvalidOperationException("unused start failure"),
+                stopThrows: false,
+                stopFailures: attempt == StopAttempt.AsyncFailure ? 1 : 0,
+                synchronousStopFailures: attempt == StopAttempt.SyncFailure ? 1 : 0);
+            await using ClientProcessResolver resolver = CreateStopResolver();
+            SetProxy(controller, proxy);
+            controller.ProcessResolverOverride = resolver;
+            if (callbackTimeout)
+            {
+                controller.CaptureCallbackDrainTimeoutOverride = TimeSpan.FromMilliseconds(10);
+            }
+            Guid run = Guid.NewGuid();
+            Guid otherRun = Guid.NewGuid();
+            resolver.SealRun(otherRun);
+            CaptureRowRegistry registry = RegistryOf(controller);
+            registry.StartRun(run);
+            SetPrivateField(controller, "_activeRun", run);
+            controller.IsRunning = true;
+            IDisposable callback = null;
+            if (callbackTimeout)
+            {
+                AsyncOperationTracker callbacks = CallbacksOf(controller);
+                callbacks.StartAccepting();
+                Assert.True(callbacks.TryBegin(out callback));
+            }
+
+            Exception failure;
+            using (callback)
+            {
+                failure = await Record.ExceptionAsync(() => controller.StopProxyAsync());
+            }
+
+            Assert.NotNull(failure);
+            Assert.Equal(expectedException, failure.GetType());
+            Assert.Equal(expectRunAdmissionAfterFailure, await AdmitsAttributionAsync(resolver, run, 50310));
+            Assert.False(await AdmitsAttributionAsync(resolver, otherRun, 50311));
+            Assert.True(controller.IsRunning);
+            Assert.Equal(run, ActiveRunOf(controller));
+
+            await controller.StopProxyAsync();
+
+            Assert.False(controller.IsRunning);
+            Assert.Equal(Guid.Empty, ActiveRunOf(controller));
+            Assert.True(await AdmitsAttributionAsync(resolver, run, 50312));
+            Assert.False(await AdmitsAttributionAsync(resolver, otherRun, 50313));
+            Assert.Equal(2, proxy.StopCount);
+        }
+
+        public enum StopAttempt
+        {
+            AsyncFailure,
+            SyncFailure,
+            Success,
+        }
+
+        private static ClientProcessResolver CreateStopResolver() =>
+            new(
+                new ProbeOwnerProvider(),
+                new MissingIdentityProvider(),
+                new AlwaysLocalAddressProvider(),
+                new SystemClientProcessResolverClock(),
+                ClientProcessResolverOptions
+                    .Default with
+                    {
+                        DrainBudget = TimeSpan.FromSeconds(5),
+                    });
+
+        // Whether RUN admits attribution from a valid local connection; an admitted probe is drained before returning.
+        private static async Task<bool> AdmitsAttributionAsync(ClientProcessResolver resolver, Guid run, int clientPort)
+        {
+            bool admitted = resolver.TryEnqueue(new ClientProcessContext(
+                run,
+                clientPort,
+                new IPEndPoint(IPAddress.Loopback, clientPort),
+                new IPEndPoint(IPAddress.Loopback, 8080),
+                DateTimeOffset.UtcNow,
+                Stopwatch.GetTimestamp()));
+            await resolver.DrainAsync(run);
+            return admitted;
+        }
+
+        private static CaptureRowRegistry RegistryOf(WebServiceDeviceCaptureController controller) =>
+            (CaptureRowRegistry) typeof(WebServiceDeviceCaptureController).GetField("_captureRows",
+            BindingFlags.Instance | BindingFlags.NonPublic).GetValue(controller);
+
+        private static AsyncOperationTracker CallbacksOf(WebServiceDeviceCaptureController controller) =>
+            (AsyncOperationTracker) typeof(WebServiceDeviceCaptureController).GetField("_captureCallbacks",
+            BindingFlags.Instance | BindingFlags.NonPublic).GetValue(controller);
+
+        private static Guid ActiveRunOf(WebServiceDeviceCaptureController controller) =>
+            (Guid)typeof(WebServiceDeviceCaptureController).GetField("_activeRun", BindingFlags.Instance |
+            BindingFlags.NonPublic).GetValue(controller);
+
         private static void SetProxy(WebServiceDeviceCaptureController controller, IWebServiceProxy proxy)
         {
             typeof(WebServiceDeviceCaptureController)
@@ -837,16 +950,61 @@ namespace XMAT.Tests
                 .SetValue(controller, proxy);
         }
 
-        private sealed class FailingProxy : IWebServiceProxy
+        // Owns the four AdmitsAttributionAsync probe ports, so probes never take the retry path.
+        private sealed class ProbeOwnerProvider : ITcpOwnerTableProvider
+        {
+            public IReadOnlyList<TcpOwnerRow> Snapshot(System.Net.Sockets.AddressFamily addressFamily)
+            {
+                _ = addressFamily;
+                return Enumerable.Range(50310, 4)
+                    .Select(clientPort => new TcpOwnerRow(
+                        new IPEndPoint(IPAddress.Loopback, clientPort),
+                        new IPEndPoint(IPAddress.Loopback, 8080),
+                        clientPort))
+                    .ToArray();
+            }
+        }
+
+        private sealed class MissingIdentityProvider : IProcessIdentityProvider
+        {
+            public ProcessIdentityQueryStatus Query(int processId, out ProcessIdentityData identity)
+            {
+                _ = processId;
+                identity = null;
+                return ProcessIdentityQueryStatus.Missing;
+            }
+
+            public IReadOnlyDictionary<int, ProcessIdentityData> Snapshot() => new Dictionary<int,
+                    ProcessIdentityData>();
+        }
+
+        private sealed class AlwaysLocalAddressProvider : ILocalAddressProvider
+        {
+            public bool IsLocal(IPAddress address)
+            {
+                _ = address;
+                return true;
+            }
+        }
+
+        internal sealed class FailingProxy : IWebServiceProxy
         {
             private readonly Exception _startFailure;
-            private readonly bool _stopThrows;
+            private int _remainingStopFailures;
+            private int _remainingSynchronousStopFailures;
 
-            public FailingProxy(Exception startFailure, bool stopThrows)
+            public FailingProxy(
+                Exception startFailure,
+                bool stopThrows,
+                int stopFailures = -1,
+                int synchronousStopFailures = 0)
             {
                 _startFailure = startFailure;
-                _stopThrows = stopThrows;
+                _remainingStopFailures = stopFailures >= 0 ? stopFailures : stopThrows ? int.MaxValue : 0;
+                _remainingSynchronousStopFailures = synchronousStopFailures;
             }
+
+            internal int StopCount { get; private set; }
 
 #pragma warning disable CS0067
             public event EventHandler<InitialConnectionEventArgs> ReceivedInitialConnection;
@@ -872,7 +1030,24 @@ namespace XMAT.Tests
                 => Task.FromException(_startFailure);
 
             public Task StopProxyAsync(IProgress<WebProxyStopProgress> progress = null)
-                => _stopThrows ? Task.FromException(new InvalidOperationException("cleanup failed")) : Task.CompletedTask;
+            {
+                _ = progress;
+                StopCount++;
+                if (_remainingSynchronousStopFailures > 0)
+                {
+                    _remainingSynchronousStopFailures--;
+                    throw new InvalidOperationException("synchronous cleanup failed");
+                }
+                if (_remainingStopFailures > 0)
+                {
+                    if (_remainingStopFailures != int.MaxValue)
+                    {
+                        _remainingStopFailures--;
+                    }
+                    return Task.FromException(new InvalidOperationException("cleanup failed"));
+                }
+                return Task.CompletedTask;
+            }
 
             public Task RecheckSslConnectionsAsync(
                 Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> policy,
@@ -1047,9 +1222,13 @@ namespace XMAT.Tests
             controller.LoadCaptureDataset(dataset);
 
             var loadedRecord = Assert.Single(controller.GetCaptureRecords());
+            dataset.RejectFilteredReads = true;
+            using ICaptureExportSnapshot snapshot =
+                controller.CreateExportSnapshot("d1");
 
             Assert.Same(record, loadedRecord);
             Assert.Equal(2, dataset.FilteredReadCount);
+            Assert.Single(snapshot.Sessions);
         }
 
         [Fact]
@@ -1108,6 +1287,119 @@ namespace XMAT.Tests
                 new HttpResponseEventArgs()));
         }
 
+        [Fact]
+        public void SetProcessFilter_EquivalentCanonicalValuesDoesNotNotifyAgain()
+        {
+            var controller = CreateController(new PreferencesModel());
+            var first = new ProcessFilterSpec(ImmutableArray.Create("game.exe"), ImmutableArray.Create("svchost.exe"));
+            var equivalent = new ProcessFilterSpec(
+                ImmutableArray.Create("game.exe"),
+                ImmutableArray.Create("svchost.exe"));
+            var notifications = 0;
+            controller.PropertyChanged +=
+                (_, args) =>
+                {
+                    if (args.PropertyName == nameof(WebServiceDeviceCaptureController.ProcessFilter))
+                    {
+                        notifications++;
+                    }
+                };
+
+            controller.SetProcessFilter(first);
+            controller.SetProcessFilter(equivalent);
+
+            Assert.Equal(1, notifications);
+            Assert.Same(first, controller.ProcessFilter);
+        }
+
+        [Fact]
+        public void ClearAllCaptures_PreservesFilterAndMonotonicRunNumbers()
+        {
+            var controller = CreateController(new PreferencesModel());
+            var proxy = new WebServiceProxy();
+            SetProxy(controller, proxy);
+            proxy.Reset();
+            int firstConnection = proxy.GetNextConnectionID();
+            int firstRequest = proxy.GetNextRequestID();
+            var filter = new ProcessFilterSpec(ImmutableArray.Create("game.exe"), ImmutableArray.Create("svchost.exe"));
+            controller.SetProcessFilter(filter);
+
+            controller.ClearAllCaptures();
+
+            Assert.Same(filter, controller.ProcessFilter);
+            Assert.Equal(firstConnection + 1, proxy.GetNextConnectionID());
+            Assert.Equal(firstRequest + 1, proxy.GetNextRequestID());
+
+            proxy.Reset();
+            Assert.Equal(1000, proxy.GetNextConnectionID());
+            Assert.Equal(1, proxy.GetNextRequestID());
+        }
+
+        [Fact]
+        public async Task NaturalAttributionRunMismatch_PreservesPolicyUnresolvedRowAndActiveRun()
+        {
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            IDataTable table = CreateConnectionsTable(database);
+            var controller = CreateController(new PreferencesModel());
+            SetPrivateField(controller, "_dataTable", table);
+            AsyncOperationTracker callbacks = CallbacksOf(controller);
+            CaptureRowRegistry registry = RegistryOf(controller);
+            Guid activeRun = Guid.NewGuid();
+            Guid staleRun = Guid.NewGuid();
+            registry.StartRun(activeRun);
+            SetPrivateField(controller, "_activeRun", activeRun);
+            var process = new ClientProcessContext(
+                staleRun,
+                1003,
+                new IPEndPoint(IPAddress.Loopback, 50303),
+                new IPEndPoint(IPAddress.Loopback, 8080),
+                DateTimeOffset.UtcNow,
+                Stopwatch.GetTimestamp());
+            var request =
+                new ClientRequest
+                {
+                    RequestNumber = 4,
+                    Version = "HTTP/1.1",
+                    Scheme = "http",
+                    Host = "example.test",
+                    Port = 80,
+                    Method = "GET",
+                    Path = "/natural-run-mismatch",
+                };
+            callbacks.StartAccepting();
+            try
+            {
+                bool accepted =
+                    await InvokeCapturePolicyAsync(
+                        controller,
+                        "WebProxy_ReceivedWebRequestAsync",
+                        new HttpRequestEventArgs
+                        {
+                            ConnectionID = 1003,
+                            Timestamp = DateTime.Now,
+                            Request = request,
+                            ProcessContext = process,
+                        });
+                IDataRecord row = Assert.Single(table.Dataset.DataRecords);
+                bool keyed = registry.Lookup(process, request.RequestNumber, out CaptureRowKey key) ==
+                    CaptureRowLookup.Current;
+                ClientProcessInfo recorded = ClientProcessRecordCodec.Read(row);
+
+                Assert.True(
+                    accepted &&
+                        keyed &&
+                        key.SourceId != Guid.Empty &&
+                        recorded.Status == ClientProcessStatus.Unresolved &&
+                        ActiveRunOf(controller) == activeRun,
+                    $"accepted={accepted}; keyed={keyed}; key={key}; process={recorded}; current={ActiveRunOf(controller)}.");
+            }
+            finally
+            {
+                await callbacks.StopAcceptingAndWaitAsync();
+            }
+        }
+
         private static Task<bool> InvokeCapturePolicyAsync<TEventArgs>(
             WebServiceDeviceCaptureController controller,
             string methodName,
@@ -1136,6 +1428,66 @@ namespace XMAT.Tests
 
             Assert.Empty(controller.ProxyConnections);
             Assert.Empty(controller.GetCaptureRecords());
+        }
+
+        [Fact]
+        public void ExactRowLookup_DoesNotReturnTheNextRowAfterDeletion()
+        {
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            IDataTable table = CreateConnectionsTable(database);
+            long deleted = AddConnectionRow(table, requestNumber: 1, connectionId: 1000);
+            _ = AddConnectionRow(table, requestNumber: 2, connectionId: 1001);
+            table.RemoveRowsWhere(new FieldValue<long>(WebServiceCaptureMethod.FieldKey_RequestNumber, 1));
+            var controller = CreateController(new PreferencesModel());
+            SetPrivateField(controller, "_dataTable", table);
+
+            IDataRecord record = (IDataRecord)typeof(WebServiceDeviceCaptureController).GetMethod("DataRecordFromRow",
+                BindingFlags.Instance | BindingFlags.NonPublic).Invoke(controller, new object[] { deleted });
+
+            Assert.Null(record);
+        }
+
+        [Fact]
+        public void ConnectCompletion_MissingRowIsANormalNoOp()
+        {
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            IDataTable table = CreateConnectionsTable(database);
+            var controller = CreateController(new PreferencesModel());
+            SetPrivateField(controller, "_dataTable", table);
+            var callbacks = (AsyncOperationTracker)
+                typeof(WebServiceDeviceCaptureController).GetField("_captureCallbacks", BindingFlags.Instance |
+                BindingFlags.NonPublic).GetValue(controller);
+            callbacks.StartAccepting();
+            var completion =
+                new SslConnectionCompletionEventArgs
+                {
+                    ConnectionID = 1000,
+                    Request =
+                        new ClientRequest
+                        {
+                            RequestNumber = 1,
+                        },
+                };
+
+            Exception exception =
+                Record.Exception(
+                    () => typeof(
+                            WebServiceDeviceCaptureController)
+                        .GetMethod(
+                            "WebProxy_CompletedSslConnectionRequest",
+                            BindingFlags.Instance |
+                            BindingFlags.NonPublic)
+                        .Invoke(
+                            controller,
+                            new object[]
+                            {
+                                null,
+                                completion,
+                            }));
+
+            Assert.Null(exception);
         }
 
         private static IDataRecord CreateAnalyzableRecord(string deviceName)
@@ -1170,13 +1522,47 @@ namespace XMAT.Tests
                 });
         }
 
-        private sealed class TestDataset : IDataset
+        private static IDataTable CreateConnectionsTable(SqLtDatabase database) => database.CreateTable(
+            WebServiceCaptureMethod.TableName,
+            WebProxyCaptureSchema.CreateFields());
+
+        private static long AddConnectionRow(IDataTable table, long requestNumber, long connectionId) => table.AddRow(
+            "test-console",
+            requestNumber,
+            connectionId,
+            "2026-11-03T20:00:00.0000000Z",
+            string.Empty,
+            "https",
+            "example.test",
+            "443",
+            "GET",
+            "/",
+            string.Empty,
+            "GET / HTTP/1.1",
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            "test-console",
+            string.Empty,
+            0L,
+            string.Empty,
+            string.Empty);
+
+        private static void SetPrivateField(object target, string name, object value)
+        {
+            typeof(WebServiceDeviceCaptureController).GetField(name, BindingFlags.Instance |
+                BindingFlags.NonPublic).SetValue(target, value);
+        }
+
+        private sealed class TestDataset : IDataset, IRawCaptureDataset
         {
             private readonly IDataRecord _record;
 
             public IEnumerable<IFieldDefinition> FieldDefs => Array.Empty<IFieldDefinition>();
             public IEnumerable<IDataRecord> DataRecords => new[] { _record };
+            public IReadOnlyList<SqLtSchemaColumn> Columns => Array.Empty<SqLtSchemaColumn>();
             public int FilteredReadCount { get; private set; }
+            internal bool RejectFilteredReads { get; set; }
 
             internal TestDataset(IDataRecord record)
             {
@@ -1195,6 +1581,10 @@ namespace XMAT.Tests
 
             public IEnumerable<IDataRecord> DataRecordsWhen(params IFieldValue[] fieldNamesAndValues)
             {
+                if (RejectFilteredReads)
+                {
+                    throw new InvalidOperationException("The loaded payload was materialized while freezing metadata.");
+                }
                 FilteredReadCount++;
 
                 var deviceFilter = fieldNamesAndValues.FirstOrDefault(

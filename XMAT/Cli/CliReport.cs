@@ -7,6 +7,9 @@ using System.Collections.Generic;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Capabilities;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Export;
+using XMAT.Operations.Processes;
 
 namespace XMAT.Cli
 {
@@ -43,6 +46,36 @@ namespace XMAT.Cli
         internal int TotalCalls { get; set; }
 
         internal int TotalFindings { get; set; }
+
+        // The validated process selectors of a run whose command line was valid; null otherwise, and then the JSON has no
+        // processFilter. ProcessScope holds the counts once session selection completed.
+        internal ProcessFilterSpec ProcessFilter { get; set; }
+
+        internal ProcessFilterScope ProcessScope { get; set; }
+    }
+
+    // The allow-listed facts of an export: its validated command line and the operation's result. Never a path or a
+    // captured value; the JSON writes counts for host, status and method values.
+    internal sealed class CliExportReport
+    {
+        internal CaptureExportFormat? Format { get; set; }
+
+        internal CliLimits Limits { get; set; }
+
+        internal string DeviceId { get; set; }
+
+        internal CaptureSelectionSpec Selection { get; set; }
+
+        internal ExportCaptureResult Result { get; set; }
+
+        // The block of a run whose command line was valid, before the operation runs.
+        internal static CliExportReport From(CliRequest request) => new()
+        {
+            Format = request.Format,
+            Limits = request.Limits ?? CliLimits.Default,
+            DeviceId = request.DeviceId,
+            Selection = request.Selection,
+        };
     }
 
     internal sealed class CliDoctorReport
@@ -99,6 +132,8 @@ namespace XMAT.Cli
 
         internal CliAnalysisReport Analysis { get; set; }
 
+        internal CliExportReport Export { get; set; }
+
         internal CliDoctorReport Doctor { get; set; }
 
         internal IReadOnlyList<CliCommandHelp> Commands { get; set; }
@@ -125,12 +160,41 @@ namespace XMAT.Cli
             }
         }
 
+        // Reports an operation's diagnostics in their order: warnings as warnings; errors, and on failure every other
+        // diagnostic, as errors. Maps the outcome to the exit code and, when a failure gave no error, adds the command's
+        // own fallback error.
+        internal void ApplyOutcome<T>(OperationResult<T> result, string fallbackCode, string fallbackMessage)
+        {
+            bool failed = !result.Succeeded;
+            foreach (OperationDiagnostic diagnostic in result.Diagnostics)
+            {
+                if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
+                {
+                    Warnings.Add(diagnostic);
+                }
+                else if (diagnostic.Severity == OperationDiagnosticSeverity.Error || failed)
+                {
+                    Errors.Add(diagnostic);
+                }
+            }
+
+            SetExitCode(CliExitCodes.FromOutcome(result.Outcome));
+            if (failed && Errors.Count == 0)
+            {
+                Errors.Add(new OperationDiagnostic(fallbackCode, OperationDiagnosticSeverity.Error, fallbackMessage));
+            }
+        }
+
         internal static CliReport ForParseError(string runId, CliParseResult parsed)
         {
             var report = new CliReport(parsed.Command, runId) { ExitCode = CliExitCodes.Usage };
             if (parsed.Command == CliCommands.Analyze)
             {
                 report.Analysis = new CliAnalysisReport();
+            }
+            else if (parsed.Command == CliCommands.Export)
+            {
+                report.Export = new CliExportReport();
             }
 
             report.Errors.Add(parsed.Error);
@@ -151,7 +215,15 @@ namespace XMAT.Cli
             var report = new CliReport(parsed?.Command, runId);
             if (parsed is { Succeeded: true, Request.Command: CliCommands.Analyze })
             {
-                report.Analysis = new CliAnalysisReport { Limits = parsed.Request.Limits ?? CliLimits.Default };
+                report.Analysis = new CliAnalysisReport
+                {
+                    Limits = parsed.Request.Limits ?? CliLimits.Default,
+                    ProcessFilter = parsed.Request.ProcessFilter ?? ProcessFilterSpec.Empty,
+                };
+            }
+            else if (parsed is { Succeeded: true, Request.Command: CliCommands.Export })
+            {
+                report.Export = CliExportReport.From(parsed.Request);
             }
 
             report.Fail(CliExitCodes.Internal, "cli.internal", "xmat stopped because of an internal error.");

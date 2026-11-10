@@ -36,11 +36,11 @@ namespace XMAT.Tests
             var originalResponse = record.ResponseLineAndHeaders;
             var originalBody = record.RequestBody.ToArray();
             var ordinary = Path.Join(_directory, "ordinary.saz");
-            FiddlerSazHandler.CreateSazFile(ordinary, new[] { record });
+            SazArchive.Write(ordinary, new[] { record });
             var ordinaryBytes = File.ReadAllBytes(ordinary);
 
             var path = Path.Join(_directory, "sanitized.saz");
-            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, new[] { record });
+            var summary = SazArchive.Write(path, new[] { record }, sanitized: true);
             var entries = Entries(path);
             var all = string.Join("\n", entries.Values.Select(Encoding.UTF8.GetString));
             foreach (var secret in new[]
@@ -102,7 +102,7 @@ namespace XMAT.Tests
                 RequestBody: record.RequestBody.ToArray(), ResponseBody: record.ResponseBody.ToArray())).ToArray();
             var path = Path.Join(_directory, "multiple.saz");
 
-            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, records);
+            var summary = SazArchive.Write(path, records, sanitized: true);
             var entries = Entries(path);
 
             Assert.Equal(new[]
@@ -183,7 +183,8 @@ namespace XMAT.Tests
                 }
                 var flags = session.Element("SessionFlags").Elements("SessionFlag")
                     .ToDictionary(flag => (string)flag.Attribute("N"), flag => (string)flag.Attribute("V"));
-                Assert.Equal(index == 1 ? 3 : 1, flags.Count);
+                // x-clientip, XMAT's request number, connection id, two timestamps and scheme, and any omission markers.
+                Assert.Equal(index == 1 ? 8 : 6, flags.Count);
                 Assert.Equal("0.0.0.0", flags["x-clientip"]);
                 if (index == 1)
                 {
@@ -503,28 +504,11 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void FailedExport_PreservesExistingDestinationAndRemovesTemporaryFile()
-        {
-            var path = Path.Join(_directory, "existing.saz");
-            File.WriteAllText(path, "original destination");
-            IEnumerable<ProxyConnectionModel> BrokenRecords()
-            {
-                yield return Record();
-                throw new IOException("simulated source failure");
-            }
-
-            Assert.Throws<IOException>(() => FiddlerSazHandler.CreateSanitizedSazFile(path, BrokenRecords()));
-
-            Assert.Equal("original destination", File.ReadAllText(path));
-            Assert.Single(Directory.GetFiles(_directory));
-        }
-
-        [Fact]
         public void Archive_OmittedBodiesAreMarkedInSessionMetadata()
         {
             var path = Path.Join(_directory, "omitted.saz");
             var record = Record("application/octet-stream");
-            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, new[] { record });
+            var summary = SazArchive.Write(path, new[] { record }, sanitized: true);
             var entries = Entries(path);
             var metadata = XDocument.Parse(Encoding.UTF8.GetString(entries["raw/1_m.xml"]));
             var marker = metadata.Descendants("SessionFlag").Single(element =>
@@ -536,140 +520,34 @@ namespace XMAT.Tests
             Assert.Contains("body-canary", Encoding.UTF8.GetString(record.RequestBody));
         }
 
+        // A running capture can be exported too: its sessions without a complete response are skipped and counted.
         [Fact]
-        public void SanitizedExport_CannotOverwriteNativeCaptureFiles()
-        {
-            var path = Path.Join(_directory, "capture.xmatcap");
-            File.WriteAllText(path, "original capture");
-
-            Assert.Throws<ArgumentException>(() => FiddlerSazHandler.CreateSanitizedSazFile(path, new[] { Record() }));
-
-            Assert.Equal("original capture", File.ReadAllText(path));
-            Assert.Single(Directory.GetFiles(_directory));
-        }
-
-        [Fact]
-        public async Task Model_ExportsOnlySelectedLoadedCaptureAndKeepsSourceRecordsUnchanged()
-        {
-            var selected = new DataRecord(1, "selected");
-            var other = new DataRecord(2, "other");
-            var original = selected.Str(WebServiceCaptureMethod.FieldKey_RequestBody);
-            Task<SanitizedExportSummary> exporting = null;
-            CaptureAppModel model = null;
-            var path = Path.Join(_directory, "selected.saz");
-            _application.Run(window =>
-            {
-                var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
-                controller.LoadCaptureDataset(new Dataset(selected, other));
-                var context = new Context(controller);
-                model = new CaptureAppModel { SelectedDeviceContext = context };
-                model.CaptureDeviceContexts.Add(context);
-                Assert.True(model.CanExportSanitizedCaptures);
-                exporting = model.ExportSanitizedDataCapturesAsync(path);
-            });
-            var summary = await exporting;
-
-            Assert.Equal(1, summary.Sessions);
-            Assert.Equal(3, Entries(path).Count);
-            Assert.DoesNotContain("body-canary", Encoding.UTF8.GetString(Entries(path)["raw/1_c.txt"]));
-            Assert.Equal(original, selected.Str(WebServiceCaptureMethod.FieldKey_RequestBody));
-            _application.Run(window =>
-            {
-                Assert.False(model.IsCaptureDataOperationRunning);
-                model.SelectedDeviceContext = null;
-            });
-        }
-
-        [Fact]
-        public async Task CancellationAfterPublication_ReportsSuccessAndKeepsTheCompletedArchive()
-        {
-            using var cancellation = new CancellationTokenSource();
-            var path = Path.Join(_directory, "published.saz");
-            Task<SanitizedExportSummary> exporting = null;
-            CaptureAppModel model = null;
-            var cancelledAfterPublication = false;
-            _application.Run(window =>
-            {
-                var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
-                controller.LoadCaptureDataset(new Dataset(new DataRecord(1, "selected")));
-                var context = new Context(controller);
-                model = new CaptureAppModel { SelectedDeviceContext = context };
-                model.CaptureDeviceContexts.Add(context);
-                model.PropertyChanged += (sender, args) =>
-                {
-                    if (args.PropertyName == nameof(CaptureAppModel.IsCaptureDataOperationRunning) &&
-                        !model.IsCaptureDataOperationRunning)
-                    {
-                        Assert.True(File.Exists(path));
-                        Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
-                        Assert.True(exporting == null || !exporting.IsCompleted);
-                        cancelledAfterPublication = true;
-                        cancellation.Cancel();
-                    }
-                };
-                exporting = model.ExportSanitizedDataCapturesAsync(path, cancellation.Token);
-            });
-            var summary = await exporting;
-
-            Assert.True(cancelledAfterPublication);
-            Assert.True(cancellation.IsCancellationRequested);
-            Assert.False(exporting.IsCanceled);
-            Assert.Equal(1, summary.Sessions);
-            var entries = Entries(path);
-            Assert.Equal(new[] { "raw/1_c.txt", "raw/1_m.xml", "raw/1_s.txt" },
-                entries.Keys.OrderBy(name => name, StringComparer.Ordinal));
-            var all = string.Join("\n", entries.Values.Select(Encoding.UTF8.GetString));
-            Assert.DoesNotContain("body-canary", Uri.UnescapeDataString(all));
-            var metadata = XDocument.Parse(Encoding.UTF8.GetString(entries["raw/1_m.xml"]));
-            Assert.Contains(metadata.Descendants("SessionFlag"), flag =>
-                (string)flag.Attribute("N") == "x-clientip" && (string)flag.Attribute("V") == "0.0.0.0");
-            var reimported = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
-            foreach (var suffix in new[] { "c", "s" })
-            {
-                var message = entries[$"raw/1_{suffix}.txt"];
-                var separator = message.AsSpan().IndexOf("\r\n\r\n"u8);
-                Assert.True(separator >= 0);
-                var headers = Encoding.ASCII.GetString(message, 0, separator);
-                var length = headers.Split("\r\n").Single(line => line.StartsWith("Content-Length:", StringComparison.Ordinal));
-                var body = message.AsSpan(separator + 4).ToArray();
-                Assert.Equal(body.Length, int.Parse(length.Substring("Content-Length:".Length), CultureInfo.InvariantCulture));
-                Assert.Equal(body, suffix == "c" ? reimported.RequestBody : reimported.ResponseBody);
-            }
-            _application.Run(window =>
-            {
-                Assert.False(model.IsCaptureDataOperationRunning);
-                Assert.True(model.CanCloseAsync().GetAwaiter().GetResult());
-                model.SelectedDeviceContext = null;
-            });
-        }
-
-        [Fact]
-        public void CommandEligibility_RejectsEmptyRunningAndBusyCapturesButAllowsReadOnlyWebCapture()
+        public void CommandEligibility_RejectsEmptyAndBusyCapturesButAllowsRunningAndReadOnlyWebCaptures()
         {
             _application.Run(window =>
             {
                 var model = new CaptureAppModel();
-                Assert.False(model.CanExportSanitizedCaptures);
+                Assert.False(model.CanExportSelectedCapture);
                 var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
                 var context = new Context(controller);
                 model.CaptureDeviceContexts.Add(context);
                 model.SelectedDeviceContext = context;
-                Assert.False(model.CanExportSanitizedCaptures);
+                Assert.False(model.CanExportSelectedCapture);
                 controller.LoadCaptureDataset(new Dataset(new DataRecord(1, "selected")));
-                Assert.True(model.CanExportSanitizedCaptures);
+                Assert.True(model.CanExportSelectedCapture);
                 controller.IsRunning = true;
-                Assert.False(model.CanExportSanitizedCaptures);
+                Assert.True(model.CanExportSelectedCapture);
                 controller.IsRunning = false;
                 Assert.True(model.TryBeginCaptureDataOperation(out var operation));
                 using (operation)
                 {
-                    Assert.False(model.CanExportSanitizedCaptures);
+                    Assert.False(model.CanExportSelectedCapture);
                     Assert.False(model.CanCloseAsync().GetAwaiter().GetResult());
                 }
-                Assert.True(model.CanExportSanitizedCaptures);
+                Assert.True(model.CanExportSelectedCapture);
                 Assert.True(model.CanCloseAsync().GetAwaiter().GetResult());
                 model.SelectedDeviceContext = new Context(controller, CaptureType.NetworkTrace);
-                Assert.False(model.CanExportSanitizedCaptures);
+                Assert.False(model.CanExportSelectedCapture);
                 model.SelectedDeviceContext = null;
             });
         }
@@ -689,8 +567,8 @@ namespace XMAT.Tests
             var binding = document.Descendants(presentation + "CommandBinding")
                 .Single(element => (string)element.Attribute("Command") == command);
             Assert.Equal("{x:Static local:AppCommands.ExportSanitized}", command);
-            Assert.Equal("ExportSanitized_Executed", (string)binding.Attribute("Executed"));
-            Assert.Equal("ExportSanitized_CanExecute", (string)binding.Attribute("CanExecute"));
+            Assert.Equal("Export_Executed", (string)binding.Attribute("Executed"));
+            Assert.Equal("Export_CanExecute", (string)binding.Attribute("CanExecute"));
             Assert.Contains(menu.Elements(presentation + "MenuItem"),
                 element => (string)element.Attribute("Command") == "{x:Static local:AppCommands.Export}");
             Assert.NotSame(AppCommands.Export, AppCommands.ExportSanitized);

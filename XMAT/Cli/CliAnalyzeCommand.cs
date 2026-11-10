@@ -8,13 +8,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Processes;
 
 namespace XMAT.Cli
 {
     // xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N]
-    // [--max-record-mib N] [--max-records N] is the command-line adapter of the shared analysis operation (the GUI's
-    // adapter is XboxLiveCaptureAnalyzer). It publishes summary.json only when the run succeeds (exit code 0, or 10
-    // with --fail-on findings); CliStagedRun owns the publication boundary.
+    // [--max-record-mib N] [--max-records N] [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]... is the
+    // command-line adapter of the shared analysis operation (the GUI's adapter is XboxLiveCaptureAnalyzer). It publishes
+    // summary.json only when the run succeeds (exit code 0, or 10 with --fail-on findings); CliStagedRun owns the
+    // publication boundary.
     internal static class CliAnalyzeCommand
     {
         internal const string SummaryPath = "summary.json";
@@ -24,7 +27,11 @@ namespace XMAT.Cli
         {
             var report = new CliReport(CliCommands.Analyze, runId)
             {
-                Analysis = new CliAnalysisReport { Limits = request.Limits ?? CliLimits.Default },
+                Analysis = new CliAnalysisReport
+                {
+                    Limits = request.Limits ?? CliLimits.Default,
+                    ProcessFilter = request.ProcessFilter ?? ProcessFilterSpec.Empty,
+                },
             };
             AnalysisAssetSet assets = LoadPrerequisites(report);
             if (assets == null)
@@ -65,6 +72,14 @@ namespace XMAT.Cli
                 token => AnalyzeAsync(request, output, assets, report, token),
                 null,
                 cancellationToken).ConfigureAwait(false);
+            ProcessFilterScope scope = report.Analysis.ProcessScope;
+            if (scope?.Counts != null && !ProcessFilter.IsEmpty(report.Analysis.ProcessFilter))
+            {
+                report.HumanLines.Add(
+                    $"xmat: the process filter kept {scope.Counts.Included} of {scope.Counts.Total} session(s); "
+                    + $"{scope.Counts.Unknown} had no process information.");
+            }
+
             if (report.Artifacts.Count != 0)
             {
                 report.HumanLines.Add(
@@ -131,7 +146,10 @@ namespace XMAT.Cli
             OperationResult<AnalysisResult> result = await new AnalyzeCaptureOperation(assets).ExecuteAsync(
                 new AnalyzeCaptureRequest(
                     AnalysisInput.FromFile(request.Input),
-                    new AnalysisOptions(DeviceId: request.DeviceId, Limits: report.Analysis.Limits.ToAnalysisLimits())),
+                    new AnalysisOptions(
+                        DeviceId: request.DeviceId,
+                        Limits: report.Analysis.Limits.ToAnalysisLimits(),
+                        ProcessFilter: report.Analysis.ProcessFilter)),
                 OperationContext.None,
                 cancellationToken).ConfigureAwait(false);
             Apply(report, result, request.FailOnFindings);
@@ -144,10 +162,11 @@ namespace XMAT.Cli
         }
 
         // Copies the allow-listed summary and maps the outcome to the exit code. On failure an informational
-        // diagnostic (for example analysis.no-data) explains the exit code, so it is reported as an error.
+        // diagnostic (for example analysis.no-data) explains the exit code, so it is reported as an error. The process
+        // selection's counts are kept even when nothing was left to analyze.
         private static void Apply(CliReport report, OperationResult<AnalysisResult> result, bool failOnFindings)
         {
-            AnalysisSummary summary = result.Value?.Summary;
+            AnalysisSummary summary = result.Succeeded ? result.Value?.Summary : null;
             if (summary != null)
             {
                 report.Analysis.InputKind = summary.InputKind;
@@ -157,26 +176,10 @@ namespace XMAT.Cli
                 report.Analysis.TotalFindings = summary.TotalFindings;
             }
 
-            bool failed = result.Outcome != OperationOutcome.Succeeded;
-            foreach (OperationDiagnostic diagnostic in result.Diagnostics)
-            {
-                if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
-                {
-                    report.Warnings.Add(diagnostic);
-                }
-                else if (diagnostic.Severity == OperationDiagnosticSeverity.Error || failed)
-                {
-                    report.Errors.Add(diagnostic);
-                }
-            }
+            report.Analysis.ProcessScope = result.Value?.ProcessScope;
 
-            report.SetExitCode(CliExitCodes.FromOutcome(result.Outcome));
-            if (failed && report.Errors.Count == 0)
-            {
-                report.Errors.Add(new OperationDiagnostic(
-                    "cli.analysis.failed", OperationDiagnosticSeverity.Error, "The analysis did not complete."));
-            }
-            else if (!failed && failOnFindings && report.Analysis.TotalFindings > 0)
+            report.ApplyOutcome(result, "cli.analysis.failed", "The analysis did not complete.");
+            if (result.Succeeded && failOnFindings && report.Analysis.TotalFindings > 0)
             {
                 report.SetExitCode(CliExitCodes.FindingsFound);
             }

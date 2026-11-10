@@ -136,6 +136,46 @@ Status codes of 400 or higher are colored red.
 
 ![Combining host and status-code filters](../ReadmeImages/10.png)
 
+### Filter by process
+
+Through a PC proxy, other programs on the PC, such as browsers, chat apps, updaters
+and Windows services, send their traffic through XMAT too. The **PROCESS** column
+shows the program that opened each connection on this PC, by image name and process
+id, such as `Game.exe (1234)`. It shows **Resolving…** while XMAT looks the program
+up, **Remote device** for traffic from a console or another device, and **Unknown**
+when the program could not be identified, for example because it had already exited,
+or when the capture was recorded before XMAT stored this information. XMAT stores the
+image name, never the program's path.
+
+To focus on one program:
+
+- Right-click a request or a timeline bar and choose **Show only "Game.exe"**, or
+  **Hide "Name"** to hide that program. **Show all processes** clears the process
+  filter.
+- Or select **Process** in the filter bar and enter image names or process ids,
+  separated by semicolons, under **Show only** and **Hide**. Names ignore case, `*`
+  and `?` are wildcards (`game*.exe`), and `.exe` is optional; a number is a process
+  id. The filter applies shortly after you stop typing, or when you press Enter or
+  **Apply**. **Hide svchost.exe** hides Windows' service host processes.
+
+While a process filter is set, the filter bar shows **Process filter: N/M; H hidden;
+U unknown**: the sessions that the process filter shows out of all sessions in the
+tab, how many it hides, and how many have no process information. Sessions without
+process information appear only while **Show only** is empty. A session whose program
+is identified after it appears is shown or hidden at that moment, without reloading
+the list. The process filter combines with the status, host and method filters, and
+**Show all processes** leaves those filters unchanged.
+
+The process filter only hides sessions: XMAT still forwards and records all traffic
+from every program, and saving, the **File** exports and analysis use the full capture
+unless you choose otherwise: analyze only the filtered sessions (see
+[Live trace analysis](live-trace-analysis.md)), or right-click a request and choose
+**Export Visible Sessions...**, which exports what every filter of the list shows, or
+**Export Selected Sessions...** (see
+[Capture files](capture-files.md#export-selected-or-visible-sessions)). Each capture tab has its own process
+filter, which [clearing the capture](#clear-a-capture) keeps and which is not saved.
+The timeline follows the process filter, but not the status, host and method filters.
+
 ### Capture timeline
 
 The Waterfall and By Host views retain complete capture history, including gaps
@@ -148,6 +188,63 @@ switching modes, and stopping refresh the visible timeline without waiting for t
 live-update cadence. Stopping displays final response statuses and durations even
 if no further requests arrive.
 
+### Clear a capture
+
+**Clear Capture** in the capture toolbar, or **View > Clear Captures**, removes the
+tab's requests and WebSocket messages; a running capture keeps capturing. Connections
+that are still open can add new rows afterwards, and the tab keeps its process filter.
+
+Request and connection numbers keep increasing after clearing; they no longer restart
+at 1. This is intentional: data that arrives later on a connection opened before the
+clear can never be matched to a newer request with the same number. **Stop Capture**
+followed by **Start Capture** starts numbering at 1 again.
+
+Clearing never overlaps saving, exporting, importing or analyzing captures: **Clear
+Capture** is unavailable while one of them runs, and if one starts at the same moment,
+XMAT reports that another capture operation is in progress and clears nothing.
+
+### Delete sessions
+
+Select sessions in the capture list and press **Delete**, or right-click one and choose
+**Delete Selected Sessions**. **Shift+Delete** (**Delete Unselected Sessions**) deletes
+the visible sessions that are not selected and keeps the selected ones. Only sessions
+that the list shows are deleted: sessions that the Status, Host, Method or process
+filters hide stay in the capture. The keys delete only in the capture list, never in
+the timeline or the filter boxes.
+
+XMAT asks first, with **Cancel** as the default answer. The confirmation counts the
+sessions to delete, the sessions that stay (including hidden ones) and the sessions to
+delete that have no complete recorded response. Deleting cannot be undone. Sessions that
+arrive while the confirmation is open, and sessions that a filter hides by the time you
+confirm, are kept, and XMAT then reports how many it deleted and kept.
+
+You can delete sessions while the capture runs. XMAT keeps forwarding the traffic of a
+deleted session that is still in progress, but does not record the rest of it. Deleting
+never closes or blocks connections on purpose, but deleting a very large number of
+sessions can briefly pause the window and delay the handling of requests.
+
+Opened capture files and imported Fiddler archives are read-only, so their delete
+commands are unavailable; [export the sessions to keep](capture-files.md#export-selected-or-visible-sessions)
+instead. Like clearing, deleting never overlaps saving, exporting, importing or
+analyzing captures.
+
+Deleting changes only the capture in its tab. XMAT does not erase files that you saved
+or exported earlier, backups of them, or analysis reports that you generated; they still
+contain the deleted sessions. Analyses of the capture become historical; see
+[Read the Per Endpoint report](live-trace-analysis.md#read-the-per-endpoint-report).
+
+In the capture, XMAT overwrites the stored data of deleted sessions with zeros (SQLite
+`secure_delete`), so a capture that you save afterwards does not contain their payloads.
+Database pages that the deletion frees entirely can be reused for new sessions, but
+pages that still hold other sessions stay allocated, and new sessions, which XMAT
+appends, may not reuse their free space. Neither the capture nor a file saved from it
+necessarily gets smaller: XMAT never compacts them (no `VACUUM` or incremental vacuum).
+XMAT also releases its references to the deleted sessions, but .NET frees their memory
+only at a later garbage collection, which XMAT does not force, and the working set that
+Windows reports may not shrink even then. Deleting is not a forensic erasure: other
+copies of the data, and data that Windows or the storage device still hold, are beyond
+XMAT's reach.
+
 ## Block or bypass hosts
 
 The **Block List** and **Bypass List** are shared by every capture in the current
@@ -158,7 +255,7 @@ changes, including **Clear All**, affect every capture.
 1. Right-click a host in the connections list, a timeline bar or By Host label, or
    an analysis Per Endpoint summary row or details header.
 2. Add or remove that exact host. **Remove** appears only for an existing exact entry;
-   the menu notes any wildcard that still matches.
+   the menu notes any other entry that still matches.
 3. Use **Actions > Manage Host Lists...** to open the editors even without a selected capture.
 
 The menu key acts on the focused row, not the selected row.
@@ -179,6 +276,13 @@ The menu key acts on the focused row, not the selected row.
   rejected with an explanation.
 - Entries containing `*` or `/` are glob patterns, such as `example.com/api/*`.
   A colon in a pattern is literal, not a port filter.
+- Path patterns compare the path and query as the proxy forwards them, after its URL
+  normalization (`/public/../private/x` becomes `/private/x`).
+- A Block entry matches the Host header, or the host the proxy connects to in network
+  spelling: the target's host when a request names one (`GET http://host/path`), else
+  the Host header, with IDN names in `xn--` form and IPv4 in dotted decimal
+  (`Host: 0177.0.0.1` also matches `127.0.0.1`). Bypass entries ignore these spellings.
+  Captured requests are still shown and exported as received.
 - Write IPv6 patterns without brackets, such as `2001:db8::*` or `::1/api/*`.
   A bracketed IPv6 pattern is accepted but never matches, including one that matched
   HTTP/2 traffic in earlier versions.

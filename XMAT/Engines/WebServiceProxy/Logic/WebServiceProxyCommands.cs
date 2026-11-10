@@ -29,5 +29,28 @@ namespace XMAT.WebServiceCapture
 
         public static readonly RoutedUICommand CheckDevice =
             new("Check Device", "Check Device", typeof(WebServiceProxyCommands));
+
+        // The process items of the request and timeline context menus; each carries the process filter to apply.
+        public static readonly RoutedUICommand ShowOnlyProcess =
+            new("Show Only Process", "ShowOnlyProcess", typeof(WebServiceProxyCommands));
+
+        public static readonly RoutedUICommand HideProcess =
+            new("Hide Process", "HideProcess", typeof(WebServiceProxyCommands));
+
+        public static readonly RoutedUICommand ShowAllProcesses =
+            new("Show All Processes", "ShowAllProcesses", typeof(WebServiceProxyCommands));
+
+        public static readonly RoutedUICommand ExportSelectedSessions =
+            new("Export Selected Sessions", "ExportSelectedSessions", typeof(WebServiceProxyCommands));
+
+        public static readonly RoutedUICommand ExportVisibleSessions =
+            new("Export Visible Sessions", "ExportVisibleSessions", typeof(WebServiceProxyCommands));
+
+        // Delete and Shift+Delete in the capture list: the visible selected rows, or the visible rows that are not selected.
+        public static readonly RoutedUICommand DeleteSelectedSessions =
+            new("Delete Selected Sessions", "DeleteSelectedSessions", typeof(WebServiceProxyCommands));
+
+        public static readonly RoutedUICommand DeleteUnselectedSessions =
+            new("Delete Unselected Sessions", "DeleteUnselectedSessions", typeof(WebServiceProxyCommands));
     }
 }

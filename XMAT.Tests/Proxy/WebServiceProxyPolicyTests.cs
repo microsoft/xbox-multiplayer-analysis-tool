@@ -2,6 +2,9 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Diagnostics;
+using System.Net;
+using XMAT.Operations.Processes;
 using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.Tests.Proxy
@@ -125,6 +128,40 @@ namespace XMAT.Tests.Proxy
             Assert.Equal(2, blockedAborts);
             Assert.Equal(0, allowedAborts);
             proxy.UntrackSslConnection(blocked);
+        }
+
+        [Fact]
+        public async Task VetoObserversReceiveIdentityWithoutChangingTheirDecision()
+        {
+            var proxy =
+                new WebServiceProxy
+                {
+                    WebRequestPolicyAsync = (_, _) => Task.FromResult(false),
+                };
+            var process = new ClientProcessContext(
+                Guid.NewGuid(),
+                17,
+                new IPEndPoint(IPAddress.Loopback, 50190),
+                new IPEndPoint(IPAddress.Loopback, 8080),
+                DateTimeOffset.UtcNow,
+                Stopwatch.GetTimestamp());
+            process.Publish(
+                new ClientProcessInfo(
+                    "blocked.exe",
+                    9911,
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    ClientProcessStatus.Local));
+            ClientProcessContext observed = null;
+            proxy.ReceivedWebRequest += (_, args) => observed = args.ProcessContext;
+
+            bool accepted = await proxy.RaiseReceivedWebRequestAsync(
+                1000,
+                new ClientRequest(),
+                CancellationToken.None,
+                process);
+
+            Assert.False(accepted);
+            Assert.Same(process, observed);
         }
     }
 }

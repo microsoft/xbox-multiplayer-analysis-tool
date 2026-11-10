@@ -14,6 +14,8 @@ namespace XMAT.Operations.Capabilities
     internal static class CapabilityRegistry
     {
         internal const string AnalyzeCaptureOperation = "XMAT.Operations.Analysis.AnalyzeCaptureOperation";
+        internal const string FilterCaptureSessionsOperation = "XMAT.Operations.Captures.FilterCaptureSessionsOperation";
+        internal const string ExportCaptureSessionsOperation = "XMAT.Operations.Export.ExportCaptureSessionsOperation";
 
         private const string Owner = "XMAT-021";
         private const string MainWindowXaml = "Windows/MainWindow.xaml";
@@ -27,8 +29,9 @@ namespace XMAT.Operations.Capabilities
         private const string PortChangeXaml = "Engines/WebServiceProxy/Windows/ProxyPortChangeWindow.xaml";
         private const string BlockListXaml = "Engines/WebServiceProxy/Views/BlockListView.xaml";
         private const string BypassListXaml = "Engines/WebServiceProxy/Views/BypassListView.xaml";
+        private const string CaptureViewXaml = "Engines/WebServiceProxy/Views/CaptureConnectionView.xaml";
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
-        private const string SanitizedExportXaml = "Windows/SanitizedExportProgressWindow.xaml";
+        private const string ExportProgressXaml = "Windows/ExportProgressWindow.xaml";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
@@ -48,7 +51,8 @@ namespace XMAT.Operations.Capabilities
             Capability.Supported(
                 "analysis.xbox-live", "Analyze Xbox Live service calls", "S1",
                 cli: "analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] " +
-                    "[--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                    "[--max-data-mib N] [--max-record-mib N] [--max-records N] " +
+                    "[--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...",
                 operation: AnalyzeCaptureOperation,
                 gui: new[]
                 {
@@ -100,22 +104,26 @@ namespace XMAT.Operations.Capabilities
                     EnumValue("XMAT.Models.ImportType", "NetTrace"),
                     EnumValue(DeviceTypeEnum, "Unknown"),
                 }),
-            Capability.Planned(
-                "capture-file.export-saz", "Export captures as Fiddler archives (.saz)", "S2", Owner,
-                gui: new[]
-                {
-                    Command(AppCommandsPrefix + "Export"),
-                    EnumValue("XMAT.Models.ExportType", "Fiddler"),
-                }),
-            // XMAT-019 implements sanitized export in the GUI; its headless support is not done yet.
-            Capability.Planned(
-                "capture-file.sanitize", "Sanitize a capture into a Fiddler archive", "S2", Owner,
-                gui: new[]
-                {
-                    Command(AppCommandsPrefix + "ExportSanitized"),
-                    Window("XMAT.SanitizedExportProgressWindow"),
-                    Click(SanitizedExportXaml, "CancelExport_Click"),
-                }),
+            // One operation exports every format: File > Export and Export Sanitized (the selected tab) and the capture
+            // list's row menu (the selected or the visible sessions), whose save dialog offers each format.
+            Capability.Supported(
+                "capture-file.export-xmatcap", "Export sessions as an XMAT capture (.xmatcap)", "S10",
+                cli: "export INPUT --out FILE [--format xmatcap|saz|sanitized-saz] [--device ID] " +
+                    "[--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]... [--host PATTERN]... " +
+                    "[--exclude-host PATTERN]... [--host-mode glob|exact] [--status VALUE]... [--method VALUE]... " +
+                    "[--match-none] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: ExportCaptureSessionsOperation,
+                gui: ExportEntryPoints("Export")),
+            Capability.Supported(
+                "capture-file.export-saz", "Export sessions as Fiddler archives (.saz)", "S2",
+                cli: "export INPUT --out FILE.saz",
+                operation: ExportCaptureSessionsOperation,
+                gui: ExportEntryPoints("Export")),
+            Capability.Supported(
+                "capture-file.sanitize", "Export sessions as a sanitized Fiddler archive", "S2",
+                cli: "export INPUT --out FILE.saz --format sanitized-saz",
+                operation: ExportCaptureSessionsOperation,
+                gui: ExportEntryPoints("ExportSanitized")),
             Capability.Planned(
                 "capture-file.save-xmatcap", "Save captures (.xmatcap)", "S5", Owner,
                 gui: new[] { WpfCommand("Save", MainWindowXaml) }),
@@ -151,6 +159,15 @@ namespace XMAT.Operations.Capabilities
             Capability.Planned(
                 "capture.clear", "Clear captured data", "S8a", Owner,
                 gui: new[] { Command(AppCommandsPrefix + "ClearAllCaptures") }),
+            Capability.PolicyException(
+                "capture.delete-sessions", "Delete sessions from a capture", "S11", "XMAT",
+                "Policy exception: deleting captured sessions is irreversible, so it stays a confirmed action in the " +
+                    "capture list; headless runs export the sessions to keep instead",
+                new[]
+                {
+                    Command(ProxyCommandsPrefix + "DeleteSelectedSessions"),
+                    Command(ProxyCommandsPrefix + "DeleteUnselectedSessions"),
+                }),
             Capability.Planned(
                 "capture.network-trace", "Capture low-level network traces", "S8b", Owner,
                 gui: new[]
@@ -158,6 +175,28 @@ namespace XMAT.Operations.Capabilities
                     Command("XMAT.NetworkTrace.NetworkTraceCommands.StartStopCapture"),
                     EnumValue(CaptureTypeEnum, "NetworkTrace"),
                 }),
+            // Hides sessions from view and selects the sessions to analyze or export; it never changes what the proxy
+            // forwards or records. The editor's buttons, the proxy commands that the row and timeline menus run, and the
+            // analyzer window's opt-in all use the same selection.
+            Capability.Supported(
+                "capture.process-filter", "Filter captured sessions by client process", "S9",
+                cli: "analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...",
+                operation: FilterCaptureSessionsOperation,
+                gui: new[]
+                {
+                    Click(CaptureViewXaml, "ApplyProcessFilter_Click"),
+                    Click(CaptureViewXaml, "HideSvchost_Click"),
+                    Click(CaptureViewXaml, "ShowAllProcesses_Click"),
+                    Command(ProxyCommandsPrefix + "ShowOnlyProcess"),
+                    Command(ProxyCommandsPrefix + "HideProcess"),
+                    Command(ProxyCommandsPrefix + "ShowAllProcesses"),
+                    Command(AppCommandsPrefix + "AnalyzeCaptures"),
+                    Window("XMAT.CaptureAnalyzerWindow"),
+                }) with
+            {
+                AdditionalCliRoutes =
+                    new[] { "export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]..." },
+            },
             Capability.Planned(
                 "capture.scripts", "Run capture scripts", "S8a", Owner,
                 gui: new[]
@@ -324,6 +363,15 @@ namespace XMAT.Operations.Capabilities
             Capability.GuiOnly(
                 "view.capture-viewers", "Capture viewers",
                 "Presentation: filters, timeline and the request, response, WebSocket and packet views"),
+        };
+
+        private static string[] ExportEntryPoints(string fileCommand) => new[]
+        {
+            Command(AppCommandsPrefix + fileCommand),
+            Command(ProxyCommandsPrefix + "ExportSelectedSessions"),
+            Command(ProxyCommandsPrefix + "ExportVisibleSessions"),
+            Window("XMAT.ExportProgressWindow"),
+            Click(ExportProgressXaml, "CancelExport_Click"),
         };
     }
 }

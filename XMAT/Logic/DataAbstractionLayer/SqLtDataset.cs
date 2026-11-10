@@ -12,11 +12,13 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtDataset : IDataset, IDisposable
+    internal class SqLtDataset : IDataset, IRawCaptureDataset, IDisposable
     {
         public IEnumerable<IFieldDefinition> FieldDefs { get { return GetFieldDefs(); } }
 
         public IEnumerable<IDataRecord> DataRecords { get { return GetDataRecords(); } }
+
+        public IReadOnlyList<SqLtSchemaColumn> Columns { get; }
 
         public IEnumerable<IDataRecord> DataRecordsFrom(Int64 firstRowId)
         {
@@ -93,13 +95,31 @@ namespace XMAT.DataAbstractionLayer
         internal SqLtDataset(
             SqliteConnection connection,
             string sourceTableName,
-            IDictionary<string, IFieldDefinition> fieldsToInclude)
+            IDictionary<string, IFieldDefinition> fieldsToInclude,
+            IReadOnlyList<SqLtSchemaColumn> columns)
         {
             _sourceTableName = sourceTableName;
             _commandInterface = new SqliteCommand();
             _commandInterface.Connection = connection;
             _commandBuilder = new StringBuilder();
-            _fieldDefinitions = fieldsToInclude;
+            _fieldDefinitions = fieldsToInclude
+                .Select((field, index) => new
+                {
+                    field.Key,
+                    Definition = FieldDefinition.CreateFromSchema(
+                        field.Key,
+                        field.Value.ValueType == FieldValueType.Integer
+                            ? typeof(long)
+                            : typeof(string),
+                        index + 1,
+                        field.Value.IsExtension),
+                })
+                .ToDictionary(item => item.Key, item => (IFieldDefinition)item.Definition, StringComparer.Ordinal);
+            Columns = columns;
+            _untypedColumns = columns
+                .Where(column => column.DeclaredType == SqLtDeclaredType.None)
+                .Select(column => column.Name)
+                .ToHashSet(StringComparer.Ordinal);
         }
 
         private IEnumerable<IFieldDefinition> GetFieldDefs()
@@ -192,6 +212,7 @@ namespace XMAT.DataAbstractionLayer
         {
             var enumerable = new SqLtDataEnumerable(
                 _fieldDefinitions,
+                _untypedColumns,
                 dataReader,
                 null,
                 disposed =>
@@ -236,6 +257,7 @@ namespace XMAT.DataAbstractionLayer
         private SqliteCommand _commandInterface;
         private StringBuilder _commandBuilder;
         private IDictionary<string, IFieldDefinition> _fieldDefinitions;
+        private readonly IReadOnlySet<string> _untypedColumns;
         private readonly HashSet<SqLtDataEnumerable> _activeEnumerables =
             new(ReferenceEqualityComparer.Instance);
         private readonly object _enumerablesLock =
