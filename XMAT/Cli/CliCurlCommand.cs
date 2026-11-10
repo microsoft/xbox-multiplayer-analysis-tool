@@ -40,8 +40,14 @@ namespace XMAT.Cli
             {
                 Curl = new CliCurlReport(curl, request.Input != null ? request.Limits ?? CliLimits.Default : null),
             };
+            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
+            if (targetFailure != null)
+            {
+                report.Fail(targetFailure.ExitCode, targetFailure.Code, targetFailure.Message);
+                return report;
+            }
 
-            // Consent comes first: without it, no input is opened and no output is reserved.
+            // After the non-mutating target check, consent comes before input is opened or output is reserved.
             if (!curl.IncludeSensitive)
             {
                 report.Fail(
@@ -86,10 +92,18 @@ namespace XMAT.Cli
                 return report;
             }
 
-            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
-            if (targetFailure != null)
+            PreparedCurl prepared;
+            try
             {
-                report.Fail(targetFailure.ExitCode, targetFailure.Code, targetFailure.Message);
+                prepared = Prepare(request, requestBody, file, report, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                report.Cancel();
+                return report;
+            }
+            if (prepared == null)
+            {
                 return report;
             }
 
@@ -123,7 +137,7 @@ namespace XMAT.Cli
                 await CliStagedRun.CompleteAsync(
                     report,
                     output,
-                    token => Task.FromResult(Export(request, requestBody, file, output, report, token)),
+                    token => Task.FromResult(Export(prepared, output, report, token)),
                     null,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -141,36 +155,32 @@ namespace XMAT.Cli
 
         private static string Ordinal(int id) => id.ToString("D5", CultureInfo.InvariantCulture);
 
-        // Writes every script, and the body file of each body that is not empty, inside the staging folder; null when the
-        // run exported nothing (the report says why).
-        private static IReadOnlyList<CliStagedFile> Export(
+        // Gathers and checks every frozen script before the command reserves output.
+        private static PreparedCurl Prepare(
             CliRequest request,
             CliRequestBody requestBody,
             RequestFileReadResult file,
-            CliOutputFolder output,
             CliReport report,
             CancellationToken cancellationToken)
         {
-            // Isolation comes first, as for analyze: legacy statics that keep files use the private staging folder.
-            HeadlessStorage.Configure(output.WorkPath);
             CliReplay curl = request.Replay;
-            OperationResult<ReplayExport> prepared = new ReplayOperation().PrepareForExport(
+            OperationResult<ReplayExport> result = new ReplayOperation().PrepareForExport(
                 CliSaveRequestCommand.CreateRequest(request, requestBody, file?.Content, curl.AcceptStoredText), cancellationToken);
-            foreach (OperationDiagnostic diagnostic in prepared.Diagnostics)
+            foreach (OperationDiagnostic diagnostic in result.Diagnostics)
             {
                 if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
                 {
                     report.Warnings.Add(diagnostic);
                 }
-                else if (diagnostic.Severity == OperationDiagnosticSeverity.Error || !prepared.Succeeded)
+                else if (diagnostic.Severity == OperationDiagnosticSeverity.Error || !result.Succeeded)
                 {
                     report.Errors.Add(diagnostic);
                 }
             }
 
-            if (!prepared.Succeeded)
+            if (!result.Succeeded)
             {
-                report.SetExitCode(CliExitCodes.FromOutcome(prepared.Outcome));
+                report.SetExitCode(CliExitCodes.FromOutcome(result.Outcome));
                 if (report.Errors.Count == 0)
                 {
                     report.Errors.Add(new OperationDiagnostic(
@@ -182,13 +192,36 @@ namespace XMAT.Cli
 
             if (file == null)
             {
-                report.Curl.InputKind = prepared.Value.InputKind;
-                report.Curl.InputSha256 = prepared.Value.InputSha256;
+                report.Curl.InputKind = result.Value.InputKind;
+                report.Curl.InputSha256 = result.Value.InputSha256;
             }
 
-            report.Curl.StoredText = prepared.Value.StoredText ?? CliStoredText.NotApplicable;
+            report.Curl.StoredText = result.Value.StoredText ?? CliStoredText.NotApplicable;
 
-            if (!curl.AllowOriginChange && prepared.Value.Items.Any(item => item.Draft.ChangesOrigin))
+            try
+            {
+                foreach (ReplayExportItem item in result.Value.Items)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    RequestCurlExporter.CheckDestination(item.Draft);
+                }
+            }
+            catch (RequestIncompleteException)
+            {
+                report.Fail(
+                    CliExitCodes.InvalidInput,
+                    RequestFileCodes.RequestIncomplete,
+                    "A request still has parts that its request file left out (its method, URL, headers or body); " +
+                        "supply them before exporting it. Nothing was exported.");
+                return null;
+            }
+            catch (CurlExportException ex)
+            {
+                report.Fail(CliExitCodes.InvalidInput, ex.Code, ex.Message);
+                return null;
+            }
+
+            if (!curl.AllowOriginChange && result.Value.Items.Any(item => item.Draft.ChangesOrigin))
             {
                 report.Fail(
                     CliExitCodes.InvalidInput,
@@ -199,15 +232,14 @@ namespace XMAT.Cli
             }
 
             // A request file keeps the HTTP version that it asks for, unless --http-version replaces it.
-            ReplayHttpVersion httpVersion =
-                file != null && !curl.HttpVersionSet ? file.Content.HttpVersion : curl.HttpVersion;
+            ReplayHttpVersion httpVersion = file != null && !curl.HttpVersionSet
+                ? file.Content.HttpVersion
+                : curl.HttpVersion;
             var transport = new ReplayTransportOptions(httpVersion);
-            bool anyBody = false;
-            int id = 0;
-            foreach (ReplayExportItem item in prepared.Value.Items)
+            var items = new List<PreparedCurlItem>(result.Value.Items.Count);
+            foreach (ReplayExportItem item in result.Value.Items)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                id++;
                 CurlRequest script;
                 try
                 {
@@ -224,13 +256,13 @@ namespace XMAT.Cli
                 }
                 catch (CurlExportException ex)
                 {
-                    report.Fail(
-                        CliExitCodes.InvalidInput,
-                        ex.Code,
-                        ex.Reason == CurlUnsupported.Http2Exact
+                    string message = ex.Code == ReplayDestination.ScopedIpv6Code
+                        ? ex.Message
+                        : ex.Reason == CurlUnsupported.Http2Exact
                             ? "The request file asks for HTTP/2 only, which curl is not known to send the same way; pass " +
                                 "--http-version auto or 1.1 to export it. Nothing was exported."
-                            : ex.Message + " Nothing was exported.");
+                            : ex.Message + " Nothing was exported.";
+                    report.Fail(CliExitCodes.InvalidInput, ex.Code, message);
                     return null;
                 }
                 catch (Exception ex) when (ex is FormatException or ArgumentException or NotSupportedException)
@@ -244,6 +276,28 @@ namespace XMAT.Cli
                     return null;
                 }
 
+                items.Add(new PreparedCurlItem(item, script));
+            }
+
+            return new PreparedCurl(httpVersion, items.AsReadOnly());
+        }
+
+        // Writes every prepared script, and the body file of each body that is not empty, inside the staging folder.
+        private static IReadOnlyList<CliStagedFile> Export(
+            PreparedCurl prepared,
+            CliOutputFolder output,
+            CliReport report,
+            CancellationToken cancellationToken)
+        {
+            // Isolation comes first, as for analyze: legacy statics that keep files use the private staging folder.
+            HeadlessStorage.Configure(output.WorkPath);
+            bool anyBody = false;
+            int id = 0;
+            foreach (PreparedCurlItem item in prepared.Items)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                id++;
+                CurlRequest script = item.Request;
                 // The body file and the script's length and hash of it come from the same bytes.
                 string sidecar = null;
                 if (!script.Body.IsEmpty)
@@ -258,12 +312,12 @@ namespace XMAT.Cli
                     stream => RequestCurlExporter.Write(script, CurlScriptForm.File, sidecar, stream, cancellationToken));
                 report.Curl.Scripts.Add(new CliCurlScript(
                     id,
-                    item.DeviceId,
-                    item.RequestNumber,
+                    item.Item.DeviceId,
+                    item.Item.RequestNumber,
                     script.Body.Length,
-                    httpVersion,
+                    prepared.HttpVersion,
                     script.NeedsUnicodeCurl,
-                    RequestFileWriter.Recognize(item.Draft)));
+                    RequestFileWriter.Recognize(item.Item.Draft)));
             }
 
             var files = new List<CliStagedFile>
@@ -278,5 +332,9 @@ namespace XMAT.Cli
 
             return files;
         }
+
+        private sealed record PreparedCurl(ReplayHttpVersion HttpVersion, IReadOnlyList<PreparedCurlItem> Items);
+
+        private sealed record PreparedCurlItem(ReplayExportItem Item, CurlRequest Request);
     }
 }

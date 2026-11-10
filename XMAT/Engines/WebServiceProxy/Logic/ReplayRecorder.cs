@@ -40,12 +40,16 @@ namespace XMAT.WebServiceCapture
 
     // Where a row of the Replays tab comes from: the tab, request number and table row of the request that it sends again,
     // as they were when the send started; the name of the request file that the request was opened from; or nothing for a
-    // composed request. It is kept in memory only.
+    // composed request. Origin, which the recorder sets for every row from its send (ReplayExchange.ProvenanceOrigin), is
+    // the origin that the request was captured or saved for, or first sent to: a request made from the row again, by Load,
+    // a drop, Edit and resend or Reissue, keeps it, so that sending it to another origin asks first. It is kept in memory
+    // only.
     internal sealed record ReplayProvenance(
         ReplaySourceKind Kind,
         string SourceName = null,
         long? RequestNumber = null,
-        long? RecordRowId = null)
+        long? RecordRowId = null,
+        Uri Origin = null)
     {
         internal static ReplayProvenance Composed { get; } = new(ReplaySourceKind.Composed);
 
@@ -84,19 +88,24 @@ namespace XMAT.WebServiceCapture
         long BudgetBytes = VerifyDiffLimits.MaxRetainedBytes);
 
     // The requests of a Replay menu run, fixed on the UI thread before the user is asked about them: copies of the rows
-    // that can be replayed, as they are then, and where each comes from. A live capture that updates a row afterwards
-    // changes nothing: what the user confirms is what is sent. The copies share the rows' bodies and header dictionaries,
-    // which an update replaces and never changes in place (ProxyConnectionModel.RequestBody).
+    // that can be replayed, as they are then, where each comes from, and the origin that each row of the Replays tab keeps
+    // (ReplayProvenance.Origin). A live capture that updates a row afterwards changes nothing: what the user confirms is
+    // what is sent. The copies share the rows' bodies and header dictionaries, which an update replaces and never changes in
+    // place (ProxyConnectionModel.RequestBody).
     internal sealed class ReplaySnapshot
     {
         private ReplaySnapshot(
             ReissueRequest request,
             IReadOnlyList<ProxyConnectionModel> captures,
-            IReadOnlyList<ReplayProvenance> provenance)
+            IReadOnlyList<ReplayProvenance> provenance,
+            IReadOnlyList<Uri> capturedOrigins,
+            int originChangeRequests)
         {
             Request = request;
             Captures = captures;
             Provenance = provenance;
+            CapturedOrigins = capturedOrigins;
+            OriginChangeRequests = originChangeRequests;
         }
 
         internal ReissueRequest Request { get; }
@@ -106,6 +115,15 @@ namespace XMAT.WebServiceCapture
         // Where each of Captures comes from, by index (ReplayItemResult.SourceIndex).
         internal IReadOnlyList<ReplayProvenance> Provenance { get; }
 
+        // The origin that each of Captures was captured or saved for, or first sent to, by index, as its row of the Replays
+        // tab keeps it, which the operation restores before its checks (ReplaySource.FromCaptures): null for a row that keeps
+        // none, such as a row of another tab, and the whole list null when no row keeps one.
+        internal IReadOnlyList<Uri> CapturedOrigins { get; }
+
+        // The requests whose URL goes to another origin than the one restored for them, with their headers, which the
+        // operation sends only with AllowOriginChange (RequestReplayDraft.ChangesOrigin).
+        internal int OriginChangeRequests { get; }
+
         // The requests whose method can change server state, as ReplayOperation's policy counts them: any method but exactly
         // GET, HEAD and OPTIONS (RequestReplayDraft.IsUnsafeMethod).
         internal int UnsafeRequests => Captures.Count(capture => RequestReplayDraft.IsUnsafeMethod(capture.Method));
@@ -114,25 +132,49 @@ namespace XMAT.WebServiceCapture
 
         internal long UnsafeSends => (long)UnsafeRequests * Request.Repeat;
 
+        internal long OriginChangeSends => (long)OriginChangeRequests * Request.Repeat;
+
         internal static ReplaySnapshot Of(ReissueRequest request, string sourceName)
         {
             ArgumentNullException.ThrowIfNull(request);
             var captures = new List<ProxyConnectionModel>();
             var provenance = new List<ReplayProvenance>();
+            var origins = new List<Uri>();
+            int originChanges = 0;
             foreach (ProxyConnectionModel row in request.Captures ?? Array.Empty<ProxyConnectionModel>())
             {
                 if (RequestReplayDraft.CanReplay(row))
                 {
-                    captures.Add(new ProxyConnectionModel(row));
+                    var copy = new ProxyConnectionModel(row);
+                    Uri origin = copy.Replay?.Origin;
+                    captures.Add(copy);
                     provenance.Add(ReplayProvenance.Of(ReplaySourceKind.Reissued, sourceName, row));
+                    origins.Add(origin);
+                    if (origin != null && GoesElsewhere(copy, origin))
+                    {
+                        originChanges++;
+                    }
                 }
             }
 
-            return new ReplaySnapshot(request, captures, provenance);
+            return new ReplaySnapshot(
+                request, captures, provenance, origins.Any(origin => origin != null) ? origins : null, originChanges);
         }
 
         internal ReplayProvenance ProvenanceOf(ReplayItemResult result) =>
             result?.SourceIndex is int index && index >= 0 && index < Provenance.Count ? Provenance[index] : null;
+
+        // Whether a row goes to another origin than origin, as the operation decides it once it has restored origin
+        // (RequestReplayDraft.ChangesOrigin): the destination that the operation makes the row's URL from, an absolute
+        // target's or else the row's own authority, zone and all (ReplayDestination.ReadCaptureDestination), so that the
+        // count reads no more of a row than that decision does, never its whole target. A row whose destination is malformed
+        // or over its size limit counts as none, since Reissue refuses it before its question (CheckCaptureDestinations).
+        // The count only decides whether to ask: the operation's own check is the guard.
+        private static bool GoesElsewhere(ProxyConnectionModel row, Uri origin)
+        {
+            CaptureDestination destination = ReplayDestination.ReadCaptureDestination(row);
+            return !destination.IsMalformed && !ReplayAuthority.SameOrigin(origin, destination.Authority);
+        }
     }
 
     // What a GUI replay run did: the operation's result, or none when XMAT was busy and nothing was sent; the tab it was
@@ -167,7 +209,8 @@ namespace XMAT.WebServiceCapture
     // A verified send's row keeps its verdict (RecordedVerification), and its verification differences while they fit what
     // is left of VerifyDiffBudgetBytes (counted as VerifyDiff.SerializedBytes, a payload budget, not a measure of memory),
     // its earlier rows included; differences that do not fit are not kept, and the row's note says so, but the send is
-    // recorded and its verdict is the same either way.
+    // recorded and its verdict is the same either way. LastItem is the last send that the recorder was given, set before its
+    // row is added and whether or not the tab takes it, and LastItemRecorded says whether that send's own row is in the tab.
     internal sealed class ReplayRecorder : IReplayExchangeSink
     {
         internal const long DefaultBodyBudgetBytes = 256L * 1024 * 1024;
@@ -183,6 +226,8 @@ namespace XMAT.WebServiceCapture
         private long _retainedVerifyDiffBytes;
         private long _lastNumber;
         private int _notRecorded;
+        private ReplayItemResult _lastItem;
+        private ProxyConnectionModel _lastItemRow;
 
         // Created on the UI thread, which onUiThread runs an action on synchronously, or not at all once it no longer takes
         // rows (UI types pass their dispatcher). isOpen says, on the UI thread, whether the tab still takes rows, and stop
@@ -246,10 +291,26 @@ namespace XMAT.WebServiceCapture
         // records one run, so this is never a row of an earlier run (ReplayRecordingTarget.TrySelectLastRecorded).
         internal ProxyConnectionModel LastRecorded { get; private set; }
 
+        // The last send that this recorder was given, with its outcome, code and write state, whether or not the tab took
+        // its row; null until a send is given. A run's status is worded from it when the run's last send has no exchange to
+        // show, as when the tab could not take that send's row.
+        internal ReplayItemResult LastItem => Volatile.Read(ref _lastItem);
+
+        // On the UI thread once the run has ended: whether the row of LastItem, that very send and never an earlier one, is
+        // in the tab's rows. A failure before the table took the row leaves it false, and one after the row went into the
+        // tab's rows, such as in a handler of those rows, leaves it true.
+        internal bool LastItemRecorded =>
+            Volatile.Read(ref _lastItemRow) is ProxyConnectionModel row &&
+            _controller.ProxyConnections.Any(shown => ReferenceEquals(shown, row));
+
         public void Add(ReplayItemResult result, ReplayExchange exchange)
         {
             ArgumentNullException.ThrowIfNull(result);
             ArgumentNullException.ThrowIfNull(exchange);
+            // Before the UI thread adds the row, and whatever then becomes of it: from now on LastItem is this send, and the
+            // row of an earlier send is not its row.
+            Volatile.Write(ref _lastItemRow, null);
+            Volatile.Write(ref _lastItem, result);
             ReplayProvenance provenance = _provenanceOf(result) ??
                 new ReplayProvenance(ReplaySourceKind.Reissued, string.Empty, result.RequestNumber);
             bool taken = false;
@@ -270,8 +331,12 @@ namespace XMAT.WebServiceCapture
         // (TooLarge). The note also says how a send with the composer's transport options went (TransportNote), from what
         // the operation recorded for it (sent), never from the composer's current controls, and, for a verified send, its
         // verdict and whether the tab kept its verification differences (VerifyNote), which the row keeps with it
-        // (verification). The row's host and port are the URL's authority as it was sent (ReplayAuthority), and its request
-        // time is when the send began, as this PC's local time like every capture's, though the exchange keeps it in UTC.
+        // (verification). A raw send's row is the normalized view of its request (RawRequestImage.ToMessage), with the
+        // response as read: its note starts with what XMAT wrote of the request (RawWriteNote), then why it got no complete
+        // response, if it did not, a response that ended with the connection and response trailers that the row does not
+        // keep (RawResponseNotes). The row's host and port are the URL's authority as it was sent (ReplayAuthority), and its
+        // request time is when the send began, as this PC's local time like every capture's, though the exchange keeps it in
+        // UTC.
         internal static ProxyConnectionModel ToRow(
             long number,
             ReplayProvenance provenance,
@@ -311,10 +376,10 @@ namespace XMAT.WebServiceCapture
             string tooLargeNote = responseTooLarge
                 ? Localization.GetLocalizedString("REPLAY_NOTE_RESPONSE_TOO_LARGE")
                 : null;
-            string note = string.Join(
-                "\n",
-                new[] { bodiesNote, tooLargeNote, TransportNote(sent), VerifyNote(verification) }
-                    .Where(line => line != null));
+            var lines = new List<string> { RawWriteNote(sent) };
+            lines.AddRange(RawResponseNotes(sent, exchange));
+            lines.AddRange(new[] { bodiesNote, tooLargeNote, TransportNote(sent), VerifyNote(verification) });
+            string note = string.Join("\n", lines.Where(line => line != null));
             return new ProxyConnectionModel(
                 number,
                 exchange.StatusCode == 0 ? string.Empty : exchange.StatusCode.ToString(CultureInfo.InvariantCulture),
@@ -333,23 +398,68 @@ namespace XMAT.WebServiceCapture
                 Replay = provenance,
                 ReplayNote = note.Length == 0 ? null : note,
                 Verification = verification,
+                SentRaw = sent?.Raw == true,
+                RawRequestWrite = sent?.RequestWrite,
             };
         }
 
+        // What XMAT wrote of a raw send's request, by its write state and never by its outcome: a raw request when XMAT
+        // handed every byte to the connection, otherwise an attempted request, whatever the response, with the state's
+        // sentence (RawSendWording.WriteSentence), which says nothing of what the server received. Null for other sends.
+        private static string RawWriteNote(ReplayItemResult sent)
+        {
+            if (sent?.Raw != true)
+            {
+                return null;
+            }
+
+            string written = RawSendWording.WriteSentence(sent.RequestWrite, sent.RequestBytesWritten);
+            return sent.RequestWrite == RawWriteState.Complete
+                ? Localization.GetLocalizedString("REPLAY_NOTE_RAW", written)
+                : Localization.GetLocalizedString("REPLAY_NOTE_RAW_ATTEMPTED", written);
+        }
+
+        // What a raw send's row cannot show of its response, in order: why it got no complete response, in its code's words
+        // and never an exception's (RawSendWording.CodeText), for an outcome other than a response, kept whole or too large;
+        // that the response ended when the server closed the connection, so it may be incomplete; and that the response's
+        // trailer fields were read and not kept. Nothing for other sends.
+        private static IEnumerable<string> RawResponseNotes(ReplayItemResult sent, ReplayExchange exchange)
+        {
+            if (sent?.Raw != true)
+            {
+                yield break;
+            }
+
+            if (sent.Outcome is not (ReplayOutcome.Completed or ReplayOutcome.TooLarge))
+            {
+                yield return RawSendWording.CodeText(sent.Code);
+            }
+
+            if (sent.ResponseFraming == RawResponseReader.CloseFraming)
+            {
+                yield return Localization.GetLocalizedString("REPLAY_NOTE_RAW_CLOSE_DELIMITED");
+            }
+
+            if (exchange.ResponseTrailerFields > 0)
+            {
+                yield return Localization.GetLocalizedString("REPLAY_NOTE_RAW_TRAILERS", exchange.ResponseTrailerFields);
+            }
+        }
+
         // How a send went with the composer's transport options, as the operation recorded it (ReplayItemResult, in the
-        // names of ReplayTransportOptions): through another endpoint than the URL's host, or through an upstream proxy, never
-        // named; whether a client certificate was configured, never which one and never whether it was sent, which is not
-        // recorded; whether Windows authentication was configured, never whether a challenge was answered or with which
-        // package, which the label that the request carried does not prove; and the HTTP version requested and the one that
-        // the response came with ("1.1" or "2", shown as HTTP/1.1 or HTTP/2), which with Windows authentication is
-        // HTTP/1.1 only, as the run recorded it. Null for a send with the default transport, directly to the URL's host with
-        // the version chosen automatically and neither credential; a requested version that replay does not name is shown
-        // as Automatic.
+        // names of ReplayTransportOptions): through another endpoint than the URL's host, or than the target origin's host
+        // for a raw send, or through an upstream proxy, never named; whether a client certificate was configured, never which
+        // one and never whether it was sent, which is not recorded; whether Windows authentication was configured, never
+        // whether a challenge was answered or with which package, which the label that the request carried does not prove;
+        // and the HTTP version requested and the one that the response came with ("1.1" or "2", shown as HTTP/1.1 or
+        // HTTP/2), which with Windows authentication is HTTP/1.1 only, as the run recorded it. Null for a send with the
+        // default transport, directly to the URL's host with the version chosen automatically and neither credential; a
+        // requested version that replay does not name is shown as Automatic.
         internal static string TransportNote(ReplayItemResult sent)
         {
             string transportKey = sent?.Transport switch
             {
-                ReplayTransportOptions.ConnectToName => "REPLAY_NOTE_CONNECT_TO",
+                ReplayTransportOptions.ConnectToName => sent.Raw ? "REPLAY_NOTE_RAW_CONNECT_TO" : "REPLAY_NOTE_CONNECT_TO",
                 ReplayTransportOptions.ProxyName => "REPLAY_NOTE_PROXY",
                 _ => null,
             };
@@ -407,7 +517,9 @@ namespace XMAT.WebServiceCapture
                 : verdict;
         }
 
-        // On the UI thread, which also closes tabs: a row goes into the open tab, or nowhere.
+        // On the UI thread, which also closes tabs: a row goes into the open tab, or nowhere. Its provenance takes the origin
+        // that the send gives (ReplayExchange.ProvenanceOrigin): the request's captured, saved or first origin, which a
+        // request made from the row again keeps.
         private void Record(ReplayProvenance provenance, ReplayExchange exchange, ReplayItemResult result)
         {
             if (!_isOpen())
@@ -421,7 +533,7 @@ namespace XMAT.WebServiceCapture
             OmittedBodies += (keepRequest ? 0 : 1) + (keepResponse ? 0 : 1);
             ProxyConnectionModel row = ToRow(
                 _lastNumber + 1,
-                provenance,
+                provenance with { Origin = exchange.ProvenanceOrigin },
                 exchange,
                 keepRequest,
                 keepResponse,
@@ -433,6 +545,8 @@ namespace XMAT.WebServiceCapture
                 row.AddToDataTable(_controller.DeviceName, _table);
             }
 
+            // The table took the row, which goes into the tab's rows now (LastItemRecorded).
+            Volatile.Write(ref _lastItemRow, row);
             _controller.ProxyConnections.Add(row);
             _lastNumber++;
             Recorded++;
@@ -518,6 +632,108 @@ namespace XMAT.WebServiceCapture
         }
 
         private static string Bytes(long count) => count.ToString(CultureInfo.InvariantCulture);
+    }
+
+    // The GUI's words for a raw send, which the composer's status and the Replays tab's rows share: the sentence of
+    // each write state (RawWriteState), which every text that names a state uses word for word and none of which says that
+    // the server received anything, and the fixed text of each code, which is the core's own message (RawRequest.Message)
+    // where it has one. Never an exception's message.
+    internal static class RawSendWording
+    {
+        // The state's own sentence; null for a send without a write state.
+        internal static string StateSentence(string requestWrite) => requestWrite switch
+        {
+            RawWriteState.None => Localization.GetLocalizedString("COMPOSER_RAW_STATE_NONE"),
+            RawWriteState.Partial => Localization.GetLocalizedString("COMPOSER_RAW_STATE_PARTIAL"),
+            RawWriteState.Uncertain => Localization.GetLocalizedString("COMPOSER_RAW_STATE_UNCERTAIN"),
+            RawWriteState.Complete => Localization.GetLocalizedString("COMPOSER_RAW_STATE_COMPLETE"),
+            _ => null,
+        };
+
+        // The state's sentence and what it allows to say: for partial and uncertain, the bytes that the write calls which
+        // completed handed to the connection's stream, never what reached the network or the server; for complete, that this
+        // does not prove that the server received them.
+        internal static string WriteSentence(string requestWrite, long? bytesWritten) => requestWrite switch
+        {
+            RawWriteState.Partial or RawWriteState.Uncertain => StateSentence(requestWrite) + " " +
+                Localization.GetLocalizedString("COMPOSER_RAW_HANDED", bytesWritten ?? 0),
+            RawWriteState.Complete => StateSentence(requestWrite) + " " +
+                Localization.GetLocalizedString("COMPOSER_RAW_NO_RECEIPT"),
+            _ => StateSentence(requestWrite),
+        };
+
+        // What the composer's history shows of a raw send's row after its request: Raw mode with the
+        // complete state's sentence when XMAT handed every byte to the connection, and otherwise an attempted request with
+        // its state's sentence, which the row keeps without the count of bytes. Null for a row that no raw send recorded,
+        // and for one without a write state, which a raw send's row always has.
+        internal static string HistoryMarker(bool sentRaw, string requestWrite)
+        {
+            string sentence = sentRaw ? StateSentence(requestWrite) : null;
+            return sentence == null
+                ? null
+                : Localization.GetLocalizedString(
+                    requestWrite == RawWriteState.Complete ? "COMPOSER_HISTORY_RAW" : "COMPOSER_HISTORY_RAW_ATTEMPTED",
+                    sentence);
+        }
+
+        // Load's status for a raw send's row of the tab named source: that it loaded the row's normalized view
+        // in Parsed mode, with the state's sentence, an attempted request's own words when the state is not complete, and
+        // that the view can differ from the bytes that XMAT prepared. Null for any other row, as for HistoryMarker.
+        internal static string LoadedStatus(bool sentRaw, string requestWrite, string source, long number)
+        {
+            string sentence = sentRaw ? StateSentence(requestWrite) : null;
+            return sentence == null
+                ? null
+                : Localization.GetLocalizedString(
+                    requestWrite == RawWriteState.Complete
+                        ? "COMPOSER_HISTORY_LOADED_RAW"
+                        : "COMPOSER_HISTORY_LOADED_RAW_ATTEMPTED",
+                    source,
+                    number,
+                    sentence);
+        }
+
+        // The en-us key of a code's fixed text in Raw mode: each Raw mode code's, which mirrors the core's message
+        // (RawRequest.Message), and a timeout's; null for any other code, such as the command line's own.
+        internal static string KeyOf(string code) => code switch
+        {
+            RawCodes.InputTooLarge => "COMPOSER_RAW_INPUT_TOO_LARGE",
+            RawCodes.Invalid => "COMPOSER_RAW_INVALID",
+            RawCodes.Method => "COMPOSER_RAW_METHOD",
+            RawCodes.Target => "COMPOSER_RAW_REQUEST_TARGET",
+            RawCodes.Version => "COMPOSER_RAW_VERSION",
+            RawCodes.DuplicateField => "COMPOSER_RAW_DUPLICATE_FIELD",
+            RawCodes.Host => "COMPOSER_RAW_HOST",
+            RawCodes.Connection => "COMPOSER_RAW_CONNECTION",
+            RawCodes.Expect => "COMPOSER_RAW_EXPECT",
+            RawCodes.Upgrade => "COMPOSER_RAW_UPGRADE",
+            RawCodes.Trailer => "COMPOSER_RAW_TRAILER",
+            RawCodes.Framing => "COMPOSER_RAW_FRAMING",
+            RawCodes.BodyNotAllowed => "COMPOSER_RAW_BODY_NOT_ALLOWED",
+            RawCodes.FixContentLength => "COMPOSER_RAW_FIX_CONTENT_LENGTH",
+            RawCodes.Changed => "COMPOSER_RAW_CHANGED",
+            RawCodes.TargetDenied => "COMPOSER_RAW_TARGET_DENIED",
+            RawCodes.Proxy => "COMPOSER_RAW_PROXY",
+            RawCodes.ClientCert => "COMPOSER_RAW_CLIENT_CERT",
+            RawCodes.WindowsAuth => "COMPOSER_RAW_WINDOWS_AUTH",
+            RawCodes.HttpVersion => "COMPOSER_RAW_HTTP_VERSION",
+            RawCodes.Redirects => "COMPOSER_RAW_REDIRECTS",
+            RawCodes.UnsupportedOption => "COMPOSER_RAW_UNSUPPORTED_OPTION",
+            RawCodes.PolicyRaw => "COMPOSER_RAW_POLICY",
+            RawCodes.PolicyRawUnsafe => "COMPOSER_RAW_POLICY_UNSAFE",
+            RawCodes.Alpn => "COMPOSER_RAW_ALPN",
+            RawCodes.ResponseInvalid => "COMPOSER_RAW_RESPONSE_INVALID",
+            RawCodes.ResponseCoding => "COMPOSER_RAW_RESPONSE_CODING",
+            RawCodes.ResponseIncomplete => "COMPOSER_RAW_RESPONSE_INCOMPLETE",
+            RawCodes.SendCancelled => "COMPOSER_RAW_SEND_CANCELLED",
+            ReplaySender.TimeoutCode => "COMPOSER_TIMEOUT",
+            _ => null,
+        };
+
+        // Why a raw send got no complete response, in its code's words: replay.send.failed, which has no core message, and
+        // any failure without a text of its own, as one that could not be completed (COMPOSER_RAW_SEND_FAILED).
+        internal static string CodeText(string code) =>
+            Localization.GetLocalizedString(KeyOf(code) ?? "COMPOSER_RAW_SEND_FAILED");
     }
 
     // One run's hold on the Replays tab: the recorder that adds the run's rows, and the capture-data operation that keeps

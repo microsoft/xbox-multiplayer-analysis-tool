@@ -58,10 +58,12 @@ namespace XMAT.WebServiceCapture
         internal RequestOmissions Omissions { get; private set; } = RequestOmissions.None;
 
         // The source of the stored text that the draft was made from (FromCapture): its capture's, AmbiguousUnmarked for a
-        // capture without XMAT's text-format marker; Literal for every other draft, such as a new request, a request
-        // file's or a raw request's. Every copy keeps it and no edit changes it, so the operation can refuse to send or
-        // export unmarked text without a decision (ReplayOperation.StoredTextAmbiguousCode).
-        internal global::XMAT.DataAbstractionLayer.CaptureTextSource CaptureTextSource { get; private set; } =
+        // capture without XMAT's text-format marker. A draft that Raw mode converts back (RawConversion.ToDraft) keeps the
+        // source of the draft that it was converted from, and Literal is the source of independent input only: a new
+        // request, a request file's or a raw file's. Every copy keeps it and no edit changes it: only an object initializer
+        // sets it, so the operation can refuse to send or export unmarked text without a decision
+        // (ReplayOperation.StoredTextAmbiguousCode).
+        internal global::XMAT.DataAbstractionLayer.CaptureTextSource CaptureTextSource { get; init; } =
             global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal;
 
         // Only exactly GET, HEAD and OPTIONS are safe; any other method, in any case, can change server state. Shared by
@@ -98,18 +100,7 @@ namespace XMAT.WebServiceCapture
                 throw new ArgumentException(
                     "Only HTTP requests without a protocol upgrade, recorded with their request body, can be replayed.");
 
-            // Captures can store either an absolute proxy URL or a path relative to the recorded host.
-            string path = capture.Path ?? "";
-            string url;
-            if (Uri.TryCreate(path, UriKind.Absolute, out var absolute) &&
-                (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps))
-            {
-                url = absolute.AbsoluteUri;
-            }
-            else
-            {
-                url = CaptureAuthority(capture) + (path.StartsWith('/') ? path : "/" + path);
-            }
+            string url = CaptureUrl(capture);
 
             // Keep the raw header lines: the capture's dictionary collapses repeated header names.
             string rawHeaders = capture.RequestLineAndHeaders ?? "";
@@ -171,17 +162,101 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // The scheme, host and port that FromCapture sends a request to when its path is relative to the recorded host, as
-        // Uri gives them: an IPv6 host in brackets, and the port only when it is not the scheme's default. It throws when
-        // the row's scheme, host or port make no URL, as FromCapture then does.
+        // The scheme, host and port of a capture whose path is relative: an IPv6 host is bracketed and keeps its stored zone,
+        // and a port is present only when it is not the scheme's default. The URL must round-trip without interpreting any
+        // host text as user information, path, query or fragment, or changing the stored port; otherwise it throws. A stored
+        // scheme, host or port longer than ReplayDestination.MaxCaptureDestinationChars throws before anything parses it.
         internal static string CaptureAuthority(ProxyConnectionModel capture)
         {
             ArgumentNullException.ThrowIfNull(capture);
-            var authority = new UriBuilder(capture.Scheme, capture.Host);
-            if (!string.IsNullOrEmpty(capture.Port))
-                authority.Port = int.Parse(capture.Port);
-            return authority.Uri.GetLeftPart(UriPartial.Authority);
+            try
+            {
+                if (ReplayDestination.StoredFieldsExceedLimit(capture))
+                {
+                    throw new UriFormatException();
+                }
+
+                string storedHost = capture.Host ?? string.Empty;
+                if (!storedHost.Contains(':') &&
+                    !storedHost.StartsWith('[') &&
+                    storedHost.AsSpan().IndexOfAny('/', '\\') >= 0)
+                {
+                    throw new UriFormatException();
+                }
+
+                var authority = new UriBuilder(capture.Scheme, capture.Host);
+                int? storedPort = null;
+                if (!string.IsNullOrEmpty(capture.Port))
+                {
+                    storedPort = int.Parse(capture.Port);
+                    authority.Port = storedPort.Value;
+                }
+
+                Uri uri = authority.Uri;
+                string userInfoWithDelimiter = uri.GetComponents(
+                    UriComponents.UserInfo | UriComponents.KeepDelimiter,
+                    UriFormat.UriEscaped);
+                bool hasEmptyUserInfoDelimiter =
+                    string.IsNullOrEmpty(uri.UserInfo) && userInfoWithDelimiter.Length != 0;
+                if (hasEmptyUserInfoDelimiter ||
+                    !string.IsNullOrEmpty(uri.UserInfo) ||
+                    (capture.Host?.StartsWith('[') == true && !capture.Host.EndsWith(']')) ||
+                    uri.PathAndQuery != "/" ||
+                    !string.IsNullOrEmpty(uri.Fragment) ||
+                    (storedPort.HasValue ? uri.Port != storedPort.Value : !uri.IsDefaultPort))
+                {
+                    throw new UriFormatException();
+                }
+
+                return ReplayDestination.AuthorityKeepingZone(uri);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException or FormatException or InvalidOperationException or OverflowException)
+            {
+                throw new UriFormatException("The captured host and port do not make a URL authority.");
+            }
         }
+
+        // The effective URL of a capture, without reading its body, made from its destination decision
+        // (ReplayDestination.ReadCaptureDestination), which every other use shares: the absolute target, which wins, as Uri
+        // writes it, or the structured authority followed by the target as a path; either keeps an IPv6 zone as stored data.
+        // The whole target is parsed only to make the URL, and must give the authority that the decision read from its head;
+        // it fails rather than choosing another destination. A malformed destination, the decision's limit included, throws.
+        internal static string CaptureUrl(ProxyConnectionModel capture)
+        {
+            ArgumentNullException.ThrowIfNull(capture);
+            CaptureDestination destination = ReplayDestination.ReadCaptureDestination(capture);
+            string path = capture.Path ?? string.Empty;
+            switch (destination.Kind)
+            {
+                case CaptureDestinationKind.Absolute:
+                    if (Uri.TryCreate(path, UriKind.Absolute, out Uri absolute) &&
+                        string.Equals(
+                            absolute.GetLeftPart(UriPartial.Authority),
+                            destination.Authority.GetLeftPart(UriPartial.Authority),
+                            StringComparison.Ordinal) &&
+                        string.Equals(absolute.DnsSafeHost, destination.Authority.DnsSafeHost, StringComparison.Ordinal))
+                    {
+                        return ReplayDestination.AbsoluteUriKeepingZone(absolute);
+                    }
+
+                    break;
+                case CaptureDestinationKind.Structured:
+                    return destination.AuthorityText + (path.StartsWith('/') ? path : "/" + path);
+                case CaptureDestinationKind.Malformed when !destination.LimitExceeded:
+                    // The stored authority makes none: CaptureAuthority says so in its own fixed words.
+                    _ = CaptureAuthority(capture);
+                    break;
+            }
+
+            throw new UriFormatException(MalformedDestinationMessage);
+        }
+
+        // Why a capture's request has no destination: its target or stored authority makes no URL, or needs more of its
+        // characters than a destination decision reads (ReplayDestination.MaxCaptureDestinationChars). Fixed, so that no
+        // captured text is echoed.
+        internal const string MalformedDestinationMessage =
+            "The captured destination is malformed or exceeds the supported size limit.";
 
         // A draft from a request file. What the file left out stays omitted (Omissions) and shows as empty until it is
         // supplied explicitly. The file's URL is the origin that a change needs consent for; a file without one gives none,
@@ -280,9 +355,11 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(body);
             if (!Uri.TryCreate(Url, UriKind.Absolute, out var uri) ||
                 (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
-                !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment))
+                !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment) || !ReplayAuthority.HasIdnHost(uri))
             {
-                throw new ArgumentException("Enter an absolute HTTP or HTTPS URL without embedded credentials or a fragment.");
+                throw new ArgumentException(
+                    "Enter an absolute HTTP or HTTPS URL with an IP address, a host name in ASCII or an international host " +
+                    "name that XMAT can convert to ASCII (punycode), without embedded credentials or a fragment.");
             }
             if (!IsValidMethod(Method))
             {
@@ -461,7 +538,9 @@ namespace XMAT.WebServiceCapture
             ArgumentNullException.ThrowIfNull(url);
             if (!IsValidRequestFileUrl(url))
                 throw new ArgumentException(
-                    "Enter an absolute HTTP or HTTPS URL without embedded credentials, with a '#' only in its path or query.",
+                    "Enter an absolute HTTP or HTTPS URL with an IP address, a host name in ASCII or an international host " +
+                        "name that XMAT can convert to ASCII (punycode), without embedded credentials, with a '#' " +
+                        "only in its path or query.",
                     nameof(url));
             Url = url;
             _origin ??= OriginOf(url);
@@ -496,8 +575,9 @@ namespace XMAT.WebServiceCapture
                 throw new FormatException("Enter a valid HTTP method other than CONNECT, of at most 64 characters.");
             if (!Omissions.Url && !IsValidRequestFileUrl(Url))
                 throw new FormatException(
-                    "Enter an absolute HTTP or HTTPS URL without embedded credentials, of at most 65,536 characters, " +
-                    "with a '#' only in its path or query.");
+                    "Enter an absolute HTTP or HTTPS URL with an IP address, a host name in ASCII or an international host " +
+                    "name that XMAT can convert to ASCII (punycode), without embedded credentials, of at most " +
+                    "65,536 characters, with a '#' only in its path or query.");
             if (!Omissions.Headers)
                 CheckHeaderLimits(HeadersText);
             if (!Omissions.Body && GetBodyLength() > RequestFileLimits.MaxBodyBytes)
@@ -743,9 +823,9 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // An absolute HTTP or HTTPS URL without user info or a fragment, of at most MaxUrlChars characters; a URL with a
-        // '#' is a sequence template, which has its every '#' in its path or query and is checked with a number in their
-        // place.
+        // An absolute HTTP or HTTPS URL without user info or a fragment, of at most MaxUrlChars characters, whose host Uri
+        // gives in ASCII (ReplayAuthority.HasIdnHost); a URL with a '#' is a sequence template, which has its every '#' in its
+        // path or query and is checked with a number in their place.
         internal static bool IsValidRequestFileUrl(string url)
         {
             if (url == null || url.Length > RequestFileLimits.MaxUrlChars)
@@ -760,7 +840,7 @@ namespace XMAT.WebServiceCapture
 
             return Uri.TryCreate(probe, UriKind.Absolute, out var uri) &&
                 (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
-                string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment);
+                string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment) && ReplayAuthority.HasIdnHost(uri);
         }
 
         // The header lines as name and value pairs, in order; FormatException when a line is not a valid header.

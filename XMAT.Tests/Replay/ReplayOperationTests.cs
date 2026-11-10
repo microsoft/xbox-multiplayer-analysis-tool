@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: MIT
 
 using System.Net;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using XMAT.Operations;
+using XMAT.Operations.Analysis;
 using XMAT.Operations.Replay;
 using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
@@ -49,6 +51,71 @@ namespace XMAT.Tests.Replay
             Assert.Equal(new[] { 1, 2, 3, 4 }, sink.Results.Select(item => item.Id));
             Assert.Equal("reply /two", Encoding.UTF8.GetString(sink.Exchanges[1].Response.Body));
             Assert.Equal(sha256, Sha256(capture));
+        }
+
+        [Fact]
+        public async Task PreparedRun_ExecutesTheFrozenCaptureWithoutReadingItAgain()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string capture = ReplayCaptures.WriteSaz(
+                _directory, "prepared.saz", new CapturedExchange("GET", server.Origin + "/prepared"));
+            var operation = new ReplayOperation();
+
+            ReplayOperation.PreparedRun prepared = await operation.PrepareRunAsync(
+                new ReplayRequest(ReplaySource.FromFile(capture, Selection("1"))),
+                CancellationToken.None);
+            Assert.Null(prepared.Failure);
+            File.Delete(capture);
+
+            OperationResult<ReplayResult> result = await operation.ExecuteAsync(
+                prepared, sink: null, context: OperationContext.None, cancellationToken: CancellationToken.None);
+
+            Assert.True(result.Succeeded, Describe(result));
+            Assert.Equal("/prepared", Assert.Single(server.Requests).Target);
+        }
+
+        [Fact]
+        public async Task PreparedRun_IsNotChangedByLaterDraftEdits()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            var draft = new RequestReplayDraft { Url = server.Origin + "/frozen" };
+            var operation = new ReplayOperation();
+            ReplayOperation.PreparedRun prepared = await operation.PrepareRunAsync(
+                new ReplayRequest(ReplaySource.FromDraft(draft)),
+                CancellationToken.None);
+            Assert.Null(prepared.Failure);
+            draft.Url = "http://[fe80::1%12]/changed";
+
+            OperationResult<ReplayResult> result = await operation.ExecuteAsync(
+                prepared, sink: null, context: OperationContext.None, cancellationToken: CancellationToken.None);
+
+            Assert.True(result.Succeeded, Describe(result));
+            Assert.Equal("/frozen", Assert.Single(server.Requests).Target);
+        }
+
+        [Fact]
+        public async Task FilePreparation_DoesNotLoadAnalysisAssets()
+        {
+            string capture = ReplayCaptures.WriteSaz(
+                _directory, "asset-free.saz", new CapturedExchange("GET", "http://example.test/prepared"));
+            var runReader = new AnalyzeCaptureOperation();
+            var runOperation = new ReplayOperation { CaptureReaderFactory = () => runReader };
+
+            ReplayOperation.PreparedRun prepared = await runOperation.PrepareRunAsync(
+                new ReplayRequest(ReplaySource.FromFile(capture, Selection("1"))),
+                CancellationToken.None);
+
+            Assert.Null(prepared.Failure);
+            Assert.False(AssetsOf(runReader).IsValueCreated);
+
+            var exportReader = new AnalyzeCaptureOperation();
+            var exportOperation = new ReplayOperation { CaptureReaderFactory = () => exportReader };
+            OperationResult<ReplayExport> exported = exportOperation.PrepareForExport(
+                new ReplayRequest(ReplaySource.FromFile(capture, Selection("1"))),
+                CancellationToken.None);
+
+            Assert.True(exported.Succeeded, string.Join(", ", exported.Diagnostics.Select(item => item.Code)));
+            Assert.False(AssetsOf(exportReader).IsValueCreated);
         }
 
         [Fact]
@@ -939,6 +1006,11 @@ namespace XMAT.Tests.Replay
             Assert.True(ReplaySelection.TryParse(text, out ReplaySelection selection));
             return selection;
         }
+
+        private static Lazy<AnalysisAssetSet> AssetsOf(AnalyzeCaptureOperation operation) =>
+            (Lazy<AnalysisAssetSet>)typeof(AnalyzeCaptureOperation)
+                .GetField("_assets", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(operation);
 
         private static void AssertFailure(OperationResult<ReplayResult> result, OperationOutcome outcome, string code)
         {

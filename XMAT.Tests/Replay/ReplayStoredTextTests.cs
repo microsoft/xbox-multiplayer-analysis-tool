@@ -92,6 +92,97 @@ namespace XMAT.Tests.Replay
             Assert.Equal(sha256, Sha256(capture));
         }
 
+        [Theory]
+        [InlineData("%0")]
+        [InlineData("%Ethernet")]
+        [InlineData("%25NoSuchIf")]
+        public async Task StoredTextDecision_PrecedesScopedDestination(string zone)
+        {
+            string host = "fe80::1" + zone;
+            string url = $"http://[{host}]:8080/";
+            string capture = Write(
+                "unmarked",
+                new CapturedExchange("GET", "http://[fe80::1]:8080/", StoredHeaders));
+            SetStoredDestination(capture, "http", host, "8080", "/");
+            ProxyConnectionModel stored = Model(capture);
+            Assert.Equal(
+                ("http", host, "8080", "/"),
+                (stored.Scheme, stored.Host, stored.Port, stored.Path));
+            RequestReplayDraft draft = RequestReplayDraft.FromCapture(stored);
+            Assert.Equal(url, draft.Url);
+            Assert.True(ReplayDestination.IsScopedIpv6(draft.Url));
+
+            var operation = new ReplayOperation();
+            var fileSource = ReplaySource.FromFile(capture, Selection("1"));
+            ReplayOperation.PreparedRun sent = await operation.PrepareRunAsync(
+                new ReplayRequest(fileSource),
+                CancellationToken.None);
+            OperationResult<ReplayExport> exported = operation.PrepareForExport(
+                new ReplayRequest(fileSource),
+                CancellationToken.None);
+
+            AssertRefused(
+                sent.Failure.Outcome,
+                sent.Failure.Diagnostics,
+                ReplayOperation.StoredTextAmbiguousCode,
+                ReplayMessage);
+            AssertRefused(
+                exported.Outcome,
+                exported.Diagnostics,
+                ReplayOperation.StoredTextAmbiguousExportCode,
+                ExportMessage);
+
+            ReplayOperation.PreparedRun accepted = await operation.PrepareRunAsync(
+                new ReplayRequest(fileSource, new ReplayOptions(AcceptStoredText: true)),
+                CancellationToken.None);
+            Assert.Equal(OperationOutcome.InvalidInput, accepted.Failure.Outcome);
+            Assert.Equal(ReplayDestination.ScopedIpv6Code, Assert.Single(accepted.Failure.Diagnostics).Code);
+
+            var heldSource = ReplaySource.FromCaptures(new[] { stored });
+            ReplayOperation.PreparedRun heldSend = await operation.PrepareRunAsync(
+                new ReplayRequest(heldSource, new ReplayOptions(AcceptStoredText: true)),
+                CancellationToken.None);
+            OperationResult<ReplayExport> heldExport = operation.PrepareForExport(
+                new ReplayRequest(heldSource, new ReplayOptions(AcceptStoredText: true)),
+                CancellationToken.None);
+            AssertRefused(
+                heldSend.Failure.Outcome,
+                heldSend.Failure.Diagnostics,
+                ReplayOperation.StoredTextAmbiguousCode,
+                ReplayMessage);
+            AssertRefused(
+                heldExport.Outcome,
+                heldExport.Diagnostics,
+                ReplayOperation.StoredTextAmbiguousExportCode,
+                ExportMessage);
+        }
+
+        // The stored-text decision comes before a malformed destination too, the decision's limit included: the request is
+        // refused for its text until the run accepts that for its capture file, and then refused as malformed. A held row of
+        // the capture is refused for its text even so. Nothing is sent.
+        [Fact]
+        public async Task StoredTextDecision_PrecedesAMalformedDestination()
+        {
+            string capture = Write("unmarked", new CapturedExchange("GET", "http://127.0.0.1:9/one", StoredHeaders));
+            SetStoredDestination(
+                capture, "http", "127.0.0.1", "9", new string(' ', ReplayDestination.MaxCaptureDestinationChars) + "/one");
+            ProxyConnectionModel held = Model(capture);
+            Assert.Equal(CaptureDestination.OverLimit, ReplayDestination.ReadCaptureDestination(held));
+            var fileSource = ReplaySource.FromFile(capture, Selection("1"));
+            var accepted = new ReplayOptions(AcceptStoredText: true);
+
+            OperationResult<ReplayResult> refused = await Execute(new ReplayRequest(fileSource));
+            OperationResult<ReplayResult> malformed = await Execute(new ReplayRequest(fileSource, accepted));
+            OperationResult<ReplayResult> heldRefused = await Execute(
+                new ReplayRequest(ReplaySource.FromCaptures(new[] { held }), accepted));
+
+            AssertRefused(refused.Outcome, refused.Diagnostics, ReplayOperation.StoredTextAmbiguousCode, ReplayMessage);
+            Assert.Equal(OperationOutcome.InvalidInput, malformed.Outcome);
+            Assert.Equal(ReplayOperation.RequestMalformedCode, Assert.Single(malformed.Diagnostics).Code);
+            AssertRefused(
+                heldRefused.Outcome, heldRefused.Diagnostics, ReplayOperation.StoredTextAmbiguousCode, ReplayMessage);
+        }
+
         [Fact]
         public async Task UnmarkedCapture_Accepted_SendsAndExportsItsTextAsStored_AndSaysSo()
         {
@@ -345,6 +436,35 @@ namespace XMAT.Tests.Replay
             }
 
             return path;
+        }
+
+        private static void SetStoredDestination(
+            string path,
+            string scheme,
+            string host,
+            string port,
+            string requestPath)
+        {
+            using var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = path,
+                    Mode = SqliteOpenMode.ReadWrite,
+                    Pooling = false,
+                }.ToString());
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText =
+                $"UPDATE \"{WebServiceCaptureMethod.TableName}\" SET " +
+                $"\"{WebServiceCaptureMethod.FieldKey_RequestScheme}\" = $scheme, " +
+                $"\"{WebServiceCaptureMethod.FieldKey_RequestHost}\" = $host, " +
+                $"\"{WebServiceCaptureMethod.FieldKey_RequestPort}\" = $port, " +
+                $"\"{WebServiceCaptureMethod.FieldKey_RequestPath}\" = $path";
+            command.Parameters.AddWithValue("$scheme", scheme);
+            command.Parameters.AddWithValue("$host", host);
+            command.Parameters.AddWithValue("$port", port);
+            command.Parameters.AddWithValue("$path", requestPath);
+            Assert.Equal(1, command.ExecuteNonQuery());
         }
 
         // The production model of a capture file's one request, as ReplayOperation reads it.

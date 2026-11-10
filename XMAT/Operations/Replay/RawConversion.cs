@@ -8,6 +8,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using XMAT.DataAbstractionLayer;
 using XMAT.WebServiceCapture;
 
 namespace XMAT.Operations.Replay
@@ -299,7 +300,8 @@ namespace XMAT.Operations.Replay
         // Raw to Parsed: the method; the target's origin with the origin form as the URL; every field
         // line as written but Host and Content-Length, which Parsed mode writes with the same values, and
         // Transfer-Encoding when the chunked body is decoded; and the entity, shown as FromCapture shows a body. The
-        // provenance's captured origin is kept, so a mode switch cannot launder it.
+        // provenance's captured origin and stored-text source are kept, so a mode switch can launder neither; without a
+        // provenance, the source is Unknown, never Literal.
         internal static RawToDraftResult ToDraft(
             RawEditorParse parse,
             RequestReplayDraft provenance,
@@ -342,6 +344,7 @@ namespace XMAT.Operations.Replay
                 Method = parse.Method,
                 Url = url,
                 HeadersText = string.Join("\r\n", lines),
+                CaptureTextSource = provenance?.CaptureTextSource ?? CaptureTextSource.Unknown,
             };
             string encoding = parse.Fields.FirstOrDefault(field => Is(field.Key, "Content-Encoding")).Value;
             bool encoded = encoding != null && !string.Equals(encoding, "identity", StringComparison.OrdinalIgnoreCase);
