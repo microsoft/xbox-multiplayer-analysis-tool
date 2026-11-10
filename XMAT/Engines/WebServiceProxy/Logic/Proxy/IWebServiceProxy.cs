@@ -36,8 +36,10 @@ namespace XMAT.WebServiceCapture.Proxy
 
         Task StopProxyAsync(IProgress<WebProxyStopProgress> progress = null);
 
+        // applyRejection must synchronously serialize the abort with policy invalidation.
         Task RecheckSslConnectionsAsync(
             Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> policy,
+            Action<Action> applyRejection,
             CancellationToken cancellationToken = default);
 
         void Reset();

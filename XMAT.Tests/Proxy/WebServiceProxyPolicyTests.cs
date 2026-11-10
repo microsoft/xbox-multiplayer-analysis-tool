@@ -59,10 +59,10 @@ namespace XMAT.Tests.Proxy
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             try
             {
-                await proxy.RecheckSslConnectionsAsync((_, _) => Task.FromResult(false));
+                await proxy.RecheckSslConnectionsAsync((_, _) => Task.FromResult(false), action => action());
                 Assert.Equal(1, aborted);
                 proxy.UntrackSslConnection(registration);
-                await proxy.RecheckSslConnectionsAsync((_, _) => Task.FromResult(false));
+                await proxy.RecheckSslConnectionsAsync((_, _) => Task.FromResult(false), action => action());
                 Assert.Equal(1, aborted);
             }
             finally
@@ -87,7 +87,7 @@ namespace XMAT.Tests.Proxy
                 started.TrySetResult(true);
                 await release.Task;
                 return false;
-            });
+            }, action => action());
             try
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -120,11 +120,11 @@ namespace XMAT.Tests.Proxy
                 () => ++allowedAborts, CancellationToken.None);
 
             await proxy.RecheckSslConnectionsAsync(
-                (args, _) => Task.FromResult(args.Request.Host != "blocked.test"));
+                (args, _) => Task.FromResult(args.Request.Host != "blocked.test"), action => action());
             Assert.Equal(1, blockedAborts);
             Assert.Equal(0, allowedAborts);
             proxy.UntrackSslConnection(allowed);
-            await proxy.RecheckSslConnectionsAsync((_, _) => Task.FromResult(false));
+            await proxy.RecheckSslConnectionsAsync((_, _) => Task.FromResult(false), action => action());
             Assert.Equal(2, blockedAborts);
             Assert.Equal(0, allowedAborts);
             proxy.UntrackSslConnection(blocked);

@@ -182,6 +182,74 @@ namespace XMAT.Tests.Proxy
         }
 
         [Theory]
+        [InlineData("disable")]
+        [InlineData("edit")]
+        [InlineData("recompile")]
+        [InlineData("replace")]
+        public async Task SslConnectionScript_InvalidatedAtAbortHandoff_PreservesExistingTunnel(
+            string invalidation)
+        {
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync();
+            Assert.Equal("origin-ok", await capture.Client.GetStringAsync(origin.Url("/before")));
+            var connects = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            capture.Proxy.ReceivedSslConnectionRequest += (_, args) => connects.Enqueue(args.Request.Host);
+            var beforeAbort = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            capture.Proxy.BeforeSslConnectionRecheckAbortAsync = async () =>
+            {
+                beforeAbort.TrySetResult(true);
+                await release.Task;
+            };
+            string key = $"ssl-handoff-{Guid.NewGuid():N}";
+            AppDomain.CurrentDomain.SetData(key, false);
+            Task activation = null;
+            try
+            {
+                activation = capture.EnableScriptAsync(
+                    WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                    $"Params.Continue = System.AppDomain.CurrentDomain.GetData(\"{key}\") is true;");
+                await beforeAbort.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                Assert.False(activation.IsCompleted);
+                ScriptModel model = capture.Controller.Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest];
+                switch (invalidation)
+                {
+                    case "disable":
+                        model.DisableScript();
+                        break;
+                    case "edit":
+                        model.Script = "Params.Continue = true;";
+                        break;
+                    case "recompile":
+                        AppDomain.CurrentDomain.SetData(key, true);
+                        Assert.Equal(ScriptActivationResult.Enabled,
+                            await model.EnableScriptAsync<WebServiceCaptureScriptParams>());
+                        break;
+                    case "replace":
+                        await capture.EnableScriptAsync(
+                            WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                            "Params.Continue = true;");
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(invalidation));
+                }
+                release.TrySetResult(true);
+                await activation.WaitAsync(TimeSpan.FromSeconds(15));
+
+                Assert.Equal("origin-ok", await capture.Client.GetStringAsync(origin.Url("/after")));
+                Assert.Empty(connects);
+            }
+            finally
+            {
+                release.TrySetResult(true);
+                if (activation != null)
+                    await activation.WaitAsync(TimeSpan.FromSeconds(15));
+                capture.Proxy.BeforeSslConnectionRecheckAbortAsync = null;
+                AppDomain.CurrentDomain.SetData(key, null);
+            }
+        }
+
+        [Theory]
         [InlineData(true)]
         [InlineData(false)]
         public async Task SslConnectionScript_InvalidOrThrowingScript_DoesNotDisconnectActiveTunnel(

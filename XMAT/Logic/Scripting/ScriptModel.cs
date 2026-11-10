@@ -35,7 +35,41 @@ namespace XMAT.Scripting
         private string _compilationMessage;
         private long _activationVersion;
 
-        internal Func<Func<bool>, Task> EnabledAsync { get; set; }
+        internal Func<Activation, Task> EnabledAsync { get; set; }
+
+        internal sealed class Activation
+        {
+            private readonly ScriptModel _model;
+            private readonly long _version;
+
+            internal Activation(ScriptModel model, long version)
+            {
+                _model = model;
+                _version = version;
+            }
+
+            internal bool IsCurrent
+            {
+                get
+                {
+                    lock (_model._syncRoot)
+                    {
+                        return _model._isEnabled && _version == _model._activationVersion;
+                    }
+                }
+            }
+
+            internal void ApplyIfCurrent(Action action)
+            {
+                ArgumentNullException.ThrowIfNull(action);
+                lock (_model._syncRoot)
+                {
+                    // The synchronous effect must commit before this activation can be invalidated.
+                    if (_model._isEnabled && _version == _model._activationVersion)
+                        action();
+                }
+            }
+        }
 
         public string DisplayName { get; private set; }
         public string Description { get; private set; }
@@ -239,13 +273,7 @@ namespace XMAT.Scripting
             RaiseCompilationStatusChanged();
             if (result == ScriptActivationResult.Enabled && EnabledAsync != null)
             {
-                await EnabledAsync(() =>
-                {
-                    lock (_syncRoot)
-                    {
-                        return _isEnabled && activationVersion == _activationVersion;
-                    }
-                });
+                await EnabledAsync(new Activation(this, activationVersion));
             }
             return result;
         }

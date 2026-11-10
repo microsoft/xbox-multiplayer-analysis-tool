@@ -1962,7 +1962,7 @@ namespace XMAT.WebServiceCapture
             return BlockList.IsBlocked(host, path);
         }
 
-        private async Task RecheckSslConnectionsAsync(Func<bool> isCurrentActivation)
+        private async Task RecheckSslConnectionsAsync(ScriptModel.Activation activation)
         {
             if (_webProxy == null)
                 return;
@@ -1972,7 +1972,7 @@ namespace XMAT.WebServiceCapture
                     "Live SSL connection",
                     async cancellationToken =>
                     {
-                        if (!isCurrentActivation())
+                        if (!activation.IsCurrent)
                             return true;
 
                         var parameters = new WebServiceCaptureScriptParams
@@ -1988,11 +1988,12 @@ namespace XMAT.WebServiceCapture
 
                         // A disabled, edited, or superseded script must not disconnect
                         // a connection on the strength of a late result.
-                        return !isCurrentActivation() ||
+                        return !activation.IsCurrent ||
                             result == ScriptPolicyResult.FailedOpen ||
                             (result == ScriptPolicyResult.Completed && parameters.Continue);
                     },
-                    token)).ConfigureAwait(false);
+                    token),
+                activation.ApplyIfCurrent).ConfigureAwait(false);
         }
 
         private Task<bool> WebProxy_ReceivedSslConnectionRequestAsync(

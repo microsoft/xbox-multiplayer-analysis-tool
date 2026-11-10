@@ -69,6 +69,9 @@ namespace XMAT.WebServiceCapture.Proxy
         // Test seam: called at the end of teardown, just before the log is closed.
         internal Action LogCloseFaultInjection { get; set; }
 
+        // Test seam: pause after a live policy rejection, before committing the abort.
+        internal Func<Task> BeforeSslConnectionRecheckAbortAsync { get; set; }
+
         private bool _logOpen;
 
         // One budget for stopping both hosts; tests shorten it.
@@ -745,9 +748,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
         public Task RecheckSslConnectionsAsync(
             Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> policy,
+            Action<Action> applyRejection,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(policy);
+            ArgumentNullException.ThrowIfNull(applyRejection);
             // Registration precedes the initial policy check. A connection is either in
             // this snapshot or checks the newly enabled script as a new CONNECT.
             return Parallel.ForEachAsync(
@@ -770,13 +775,27 @@ namespace XMAT.WebServiceCapture.Proxy
                         AcceptConnection = true
                     };
                     bool accepted = await policy(args, linked.Token).ConfigureAwait(false);
-                    if (!accepted && !linked.IsCancellationRequested &&
-                        _sslConnections.TryGetValue(entry.Key, out var current) &&
-                        ReferenceEquals(current, connection))
+                    if (accepted || linked.IsCancellationRequested)
+                        return;
+
+                    if (BeforeSslConnectionRecheckAbortAsync != null)
+                        await BeforeSslConnectionRecheckAbortAsync().ConfigureAwait(false);
+
+                    bool aborted = false;
+                    applyRejection(() =>
+                    {
+                        if (!linked.IsCancellationRequested &&
+                            _sslConnections.TryGetValue(entry.Key, out var current) &&
+                            ReferenceEquals(current, connection))
+                        {
+                            connection.Abort();
+                            aborted = true;
+                        }
+                    });
+                    if (aborted)
                     {
                         _logger.Log(connection.Request.ConnectionID, LogLevel.INFO,
-                            "Disconnecting active SSL connection rejected by the enabled script.");
-                        connection.Abort();
+                            "Aborted active SSL connection rejected by the enabled script.");
                     }
                 });
         }
