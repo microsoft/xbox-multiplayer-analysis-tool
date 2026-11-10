@@ -313,9 +313,9 @@ namespace XMAT.Tests
                 TimeSpan.FromHours(6), ProxyConnectionModel.Elapsed(start, new DateTime(2026, 3, 8, 5, 0, 0, DateTimeKind.Local)));
         }
 
-        // A timer that DateTime reads but that names no instant, its UTC outside years 1 to 9999, is no time, as such a value
-        // never failed an import before timers were instants: the request time stays unknown and the duration is zero.
-        // These have offsets, so every zone reads them alike.
+        // A timer that names no instant, its UTC outside years 1 to 9999, is no time, as such a value never failed an import
+        // before timers were instants: the request time stays unknown and the duration is zero. These have offsets, so every
+        // zone reads them alike, including those where DateTime cannot read them at all.
         [Theory]
         [InlineData("0001-01-01T00:00:00.00000+09:00", "2026-01-01T00:00:01.0000000Z", false)]
         [InlineData("2026-01-01T00:00:00.0000000Z", "9999-12-31T23:59:59.99999-08:00", true)]
@@ -481,9 +481,11 @@ namespace XMAT.Tests
 
         // An instant that this machine cannot show as a local time, which DateTime would move to its first or last value, is
         // no time: the request time stays unknown when it is the first timer, the duration zero when it is either, and every
-        // writer and reader of the pair keeps the times it has. Whether each timer is such an instant is worked out here from
-        // this machine's offset at it, not by the round trip that the reader uses; the first hours of the year 1 are such
-        // instants west of UTC, the last hours of the year 9999 east of it, and none in UTC, which the output says.
+        // writer and reader of the pair keeps the times it has. The one exception is a done time before the begin time, which
+        // the GUI's import keeps as a negative duration, as it always has; the SAZ export writes it as a zero duration and
+        // counts it as a time it adjusted. Whether each timer is such an instant is worked out here from this machine's offset
+        // at it, not by the round trip that the reader uses; the first hours of the year 1 are such instants west of UTC, the
+        // last hours of the year 9999 east of it, and none in UTC, which the output says.
         [Theory]
         [InlineData("0001-01-01T00:00:00.0000000Z", "9999-12-31T23:59:59.9999999Z")]
         [InlineData("2026-01-01T00:00:00.0000000Z", "0001-01-01T00:00:00.0000000Z")]
@@ -548,11 +550,13 @@ namespace XMAT.Tests
 
             foreach (bool sanitized in new[] { false, true })
             {
-                ProxyConnectionModel again = SaveAndRead(read, sanitized);
+                ProxyConnectionModel again = SaveAndRead(read, sanitized, out int adjustedTimes);
+                bool backwards = read.Duration < TimeSpan.Zero;
+                Assert.Equal(backwards ? 1 : 0, adjustedTimes);
                 if (beginHeld)
                 {
                     Assert.Equal(read.RequestTime.ToUniversalTime(), again.RequestTime.ToUniversalTime());
-                    Assert.Equal(read.Duration, again.Duration);
+                    Assert.Equal(backwards ? TimeSpan.Zero : read.Duration, again.Duration);
                 }
                 else
                 {
@@ -948,7 +952,11 @@ namespace XMAT.Tests
         }
 
         // The record saved by the SAZ export, or by the sanitized one, and read back by the GUI's import.
-        private static ProxyConnectionModel SaveAndRead(ProxyConnectionModel record, bool sanitized)
+        private static ProxyConnectionModel SaveAndRead(ProxyConnectionModel record, bool sanitized) =>
+            SaveAndRead(record, sanitized, out _);
+
+        // The same, with the count of times that the export adjusted to write them.
+        private static ProxyConnectionModel SaveAndRead(ProxyConnectionModel record, bool sanitized, out int adjustedTimes)
         {
             string path = Path.Join(Path.GetTempPath(), "xmat-timers-" + Guid.NewGuid().ToString("N") + ".saz");
             try
@@ -961,6 +969,7 @@ namespace XMAT.Tests
                             ? SazExportKind.Sanitized
                             : SazExportKind.Plain);
                 Assert.True(exported.Succeeded);
+                adjustedTimes = exported.Value.Summary.AdjustedTimes;
 
                 return Assert.Single(FiddlerSazHandler.ImportSazFileWithDiagnostics(path, CancellationToken.None).Records);
             }

@@ -706,11 +706,12 @@ namespace XMAT.WebServiceCapture
 
         // A timer as an instant, or null for one that names no time this machine can keep. A time without an offset that reads
         // as DateTime.MinValue is the unknown time: Fiddler writes it for a timer that was never set, and XMAT's export for a
-        // time it does not know, so it reads back as unknown in any time zone. A time that DateTime reads but that names no
-        // instant is no time either: one whose UTC falls outside years 1 to 9999. So is an instant that this machine cannot
-        // show as a local time: the model keeps local times, and DateTime would move such a time to its first or last value,
-        // as it does the first hours of the year 1 west of UTC, so the request time and the end would no longer name the
-        // instants. Anything else that is not a time throws, as DateTime.Parse did.
+        // time it does not know, so it reads back as unknown in any time zone. A time that names no instant is no time either:
+        // one whose UTC falls outside years 1 to 9999. DateTime reads such a time only in the time zones whose offset brings it
+        // back within those years, so it is found from its clock and its offset alone, and every zone reads it alike. So is an
+        // instant that this machine cannot show as a local time: the model keeps local times, and DateTime would move such a
+        // time to its first or last value, as it does the first hours of the year 1 west of UTC, so the request time and the
+        // end would no longer name the instants. Anything else that is not a time throws, as DateTime.Parse did.
         private static DateTimeOffset? ParseTimer(string value)
         {
             bool isTime = DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime clock);
@@ -724,13 +725,53 @@ namespace XMAT.WebServiceCapture
                 return instant.LocalDateTime.ToUniversalTime() == instant.UtcDateTime ? instant : null;
             }
 
-            if (isTime)
+            if (isTime || NamesNoInstant(value))
             {
                 return null;
             }
 
             // Throws the exception that the value is not a time, or ArgumentNullException without one.
             return DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal);
+        }
+
+        // Whether the value is a clock and an offset whose UTC falls outside years 1 to 9999. The offset is the hours, and the
+        // minutes if any, after the value's last sign, at most 14 hours as DateTimeOffset allows; the clock is the time before
+        // it, which must have no offset of its own. Text that is no time in any zone is neither, so it still throws.
+        private static bool NamesNoInstant(string value)
+        {
+            ReadOnlySpan<char> text = value.AsSpan().Trim();
+            int sign = text.LastIndexOfAny('+', '-');
+            if (sign <= 0 ||
+                !TryReadOffset(text[(sign + 1)..], out TimeSpan offset) ||
+                !DateTime.TryParse(text[..sign], CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime clock) ||
+                clock.Kind != DateTimeKind.Unspecified)
+            {
+                return false;
+            }
+
+            long utc = text[sign] == '-' ? clock.Ticks + offset.Ticks : clock.Ticks - offset.Ticks;
+            return utc < DateTime.MinValue.Ticks || utc > DateTime.MaxValue.Ticks;
+        }
+
+        // An offset's hours as hh, with minutes as hhmm or hh:mm.
+        private static bool TryReadOffset(ReadOnlySpan<char> text, out TimeSpan offset)
+        {
+            offset = TimeSpan.Zero;
+            if (text.Length is not (2 or 4 or 5) || (text.Length == 5 && text[2] != ':'))
+            {
+                return false;
+            }
+
+            ReadOnlySpan<char> minutesText = text.Length == 2 ? "00" : text[^2..];
+            if (!int.TryParse(text[..2], NumberStyles.None, CultureInfo.InvariantCulture, out int hours) ||
+                !int.TryParse(minutesText, NumberStyles.None, CultureInfo.InvariantCulture, out int minutes) ||
+                minutes > 59)
+            {
+                return false;
+            }
+
+            offset = new TimeSpan(hours, minutes, 0);
+            return offset <= TimeSpan.FromHours(14);
         }
 
         private static bool IsHeaderValueTrimCharacter(char value) =>
