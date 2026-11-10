@@ -42,6 +42,20 @@ namespace XMAT.Tests.HeadlessParity
             return File.Exists(Path.Combine(candidate, "xmat.exe")) ? Path.GetFullPath(candidate) : null;
         }
 
+        // The built xmat-echo.exe (XMAT.Tests.Echo), which builds to the same relative folder as the tests; null when it
+        // has not been built.
+        internal static string FindEchoHelper()
+        {
+            string relative = Path.GetRelativePath(Path.Combine(Root, "XMAT.Tests"), AppContext.BaseDirectory);
+            if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
+            {
+                return null;
+            }
+
+            string candidate = Path.GetFullPath(Path.Combine(Root, "XMAT.Tests.Echo", relative, "xmat-echo.exe"));
+            return File.Exists(candidate) ? candidate : null;
+        }
+
         private static string FindRoot()
         {
             for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory != null; directory = directory.Parent)

@@ -65,6 +65,32 @@ namespace XMAT.Cli
                 body = read.Body;
             }
 
+            // A request file (compose --request-file) is read next, as untrusted data: only its kind and SHA-256 reach the
+            // output. A file that cannot be read, or is not a valid request file, is refused with exit code 3.
+            RequestFileReadResult file = null;
+            if (request.Replay.RequestFile != null)
+            {
+                try
+                {
+                    file = await RequestFileReader.ReadFileAsync(request.Replay.RequestFile, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    report.Cancel();
+                    return report;
+                }
+
+                report.Replay.InputKind = RequestFileInputKind;
+                if (file.Code != null)
+                {
+                    report.Fail(CliExitCodes.InvalidInput, file.Code, RequestFileMessage(file.Code));
+                    return report;
+                }
+
+                report.Replay.InputSha256 = file.Sha256;
+            }
+
             CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
             if (targetFailure != null)
             {
@@ -102,7 +128,7 @@ namespace XMAT.Cli
                 await CliStagedRun.CompleteAsync(
                     report,
                     output,
-                    token => SendAsync(request, body, output, report, token),
+                    token => SendAsync(request, body, file, output, report, token),
                     null,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -134,7 +160,7 @@ namespace XMAT.Cli
             return report;
         }
 
-        private static string BodyFileMessage(string code) =>
+        internal static string BodyFileMessage(string code) =>
             code switch
             {
                 ReplayBodyFile.TooLargeCode => "The --body-file is larger than 64 MiB.",
@@ -142,11 +168,28 @@ namespace XMAT.Cli
                 _ => "The --body-file could not be read.",
             };
 
+        // The input kind that a run from a request file reports.
+        internal const string RequestFileInputKind = "request-file";
+
+        // What each request file failure says, never what the file holds.
+        internal static string RequestFileMessage(string code) =>
+            code switch
+            {
+                RequestFileCodes.NotFound => "The --request-file was not found.",
+                RequestFileCodes.TooLarge => "The --request-file is larger than 96 MiB.",
+                RequestFileCodes.Unsupported => "The --request-file is a request file of a version that xmat does not read.",
+                RequestFileCodes.Invalid =>
+                    "The --request-file is not a valid request file (xmat-request/1): it has an unknown, missing or repeated " +
+                        "member, or a value that a request file cannot hold.",
+                _ => "The --request-file could not be read.",
+            };
+
         // Produces the results inside the staging folder; null when the run did not send its requests (the report says
         // why).
         private static async Task<IReadOnlyList<CliStagedFile>> SendAsync(
             CliRequest request,
             byte[] body,
+            RequestFileReadResult file,
             CliOutputFolder output,
             CliReport report,
             CancellationToken cancellationToken)
@@ -155,10 +198,16 @@ namespace XMAT.Cli
             // folder and never the GUI's folder under %APPDATA%.
             HeadlessStorage.Configure(output.WorkPath);
             OperationResult<ReplayResult> result = await new ReplayOperation().ExecuteAsync(
-                CreateRequest(request, body, new FileSink(output, report.Replay)),
+                CreateRequest(request, body, file?.Content, new FileSink(output, report.Replay)),
                 OperationContext.None,
                 cancellationToken).ConfigureAwait(false);
             Apply(report, result);
+            if (file != null)
+            {
+                report.Replay.InputKind = RequestFileInputKind;
+                report.Replay.InputSha256 = file.Sha256;
+            }
+
             if (!CliExitCodes.IsPublished(report.ExitCode))
             {
                 return null;
@@ -171,9 +220,15 @@ namespace XMAT.Cli
             };
         }
 
-        private static ReplayRequest CreateRequest(CliRequest request, byte[] body, IReplayExchangeSink sink)
+        private static ReplayRequest CreateRequest(
+            CliRequest request, byte[] body, RequestFileContent file, IReplayExchangeSink sink)
         {
             CliReplay replay = request.Replay;
+
+            // A request file's HTTP version is the run's unless --http-version says otherwise; nothing else in the file
+            // is transport or consent.
+            ReplayHttpVersion httpVersion =
+                file != null && !replay.HttpVersionSet ? file.HttpVersion : replay.HttpVersion;
             var options = new ReplayOptions(
                 Repeat: replay.Repeat,
                 Parallelism: replay.Parallel,
@@ -184,19 +239,29 @@ namespace XMAT.Cli
                 AllowUnsafeMethods: replay.AllowUnsafeMethods,
                 AllowOriginChange: replay.AllowOriginChange,
                 AllowConnectTo: replay.AllowConnectTo,
-                Transport: new ReplayTransportOptions(replay.HttpVersion, replay.ConnectTo),
+                Transport: new ReplayTransportOptions(httpVersion, replay.ConnectTo),
                 VerifyDiff: replay.VerifyDiff);
             if (request.Command == CliCommands.Compose)
             {
                 // The operation applies and checks the method, headers and body of a composed request like any edit; with
-                // --sequence it expands the URL template once per number after checking the plan size.
-                var draft = new RequestReplayDraft { Url = replay.Url };
+                // --sequence it expands the URL template once per number after checking the plan size. A request file's
+                // request is the draft instead, and the edits complete what it left out: --url, --method, --clear-headers
+                // and --body-file or --empty-body; the operation refuses to send anything that is still left out.
+                RequestReplayDraft draft = file != null
+                    ? RequestReplayDraft.FromRequestFile(file)
+                    : new RequestReplayDraft { Url = replay.Url };
                 return new ReplayRequest(
                     ReplaySequence.TryParse(replay.Sequence, out ReplaySequence sequence)
                         ? ReplaySource.FromTemplate(draft, sequence)
                         : ReplaySource.FromDraft(draft),
                     options,
-                    new ReplayEdits(Method: replay.Method, SetHeaders: replay.Headers, Body: body),
+                    new ReplayEdits(
+                        Url: file != null ? replay.Url : null,
+                        Method: replay.Method,
+                        SetHeaders: replay.Headers,
+                        RemoveHeaders: replay.RemoveHeaders,
+                        Body: replay.EmptyBody ? Array.Empty<byte>() : body,
+                        ClearHeaders: replay.ClearHeaders),
                     sink);
             }
 
