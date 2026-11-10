@@ -274,10 +274,11 @@ namespace XMAT.Tests.Replay
         }
 
         // The instructions of the method that type declares with signature "Name(ParameterType,...):ReturnType" (full type
-        // names), in IL order with nop left out, then those of each method that the compiler generated for it (a lambda, a
-        // local function or a state machine's), each after a "generated:" line. A method operand is written as
-        // Type::Name(ParameterType,...):ReturnType, a field as Type::Name:FieldType, a type by its full name, a string quoted
-        // and any other operand as its raw value. A signature that type does not declare throws.
+        // names), in IL order with nop and coverage collection's hit counting left out, then those of each method that the
+        // compiler generated for it (a lambda, a local function or a state machine's), each after a "generated:" line. A
+        // method operand is written as Type::Name(ParameterType,...):ReturnType, a field as Type::Name:FieldType, a type by
+        // its full name, a string quoted and any other operand as its raw value. A signature that type does not declare
+        // throws.
         internal static IReadOnlyList<string> MethodInstructions(Type type, string signature)
         {
             MethodBase[] matching = MethodsOf(type).Where(method => Signature(method) == signature).ToArray();
@@ -651,10 +652,21 @@ namespace XMAT.Tests.Replay
                 {
                     lines.Add(operand == null ? opCode.Name : opCode.Name + " " + operand);
                 }
+
+                // Coverage collection (coverlet, on CI) puts "ldc.i4 <hit index>" and a call of its tracker at each sequence
+                // point; the pair is not the method's own, so it is left out like nop.
+                if (lines.Count >= 2 &&
+                    lines[^1].StartsWith("call " + CoverageTrackerPrefix, StringComparison.Ordinal) &&
+                    lines[^2].StartsWith("ldc.i4 ", StringComparison.Ordinal))
+                {
+                    lines.RemoveRange(lines.Count - 2, 2);
+                }
             }
 
             return lines;
         }
+
+        private const string CoverageTrackerPrefix = "Coverlet.Core.Instrumentation.Tracker.";
 
         private static string RawOperand(byte[] il, int offset, OperandType operandType) => operandType switch
         {
