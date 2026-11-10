@@ -4,7 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Processes;
@@ -14,6 +16,7 @@ namespace XMAT.WebServiceCapture.Models
 {
     public class ProxyConnectionsCollection : ObservableCollection<ProxyConnectionModel>
     {
+        private const int PreciseRemovalLimit = 16;
         private readonly object _lockObj = new object();
 
         public ProxyConnectionModel ById(int requestId)
@@ -80,27 +83,6 @@ namespace XMAT.WebServiceCapture.Models
             }
         }
 
-        internal ProxyConnectionModel UpdateFromDataRecord(IDataRecord dataRecord)
-        {
-            lock (_lockObj)
-            {
-                if (dataRecord == null)
-                {
-                    throw new ArgumentNullException(nameof(dataRecord));
-                }
-
-                int requestNumber = (int)dataRecord.Int(WebServiceCaptureMethod.FieldKey_RequestNumber);
-                if (!_requestToConnections.TryGetValue(requestNumber, out List<ProxyConnectionModel> models))
-                {
-                    return null;
-                }
-                ProxyConnectionModel model = models.FirstOrDefault(
-                    candidate => candidate.RecordRowId == dataRecord.RowId);
-                model?.UpdateFromDataRecord(dataRecord);
-                return model;
-            }
-        }
-
         internal ProxyConnectionModel UpdateFromDataRecord(CaptureRowKey key, IDataRecord dataRecord)
         {
             lock (_lockObj)
@@ -121,6 +103,81 @@ namespace XMAT.WebServiceCapture.Models
         internal void RemoveAll()
         {
             Clear();
+        }
+
+        internal int RemoveByRowKeys(IReadOnlySet<CaptureRowKey> keys)
+        {
+            ArgumentNullException.ThrowIfNull(keys);
+            lock (_lockObj)
+            {
+                (int Index, ProxyConnectionModel Model)[] victims = this
+                    .Select((model, index) => (Index: index, Model: model))
+                    .Where(item => keys.Contains(item.Model.RowKey))
+                    .OrderByDescending(item => item.Index)
+                    .ToArray();
+                if (victims.Length == 0)
+                {
+                    return 0;
+                }
+                CheckReentrancy();
+                if (victims.Length <= PreciseRemovalLimit)
+                {
+                    foreach (var victim in victims)
+                    {
+                        Unindex(victim.Model);
+                    }
+                    RemovePrecisely(victims);
+                    return victims.Length;
+                }
+
+                ProxyConnectionModel[] survivors = this.Where(model => !keys.Contains(model.RowKey)).ToArray();
+                Items.Clear();
+                _requestToConnections.Clear();
+                _keyToConnection.Clear();
+                foreach (ProxyConnectionModel survivor in survivors)
+                {
+                    Items.Add(survivor);
+                    Index(survivor);
+                }
+                OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+                OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+                OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+                return victims.Length;
+            }
+        }
+
+        private void RemovePrecisely((int Index, ProxyConnectionModel Model)[] victims)
+        {
+            for (var index = 0; index < victims.Length; index++)
+            {
+                (int sourceIndex, ProxyConnectionModel model) = victims[index];
+                Items.RemoveAt(sourceIndex);
+                try
+                {
+                    OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+                    OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+                    OnCollectionChanged(new NotifyCollectionChangedEventArgs(
+                        NotifyCollectionChangedAction.Remove, model, sourceIndex));
+                }
+                catch
+                {
+                    for (int remaining = index + 1; remaining < victims.Length; remaining++)
+                    {
+                        Items.RemoveAt(victims[remaining].Index);
+                    }
+                    try
+                    {
+                        OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+                        OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+                        OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+                    }
+                    catch (Exception recovery) when (!ExceptionUtilities.IsFatal(recovery))
+                    {
+                        // The original observer failure must win after best-effort recovery.
+                    }
+                    throw;
+                }
+            }
         }
 
         protected override void InsertItem(int index, ProxyConnectionModel item)

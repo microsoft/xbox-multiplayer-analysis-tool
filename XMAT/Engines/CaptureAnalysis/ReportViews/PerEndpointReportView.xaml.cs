@@ -44,23 +44,55 @@ namespace XMAT.XboxLiveCaptureAnalysis
             endPointElement?.BringIntoView();
         }
 
-        private void GoToEndpoint_Id(object sender, RoutedEventArgs e)
+        // The capture tab that the analysis read, found by its stamp and never by name, while it holds the analyzed sessions.
+        private ICaptureDeviceContext AnalyzedSource(out CaptureAppModel app)
         {
-            PerEndpointReportModel reportModel = DataContext as PerEndpointReportModel;
-            // select the device by source name
-            ICaptureDeviceContext context = reportModel.CaptureAppModel.SelectCaptureDeviceContext(reportModel.SourceCaptureName);
-            if (context != null)
+            if (DataContext is not PerEndpointReportModel { CaptureAppModel: CaptureAppModel owner } report)
             {
-                // select the capture by ID
-                int requestId = int.Parse((e as ExecutedRoutedEventArgs).Parameter.ToString());
-                WebServiceDeviceCaptureController controller =
-                    context.CaptureController as WebServiceDeviceCaptureController;
-                ProxyConnectionModel model = controller.ProxyConnections.ById(requestId);
-                if (model != null && model != controller.SelectedConnectionModel)
-                {
-                    controller.SelectedConnectionModel = model;
-                }
+                app = null;
+                return null;
             }
+
+            app = owner;
+            return owner.ResolveCaptureSource(report.SourceStamp);
+        }
+
+        private void GoToId_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = ResolveSession(e.Parameter).HasValue;
+            e.Handled = true;
+        }
+
+        // Resolves the analyzed tab and its only session with that request ID before selecting either; otherwise changes nothing.
+        private void GoToEndpoint_Id(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (ResolveSession(e.Parameter) is not { } target)
+            {
+                return;
+            }
+
+            target.App.SelectedDeviceContext = target.Context;
+            if (target.Model != target.Controller.SelectedConnectionModel)
+            {
+                target.Controller.SelectedConnectionModel = target.Model;
+            }
+        }
+
+        private (
+            CaptureAppModel App,
+            ICaptureDeviceContext Context,
+            WebServiceDeviceCaptureController Controller,
+            ProxyConnectionModel Model)? ResolveSession(object parameter)
+        {
+            if (!int.TryParse(parameter?.ToString(), out int requestId) ||
+                AnalyzedSource(out CaptureAppModel app) is not
+                    { CaptureController: WebServiceDeviceCaptureController sourceController } source ||
+                sourceController.ProxyConnections.ById(requestId) is not { } sourceModel)
+            {
+                return null;
+            }
+
+            return (app, source, sourceController, sourceModel);
         }
 
         private void GoToEndpoint_Executed(object sender, RoutedEventArgs e)

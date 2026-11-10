@@ -159,6 +159,15 @@ namespace XMAT.Operations.Capabilities
             Capability.Planned(
                 "capture.clear", "Clear captured data", "S8a", Owner,
                 gui: new[] { Command(AppCommandsPrefix + "ClearAllCaptures") }),
+            Capability.PolicyException(
+                "capture.delete-sessions", "Delete sessions from a capture", "S11", "XMAT",
+                "Policy exception: deleting captured sessions is irreversible, so it stays a confirmed action in the " +
+                    "capture list; headless runs export the sessions to keep instead",
+                new[]
+                {
+                    Command(ProxyCommandsPrefix + "DeleteSelectedSessions"),
+                    Command(ProxyCommandsPrefix + "DeleteUnselectedSessions"),
+                }),
             Capability.Planned(
                 "capture.network-trace", "Capture low-level network traces", "S8b", Owner,
                 gui: new[]

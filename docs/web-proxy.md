@@ -203,6 +203,48 @@ Clearing never overlaps saving, exporting, importing or analyzing captures: **Cl
 Capture** is unavailable while one of them runs, and if one starts at the same moment,
 XMAT reports that another capture operation is in progress and clears nothing.
 
+### Delete sessions
+
+Select sessions in the capture list and press **Delete**, or right-click one and choose
+**Delete Selected Sessions**. **Shift+Delete** (**Delete Unselected Sessions**) deletes
+the visible sessions that are not selected and keeps the selected ones. Only sessions
+that the list shows are deleted: sessions that the Status, Host, Method or process
+filters hide stay in the capture. The keys delete only in the capture list, never in
+the timeline or the filter boxes.
+
+XMAT asks first, with **Cancel** as the default answer. The confirmation counts the
+sessions to delete, the sessions that stay (including hidden ones) and the sessions to
+delete that have no complete recorded response. Deleting cannot be undone. Sessions that
+arrive while the confirmation is open, and sessions that a filter hides by the time you
+confirm, are kept, and XMAT then reports how many it deleted and kept.
+
+You can delete sessions while the capture runs. XMAT keeps forwarding the traffic of a
+deleted session that is still in progress, but does not record the rest of it. Deleting
+never closes or blocks connections on purpose, but deleting a very large number of
+sessions can briefly pause the window and delay the handling of requests.
+
+Opened capture files and imported Fiddler archives are read-only, so their delete
+commands are unavailable; [export the sessions to keep](capture-files.md#export-selected-or-visible-sessions)
+instead. Like clearing, deleting never overlaps saving, exporting, importing or
+analyzing captures.
+
+Deleting changes only the capture in its tab. XMAT does not erase files that you saved
+or exported earlier, backups of them, or analysis reports that you generated; they still
+contain the deleted sessions. Analyses of the capture become historical; see
+[Read the Per Endpoint report](live-trace-analysis.md#read-the-per-endpoint-report).
+
+In the capture, XMAT overwrites the stored data of deleted sessions with zeros (SQLite
+`secure_delete`), so a capture that you save afterwards does not contain their payloads.
+Database pages that the deletion frees entirely can be reused for new sessions, but
+pages that still hold other sessions stay allocated, and new sessions, which XMAT
+appends, may not reuse their free space. Neither the capture nor a file saved from it
+necessarily gets smaller: XMAT never compacts them (no `VACUUM` or incremental vacuum).
+XMAT also releases its references to the deleted sessions, but .NET frees their memory
+only at a later garbage collection, which XMAT does not force, and the working set that
+Windows reports may not shrink even then. Deleting is not a forensic erasure: other
+copies of the data, and data that Windows or the storage device still hold, are beyond
+XMAT's reach.
+
 ## Block or bypass hosts
 
 The **Block List** and **Bypass List** are shared by every capture in the current

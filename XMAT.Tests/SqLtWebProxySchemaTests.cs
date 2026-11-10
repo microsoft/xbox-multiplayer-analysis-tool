@@ -49,12 +49,6 @@ namespace XMAT.Tests
             public IReadonlyDatabase LoadedDatabase => null;
             public ObservableCollection<ICaptureDeviceContext> CaptureDeviceContexts { get; } = new();
             public ObservableCollection<ICaptureAnalysisRun> AnalysisRuns { get; } = new();
-
-            public ICaptureDeviceContext SelectCaptureDeviceContext(string deviceContextName)
-            {
-                _ = deviceContextName;
-                return null;
-            }
         }
     }
 }
