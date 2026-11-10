@@ -14,7 +14,7 @@ both. Other capabilities move over time; the [capability table](#what-runs-headl
 
 ```
 xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N]
-             [--max-record-mib N] [--max-records N]
+             [--max-record-mib N] [--max-records N] [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...
 xmat export-saz INPUT --out DIR [--device ID] [--sanitize] [--accept-stored-text]
                 [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]
 xmat mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer [--max-input-mib N]
@@ -110,7 +110,12 @@ reservation-time storage failure.
   quoted, a rule stricter than SQLite's own. xmat needs CaptureDevices and WebProxyConnections and does not read
   NetworkTracePackets. Every column of both tables counts: 8 bytes for each row's id and each integer value, and the
   UTF-8 length of each text value; a column of any other type is rejected too (`analysis.input.schema`). An extra
-  column may be NULL, which counts nothing; a NULL in a known column is rejected (`analysis.input.malformed`). A Fiddler
+  column may be NULL, which counts nothing; a NULL in a known column is rejected (`analysis.input.malformed`).
+  WebProxyConnections may also hold, among its extra columns, the optional client process columns that XMAT writes
+  (`ClientProcessName` TEXT, `ClientProcessId` INTEGER, `ClientProcessStartTime` TEXT and `ClientProcessStatus` TEXT;
+  see [Capture files](capture-files.md#process-information)). One of them spelled or typed otherwise is rejected
+  (`analysis.input.schema`), but a NULL or unreadable value in them is read as missing, never rejected: a session
+  without usable process information counts as unknown, as in a capture saved without these columns. A Fiddler
   archive whose directory records are missing, inconsistent or span several disks is rejected too
   (`analysis.input.malformed`); single-disk ZIP64 archives are supported. These limits bound the capture data that
   xmat reads, not its exact memory use, and how many calls fit depends on the data: typical Xbox Live traffic stores
@@ -159,6 +164,18 @@ reservation-time storage failure.
   guaranteed capacity or a bound on memory use, so still run xmat with time and memory limits. The limits do not
   change the rule budget below, so a larger capture can still stop with `analysis.rules.work-limit`, nor the fixed
   limits above.
+- `--process` and `--exclude-process` choose the sessions to analyze by the client process that sent them, with the
+  same rules as the process filter of a capture tab in the GUI. Each takes one selector and may be given again, up to
+  64 times each: an image name such as `game.exe` or `game*.exe` (`*` and `?` are wildcards, case does not matter and
+  `.exe` is optional) or a process id such as `4321`. A session is analyzed when it matches a `--process` selector (or
+  there is none) and no `--exclude-process` selector. Sessions without process information, such as those in captures
+  recorded before XMAT stored it, in Fiddler archives without `x-ProcessInfo` and from Xbox consoles or other remote
+  devices, are unknown: they never match a selector, so `--process` leaves them out and `--exclude-process` alone keeps
+  them. The selectors only choose what is analyzed and reported; the input is never changed. An empty selector, one
+  longer than 260 characters or with a path separator, a colon or a control character, a process id of 0 and more than
+  64 selectors for one option are usage errors (`cli.usage.invalid-value`, exit code 2) whose message never repeats the
+  value; the other options still take one value (`cli.usage.duplicate-option`). When the selectors leave no session,
+  there is nothing to analyze (`analysis.no-data`, exit code 3), and the JSON output still reports the counts.
 - Exact rule evaluation has one work and live-memory budget shared across all selected devices, consoles, endpoints
   and rules, and never samples, truncates or publishes partial findings. Analysis uses safety budgets, not a fixed
   duration limit. In testing, one regular 1 Hz polling key completed at 75 minutes but exceeded the budget at
@@ -170,9 +187,11 @@ reservation-time storage failure.
   machine and its load; the installed patterns never fall back. The budget bounds rule evaluation, not xmat's total
   time or memory use, so in automation run xmat with time and memory limits.
 - Neither the JSON output nor the published files of `xmat analyze` contain captured content (hosts, URLs, headers,
-  bodies, Xbox user ids, IP addresses or device names) or local paths such as the input's; the only paths in them are
+  bodies, Xbox user ids, IP addresses, device names or client process names and ids) or local paths such as the input's; the
+  only paths in them are
   artifact paths relative to `DIR`, such as `summary.json`. They hold rule names, levels and counts, service labels,
-  ordinal device and console ids and the SHA-256 of the input. The input is never modified.
+  ordinal device and console ids, the SHA-256 of the input and the validated `--process` and `--exclude-process`
+  selectors. The input is never modified.
 - `xmat replay` sends requests from a capture again, like Fiddler's Reissue, and `xmat compose` sends one new request,
   like Fiddler's Composer. Both send from this PC, the way the GUI's request composer does: directly, unless `--proxy`
   names an upstream proxy, and never through the system's or the environment's proxy settings (so, unless you name
@@ -670,6 +689,9 @@ An abridged result:
   "input": { "kind": "saz", "sha256": "..." },
   "storedText": { "semantics": "notApplicable", "policy": "notNeeded" },
   "limits": { "maxInputMib": 512, "maxDataMib": 256, "maxRecordMib": 32, "maxRecords": 100000 },
+  "processFilter": { "applied": true, "include": [], "exclude": [],
+    "counts": { "total": 4, "included": 4, "hidden": 0, "unknown": 4 },
+    "devices": [ { "id": "d1", "total": 4, "included": 4, "hidden": 0, "unknown": 4 } ] },
   "devices": [ { "id": "d1", "consoles": [ { "id": "c1", "calls": 4, "findings": [
     { "rule": "XR049Rule", "service": "presence_service", "level": "Warning", "count": 1 } ] } ] } ],
   "totals": { "calls": 4, "findings": 1 },
@@ -684,9 +706,14 @@ An abridged result:
 `errors` hold stable codes, such as `analysis.input.not-found`, with fixed messages, and `artifacts` lists what was
 published. `analyze` publishes only when the run completes successfully: status `succeeded`, or `findingsFound` with
 `--fail-on findings`; otherwise `artifacts` is empty. `replay` and `compose` publish once every request was sent,
-whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFailed`). Once its command line is valid, `analyze` reports the effective input limits in `limits`, even when it fails.
+whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFailed`). Once its command line is valid, `analyze` reports the effective input limits in `limits`, even when it fails,
+and its process selection in `processFilter`: `include` and `exclude` hold the validated `--process` and
+`--exclude-process` selectors (empty when none was given). Once xmat has read the sessions, `applied` is `true` and
+`counts` holds the sessions read (`total`), analyzed (`included`) and left out (`hidden`), and how many of them had no
+process information (`unknown`), with the same counts for each device in `devices`; before that, `applied` is `false`
+and `counts` is `null`.
 `summary.json` holds `schema` (`xmat-analysis/1`), `command`, `runId`, `version`, the same `input`, `limits`,
-`devices` and `totals`, and the run's `warnings`. Instead of the analysis fields, `doctor` reports `target`, `checks`
+`processFilter`, `devices` and `totals`, and the run's `warnings`. Instead of the analysis fields, `doctor` reports `target`, `checks`
 (each with its `id`, `status` and, when it failed, its `code`), `environment` (`framework`, the .NET runtime, and
 `architecture`, the process architecture such as `x64`) and `capabilities` (each with its `id`, `status` and
 `slice`); `help` reports `commands`, each with its `name`, `status` (`supported`), `usage` and `capabilities` (the ids
@@ -756,7 +783,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 |---|---|
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
-| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, or capture-text marking refuses the input or interpretation; for `export-saz`, a planning or row-projection refusal; for `replay` and `compose`, a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint, proxy, client certificate or Windows authentication that cannot be used, a Fiddler control header, a `--raw` file or request that Raw mode refuses, or a request that needs `--allow-raw`, `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to`, `--allow-proxy`, `--allow-client-cert` or `--allow-windows-auth` for its origin (nothing is sent); and for `export-saz`, `replay`, `save-request` and `curl`, an unmarked XMAT capture without `--accept-stored-text` (`replay.capture-text.ambiguous`, `capture.text.ambiguous-export`; nothing is sent or published) |
+| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, `--process` and `--exclude-process` leave no session, or capture-text marking refuses the input or interpretation; for `export-saz`, a planning or row-projection refusal; for `replay` and `compose`, a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint, proxy, client certificate or Windows authentication that cannot be used, a Fiddler control header, a `--raw` file or request that Raw mode refuses, or a request that needs `--allow-raw`, `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to`, `--allow-proxy`, `--allow-client-cert` or `--allow-windows-auth` for its origin (nothing is sent); and for `export-saz`, `replay`, `save-request` and `curl`, an unmarked XMAT capture without `--accept-stored-text` (`replay.capture-text.ambiguous`, `capture.text.ambiguous-export`; nothing is sent or published) |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists |
 | 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`) |
@@ -764,7 +791,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 | 10 | `--fail-on findings` and the rules reported findings |
 | 11 | `--verify` (or `--verify-diff`) and a replayed response differs from the captured one (the results are published) |
 | 12 | A replayed or composed request got no complete response (the results are published) |
-| 70 | Internal error, including a `help`, `--version` or passing `doctor` run whose JSON document could not be produced (`cli.internal.output`) |
+| 70 | Internal error, for example a process selection that does not match the analyzed sessions (`analysis.process-filter.consistency`), or a `help`, `--version` or passing `doctor` run whose JSON document could not be produced (`cli.internal.output`) |
 | 130 | Cancelled: nothing was published, except by `compose --raw` once a raw send began (`cli.cancelled-after-send`) |
 
 ## Compatibility
@@ -805,7 +832,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Analyze with the LTA rule set, custom rules or other thresholds (`analysis.compatibility`) | (not available yet) | Planned (S1b, XMAT-021) |
 | Write the analysis HTML report (`analysis.html-report`) | (not available yet) | Planned (S3, XMAT-008) |
 | Analyze network traces (`analysis.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
-| Analyze Xbox Live service calls (`analysis.xbox-live`) | `xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S1) |
+| Analyze Xbox Live service calls (`analysis.xbox-live`) | `xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N] [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S1) |
 | Export captures as Fiddler archives (.saz) (`capture-file.export-saz`) | `xmat export-saz INPUT --out DIR [--device ID] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S2) |
 | Read network traces (.etl) (`capture-file.import-etl`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Read Fiddler archives (.saz) (`capture-file.import-saz`) | `xmat analyze INPUT.saz --out DIR` | Supported (S1) |
@@ -819,6 +846,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Block or bypass hosts during capture (`capture.host-lists`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Capture this PC (`capture.local-pc`) | (not available yet) | Planned (S6, XMAT-021) |
 | Capture low-level network traces (`capture.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
+| Filter captured sessions by client process (`capture.process-filter`) | `xmat analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S9) |
 | Run capture scripts (`capture.scripts`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Stop a running capture (`capture.stop`) | (not available yet) | Planned (S5, XMAT-021) |
 | Record WebSocket handshakes and report observed frames without their payloads (`capture.websocket-handshakes`) | (not available yet) | Planned (S4, XMAT-021) |

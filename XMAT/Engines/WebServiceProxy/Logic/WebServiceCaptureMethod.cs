@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -78,26 +79,9 @@ namespace XMAT.WebServiceCapture
 
         private void InitializeDataTables()
         {
-            // TODO: expose these constants
             WebProxyConnectionsTable = _captureAppModel.ActiveDatabase.CreateTable(
                 TableName,
-                new Field<string>(FieldKey_DeviceName),
-                new Field<Int64>(FieldKey_RequestNumber),
-                new Field<Int64>(FieldKey_ConnectionId),
-                new Field<string>(FieldKey_RequestTimestamp),
-                new Field<string>(FieldKey_ResponseTimestamp),
-                new Field<string>(FieldKey_RequestScheme),
-                new Field<string>(FieldKey_RequestHost),
-                new Field<string>(FieldKey_RequestPort),
-                new Field<string>(FieldKey_RequestMethod),
-                new Field<string>(FieldKey_RequestPath),
-                new Field<string>(FieldKey_RequestStatus),
-                new Field<string>(FieldKey_RequestLineAndHeaders),
-                new Field<string>(FieldKey_RequestBody),
-                new Field<string>(FieldKey_ResponseLineAndHeaders),
-                new Field<string>(FieldKey_ResponseBody),
-                new Field<string>(FieldKey_ClientIP)
-            );
+                WebProxyCaptureSchema.CreateFields());
         }
 
         public async Task ImportFromFiddlerAsync(string fromFilePath, ICaptureDeviceContext context)
@@ -160,12 +144,18 @@ namespace XMAT.WebServiceCapture
                     connections.Select(connection => connection.Status).Distinct().ToList());
                 var methodFilters = captureController.UpdateFilter(
                     connections.Select(connection => connection.Method).Distinct().ToList());
-                var rows = connections.Select(
-                    connection => connection.ToDataTableValues(captureController.DeviceName));
-                var rowIds = importTable.ReplaceImportedRows(
-                    CaptureTextSource.Literal,
-                    new FieldValue<string>(FieldKey_DeviceName, captureController.DeviceName),
-                    rows);
+                IDataset dataset = dataTable.Dataset;
+                IReadOnlyList<long> rowIds;
+                using (dataset as IDisposable)
+                {
+                    IFieldDefinition[] fields = dataset.FieldDefs.ToArray();
+                    var rows = connections.Select(
+                        connection => connection.ToDataTableValues(captureController.DeviceName, fields));
+                    rowIds = importTable.ReplaceImportedRows(
+                        CaptureTextSource.Literal,
+                        new FieldValue<string>(FieldKey_DeviceName, captureController.DeviceName),
+                        rows);
+                }
                 for (int index = 0; index < connections.Count; index++)
                 {
                     connections[index].RecordRowId = rowIds[index];

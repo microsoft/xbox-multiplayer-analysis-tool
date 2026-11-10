@@ -31,6 +31,16 @@ namespace XMAT.DataAbstractionLayer
                 }
                 return null;
             }
+            if (fieldDefinition.IsExtension)
+            {
+                object stored = reader.GetValue(columnIndex);
+                return fieldDefinition.ValueType switch
+                {
+                    FieldValueType.Integer when stored is long => stored,
+                    FieldValueType.String when stored is string => stored,
+                    _ => null,
+                };
+            }
 
             switch (fieldDefinition.ValueType)
             {

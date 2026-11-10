@@ -12,6 +12,7 @@ using System.Text;
 using System.Threading;
 using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.XboxLiveCaptureAnalysis;
 
@@ -606,7 +607,12 @@ namespace XMAT.Operations.Capture
                     responseTimestamp,
                     responseTimestampUnavailable,
                     clientAddress,
-                    clientAddressUnavailable);
+                    clientAddressUnavailable)
+                {
+                    ClientProcess =
+                        ClientProcessRecordCodec.Read(
+                            record),
+                };
             }
 
             private static StoredBody ReadBody(
@@ -790,6 +796,7 @@ namespace XMAT.Operations.Capture
         private const string ResponseHead = "ResponseLineAndHeaders";
         private const string ResponseBody = "ResponseBody";
         private const string ClientAddress = "ClientIP";
+        private const int MaxProcessFieldBytes = 4096;
         private static readonly Encoding Utf8 =
             new UTF8Encoding(
                 encoderShouldEmitUTF8Identifier: false);
@@ -1066,7 +1073,94 @@ namespace XMAT.Operations.Capture
                 responseTimestamp,
                 responseTimestampUnavailable,
                 clientAddress,
-                clientAddressUnavailable);
+                clientAddressUnavailable)
+            {
+                ClientProcess =
+                    ReadClientProcess(
+                        connection,
+                        table,
+                        key.RowId,
+                        cancellationToken),
+            };
+        }
+
+        // Captures saved before process attribution have no process columns; their sessions stay unattributed.
+        private static ClientProcessInfo ReadClientProcess(
+            SqliteConnection connection,
+            string table,
+            long rowId,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!HasProcessColumns(
+                connection,
+                table))
+            {
+                return ClientProcessInfo.NotRecorded;
+            }
+
+            using SqliteCommand command =
+                connection.CreateCommand();
+            command.CommandText =
+                "SELECT " +
+                BoundedText(WebProxyCaptureSchema.ClientProcessName) + "," +
+                $"CASE WHEN typeof({Quote(WebProxyCaptureSchema.ClientProcessId)}) = 'integer' " +
+                $"THEN {Quote(WebProxyCaptureSchema.ClientProcessId)} ELSE NULL END," +
+                BoundedText(WebProxyCaptureSchema.ClientProcessStartTime) + "," +
+                BoundedText(WebProxyCaptureSchema.ClientProcessStatus) +
+                $" FROM {Quote(table)} WHERE id = $id";
+            command.Parameters.AddWithValue(
+                "$id",
+                rowId);
+            using SqliteDataReader reader =
+                command.ExecuteReader();
+            if (!reader.Read())
+            {
+                return ClientProcessInfo.NotRecorded;
+            }
+
+            return ClientProcessRecordCodec.FromValues(
+                reader.IsDBNull(0) ? string.Empty : reader.GetString(0),
+                reader.IsDBNull(1) ? 0 : reader.GetInt64(1),
+                reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                reader.IsDBNull(3) ? string.Empty : reader.GetString(3));
+        }
+
+        private static string BoundedText(
+            string column) =>
+            $"CASE WHEN typeof({Quote(column)}) = 'text' AND " +
+            $"length(CAST({Quote(column)} AS BLOB)) <= {MaxProcessFieldBytes} " +
+            $"THEN {Quote(column)} ELSE NULL END";
+
+        private static bool HasProcessColumns(
+            SqliteConnection connection,
+            string table)
+        {
+            using SqliteCommand command =
+                connection.CreateCommand();
+            command.CommandText =
+                "SELECT count(*) FROM pragma_table_info($table) " +
+                "WHERE name IN ($name,$id,$start,$status)";
+            command.Parameters.AddWithValue(
+                "$table",
+                table);
+            command.Parameters.AddWithValue(
+                "$name",
+                WebProxyCaptureSchema.ClientProcessName);
+            command.Parameters.AddWithValue(
+                "$id",
+                WebProxyCaptureSchema.ClientProcessId);
+            command.Parameters.AddWithValue(
+                "$start",
+                WebProxyCaptureSchema.ClientProcessStartTime);
+            command.Parameters.AddWithValue(
+                "$status",
+                WebProxyCaptureSchema.ClientProcessStatus);
+            return Convert.ToInt64(
+                    command.ExecuteScalar(),
+                    System.Globalization
+                        .CultureInfo.InvariantCulture) ==
+                4;
         }
 
         private static RowInformation ReadInformation(
@@ -1758,6 +1852,8 @@ namespace XMAT.Operations.Capture
 
         internal bool ClientAddressUnavailable { get; }
 
+        internal ClientProcessInfo ClientProcess { get; init; } =
+            ClientProcessInfo.NotRecorded;
         internal static StoredRow Oversized(
             long rowId,
             long? requestNumber,

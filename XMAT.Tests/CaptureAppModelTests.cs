@@ -759,6 +759,38 @@ namespace XMAT.Tests
             }
         }
 
+        [Fact]
+        public void SaveDataCaptures_DoesNotOverlapAnotherCaptureDataOperation()
+        {
+            string directory = Path.Join(
+                AppContext.BaseDirectory,
+                "CaptureAppModelFixtures",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string destination = Path.Join(directory, "saved.xmatcap");
+            using var active = new SqLtDatabase();
+            active.Initialize();
+            active.CreateTable("LiveData", new Field<string>("Value")).AddRow("live");
+            var model =
+                new CaptureAppModel
+                {
+                    ActiveDatabase = active,
+                };
+            try
+            {
+                Assert.True(model.TryBeginCaptureDataOperation(out IDisposable lease));
+                using (lease)
+                {
+                    Assert.Throws<InvalidOperationException>(() => model.SaveDataCaptures(destination));
+                }
+                Assert.False(File.Exists(destination));
+            }
+            finally
+            {
+                TestFolderCleanup.Delete(directory);
+            }
+        }
+
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
@@ -2117,23 +2149,7 @@ namespace XMAT.Tests
             table = new ObservedImportDataTable(
                 new SqLtDataTable(database,
                     WebServiceCaptureMethod.TableName,
-                    new IField[] {
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_DeviceName),
-                    new Field<long>(WebServiceCaptureMethod.FieldKey_RequestNumber),
-                    new Field<long>(WebServiceCaptureMethod.FieldKey_ConnectionId),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestTimestamp),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestScheme),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestHost),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPort),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestMethod),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPath),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestStatus),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestBody),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseBody),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ClientIP) }));
+                    WebProxyCaptureSchema.CreateFields()));
             return database;
         }
 
@@ -2297,7 +2313,11 @@ namespace XMAT.Tests
                 string.Empty,
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n",
                 Convert.ToBase64String(Encoding.UTF8.GetBytes(responseBody)),
-                "10.0.0.1"
+                "10.0.0.1",
+                string.Empty,
+                0L,
+                string.Empty,
+                string.Empty
             };
         }
 

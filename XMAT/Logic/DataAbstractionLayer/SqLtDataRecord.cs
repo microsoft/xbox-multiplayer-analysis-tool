@@ -16,6 +16,7 @@ namespace XMAT.DataAbstractionLayer
 
     internal class SqLtDataRecord :
         IDataRecord,
+        IOptionalTypedDataRecord,
         INullableDataRecord,
         ICaptureTextSourceProvider
     {
@@ -60,6 +61,33 @@ namespace XMAT.DataAbstractionLayer
             {
                 return default(string);
             }
+        }
+
+        public bool TryReadString(string name, out string value)
+        {
+            value = null;
+            if (!_fieldDefs.TryGetValue(name, out IFieldDefinition fieldDefinition) ||
+                fieldDefinition.ValueType != FieldValueType.String)
+            {
+                return false;
+            }
+
+            value = _fieldValues[fieldDefinition.ColumnIndex] as string;
+            return value != null;
+        }
+
+        public bool TryReadInt64(string name, out long value)
+        {
+            value = default;
+            if (!_fieldDefs.TryGetValue(name, out IFieldDefinition fieldDefinition) ||
+                fieldDefinition.ValueType != FieldValueType.Integer ||
+                _fieldValues[fieldDefinition.ColumnIndex] is not long stored)
+            {
+                return false;
+            }
+
+            value = stored;
+            return true;
         }
 
         internal SqLtDataRecord(

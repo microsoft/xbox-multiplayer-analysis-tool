@@ -176,7 +176,7 @@ namespace XMAT.Tests
                     new FieldValue<string>(
                         WebServiceCaptureMethod.FieldKey_DeviceName,
                         "selected"),
-                    new[] { imported.ToDataTableValues("selected") });
+                    new[] { imported.ToDataTableValues("selected", table) });
                 var controller =
                     new WebServiceDeviceCaptureController(
                         "selected",

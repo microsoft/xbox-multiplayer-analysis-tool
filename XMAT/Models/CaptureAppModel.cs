@@ -19,6 +19,7 @@ using XMAT.DataAbstractionLayer;
 using XMAT.NetworkTrace;
 using XMAT.Operations;
 using XMAT.Operations.Capture;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
@@ -874,9 +875,47 @@ namespace XMAT.Models
                     SqLtSchemaFailure.Unsupported),
             };
 
+        // Saving is a capture data operation: it never overlaps an import, export, close or analysis.
         internal void SaveDataCaptures(string toFilePath)
         {
-            ActiveDatabase.SaveToFile(toFilePath);
+            if (!TrySaveDataCaptures(toFilePath))
+            {
+                throw new InvalidOperationException("Another capture data operation is running.");
+            }
+        }
+
+        // Returns false, without writing, while another capture data operation runs.
+        internal bool TrySaveDataCaptures(string toFilePath)
+        {
+            if (!TryBeginCaptureDataOperation(out IDisposable operation))
+            {
+                return false;
+            }
+
+            using (operation)
+            {
+                ActiveDatabase.SaveToFile(toFilePath);
+            }
+
+            return true;
+        }
+
+        // Clears one capture. Clearing is a capture data operation, so it never overlaps an import, export, save, close or
+        // analysis: returns false, without clearing, while one of them runs, and releases the lease even if it fails.
+        internal bool TryClearAllCaptures(IDeviceCaptureController controller)
+        {
+            ArgumentNullException.ThrowIfNull(controller);
+            if (!TryBeginCaptureDataOperation(out IDisposable operation))
+            {
+                return false;
+            }
+
+            using (operation)
+            {
+                controller.ClearAllCaptures();
+            }
+
+            return true;
         }
 
         internal Task ImportDataCapturesAsync(
@@ -1272,13 +1311,25 @@ namespace XMAT.Models
                     StringComparison.OrdinalIgnoreCase)
                 : first == second);
 
-        internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer)
+        internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer) =>
+            AddAnalysisRun(analyzer, ProcessFilterSpec.Empty);
+
+        // A run with a process filter analyzes only the sessions it selects; the specification is immutable, so the run
+        // keeps the filter as it was when the run started.
+        internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer, ProcessFilterSpec processFilter)
         {
+            bool filtered = !ProcessFilter.IsEmpty(processFilter);
             var headerText = $"{analyzer.Description} [{DateTime.Now}]";
+            if (filtered)
+            {
+                headerText += " " + Localization.GetLocalizedString("ANALYSIS_PROCESS_FILTER_TAB");
+            }
+
             var id = (Int64)DateTime.Now.ToFileTimeUtc();
             var analysisRun = new AnalysisRunModel(analyzer, id)
             {
-                Header = headerText
+                Header = headerText,
+                ProcessFilter = filtered ? processFilter : ProcessFilterSpec.Empty,
             };
 
             _analysisRuns.Add(analysisRun);

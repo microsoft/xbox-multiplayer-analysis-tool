@@ -4,9 +4,11 @@
 
 using System.Threading;
 using System.Windows.Threading;
+using XMAT.Tests.Proxy;
 
 namespace XMAT.Tests
 {
+    [Collection(IsolatedProxyTests.Name)]
     public class BatchedDispatcherQueueTests
     {
         [Fact]
@@ -130,7 +132,7 @@ namespace XMAT.Tests
                 "The dispatcher shutdown test did not complete.");
             Assert.True(
                 dispatcherThread.Join(TimeSpan.FromSeconds(10)),
-                "The dispatcher shutdown thread did not stop.");
+                "The dispatcher queue thread did not stop.");
             Assert.Null(dispatcherException);
         }
     }

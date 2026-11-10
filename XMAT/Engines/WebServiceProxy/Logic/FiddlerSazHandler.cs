@@ -12,6 +12,7 @@ using System.Net;
 using System.Text;
 using System.Threading;
 using System.Xml.Linq;
+using XMAT.Operations.Processes;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -39,6 +40,11 @@ namespace XMAT.WebServiceCapture
         internal const int MaxHeaderLinesPerMessage = 16_384;
         internal const int MaxRawHeaderBytesPerMessage = 16 * 1024 * 1024;
         private const int EntryReadBufferBytes = 64 * 1024;
+
+        // Fiddler's process flag ("name:pid") and XMAT's flags for the process start time and attribution state.
+        internal const string ProcessInfoFlag = "x-ProcessInfo";
+        internal const string ProcessStartTimeFlag = "x-xmat-clientprocess-starttime";
+        internal const string ProcessStatusFlag = "x-xmat-clientprocess-status";
 
         enum EntryType
         {
@@ -234,6 +240,7 @@ namespace XMAT.WebServiceCapture
             }
 
             // Read the frame metadata (###_m.xml)
+            ClientProcessInfo clientProcess = ClientProcessInfo.NotRecorded;
             if (metadataStream != null)
             {
                 RewindIfSeekable(metadataStream);
@@ -268,21 +275,43 @@ namespace XMAT.WebServiceCapture
 
                     var sessionFlags = xmldata.Element("Session").Element("SessionFlags");
 
+                    var clientIPRead = false;
+                    string processInfo = null;
+                    string processStartTime = null;
+                    string processStatus = null;
                     foreach (var flag in sessionFlags.Descendants())
                     {
-                        if ((string)flag.Attribute("N") == "x-clientip")
+                        var flagName = (string)flag.Attribute("N");
+                        if (flagName == "x-clientip")
                         {
-                            // CLIENT IP, as written, except that an IPv4 address written in its IPv6 form (::ffff:a.b.c.d)
-                            // is kept as IPv4.
-                            clientIP = (string)flag.Attribute("V") ??
-                                throw new FormatException("x-clientip has no value");
-                            if (IPAddress.TryParse(clientIP, out IPAddress address) && address.IsIPv4MappedToIPv6)
+                            if (!clientIPRead)
                             {
-                                clientIP = address.MapToIPv4().ToString();
+                                // CLIENT IP, as written, except that an IPv4 address written in its IPv6 form
+                                // (::ffff:a.b.c.d) is kept as IPv4.
+                                clientIP = (string)flag.Attribute("V") ??
+                                    throw new FormatException("x-clientip has no value");
+                                if (IPAddress.TryParse(clientIP, out IPAddress address) && address.IsIPv4MappedToIPv6)
+                                {
+                                    clientIP = address.MapToIPv4().ToString();
+                                }
+                                clientIPRead = true;
                             }
-                            break;
+                        }
+                        else if (string.Equals(flagName, ProcessInfoFlag, StringComparison.OrdinalIgnoreCase))
+                        {
+                            processInfo ??= (string)flag.Attribute("V") ?? string.Empty;
+                        }
+                        else if (string.Equals(flagName, ProcessStartTimeFlag, StringComparison.OrdinalIgnoreCase))
+                        {
+                            processStartTime ??= (string)flag.Attribute("V");
+                        }
+                        else if (string.Equals(flagName, ProcessStatusFlag, StringComparison.OrdinalIgnoreCase))
+                        {
+                            processStatus ??= (string)flag.Attribute("V");
                         }
                     }
+
+                    clientProcess = ReadClientProcess(processInfo, processStartTime, processStatus);
                 }
             }
 
@@ -300,8 +329,61 @@ namespace XMAT.WebServiceCapture
                 responseHeaders,
                 responseBody,
                 clientIP);
+            model.SetClientProcess(clientProcess);
 
             return model;
+        }
+
+        // Fiddler's x-ProcessInfo holds "name:pid". A last ':' starts the id only when a positive number follows it, so a
+        // drive path without an id stays a name. The shared codec keeps the name's spelling but only its image name,
+        // and anything else leaves the session without process information. A file never shows that a process ran on
+        // this PC, so every identity it holds is imported.
+        private static ClientProcessInfo ReadClientProcess(string processInfo, string startTime, string status)
+        {
+            if (string.IsNullOrEmpty(processInfo))
+            {
+                return status?.Trim() switch
+                {
+                    "remote" => new ClientProcessInfo(string.Empty, 0, null, ClientProcessStatus.Remote),
+                    "unresolved" => new ClientProcessInfo(string.Empty, 0, null, ClientProcessStatus.Unresolved),
+                    _ => ClientProcessInfo.NotRecorded,
+                };
+            }
+
+            string name = processInfo;
+            long processId = 0;
+            int separator = processInfo.LastIndexOf(':');
+            if (separator >= 0 && TryParseProcessId(processInfo.AsSpan(separator + 1), out long suffix))
+            {
+                name = processInfo.Substring(0, separator);
+                processId = suffix;
+            }
+
+            // A start time that cannot be read is dropped; the identity stays.
+            string start = DateTimeOffset.TryParse(
+                startTime,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal,
+                out DateTimeOffset started)
+                ? started.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture)
+                : string.Empty;
+            return ClientProcessRecordCodec.FromValues(
+                name,
+                processId,
+                start,
+                ClientProcessRecordCodec.StatusToken(ClientProcessStatus.Imported));
+        }
+
+        private static bool TryParseProcessId(ReadOnlySpan<char> text, out long processId)
+        {
+            processId = 0;
+            if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int value) || value <= 0)
+            {
+                return false;
+            }
+
+            processId = value;
+            return true;
         }
 
         public static ProxyConnectionsCollection ImportSazFile(

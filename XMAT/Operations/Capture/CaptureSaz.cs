@@ -8,6 +8,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Xml;
+using XMAT.Operations.Processes;
 using XMAT.WebServiceCapture;
 
 namespace XMAT.Operations.Capture
@@ -207,6 +208,13 @@ namespace XMAT.Operations.Capture
                     sanitizer.Summary.RedactedValues++;
                 }
 
+                // Process metadata is never written to a sanitized archive; its omission counts once per session.
+                if (HasProcessMetadata(
+                    row.ClientProcess))
+                {
+                    sanitizer.Summary.RedactedValues++;
+                }
+
                 if (requestBodyOmitted)
                 {
                     flags.Add(
@@ -235,6 +243,13 @@ namespace XMAT.Operations.Capture
             else
             {
                 discardedClientAddresses++;
+            }
+
+            if (kind != SazExportKind.Sanitized)
+            {
+                AddProcessFlags(
+                    flags,
+                    row.ClientProcess);
             }
 
             (DateTime? started,
@@ -712,6 +727,61 @@ namespace XMAT.Operations.Capture
 
             return bytes <=
                 budgets.MaxHeadBytes;
+        }
+
+        internal static bool HasProcessMetadata(
+            ClientProcessInfo process) =>
+            !ProcessFilter.IsUnknown(process) ||
+            ClientProcessRecordCodec.StatusToken(
+                    process?.Status ??
+                    ClientProcessStatus.NotRecorded)
+                .Length != 0;
+
+        // Writes Fiddler's "name:pid" flag plus XMAT's start-time and attribution flags, matching
+        // FiddlerSazHandler's import.
+        private static void AddProcessFlags(
+            List<KeyValuePair<string, string>> flags,
+            ClientProcessInfo process)
+        {
+            if (!ProcessFilter.IsUnknown(process))
+            {
+                string identity = process.ProcessId > 0
+                    ? process.Name +
+                        ":" +
+                        process.ProcessId.ToString(
+                            CultureInfo.InvariantCulture)
+                    : process.Name;
+                if (CanWriteClientAddress(
+                    identity,
+                    false))
+                {
+                    flags.Add(
+                        new(
+                            FiddlerSazHandler.ProcessInfoFlag,
+                            identity));
+                    if (process.StartTimeUtc is DateTimeOffset started)
+                    {
+                        flags.Add(
+                            new(
+                                FiddlerSazHandler.ProcessStartTimeFlag,
+                                started.ToUniversalTime().ToString(
+                                    "o",
+                                    CultureInfo.InvariantCulture)));
+                    }
+                }
+            }
+
+            string status =
+                ClientProcessRecordCodec.StatusToken(
+                    process?.Status ??
+                    ClientProcessStatus.NotRecorded);
+            if (status.Length != 0)
+            {
+                flags.Add(
+                    new(
+                        FiddlerSazHandler.ProcessStatusFlag,
+                        status));
+            }
         }
 
         private static bool CanWriteClientAddress(

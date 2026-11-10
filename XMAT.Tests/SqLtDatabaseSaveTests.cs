@@ -5,8 +5,10 @@
 using System.Buffers.Binary;
 using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
+using XMAT.WebServiceCapture;
 
 namespace XMAT.Tests
 {
@@ -68,6 +70,71 @@ namespace XMAT.Tests
                 path,
                 original);
             AssertLiteralMarker(path);
+        }
+
+        [Fact]
+        public void ReadonlyDatabase_OldShapeHasNotRecordedProcessIdentity()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteXmatcap(
+                directory.Path,
+                "old-shape.xmatcap",
+                new SyntheticXmatcapOptions(RequestsPerDevice: 1));
+
+            using var database = new SqLtReadonlyDatabase(path);
+            IDataRecord record = Assert.Single(
+                database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
+
+            Assert.Equal(ClientProcessInfo.NotRecorded, ClientProcessRecordCodec.Read(record));
+        }
+
+        [Fact]
+        public void ReadonlyDatabase_ProcessShapeRoundTripsTypedIdentity()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteProcessXmatcap(
+                directory.Path,
+                "process-shape.xmatcap",
+                new SyntheticProcessXmatcapOptions(
+                    RequestsPerDevice: 1,
+                    ProcessName: "ExampleGame.exe",
+                    ProcessId: 7788,
+                    ProcessStatus: "local"));
+
+            using var database = new SqLtReadonlyDatabase(path);
+            IDataRecord record = Assert.Single(
+                database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
+            ClientProcessInfo process = ClientProcessRecordCodec.Read(record);
+
+            Assert.Equal("ExampleGame.exe", process.Name);
+            Assert.Equal(7788, process.ProcessId);
+            Assert.NotNull(process.StartTimeUtc);
+            Assert.Equal(ClientProcessStatus.Local, process.Status);
+        }
+
+        [Fact]
+        public void ProcessShapeStoresNoNullOrPendingValues()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteProcessXmatcap(
+                directory.Path,
+                "process-values.xmatcap",
+                new SyntheticProcessXmatcapOptions(RequestsPerDevice: 2));
+
+            using var database = new SqLtReadonlyDatabase(path);
+            foreach (IDataRecord record in database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords)
+            {
+                var optional = Assert.IsAssignableFrom<IOptionalTypedDataRecord>(record);
+                Assert.True(optional.TryReadString(WebProxyCaptureSchema.ClientProcessName, out string name));
+                Assert.True(optional.TryReadInt64(WebProxyCaptureSchema.ClientProcessId, out long processId));
+                Assert.True(optional.TryReadString(WebProxyCaptureSchema.ClientProcessStartTime, out string startTime));
+                Assert.True(optional.TryReadString(WebProxyCaptureSchema.ClientProcessStatus, out string status));
+                Assert.NotNull(name);
+                Assert.True(processId > 0);
+                Assert.NotNull(startTime);
+                Assert.NotNull(status);
+                Assert.False(string.Equals("pending", status, StringComparison.OrdinalIgnoreCase));
+            }
         }
 
         [Fact]

@@ -3,13 +3,18 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using CaptureAnalysisEngine;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.XboxLiveCaptureAnalysis.Models;
@@ -124,7 +129,8 @@ namespace XMAT.XboxLiveCaptureAnalysis
                         controller.GetCaptureRecords(),
                         controller.DeviceName),
                     new AnalysisOptions(
-                        ProduceLegacyReports: true)),
+                        ProduceLegacyReports: true,
+                        ProcessFilter: analysisRun.ProcessFilter)),
                 new OperationContext(
                     workingDirectory: analysisRunStorageDirectory,
                     progress: progress),
@@ -170,9 +176,59 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 }
             }
 
+            // Written before completion lists the artifacts, so report export keeps the scope with the report.
+            if (!ProcessFilter.IsEmpty(analysisRun.ProcessFilter))
+            {
+                WriteProcessScope(
+                    analysisRunStorageDirectory,
+                    analysisRun.ProcessFilter,
+                    result.Value.ProcessScope);
+            }
+
             SetProcessStatus(analysisResultsModel, AnalysisResultsModel.ProcessStep.Complete);
             return ECaptureAnalyzerResult.Success;
         }
+
+        // A filtered analysis states its scope twice: scope.json in the shape of xmat's processFilter, and a banner at the
+        // top of the HTML report.
+        private static void WriteProcessScope(string directory, ProcessFilterSpec filter, ProcessFilterScope scope)
+        {
+            File.WriteAllBytes(
+                Path.Join(directory, ProcessScopeJson.ScopeFileName),
+                ProcessScopeJson.Serialize(filter, scope));
+
+            string index = Path.Join(directory, "index.html");
+            if (!File.Exists(index))
+            {
+                return;
+            }
+
+            ProcessFilterCounts counts = scope?.Counts ?? new ProcessFilterCounts(0, 0, 0, 0);
+            string text = Localization.GetLocalizedString(
+                "ANALYSIS_PROCESS_FILTER_BANNER",
+                counts.Included,
+                counts.Total,
+                counts.Hidden,
+                counts.Unknown,
+                Selectors(filter.Include, "ANALYSIS_PROCESS_FILTER_ALL"),
+                Selectors(filter.Exclude, "ANALYSIS_PROCESS_FILTER_NONE"));
+            string banner =
+                "<div id=\"process-filter-banner\" class=\"process-filter-banner\" role=\"note\">" +
+                WebUtility.HtmlEncode(text) +
+                "</div>";
+            const string container = "<div class=\"atg-container\">";
+            string html = File.ReadAllText(index);
+            int position = html.IndexOf(container, StringComparison.Ordinal);
+            html = position >= 0
+                ? html.Insert(position + container.Length, Environment.NewLine + "\t" + banner)
+                : html.Replace("<body>", "<body>" + banner, StringComparison.OrdinalIgnoreCase);
+            File.WriteAllText(index, html, new UTF8Encoding(false));
+        }
+
+        private static string Selectors(ImmutableArray<string> selectors, string emptyKey) =>
+            selectors.IsDefaultOrEmpty
+                ? Localization.GetLocalizedString(emptyKey)
+                : string.Join(", ", selectors);
 
         public void Shutdown()
         {

@@ -208,6 +208,15 @@ namespace XMAT.Tests
             return host;
         }
 
+        // Runs a test on the shared application's dispatcher, starting the application first if this process has not.
+        internal static void RunOnApplication(
+            Action<Window> test,
+            [CallerMemberName] string caller = null,
+            [CallerFilePath] string file = null,
+            [CallerLineNumber] int line = 0)
+        {
+            GetOrCreateHost().Run(test, caller, file, line);
+        }
         // Runs a UI test on this application's dispatcher, as Dispatcher.Invoke would, within UiTestDispatcher.Budget.
         // A budget failure names the test with the call that reached the fixture (UiTestName).
         internal void Run(

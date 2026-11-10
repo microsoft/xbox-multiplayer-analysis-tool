@@ -8,6 +8,8 @@ using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Processes;
 using XMAT.Operations.Replay;
 
 namespace XMAT.Cli
@@ -54,6 +56,12 @@ namespace XMAT.Cli
         internal int TotalCalls { get; set; }
 
         internal int TotalFindings { get; set; }
+
+        // The validated process selectors of a run whose command line was valid; null otherwise, and then the JSON has no
+        // processFilter. ProcessScope holds the counts once session selection completed.
+        internal ProcessFilterSpec ProcessFilter { get; set; }
+
+        internal ProcessFilterScope ProcessScope { get; set; }
     }
 
     internal sealed class CliMarkCaptureTextReport
@@ -292,7 +300,11 @@ namespace XMAT.Cli
             var report = new CliReport(parsed?.Command, runId);
             if (parsed is { Succeeded: true, Request.Command: CliCommands.Analyze })
             {
-                report.Analysis = new CliAnalysisReport { Limits = parsed.Request.Limits ?? CliLimits.Default };
+                report.Analysis = new CliAnalysisReport
+                {
+                    Limits = parsed.Request.Limits ?? CliLimits.Default,
+                    ProcessFilter = parsed.Request.ProcessFilter ?? ProcessFilterSpec.Empty,
+                };
             }
             else if (parsed is
                 {

@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -34,8 +35,10 @@ namespace XMAT.WebServiceCapture
         private readonly PrefixHeights _groupHeights = new();
         private long _nextSequence;
         private long _nextGroupSequence;
+        private Func<ProxyConnectionModel, bool> _include;
 
         internal int Count => _rows.Count;
+        internal int ResetCount { get; private set; }
         internal DateTime Origin => Count == 0 ? DateTime.MinValue : _rows[0].Start;
         internal double SpanMilliseconds => Count == 0 ? 1 : Math.Max((_ends.Max.End - OriginAt).TotalMilliseconds, 1);
         internal double Width => Math.Max(SpanMilliseconds * 0.5, 200);
@@ -52,6 +55,7 @@ namespace XMAT.WebServiceCapture
 
         internal void Reset(IEnumerable<ProxyConnectionModel> models)
         {
+            ResetCount++;
             _entries.Clear();
             _rows.Clear();
             _ends.Clear();
@@ -69,9 +73,9 @@ namespace XMAT.WebServiceCapture
         internal void Add(ProxyConnectionModel model)
         {
             ArgumentNullException.ThrowIfNull(model);
-            var entry = new Entry(model, _nextSequence++);
+            var entry = new Entry(model, _nextSequence++) { Included = Includes(model) };
             _entries.Add(model, entry);
-            if (entry.IsValid)
+            if (entry.IsShown)
             {
                 AddRow(entry);
             }
@@ -79,21 +83,51 @@ namespace XMAT.WebServiceCapture
 
         internal void Remove(ProxyConnectionModel model)
         {
-            if (_entries.Remove(model, out var entry) && entry.IsValid)
+            if (_entries.Remove(model, out var entry) && entry.IsShown)
             {
                 RemoveRow(entry);
             }
         }
 
+        // The process filter of the timeline. Changing it rebuilds the rows once; later changes of one request show or
+        // hide only that request (Update).
+        internal void SetFilter(Func<ProxyConnectionModel, bool> include)
+        {
+            _include = include;
+            _rows.Clear();
+            _ends.Clear();
+            _hosts.Clear();
+            _groups.Clear();
+            _groupHeights.Clear();
+            _nextGroupSequence = 0;
+            foreach (var entry in _entries.Values.OrderBy(item => item.Sequence))
+            {
+                entry.Included = Includes(entry.Model);
+                if (entry.IsShown)
+                {
+                    AddRow(entry);
+                }
+            }
+        }
+
+        // Returns true when the request's row changed, appeared or disappeared.
         internal bool Update(ProxyConnectionModel model)
         {
-            if (!_entries.TryGetValue(model, out var entry) || entry.Matches(model))
+            if (!_entries.TryGetValue(model, out var entry))
             {
                 return false;
             }
 
-            var reorder = entry.At != ProxyConnectionModel.InstantOf(model.RequestTime) || entry.Host != model.Host;
-            if (entry.IsValid)
+            var included = Includes(model);
+            if (entry.Matches(model) && included == entry.Included)
+            {
+                return false;
+            }
+
+            var wasShown = entry.IsShown;
+            var reorder = entry.At != ProxyConnectionModel.InstantOf(model.RequestTime) || entry.Host != model.Host
+                || included != entry.Included;
+            if (wasShown)
             {
                 if (reorder)
                 {
@@ -106,9 +140,10 @@ namespace XMAT.WebServiceCapture
             }
 
             entry.Refresh();
-            if (entry.IsValid)
+            entry.Included = included;
+            if (entry.IsShown)
             {
-                if (reorder)
+                if (reorder || !wasShown)
                 {
                     AddRow(entry);
                 }
@@ -117,8 +152,10 @@ namespace XMAT.WebServiceCapture
                     _ends.Add((entry.End, entry.Sequence));
                 }
             }
-            return true;
+            return wasShown || entry.IsShown;
         }
+
+        private bool Includes(ProxyConnectionModel model) => _include == null || _include(model);
 
         internal double GetHeight(bool waterfall) =>
             waterfall ? Count * RowHeight : _groupHeights.Sum(_groups.Count);
@@ -308,6 +345,10 @@ namespace XMAT.WebServiceCapture
             private string Method { get; set; }
             private string Path { get; set; }
             internal bool IsValid => At >= ProxyConnectionModel.FirstPlacedInstant;
+
+            // Whether the process filter shows the request; only valid, included requests have a row.
+            internal bool Included { get; set; } = true;
+            internal bool IsShown => IsValid && Included;
             internal DateTime End => At + Duration;
 
             internal Entry(ProxyConnectionModel model, long sequence)

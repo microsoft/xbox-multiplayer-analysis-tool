@@ -29,6 +29,25 @@ You can also drag `.XMATCAP`, `.SAZ`, or `.ETL` files onto the main window.
 **Expected result:** loaded/imported captures appear in read-only tabs; exports are
 written to the selected destination.
 
+### Process information
+
+Web proxy captures on a PC record the program that opened each connection (see
+[Filter by process](web-proxy.md#filter-by-process)): its image name, never its path,
+its process id and start time, and whether XMAT identified it on this PC or read it
+from an imported archive. `.XMATCAP` files keep it in four optional columns of the
+`WebProxyConnections` table (`ClientProcessName`, `ClientProcessId`,
+`ClientProcessStartTime` and `ClientProcessStatus`). Captures saved without these
+columns, `.SAZ` archives without process metadata and traffic from consoles or other
+devices show **Unknown** or **Remote device**.
+
+**Export** writes each session's program to its `.SAZ` metadata as Fiddler does, in
+`x-ProcessInfo` (`name:pid`), with XMAT's `x-xmat-clientprocess-starttime` and
+`x-xmat-clientprocess-status` flags. **Import** reads `x-ProcessInfo` whatever its
+case, keeps only the image name if it includes a path, and treats the result as
+imported metadata, not as a program on this PC. A `:pid` suffix counts only when it
+is a positive number; a value XMAT cannot use leaves the session without process
+information. **Export Sanitized Capture...** omits all three flags (see below).
+
 If a new `.SAZ` import fails, XMAT reports the error and removes only the tab created
 for that attempt. If re-importing a same-named `.SAZ` fails, the existing tab,
 selection, and data stay unchanged. Retry without restarting XMAT; details are in
@@ -215,6 +234,9 @@ masked when long (at least eight characters) or numeric identifiers (at least fo
 digits); short and recognized schema labels are preserved. Renamed JSON keys use
 collision-safe names. Xbox profile IDs/display names, recognized structured-body
 credential echoes across a request/response pair, and client-IP metadata are masked.
+Client process metadata (`x-ProcessInfo` and XMAT's process flags) is never written;
+each session for which an ordinary export would write any of it counts as one
+redaction.
 JWT recognition does not depend on a particular encoded-header prefix. Standalone
 Xbox credentials and PGP private-key armor are recognized.
 

@@ -20,6 +20,9 @@ namespace XMAT.WebServiceCapture
         internal const int JobExtendedLimitInformationClass = 9;
         internal const int SystemProcessInformation = 5;
         internal const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
+        internal const uint ErrorInsufficientBuffer = 122;
+        internal const int AfInet = 2;
+        internal const int TcpTableOwnerPidConnections = 4;
 
         [StructLayout(LayoutKind.Sequential)]
         internal struct JobBasicLimitInformation
@@ -97,6 +100,19 @@ namespace XMAT.WebServiceCapture
         internal static extern bool GetProcessTimes(
             SafeProcessHandle process, out long creationTime, out long exitTime, out long kernelTime, out long userTime);
 
+        [DllImport(
+            "kernel32.dll",
+            EntryPoint =
+                "QueryFullProcessImageNameW",
+            CharSet = CharSet.Unicode,
+            SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool QueryFullProcessImageName(
+            SafeProcessHandle process,
+            int flags,
+            StringBuilder imageName,
+            ref int size);
+
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool IsProcessInJob(
@@ -130,5 +146,23 @@ namespace XMAT.WebServiceCapture
         [DllImport("ntdll.dll")]
         internal static extern int NtQuerySystemInformation(
             int informationClass, [Out] byte[] information, int length, out uint returnLength);
+
+        [DllImport(
+            "ntdll.dll",
+            EntryPoint =
+                "NtQuerySystemInformation")]
+        internal static extern int NtQuerySystemInformationPinned(
+            int informationClass,
+            IntPtr information,
+            int length,
+            out uint returnLength);
+
+        [DllImport("iphlpapi.dll")]
+        internal static extern uint GetExtendedTcpTable(IntPtr table, ref int size,
+            [MarshalAs(UnmanagedType.Bool)]
+            bool order,
+            int addressFamily,
+            int tableClass,
+            uint reserved);
     }
 }

@@ -443,8 +443,7 @@ namespace XMAT.Tests
 
             public string Name => "Counting";
 
-            public IDataset Dataset =>
-                throw new NotSupportedException();
+            public IDataset Dataset { get; } = new EmptyDataset();
 
             public IDataset Subset(params string[] fieldNames) =>
                 throw new NotSupportedException();
@@ -463,6 +462,19 @@ namespace XMAT.Tests
             public void RemoveRowsWhere(
                 params IFieldValue[] fieldNamesAndValues) =>
                 throw new NotSupportedException();
+        }
+
+        private sealed class EmptyDataset : IDataset
+        {
+            public IEnumerable<IFieldDefinition> FieldDefs => Array.Empty<IFieldDefinition>();
+
+            public IEnumerable<IDataRecord> DataRecords => Array.Empty<IDataRecord>();
+
+            public IEnumerable<IDataRecord> DataRecordsFrom(long firstRowId) => DataRecords;
+
+            public IEnumerable<IDataRecord> DataRecordsFrom(long firstRowId, int limit) => DataRecords;
+
+            public IEnumerable<IDataRecord> DataRecordsWhen(params IFieldValue[] filters) => DataRecords;
         }
 
         private sealed class TestDirectory : IDisposable

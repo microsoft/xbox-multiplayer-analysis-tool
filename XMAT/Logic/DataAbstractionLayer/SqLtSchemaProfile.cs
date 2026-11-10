@@ -183,6 +183,37 @@ namespace XMAT.DataAbstractionLayer
                     Text("Payload")),
             };
 
+        private static IReadOnlyDictionary<
+            string,
+            SqLtExpectedColumn>
+            WebProxyOptionalColumns { get; } =
+                new Dictionary<
+                    string,
+                    SqLtExpectedColumn>(
+                    StringComparer.OrdinalIgnoreCase)
+                {
+                    [WebProxyCaptureSchema
+                        .ClientProcessName] =
+                        Text(
+                            WebProxyCaptureSchema
+                                .ClientProcessName),
+                    [WebProxyCaptureSchema
+                        .ClientProcessId] =
+                        Integer(
+                            WebProxyCaptureSchema
+                                .ClientProcessId),
+                    [WebProxyCaptureSchema
+                        .ClientProcessStartTime] =
+                        Text(
+                            WebProxyCaptureSchema
+                                .ClientProcessStartTime),
+                    [WebProxyCaptureSchema
+                        .ClientProcessStatus] =
+                        Text(
+                            WebProxyCaptureSchema
+                                .ClientProcessStatus),
+                };
+
         // The profile of a capture opened in XMAT: it needs only CaptureDevices, reads every known table, and has
         // no size limit of its own.
         internal static SqLtSchemaProfile CreateGui() =>
@@ -250,6 +281,17 @@ namespace XMAT.DataAbstractionLayer
                 KnownTables.TryGetValue(name, out SqLtExpectedTable table)
                     ? table
                     : null;
+        }
+
+        internal static SqLtExpectedColumn GetKnownOptionalColumn(string tableName, string columnName)
+        {
+            if (!string.Equals(tableName, "WebProxyConnections", StringComparison.OrdinalIgnoreCase) ||
+                columnName == null)
+            {
+                return null;
+            }
+            WebProxyOptionalColumns.TryGetValue(columnName, out SqLtExpectedColumn column);
+            return column;
         }
 
         private static SqLtExpectedTable Table(

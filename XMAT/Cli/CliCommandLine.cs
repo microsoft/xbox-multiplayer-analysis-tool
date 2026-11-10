@@ -9,6 +9,7 @@ using System.Linq;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.CaptureFiles;
+using XMAT.Operations.Processes;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Proxy;
@@ -45,7 +46,8 @@ namespace XMAT.Cli
         CliReplay Replay = null,
         CaptureTextInterpretation? Interpretation = null,
         int MaxInputMib = 0,
-        CliExportSaz ExportSaz = null);
+        CliExportSaz ExportSaz = null,
+        ProcessFilterSpec ProcessFilter = null);
 
     // What xmat replay, compose and save-request send or save, as their command lines give it. Headers and RemoveHeaders
     // keep the order they were given in; BodyFile and RequestFile are read when the run starts. Selection is the --request
@@ -136,6 +138,8 @@ namespace XMAT.Cli
         internal const string OutOption = "--out";
         internal const string DeviceOption = "--device";
         internal const string FailOnOption = "--fail-on";
+        internal const string ProcessOption = "--process";
+        internal const string ExcludeProcessOption = "--exclude-process";
         internal const string ForOption = "--for";
         internal const string InterpretOption = "--interpret";
         internal const string VersionSwitch = "--version";
@@ -250,6 +254,11 @@ namespace XMAT.Cli
         internal const string UnknownOptionMessage = "Unknown option. Run xmat help for the options.";
         internal const string UnknownTargetMessage = "Unknown doctor target. Run xmat help doctor for the targets.";
 
+        // A selector can be a path or another value that must not be repeated, so the message never names it.
+        internal const string InvalidProcessSelectorMessage =
+            "--process and --exclude-process take an image name such as game*.exe (* and ? are wildcards, .exe is " +
+            "optional) or a process id, each at most 260 characters and at most 64 of each option.";
+
         private static readonly HashSet<string> AnalyzeOptions = new(StringComparer.Ordinal)
         {
             OutOption,
@@ -259,6 +268,15 @@ namespace XMAT.Cli
             CliLimits.DataOption,
             CliLimits.RecordOption,
             CliLimits.RecordsOption,
+            ProcessOption,
+            ExcludeProcessOption,
+        };
+
+        // The only options that may be given more than once; each value adds a selector.
+        private static readonly HashSet<string> RepeatableAnalyzeOptions = new(StringComparer.Ordinal)
+        {
+            ProcessOption,
+            ExcludeProcessOption,
         };
 
         private static readonly HashSet<string> DoctorOptions = new(StringComparer.Ordinal) { ForOption };
@@ -582,7 +600,7 @@ namespace XMAT.Cli
         {
             const string command = CliCommands.Analyze;
             var arguments = new CliArguments();
-            CliParseResult error = arguments.Read(args, command, AnalyzeOptions);
+            CliParseResult error = arguments.Read(args, command, AnalyzeOptions, RepeatableAnalyzeOptions);
             if (error != null)
             {
                 return error;
@@ -631,13 +649,28 @@ namespace XMAT.Cli
                 return CliParseResult.UsageError(command, "cli.usage.invalid-value", CliLimits.RecordOverDataMessage);
             }
 
+            ProcessFilterSpec processFilter = null;
+            IReadOnlyList<string> included = arguments.RepeatedValues(ProcessOption);
+            IReadOnlyList<string> excluded = arguments.RepeatedValues(ExcludeProcessOption);
+            if (included.Count != 0 || excluded.Count != 0)
+            {
+                OperationResult<ProcessFilterSpec> selectors = ProcessFilter.Parse(included, excluded);
+                if (!selectors.Succeeded || selectors.Value == null)
+                {
+                    return CliParseResult.UsageError(command, "cli.usage.invalid-value", InvalidProcessSelectorMessage);
+                }
+
+                processFilter = selectors.Value;
+            }
+
             return CliParseResult.Success(new CliRequest(
                 command,
                 Input: arguments.Positionals[0],
                 Output: output,
                 DeviceId: deviceId,
                 FailOnFindings: failOnFindings,
-                Limits: limits));
+                Limits: limits,
+                ProcessFilter: processFilter));
         }
 
         private static CliParseResult ParseDoctor(IReadOnlyList<string> args)

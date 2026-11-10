@@ -29,6 +29,30 @@ and then displays report tabs.
 
 ![Xbox Live Trace analysis progress](../ReadmeImages/16.png)
 
+### Analyze only the sessions shown by the process filter
+
+Analysis covers the full capture by default, including sessions that the capture
+tab's process filter hides. To analyze one program's traffic, set the tab's process
+filter (see [Filter by process](web-proxy.md#filter-by-process)), then check **Analyze
+only the sessions shown by the process filter** in the analyzer selector, which lists
+the filter's selectors. The option is available only while the tab has a process
+filter. The status, host and method filters never limit analysis.
+
+A process-filtered analysis:
+
+- uses the process filter as it was when the analysis started;
+- adds **(process-filtered)** to its result tab's name;
+- shows a banner at the top of the Statistics report with how many of the captured
+  sessions were analyzed, how many were hidden, how many had no process information,
+  and the selectors;
+- writes `scope.json` to its working folder, with the selectors and the same counts
+  for the capture and for each device (`d1`, `d2`, ...), in the format of
+  [xmat's](cli.md#output) `processFilter`. Exported reports include it.
+
+Sessions without process information are never analyzed while **Show only** has
+selectors. If the process filter hides every session, there is nothing to analyze and
+XMAT reports that the capture has no suitable data.
+
 Analysis creates a timestamped `xlca_*` working folder in XMAT's roaming application
 data directory, under `Microsoft\Xbox Multiplayer Analysis Tool`.
 

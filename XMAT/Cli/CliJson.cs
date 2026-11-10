@@ -18,8 +18,8 @@ namespace XMAT.Cli
 {
     // Writes xmat's JSON field by field, so only allow-listed values reach the output: rule names, levels, counts,
     // service labels, ordinal ids, request numbers, outcomes and status codes, the input kind and SHA-256, the effective
-    // limits and options, codes and fixed messages. Never AnalysisResult.Legacy, captured content or paths other than
-    // artifact paths.
+    // limits and options, the validated process selectors of the command line, codes and fixed messages. Never
+    // AnalysisResult.Legacy, captured content or paths other than artifact paths.
     internal static class CliJson
     {
         // summary.json in a published --out folder.
@@ -819,6 +819,12 @@ namespace XMAT.Cli
                     "policy",
                     analysis.StoredText.Policy);
                 writer.WriteEndObject();
+            }
+
+            if (analysis.ProcessFilter != null)
+            {
+                writer.WritePropertyName("processFilter");
+                ProcessScopeJson.Write(writer, analysis.ProcessFilter, analysis.ProcessScope);
             }
 
             writer.WriteStartArray("devices");

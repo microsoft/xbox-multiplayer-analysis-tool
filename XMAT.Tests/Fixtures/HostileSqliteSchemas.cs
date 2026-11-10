@@ -23,6 +23,12 @@ namespace XMAT.Tests.Fixtures
             "RequestStatus TEXT,RequestLineAndHeaders TEXT,RequestBody TEXT," +
             "ResponseLineAndHeaders TEXT,ResponseBody TEXT,ClientIP TEXT)";
 
+        internal static string WebProxyConnectionsWithProcessDdl { get; } = AppendWebProxyColumns(
+            $"{WebProxyCaptureSchema.ClientProcessName} TEXT",
+            $"{WebProxyCaptureSchema.ClientProcessId} INTEGER",
+            $"{WebProxyCaptureSchema.ClientProcessStartTime} TEXT",
+            $"{WebProxyCaptureSchema.ClientProcessStatus} TEXT");
+
         internal const string NetworkTracePacketsDdl =
             "CREATE TABLE NetworkTracePackets(id INTEGER PRIMARY KEY," +
             "DeviceName TEXT,ProcessId INTEGER,ThreadId INTEGER,Timestamp TEXT," +
@@ -406,6 +412,9 @@ namespace XMAT.Tests.Fixtures
             return builder.Append(')')
                 .ToString();
         }
+
+        internal static string AppendWebProxyColumns(params string[] declarations) =>
+            WebProxyConnectionsDdl.TrimEnd(')') + "," + string.Join(",", declarations) + ")";
 
         internal static void CorruptFirstOverflowPage(
             string path,

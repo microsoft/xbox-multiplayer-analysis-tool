@@ -4,6 +4,7 @@
 
 using System;
 using System.Net.WebSockets;
+using XMAT.Operations.Captures;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -15,6 +16,7 @@ namespace XMAT.WebServiceCapture.Proxy
         public string RemoteEndPoint { get; set; }
         public string SubProtocol { get; set; }
         public bool AcceptConnection { get; set; }
+        internal ClientProcessContext ProcessContext { get; set; }
     }
 
     public class WebSocketMessageEventArgs : EventArgs
@@ -26,6 +28,8 @@ namespace XMAT.WebServiceCapture.Proxy
         public WebSocketMessageType MessageType { get; set; }
         public byte[] Message { get; set; }
         public bool PayloadTruncated { get; set; }
+        internal CaptureRowKey RowKey { get; set; }
+        internal ClientProcessContext ProcessContext { get; set; }
     }
 
     public class WebSocketClosedEventArgs : EventArgs
@@ -33,5 +37,6 @@ namespace XMAT.WebServiceCapture.Proxy
         public DateTime Timestamp { get; set; }
         public int ConnectionID { get; set; }
         public int RequestNumber { get; set; }
+        internal ClientProcessContext ProcessContext { get; set; }
     }
 }

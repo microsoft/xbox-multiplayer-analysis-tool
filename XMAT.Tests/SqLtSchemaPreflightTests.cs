@@ -130,6 +130,62 @@ namespace XMAT.Tests
                 schema.TextSemantics);
         }
 
+        [Fact]
+        public void Preflight_AcceptsKnownOptionalProcessColumnsInAnyTrailingOrder()
+        {
+            using var directory = new TestDirectory();
+            string webDdl = HostileSqliteSchemas.AppendWebProxyColumns(
+                $"{WebProxyCaptureSchema.ClientProcessStatus} TEXT",
+                "UnrelatedExtension INTEGER",
+                $"{WebProxyCaptureSchema.ClientProcessStartTime} TEXT",
+                $"{WebProxyCaptureSchema.ClientProcessName} TEXT",
+                $"{WebProxyCaptureSchema.ClientProcessId} INTEGER");
+            string path = HostileSqliteSchemas.CreateOrdinaryCapture(
+                directory.Path,
+                "process-columns-permuted.xmatcap",
+                webDdl);
+
+            SqLtValidatedSchema schema = ValidateGui(path);
+
+            Assert.Equal(
+                new[]
+                {
+                    WebProxyCaptureSchema.ClientProcessStatus,
+                    "UnrelatedExtension",
+                    WebProxyCaptureSchema.ClientProcessStartTime,
+                    WebProxyCaptureSchema.ClientProcessName,
+                    WebProxyCaptureSchema.ClientProcessId,
+                },
+                schema.Tables["WebProxyConnections"].Columns.Skip(16).Select(column => column.Name));
+        }
+
+        [Theory]
+        [InlineData("ClientProcessName INTEGER")]
+        [InlineData("ClientProcessId TEXT")]
+        [InlineData("ClientProcessStartTime INTEGER")]
+        [InlineData("ClientProcessStatus INTEGER")]
+        [InlineData("ClientProcessName")]
+        public void Preflight_RejectsMistypedKnownOptionalProcessColumns(string wrongDeclaration)
+        {
+            using var directory = new TestDirectory();
+            string columnName = wrongDeclaration.Split(' ')[0];
+            string expectedDeclaration = columnName == WebProxyCaptureSchema.ClientProcessId
+                ? columnName + " INTEGER"
+                : columnName + " TEXT";
+            string webDdl = HostileSqliteSchemas.WebProxyConnectionsWithProcessDdl.Replace(
+                expectedDeclaration,
+                wrongDeclaration,
+                StringComparison.Ordinal);
+            string path = HostileSqliteSchemas.CreateOrdinaryCapture(
+                directory.Path,
+                "process-column-wrong-type.xmatcap",
+                webDdl);
+
+            SqLtSchemaException exception = Assert.Throws<SqLtSchemaException>(() => ValidateGui(path));
+
+            Assert.Equal(SqLtSchemaFailure.Unsupported, exception.Failure);
+        }
+
         [Theory]
         [InlineData(
             "CREATE INDEX ExtraIndex ON WebProxyConnections(RequestNumber)")]

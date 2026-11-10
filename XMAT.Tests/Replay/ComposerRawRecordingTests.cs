@@ -1273,7 +1273,7 @@ namespace XMAT.Tests.Replay
 
             public string Name => "Refusing";
 
-            public IDataset Dataset => null;
+            public IDataset Dataset { get; } = new EmptyDataset();
 
             public IDataset Subset(params string[] fieldNames) => null;
 
@@ -1287,6 +1287,19 @@ namespace XMAT.Tests.Replay
             public void RemoveRowsWhere(params IFieldValue[] fieldNamesAndValues)
             {
             }
+        }
+
+        private sealed class EmptyDataset : IDataset
+        {
+            public IEnumerable<IFieldDefinition> FieldDefs => Array.Empty<IFieldDefinition>();
+
+            public IEnumerable<IDataRecord> DataRecords => Array.Empty<IDataRecord>();
+
+            public IEnumerable<IDataRecord> DataRecordsFrom(long firstRowId) => DataRecords;
+
+            public IEnumerable<IDataRecord> DataRecordsFrom(long firstRowId, int limit) => DataRecords;
+
+            public IEnumerable<IDataRecord> DataRecordsWhen(params IFieldValue[] filters) => DataRecords;
         }
     }
 }

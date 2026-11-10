@@ -157,6 +157,43 @@ Status codes of 400 or higher are colored red.
 
 ![Combining host and status-code filters](../ReadmeImages/10.png)
 
+### Filter by process
+
+Through a PC proxy, other programs on the PC, such as browsers, chat apps, updaters
+and Windows services, send their traffic through XMAT too. The **PROCESS** column
+shows the program that opened each connection on this PC, by image name and process
+id, such as `Game.exe (1234)`. It shows **Resolving…** while XMAT looks the program
+up, **Remote device** for traffic from a console or another device, and **Unknown**
+when the program could not be identified, for example because it had already exited,
+or when the capture was recorded before XMAT stored this information. XMAT stores the
+image name, never the program's path.
+
+To focus on one program:
+
+- Right-click a request or a timeline bar and choose **Show only "Game.exe"**, or
+  **Hide "Name"** to hide that program. **Show all processes** clears the process
+  filter.
+- Or select **Process** in the filter bar and enter image names or process ids,
+  separated by semicolons, under **Show only** and **Hide**. Names ignore case, `*`
+  and `?` are wildcards (`game*.exe`), and `.exe` is optional; a number is a process
+  id. The filter applies shortly after you stop typing, or when you press Enter or
+  **Apply**. **Hide svchost.exe** hides Windows' service host processes.
+
+While a process filter is set, the filter bar shows **Process filter: N/M; H hidden;
+U unknown**: the sessions that the process filter shows out of all sessions in the
+tab, how many it hides, and how many have no process information. Sessions without
+process information appear only while **Show only** is empty. A session whose program
+is identified after it appears is shown or hidden at that moment, without reloading
+the list. The process filter combines with the status, host and method filters, and
+**Show all processes** leaves those filters unchanged.
+
+The process filter only hides sessions: XMAT still forwards and records all traffic
+from every program, and saving, exporting and analysis use the full capture unless
+you choose to analyze only the filtered sessions (see
+[Live trace analysis](live-trace-analysis.md)). Each capture tab has its own process
+filter, which [clearing the capture](#clear-a-capture) keeps and which is not saved.
+The timeline follows the process filter, but not the status, host and method filters.
+
 ### Capture timeline
 
 The Waterfall and By Host views retain complete capture history, including gaps
@@ -168,6 +205,21 @@ limits presentation only, not request capture or storage. Scrolling, resizing,
 switching modes, and stopping refresh the visible timeline without waiting for the
 live-update cadence. Stopping displays final response statuses and durations even
 if no further requests arrive.
+
+### Clear a capture
+
+**Clear Capture** in the capture toolbar, or **View > Clear Captures**, removes the
+tab's requests and WebSocket messages; a running capture keeps capturing. Connections
+that are still open can add new rows afterwards, and the tab keeps its process filter.
+
+Request and connection numbers keep increasing after clearing; they no longer restart
+at 1. This is intentional: data that arrives later on a connection opened before the
+clear can never be matched to a newer request with the same number. **Stop Capture**
+followed by **Start Capture** starts numbering at 1 again.
+
+Clearing never overlaps saving, exporting, importing or analyzing captures: **Clear
+Capture** is unavailable while one of them runs, and if one starts at the same moment,
+XMAT reports that another capture operation is in progress and clears nothing.
 
 ## Edit and resend a request
 

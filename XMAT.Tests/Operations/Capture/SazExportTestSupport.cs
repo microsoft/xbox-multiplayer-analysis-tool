@@ -5,6 +5,7 @@
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Capture;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
@@ -185,7 +186,8 @@ namespace XMAT.Tests.Operations.Capture
         private sealed class ModelRecord :
             IDataRecord,
             IRawBodyDataRecord,
-            ICaptureTextSourceProvider
+            ICaptureTextSourceProvider,
+            IOptionalTypedDataRecord
         {
             private readonly ProxyConnectionModel _model;
 
@@ -248,6 +250,31 @@ namespace XMAT.Tests.Operations.Capture
                         _model.ClientIP,
                     _ => null,
                 };
+
+            public bool TryReadString(
+                string fieldName,
+                out string value)
+            {
+                value = ProcessField(fieldName) as string;
+                return value != null;
+            }
+
+            public bool TryReadInt64(
+                string fieldName,
+                out long value)
+            {
+                object field = ProcessField(fieldName);
+                value = field is long number ? number : 0;
+                return field is long;
+            }
+
+            private object ProcessField(
+                string fieldName) =>
+                ClientProcessRecordCodec
+                    .ToFields(_model.ClientProcess)
+                    .FirstOrDefault(
+                        field => field.Name == fieldName)
+                    ?.Value;
 
             public ReadOnlyMemory<byte> RawBody(
                 string fieldName)

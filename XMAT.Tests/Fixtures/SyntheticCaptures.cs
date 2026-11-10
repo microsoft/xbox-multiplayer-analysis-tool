@@ -26,6 +26,13 @@ namespace XMAT.Tests.Fixtures
         bool IncludeXr049Violation = false,
         uint UserVersion = CaptureTextFormat.LiteralUserVersion);
 
+    internal sealed record SyntheticProcessXmatcapOptions(
+        int Devices = 1,
+        int RequestsPerDevice = 4,
+        string ProcessName = "game.exe",
+        int ProcessId = 4242,
+        string ProcessStatus = "local");
+
     // A frame for the SAZ readers. Valid frames, and those with a malformed start line, have an absolute https request
     // target; the hostless kinds have an origin-form target (a path), so the Host header alone could name the host, and the
     // AbsoluteTarget kinds keep the absolute target, whose authority names the host whatever the Host header says
@@ -207,6 +214,84 @@ namespace XMAT.Tests.Fixtures
                     path,
                     options.UserVersion);
             }
+            return path;
+        }
+
+        internal static string WriteProcessXmatcap(
+            string directory,
+            string fileName,
+            SyntheticProcessXmatcapOptions options = null)
+        {
+            options ??= new SyntheticProcessXmatcapOptions();
+            ValidateCounts(options.Devices, options.RequestsPerDevice);
+            Directory.CreateDirectory(directory);
+            string path = Path.Join(directory, fileName);
+
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            IDataTable devices = database.CreateTable(
+                "CaptureDevices",
+                new Field<long>("DeviceType"),
+                new Field<string>("DeviceName"),
+                new Field<long>("CaptureType"));
+            IDataTable captures = database.CreateTable(
+                WebServiceCaptureMethod.TableName,
+                new Field<string>(WebServiceCaptureMethod.FieldKey_DeviceName),
+                new Field<long>(WebServiceCaptureMethod.FieldKey_RequestNumber),
+                new Field<long>(WebServiceCaptureMethod.FieldKey_ConnectionId),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestTimestamp),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestScheme),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestHost),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPort),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestMethod),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPath),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestStatus),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestBody),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseBody),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ClientIP),
+                new Field<string>(WebProxyCaptureSchema.ClientProcessName),
+                new Field<long>(WebProxyCaptureSchema.ClientProcessId),
+                new Field<string>(WebProxyCaptureSchema.ClientProcessStartTime),
+                new Field<string>(WebProxyCaptureSchema.ClientProcessStatus));
+
+            long requestNumber = 0;
+            for (var device = 0; device < options.Devices; device++)
+            {
+                string deviceName = $"Synthetic process device {device + 1}";
+                devices.AddRow((long)DeviceType.LocalPC, deviceName, (long)CaptureType.WebProxy);
+                for (var request = 0; request < options.RequestsPerDevice; request++)
+                {
+                    requestNumber++;
+                    RequestData data = CreateRequestData(device, request, options.RequestsPerDevice, false, false);
+                    DateTime started = SyntheticStartUtc.AddSeconds(requestNumber);
+                    captures.AddRow(
+                        deviceName,
+                        requestNumber,
+                        requestNumber,
+                        ProxyConnectionModel.ToDateTimeString(started),
+                        ProxyConnectionModel.ToDateTimeString(started.AddMilliseconds(25)),
+                        "https",
+                        data.Host,
+                        "443",
+                        "POST",
+                        data.PathAndQuery,
+                        "200",
+                        data.RequestHeaders,
+                        Convert.ToBase64String(data.RequestBody),
+                        data.ResponseHeaders,
+                        Convert.ToBase64String(data.ResponseBody),
+                        "127.0.0.1",
+                        options.ProcessName ?? string.Empty,
+                        options.ProcessId > 0 ? options.ProcessId : 0,
+                        ProxyConnectionModel.ToDateTimeString(started.AddMinutes(-5)),
+                        options.ProcessStatus ?? string.Empty);
+                }
+            }
+
+            database.SaveToFile(path);
             return path;
         }
 
