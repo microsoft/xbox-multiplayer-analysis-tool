@@ -208,7 +208,7 @@ namespace XMAT.Tests.Replay
             (X509Certificate2 leaf, string keyPem) = Leaf(authority.Root, IPAddress.Parse("127.0.0.12"), crlUrl: revocation.Url);
             using (leaf)
             {
-                using (OpenSslServer server = await OpenSslServer.StartAsync(IPAddress.Parse("127.0.0.12"), leaf, keyPem, "-www"))
+                using (OpenSslServer server = await OpenSslServer.StartAsync(IPAddress.Parse("127.0.0.12"), leaf, keyPem))
                 {
                     var setup = new RawSenderSetup(ChainPolicyFactory: () =>
                     {
@@ -245,7 +245,7 @@ namespace XMAT.Tests.Replay
             {
                 (X509Certificate2 leaf, string keyPem) = Leaf(authority.Root, IPAddress.Parse(address));
                 using (leaf)
-                using (OpenSslServer server = await OpenSslServer.StartAsync(IPAddress.Parse(address), leaf, keyPem, "-www " + version))
+                using (OpenSslServer server = await OpenSslServer.StartAsync(IPAddress.Parse(address), leaf, keyPem, version))
                 {
                     RawRequestImage image = Image($"https://{address}:{server.Port}", $"GET / HTTP/1.1\r\nHost: {address}:{server.Port}\r\n\r\n");
                     for (int send = 0; send < 2; send++)
@@ -420,9 +420,12 @@ namespace XMAT.Tests.Replay
         }
 
         // openssl s_server for one test: it sends exactly the certificate that it is given, with no intermediate, and never
-        // completes its chain. With -www, it answers each GET with a status page that says whether that connection's
-        // session was new or reused. Ready once it accepts a connection; disposing it ends the process and deletes its
-        // folder.
+        // completes its chain. It always runs with -www, answering each GET with a status page that says whether that
+        // connection's session was new or reused: without -www, a native Windows build reads its stdin whenever it waits
+        // on a connection (it takes a redirected stdin to always have input waiting), blocks there, and never answers a
+        // ClientHello, so every send would time out (seen on CI; the MSYS build that Git ships selects on stdin instead).
+        // A send whose validation wrongly succeeded is answered at once rather than hanging. Ready once it accepts a
+        // connection; disposing it ends the process and deletes its folder.
         internal sealed class OpenSslServer : IDisposable
         {
             private readonly System.Diagnostics.Process _process;
@@ -451,7 +454,7 @@ namespace XMAT.Tests.Replay
                 port = ((IPEndPoint)probe.LocalEndpoint).Port;
                 probe.Stop();
                 System.Diagnostics.Process process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-                    OpenSsl.Executable, $"s_server -accept {address}:{port} -cert leaf.pem -key key.pem" + (options == null ? string.Empty : " " + options))
+                    OpenSsl.Executable, $"s_server -accept {address}:{port} -cert leaf.pem -key key.pem -www" + (options == null ? string.Empty : " " + options))
                 {
                     WorkingDirectory = folder,
                     UseShellExecute = false,

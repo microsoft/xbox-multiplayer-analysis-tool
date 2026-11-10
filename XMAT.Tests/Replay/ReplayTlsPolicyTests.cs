@@ -64,7 +64,7 @@ namespace XMAT.Tests.Replay
             using (leaf)
             {
                 using (RawSenderTlsTests.OpenSslServer server =
-                    await RawSenderTlsTests.OpenSslServer.StartAsync(IPAddress.Parse("127.0.0.16"), leaf, keyPem, "-www"))
+                    await RawSenderTlsTests.OpenSslServer.StartAsync(IPAddress.Parse("127.0.0.16"), leaf, keyPem))
                 {
                     using var sender = new ReplaySender(new ReplaySenderSetup(ChainPolicyFactory: () => Permissive(authority)));
 
