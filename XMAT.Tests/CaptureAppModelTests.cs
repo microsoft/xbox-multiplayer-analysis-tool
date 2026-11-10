@@ -850,13 +850,19 @@ namespace XMAT.Tests
         public async Task ImportDataCapturesAsync_FailedReimportPreservesExistingTabSelectionAndRows()
         {
             string path = CreateRepositoryLocalSazPath();
+            string alias = Path.Join(
+                Path.GetDirectoryName(path),
+                Path.GetFileNameWithoutExtension(path) + "-alias.saz");
             string deviceName = $"Fiddler - {Path.GetFileName(path)}";
             using var database = CreateCaptureDatabase(out var table);
             AddCaptureRow(table, "Unrelated capture", "unrelated.example", "/keep", "unrelated");
+            ICaptureDeviceContext importedContext = null;
+            CaptureAppModel model = null;
             try
             {
                 WriteSaz(path, "original.example", "/original", "original body");
-                var model = new CaptureAppModel();
+                CreateHardLink(alias, path);
+                model = new CaptureAppModel();
                 var originalContext = new TestCaptureDeviceContext(false);
                 model.CaptureDeviceContexts.Add(originalContext);
                 model.SelectedDeviceContext = originalContext;
@@ -867,7 +873,7 @@ namespace XMAT.Tests
                     path,
                     importer);
 
-                var importedContext = model.SelectedDeviceContext;
+                importedContext = model.SelectedDeviceContext;
                 var importedController =
                     (WebServiceDeviceCaptureController)importedContext.CaptureController;
                 var selectedConnection =
@@ -884,6 +890,7 @@ namespace XMAT.Tests
                     Assert.Single(RowsForDevice(table, deviceName)).RowId;
 
                 model.SelectedDeviceContext = originalContext;
+                DeleteFileWithRetry(path);
                 await File.WriteAllTextAsync(path, "not a ZIP archive");
 
                 await Assert.ThrowsAsync<InvalidDataException>(
@@ -914,10 +921,20 @@ namespace XMAT.Tests
                     "unrelated.example",
                     "/keep",
                     "unrelated");
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(path));
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(alias));
+                Assert.Equal(CaptureSaveFailure.Refused, SaveDestinationFailure(path));
             }
             finally
             {
-                File.Delete(path);
+                if (model != null &&
+                    importedContext != null &&
+                    model.CaptureDeviceContexts.Contains(importedContext))
+                {
+                    await model.RemoveDeviceContextAsync(importedContext);
+                }
+                DeleteFileWithRetry(path);
+                DeleteFileWithRetry(alias);
             }
         }
 
@@ -925,14 +942,18 @@ namespace XMAT.Tests
         public async Task ImportDataCapturesAsync_SuccessfulReimportReplacesRowsWithoutAppending()
         {
             string path = CreateRepositoryLocalSazPath();
+            string oldAlias = Path.Join(
+                Path.GetDirectoryName(path),
+                Path.GetFileNameWithoutExtension(path) + "-old.saz");
             string deviceName = $"Fiddler - {Path.GetFileName(path)}";
             using var database = CreateCaptureDatabase(out var table);
             AddCaptureRow(table, "Unrelated capture", "unrelated.example", "/keep", "unrelated");
+            var model = new CaptureAppModel();
             try
             {
-                var model = new CaptureAppModel();
                 var importer = CreateFiddlerImporter(table);
                 WriteSaz(path, "original.example", "/original", "original body");
+                CreateHardLink(oldAlias, path);
 
                 await model.ImportDataCapturesAsync(
                     ImportType.Fiddler,
@@ -947,6 +968,7 @@ namespace XMAT.Tests
                 var changedProperties = new List<string>();
                 controller.PropertyChanged += (_, args) =>
                     changedProperties.Add(args.PropertyName);
+                DeleteFileWithRetry(path);
                 WriteSaz(path, "replacement.example", "/replacement", "replacement body");
 
                 await model.ImportDataCapturesAsync(
@@ -982,10 +1004,59 @@ namespace XMAT.Tests
                     "/keep",
                     "unrelated");
                 Assert.Equal(2, table.Dataset.DataRecords.Count());
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(path));
+                Assert.False(LoadedCaptureDatabaseRegistry.IsLoadedPath(oldAlias));
             }
             finally
             {
-                File.Delete(path);
+                await RemoveReadOnlyContextsAsync(model);
+                DeleteFileWithRetry(path);
+                DeleteFileWithRetry(oldAlias);
+            }
+        }
+
+        [Fact]
+        public async Task ImportDataCapturesAsync_SharedImportedSourceProtectedUntilLastOwnerReleasesIt()
+        {
+            string path = CreateRepositoryLocalSazPath();
+            string alias = Path.Join(
+                Path.GetDirectoryName(path),
+                Path.GetFileNameWithoutExtension(path) + "-shared.saz");
+            using var database = CreateCaptureDatabase(out var table);
+            var model = new CaptureAppModel();
+            try
+            {
+                WriteSaz(path, "shared.example", "/shared", "shared body");
+                CreateHardLink(alias, path);
+                var importer = CreateFiddlerImporter(table);
+
+                await model.ImportDataCapturesAsync(ImportType.Fiddler, path, importer);
+                ICaptureDeviceContext first = model.SelectedDeviceContext;
+                await model.ImportDataCapturesAsync(ImportType.Fiddler, alias, importer);
+                ICaptureDeviceContext second = model.SelectedDeviceContext;
+
+                Assert.NotSame(first, second);
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(path));
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(alias));
+                Assert.Equal(CaptureSaveFailure.Refused, SaveDestinationFailure(alias));
+
+                await model.RemoveDeviceContextAsync(first);
+
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(path));
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(alias));
+                Assert.Equal(CaptureSaveFailure.Refused, SaveDestinationFailure(alias));
+
+                await model.RemoveDeviceContextAsync(second);
+
+                Assert.False(LoadedCaptureDatabaseRegistry.IsLoadedPath(path));
+                Assert.False(LoadedCaptureDatabaseRegistry.IsLoadedPath(alias));
+                LoadedCaptureDatabaseRegistry.AcquireSaveDestination(alias).Dispose();
+            }
+            finally
+            {
+                await RemoveReadOnlyContextsAsync(model);
+                DeleteFileWithRetry(path);
+                DeleteFileWithRetry(alias);
             }
         }
 
@@ -1954,6 +2025,20 @@ namespace XMAT.Tests
                     table);
         }
 
+        private static async Task RemoveReadOnlyContextsAsync(CaptureAppModel model)
+        {
+            foreach (ICaptureDeviceContext context in model.CaptureDeviceContexts
+                .Where(context => context.IsReadOnly)
+                .ToArray())
+            {
+                await model.RemoveDeviceContextAsync(context);
+            }
+        }
+
+        private static CaptureSaveFailure SaveDestinationFailure(string path) =>
+            Assert.Throws<CaptureSaveException>(
+                () => LoadedCaptureDatabaseRegistry.AcquireSaveDestination(path).Dispose()).Failure;
+
         [Fact]
         public async Task ImportDataCapturesAsync_PersistsInBackgroundAndPublishesFiltersBeforeConnections()
         {
@@ -2124,6 +2209,24 @@ namespace XMAT.Tests
             return Path.Combine(directory, $"{Guid.NewGuid():N}.saz");
         }
 
+        private static void DeleteFileWithRetry(string path)
+        {
+            const int Attempts = 6;
+            for (var attempt = 1; attempt <= Attempts; attempt++)
+            {
+                try
+                {
+                    File.Delete(path);
+                    return;
+                }
+                catch (IOException) when (attempt < Attempts)
+                {
+                    // Allow a bounded delay only for transient external scanners touching a newly created fixture.
+                    Thread.Sleep(25);
+                }
+            }
+        }
+
         private static void DeleteDirectoryWithRetry(
             string path)
         {
@@ -2149,7 +2252,7 @@ namespace XMAT.Tests
             }
         }
 
-        private static void CreateHardLink(
+        internal static void CreateHardLink(
             string linkPath,
             string existingPath)
         {

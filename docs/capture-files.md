@@ -6,8 +6,9 @@ Save captures for later, import traces from other tools, and export copies for s
 
 ## Prerequisites
 
-Open XMAT and select the capture you want to export. For **Export Sanitized
-Capture...**, stop **all** captures first. Loaded and imported web captures are supported.
+Open XMAT and select the capture you want to export. Exports also work while a capture
+runs: sessions whose response is not complete yet are skipped, and the confirmation
+says how many. Loaded and imported web captures are supported.
 
 ## Save, load, import, or export
 
@@ -20,14 +21,43 @@ Capture...**, stop **all** captures first. Loaded and imported web captures are 
 | **Save Captures** | Saves all open web proxy and network trace captures to an `.XMATCAP` file |
 | **Load Captures** | Opens an `.XMATCAP` file in read-only tabs |
 | **Import** | Opens a Fiddler `.SAZ` archive or a network `.ETL` trace captured with `netsh` in a read-only tab; re-importing the same-named `.SAZ` replaces that tab's data |
-| **Export** | Exports the selected web proxy capture to a Fiddler `.SAZ` archive |
-| **Export Sanitized Capture...** | Exports a sanitized `.SAZ` copy of the selected web capture without changing the original |
+| **Export Selected Tab...** | Exports every session of the selected web proxy capture to an `.XMATCAP` file or a Fiddler `.SAZ` archive, as chosen in the save dialog |
+| **Export Selected Tab Sanitized...** | Exports a sanitized `.SAZ` copy of the selected web capture without changing the original |
 
 You can also drag `.XMATCAP`, `.SAZ`, or `.ETL` files onto the main window.
 **WebSocket messages are not saved to or loaded from `.XMATCAP` files.**
 
 **Expected result:** loaded/imported captures appear in read-only tabs; exports are
 written to the selected destination.
+
+### Export selected or visible sessions
+
+In a capture list, right-click a request and choose **Export Selected Sessions...**
+(the selected requests) or **Export Visible Sessions...** (every request that the
+status, host, method and process filters show). XMAT confirms how many sessions it
+will export, then asks for the file; the save dialog's file type chooses an
+`.XMATCAP` subset (the original rows, ids and columns), a `.SAZ` archive or a
+sanitized `.SAZ`. A file name that does not end in the chosen type's extension is
+refused with an explanation and the save dialog opens again; nothing is written. The
+completion message reports **Exported N of M sessions**, where M counts the capture's
+sessions when the export started, and any sessions it skipped. An existing file is
+replaced only after you confirm it in the save dialog and the export completes. XMAT
+never replaces a capture open in a tab, including the `.SAZ` an imported tab was read
+from or another name for the same file. While an export runs, the capture cannot be
+stopped. `xmat export` makes the same exports from the command line (see
+[Command line](cli.md)).
+
+An exported file can be opened only by your Windows account, also when it replaces a
+file, and so can the temporary folder next to it that XMAT writes it in. On storage
+where Windows cannot restrict access (such as FAT drives or some network shares), XMAT
+asks before exporting there; if you agree, the file is exported without that
+protection and the completion message says so. The answer covers only that export;
+`xmat export` never exports there.
+
+A `.SAZ` export also keeps XMAT's own values as session flags: the request number,
+connection id, exact request and response times, scheme, request path (with its
+query) and client IP address. XMAT's import restores each value whose flag is
+present and valid, and otherwise reads the archive as Fiddler wrote it.
 
 ### Process information
 
@@ -40,13 +70,13 @@ from an imported archive. `.XMATCAP` files keep it in four optional columns of t
 columns, `.SAZ` archives without process metadata and traffic from consoles or other
 devices show **Unknown** or **Remote device**.
 
-**Export** writes each session's program to its `.SAZ` metadata as Fiddler does, in
+A `.SAZ` export writes each session's program to its metadata as Fiddler does, in
 `x-ProcessInfo` (`name:pid`), with XMAT's `x-xmat-clientprocess-starttime` and
 `x-xmat-clientprocess-status` flags. **Import** reads `x-ProcessInfo` whatever its
 case, keeps only the image name if it includes a path, and treats the result as
 imported metadata, not as a program on this PC. A `:pid` suffix counts only when it
 is a positive number; a value XMAT cannot use leaves the session without process
-information. **Export Sanitized Capture...** omits all three flags (see below).
+information. A sanitized `.SAZ` omits all three flags (see below).
 
 If a new `.SAZ` import fails, XMAT reports the error and removes only the tab created
 for that attempt. If re-importing a same-named `.SAZ` fails, the existing tab,
@@ -82,14 +112,17 @@ XMAT checks capture files before reading them and never changes them:
 
 ## Export a sanitized capture
 
-1. Stop all captures and select the web proxy capture to share.
-2. Choose **File > Export Sanitized Capture...** and select a destination.
+1. Select the web proxy capture to share.
+2. Choose **File > Export Selected Tab Sanitized...** (or export selected or visible
+   sessions and choose the sanitized file type), confirm, and select a destination.
 3. Review the completion dialog's redactions and omissions.
 4. **Review the exported archive manually before sharing.**
 
-Sanitization is per export, not a preference. Ordinary **Export** and native
-**Save Captures** remain unsanitized. Only the selected capture is exported;
-the original capture is not sanitized in place.
+Sanitization is per export, not a preference. Ordinary exports and native
+**Save Captures** remain unsanitized. Only the chosen sessions are exported;
+the original capture is not sanitized in place. A sanitized archive keeps XMAT's
+request numbers, connection ids, times and schemes, but not the client IP address,
+the raw request path or the client process.
 
 ### What is inspected
 
@@ -157,10 +190,14 @@ archive rather than truncating it.
 
 ### Cancellation and failures
 
-Longer exports show a cancellable progress window. Cancel, Escape, or closing that
-window requests cancellation and waits for the worker and cleanup before releasing
-the operation guard. An existing destination is replaced only after a complete export,
-not on cancellation or failure.
+Longer exports show a progress window with the current step and Cancel. Cancel,
+Escape, or closing that window requests cancellation and waits for the worker and
+cleanup before releasing the operation guard. An existing destination is replaced only
+after a complete export, not on cancellation or failure; one that another program has
+open is reported and left as it is. An `.XMATCAP` export fails with an error and
+leaves nothing behind when its temporary file, in a folder next to the destination,
+would have a path longer than Windows' 260-character limit; choose a shorter folder.
+`.SAZ` exports are not affected.
 
 ### Review before sharing
 

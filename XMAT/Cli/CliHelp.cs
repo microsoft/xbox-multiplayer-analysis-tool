@@ -41,13 +41,18 @@ namespace XMAT.Cli
             return report;
         }
 
+        // The command's own command lines only: a capability that several commands provide lists each under its command.
         internal static CliCommandHelp Describe(string command)
         {
             IReadOnlyList<Capability> capabilities = CliCatalog.CapabilitiesOf(command);
             return new CliCommandHelp(
                 command,
                 CliCommandHelp.SupportedStatus,
-                capabilities.Select(capability => capability.CliRoute).Distinct(StringComparer.Ordinal).ToList(),
+                capabilities
+                    .SelectMany(capability => capability.CliRoutes)
+                    .Where(route => CliCatalog.CommandOf(route) == command)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList(),
                 capabilities.Select(capability => capability.Id).ToList());
         }
 
@@ -90,6 +95,16 @@ namespace XMAT.Cli
                 yield return "game*.exe: case-insensitive, * and ? are wildcards and .exe is optional. A number is a process id.";
                 yield return "Sessions without process information (older captures, Fiddler archives without x-ProcessInfo,";
                 yield return "Xbox or other remote devices) never match --process; the JSON counts them as unknown.";
+            }
+            else if (command.Name == CliCommands.Export)
+            {
+                yield return string.Empty;
+                yield return "Writes the selected sessions to a new FILE; it never replaces a file or changes INPUT. The format";
+                yield return "follows FILE's extension (.xmatcap or .saz); --format sanitized-saz must be asked for. --process,";
+                yield return "--host, --status and --method select as in the capture list; each is repeatable and exclusions win.";
+                yield return "An empty --status=, --method= or (with --host-mode exact) --host= selects sessions without one.";
+                yield return "--match-none selects nothing, so the JSON shows the counts without writing FILE.";
+                yield return "Only your Windows account can open FILE; where that cannot be ensured, nothing is written (exit 6).";
             }
         }
     }

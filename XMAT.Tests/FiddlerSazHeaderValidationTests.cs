@@ -729,18 +729,7 @@ namespace XMAT.Tests
                 string path = Path.Combine(
                     directory,
                     "over-limit.saz");
-                if (sanitized)
-                {
-                    FiddlerSazHandler.CreateSanitizedSazFile(
-                        path,
-                        new[] { record });
-                }
-                else
-                {
-                    FiddlerSazHandler.CreateSazFile(
-                        path,
-                        new[] { record });
-                }
+                SazArchive.Write(path, new[] { record }, sanitized);
 
                 Assert.Throws<FiddlerSazHeaderLimitException>(
                     () => FiddlerSazHandler.ImportSazFileWithDiagnostics(

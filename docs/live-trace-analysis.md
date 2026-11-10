@@ -113,7 +113,7 @@ The Stats and Call report files record each endpoint's numeric `Kind` (0 unknown
 
 **Warning:** analysis exports are **not sanitized**. They can contain request bodies,
 sign-in tokens, URLs, Xbox user IDs, console IP addresses, and telemetry.
-**File > Export Sanitized Capture...** sanitizes `.SAZ` captures, not analysis reports.
+**File > Export Selected Tab Sanitized...** sanitizes `.SAZ` captures, not analysis reports.
 
 XMAT creates a child folder named `XMAT Analysis - <capture> - <yyyy-MM-dd HHmmss>`.
 If it exists, XMAT adds ` (2)`, ` (3)`, and so on without merging or overwriting exports.

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections.Specialized;
 using System.IO.Compression;
 using System.Text;
 using XMAT.WebServiceCapture;
@@ -143,6 +144,25 @@ namespace XMAT.Tests
             Assert.True(list.Remove("[::1]"));
             Assert.Empty(list.BypassedUrls);
             Assert.False(list.IsBypassed("::1"));
+        }
+
+        [Theory]
+        [InlineData("127.0.0.1", "0177.0.0.1")]
+        [InlineData("127.0.0.1", "127.1")]
+        [InlineData("127.0.0.1", "2130706433")]
+        [InlineData("127.0.0.1", "0x7f.0.0.1")]
+        [InlineData("api.example.com", "api\u3002example.com")]
+        [InlineData("example.com", "\uFF45\uFF58\uFF41\uFF4D\uFF50\uFF4C\uFF45.com")]
+        [InlineData("example.com", "exam\u00ADple.com")]
+        public void BypassList_RemainsLiteralForDestinationAliases(string entry, string alias)
+        {
+            var list = new BypassListModel();
+
+            Assert.True(list.Add(entry));
+            Assert.False(list.IsBypassed(alias));
+            Assert.False(list.Contains(alias));
+            Assert.False(list.Remove(alias));
+            Assert.True(list.Contains(entry));
         }
 
         // A port attempt is rejected by its shape, whether or not the port itself is valid.
@@ -363,6 +383,40 @@ namespace XMAT.Tests
             Assert.True(first.BlockList.Add("api.example.com"));
             Assert.False(first.BypassList.Contains("api.example.com"));
             Assert.False(second.BlockList.Contains("api.example.com"));
+        }
+
+        [Fact]
+        public void ModelCollections_KeepIdentityNotificationsAndDirectEditMatching()
+        {
+            var block = new BlockListModel();
+            var bypass = new BypassListModel();
+            var blocked = block.BlockedUrls;
+            var bypassed = bypass.BypassedUrls;
+            var blockChanges = new List<NotifyCollectionChangedAction>();
+            var bypassChanges = new List<NotifyCollectionChangedAction>();
+            blocked.CollectionChanged += (_, args) => blockChanges.Add(args.Action);
+            bypassed.CollectionChanged += (_, args) => bypassChanges.Add(args.Action);
+
+            Assert.True(block.Add("*.example.com"));
+            Assert.True(bypass.Add("*.example.com"));
+            Assert.True(block.IsBlocked("api.example.com"));
+            Assert.True(bypass.IsBypassed("api.example.com"));
+
+            blocked[0] = "other.example.com";
+            bypassed[0] = "other.example.com";
+
+            Assert.Same(blocked, block.BlockedUrls);
+            Assert.Same(bypassed, bypass.BypassedUrls);
+            Assert.Equal(
+                new[] { NotifyCollectionChangedAction.Add, NotifyCollectionChangedAction.Replace },
+                blockChanges);
+            Assert.Equal(
+                new[] { NotifyCollectionChangedAction.Add, NotifyCollectionChangedAction.Replace },
+                bypassChanges);
+            Assert.False(block.IsBlocked("api.example.com"));
+            Assert.False(bypass.IsBypassed("api.example.com"));
+            Assert.True(block.IsBlocked("other.example.com"));
+            Assert.True(bypass.IsBypassed("other.example.com"));
         }
 
         [Fact]

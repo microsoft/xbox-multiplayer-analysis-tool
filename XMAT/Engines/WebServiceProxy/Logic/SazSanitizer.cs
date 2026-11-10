@@ -33,6 +33,8 @@ namespace XMAT.WebServiceCapture
     internal sealed class SazSanitizer
     {
         internal const string Redacted = "[REDACTED]";
+        // Fixed English, so the headless export never needs the GUI's strings; the export codes this failure.
+        private const string InvalidStartLine = "A captured HTTP start line is malformed.";
         internal const int MaximumBodyBytes = 4 * 1024 * 1024;
         internal const int MaximumStructuredDepth = 64;
         private const long MaximumInspectionWork = 64L * 1024 * 1024;
@@ -1209,7 +1211,7 @@ namespace XMAT.WebServiceCapture
             var space = line.IndexOf(' ');
             if (space <= 0)
             {
-                throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                throw new InvalidDataException(InvalidStartLine);
             }
             var method = line.Substring(0, space);
             return method + " " +
@@ -1226,7 +1228,7 @@ namespace XMAT.WebServiceCapture
                 if (firstSpace <= 0 || lastSpace <= firstSpace ||
                     !line.Substring(lastSpace + 1).StartsWith("HTTP/", StringComparison.Ordinal))
                 {
-                    throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                    throw new InvalidDataException(InvalidStartLine);
                 }
                 var target = line.Substring(firstSpace + 1, lastSpace - firstSpace - 1);
                 var portSeparator = target.LastIndexOf(':');
@@ -1243,7 +1245,7 @@ namespace XMAT.WebServiceCapture
             }
             if (!line.StartsWith("HTTP/", StringComparison.Ordinal) || firstSpace < 0)
             {
-                throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                throw new InvalidDataException(InvalidStartLine);
             }
             var statusStart = firstSpace + 1;
             while (statusStart < line.Length && line[statusStart] == ' ')
@@ -1262,7 +1264,7 @@ namespace XMAT.WebServiceCapture
                 !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var status) ||
                 status is < 100 or > 999)
             {
-                throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                throw new InvalidDataException(InvalidStartLine);
             }
             return status;
         }
