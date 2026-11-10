@@ -10,6 +10,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using Xunit.Abstractions;
@@ -1591,6 +1592,6 @@ namespace XMAT.Tests
             return body.Append("0\r\n\r\n").ToString();
         }
 
-        public void Dispose() => Directory.Delete(_directory, true);
+        public void Dispose() => TestFolderCleanup.Delete(_directory);
     }
 }

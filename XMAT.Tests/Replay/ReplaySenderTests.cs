@@ -45,6 +45,145 @@ namespace XMAT.Tests.Replay
             Assert.Equal("hello"u8.ToArray(), received.Body);
         }
 
+        // The request is recorded with the version of the request line that it was sent with, whatever version the server's
+        // status line names: an HTTP/1.0 or HTTP/1.9 answer to a request that went as HTTP/1.1, automatically or exactly,
+        // leaves the recorded request HTTP/1.1, while the response keeps the version that it named.
+        [Theory]
+        [InlineData("Auto", "HTTP/1.0", "1.0")]
+        [InlineData("Http11", "HTTP/1.0", "1.0")]
+        [InlineData("Http11", "HTTP/1.9", "1.9")]
+        public async Task TheRecordedRequest_KeepsTheVersionItWasSentWith_WhateverVersionTheServerAnswers(
+            string version, string answered, string responseVersion)
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok("ok") with { Version = answered });
+            using var sender = new ReplaySender();
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Url = server.Origin + "/item" },
+                ReplaySendOptions.Default with { HttpVersion = Enum.Parse<ReplayHttpVersion>(version) },
+                CancellationToken.None);
+
+            Assert.Equal("HTTP/1.1", Assert.Single(server.Requests).Version);
+            Assert.Equal(
+                ("GET /item HTTP/1.1", answered + " 200 OK", responseVersion),
+                (exchange.Request.StartLine, exchange.Response.StartLine, ReplayTransportOptions.ResponseVersionName(exchange.Version)));
+        }
+
+        // An answer of version 2 can only come over an HTTP/2 connection, so the request went, and is recorded, as HTTP/2.
+        [Fact]
+        public async Task TheRecordedRequest_IsHttp2_WhenTheAnswerIs()
+        {
+            using var handler = new StubHandler((_, _) =>
+                Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Version = HttpVersion.Version20 }));
+            using var invoker = new HttpMessageInvoker(handler);
+            using var sender = new ReplaySender(invoker);
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Url = "https://example.test/item" }, ReplaySendOptions.Default, CancellationToken.None);
+
+            Assert.Equal(("GET /item HTTP/2", "HTTP/2 200 OK"), (exchange.Request.StartLine, exchange.Response.StartLine));
+        }
+
+        // A direct send records the request as replay built it, as it always has: Host first, then the headers in order with
+        // each value of a repeated one on a line of its own, then the content headers without Content-Length, and the
+        // length of the body last.
+        [Fact]
+        public async Task SendAsync_RecordsEachHeaderLineInOrder()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            using var sender = new ReplaySender();
+            var draft = new RequestReplayDraft
+            {
+                Method = "PUT",
+                Url = server.Origin + "/item?q=1",
+                HeadersText = "Accept: text/plain\r\nX-Multi: one\r\nX-Multi: two\r\nContent-Type: text/plain\r\nContent-Language: en",
+                BodyText = "hello",
+            };
+
+            ReplayExchange exchange = await sender.SendAsync(draft, ReplaySendOptions.Default, CancellationToken.None);
+
+            Assert.Equal("PUT /item?q=1 HTTP/1.1", exchange.Request.StartLine);
+            Assert.Equal(
+                new[] { $"Host: 127.0.0.1:{server.Port}", "Accept: text/plain", "X-Multi: one", "X-Multi: two" },
+                exchange.Request.Headers.Select(Line));
+            Assert.Equal(
+                new[] { "Content-Type: text/plain", "Content-Language: en", "Content-Length: 5" },
+                exchange.Request.ContentHeaders.Select(Line));
+        }
+
+        // What the HTTP stack adds to a message while it sends it, such as an authentication header, is neither recorded
+        // nor sent again on a redirect: each hop is described, and the next one built, from what replay put in it.
+        [Fact]
+        public async Task SendAsync_NeverRecordsOrResendsWhatTheStackAddedWhileSending()
+        {
+            const string Canary = "XMATSNAPSHOTCANARY";
+            var arrived = new List<string>();
+            var handler = new StubHandler((request, _) =>
+            {
+                arrived.Add(string.Join(",", request.Headers.NonValidated.Select(header => header.Key)));
+                request.Headers.TryAddWithoutValidation("Authorization", "Negotiate " + Canary);
+                request.Headers.TryAddWithoutValidation("Proxy-Authorization", "Basic " + Canary);
+                var response = new HttpResponseMessage(arrived.Count == 1 ? HttpStatusCode.TemporaryRedirect : HttpStatusCode.OK);
+                if (arrived.Count == 1)
+                {
+                    response.Headers.Location = new Uri("/next", UriKind.Relative);
+                }
+
+                return Task.FromResult(response);
+            });
+            using var sender = new ReplaySender(new HttpMessageInvoker(handler));
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft { Url = "https://example.test/start", HeadersText = "X-Keep: 1" },
+                ReplaySendOptions.Default with { MaxRedirects = 1 },
+                CancellationToken.None);
+
+            Assert.Equal((ReplayOutcome.Completed, 200, 1), (exchange.Outcome, exchange.StatusCode, exchange.Redirects));
+            Assert.Equal(new[] { "X-Keep", "X-Keep" }, arrived);
+            Assert.Equal(new[] { "Host: example.test", "X-Keep: 1" }, exchange.Request.Headers.Select(Line));
+            Assert.DoesNotContain(Canary, Encoding.Latin1.GetString(exchange.Request.ToBytes()), StringComparison.Ordinal);
+        }
+
+        // A handler may send a request's content more than once, as an authentication handshake does after a challenge:
+        // every hop's content, a redirect's included, gives the whole body each time that it is sent.
+        [Fact]
+        public async Task SendAsync_EveryHopsBody_CanBeSentAgain_ARedirectsIncluded()
+        {
+            var bodies = new List<string>();
+            var handler = new StubHandler(async (request, _) =>
+            {
+                for (int copy = 0; copy < 2; copy++)
+                {
+                    using var sent = new MemoryStream();
+                    await request.Content.CopyToAsync(sent);
+                    bodies.Add(request.RequestUri.AbsolutePath + " " + Encoding.ASCII.GetString(sent.ToArray()));
+                }
+
+                var response = new HttpResponseMessage(bodies.Count == 2 ? HttpStatusCode.TemporaryRedirect : HttpStatusCode.OK);
+                if (bodies.Count == 2)
+                {
+                    response.Headers.Location = new Uri("/next", UriKind.Relative);
+                }
+
+                return response;
+            });
+            using var sender = new ReplaySender(new HttpMessageInvoker(handler));
+
+            ReplayExchange exchange = await sender.SendAsync(
+                new RequestReplayDraft
+                {
+                    Method = "POST",
+                    Url = "https://example.test/start",
+                    HeadersText = "Content-Type: text/plain",
+                    BodyText = "payload",
+                },
+                ReplaySendOptions.Default with { MaxRedirects = 1 },
+                CancellationToken.None);
+
+            Assert.Equal((ReplayOutcome.Completed, 200, 1), (exchange.Outcome, exchange.StatusCode, exchange.Redirects));
+            Assert.Equal(new[] { "/start payload", "/start payload", "/next payload", "/next payload" }, bodies);
+        }
+
         [Fact]
         public async Task SendAsync_FollowsSameOriginRedirectsOnlyUpToTheLimit()
         {
@@ -353,6 +492,8 @@ namespace XMAT.Tests.Replay
             Assert.Null(exchange.Response);
             Assert.NotNull(exchange.Request);
         }
+
+        private static string Line(KeyValuePair<string, string> header) => header.Key + ": " + header.Value;
 
         private sealed class StubHandler(
             Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> callback) : HttpMessageHandler

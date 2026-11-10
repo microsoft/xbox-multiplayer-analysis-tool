@@ -63,13 +63,20 @@ namespace XMAT.WebServiceCapture
         // Creates the shared operation that every check and send goes through; tests observe it.
         internal Func<ReplayOperation> OperationFactory { get; set; } = static () => new ReplayOperation();
 
+        // The native calls that read the current user's certificates: the composer's client certificate list reads them
+        // through these (ReplayCertificateCatalog), and every run that this client sends resolves its certificate through
+        // them too (ReplayOperation.CertificateNative), so both see the same store; tests record or fail them.
+        internal IReplayCertificateNative CertificateNative { get; set; } = ReplayCertificateNative.Instance;
+
         // Whether Dispose has run. A composer disposes the client it owns once its run has ended, not while it sends.
         internal bool IsDisposed { get; private set; }
 
         // The composer's options: one request at a time, each sent once, with the 30-second timeout and the 16 MiB response
         // limit, following at most maxRedirects redirects, which replay follows within the request's origin only, over the
         // transport chosen (null for the default: the HTTP version chosen automatically, directly to the URL's host). A plan
-        // that the user confirmed gets the permission that its preview said it needs, and no other.
+        // that the user confirmed gets the permission that its preview said it needs, and no other: Connect to another
+        // endpoint and Upstream proxy only for a plan that uses them, and a client certificate and Windows authentication
+        // each only for a plan that uses it, and only for the one origin that the preview found for it (CredentialOrigin).
         internal static ReplayOptions ComposerOptions(
             int maxRedirects, ReplayTransportOptions transport = null, ReplayPlanPreview confirmed = null) =>
             new(
@@ -77,7 +84,10 @@ namespace XMAT.WebServiceCapture
                 AllowUnsafeMethods: confirmed?.UsesUnsafeMethod == true,
                 AllowOriginChange: confirmed?.ChangesOrigin == true,
                 AllowConnectTo: confirmed?.UsesConnectTo == true,
-                Transport: transport);
+                Transport: transport,
+                AllowProxy: confirmed?.UsesProxy == true,
+                AllowClientCertificate: confirmed?.UsesClientCertificate == true ? confirmed.CredentialOrigin : null,
+                AllowWindowsAuth: confirmed?.UsesWindowsAuth == true ? confirmed.CredentialOrigin : null);
 
         // Checks a composed request, or one per number of a sequence, as sending it would, without sending anything or
         // expanding the sequence: the size of the plan, the request, the transport and the permission they need, with a
@@ -183,6 +193,7 @@ namespace XMAT.WebServiceCapture
         {
             ReplayOperation operation = CreateOperation();
             operation.SenderFactory = () => new ReplaySender(_invoker);
+            operation.CertificateNative = CertificateNative;
             return operation.ExecuteAsync(
                 new ReplayRequest(source, options, ReplayEdits.None, sink), OperationContext.None, cancellationToken);
         }

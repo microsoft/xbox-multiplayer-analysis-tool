@@ -211,7 +211,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 RequestUri = uri,
                 Version = HttpVersion.Version20,
                 VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
-                Content = new BufferedRequestContent(request.BodyBytes ?? Array.Empty<byte>())
+                Content = CreateContent(request.BodyBytes ?? Array.Empty<byte>())
             };
 
             var connectionHeaderNames = ProxyHeaderUtilities.GetConnectionHeaderNames(request.Headers);
@@ -237,6 +237,10 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             return message;
         }
+
+        // The content that Create gives the proxy's HTTP/2-capable forwarding and replay's Parsed sends, and that replay gives
+        // a redirect that keeps the body: a complete buffered body that HttpClient may send duplex, and send again.
+        internal static HttpContent CreateContent(byte[] body) => new BufferedRequestContent(body);
 
         // ByteArrayContent disables duplex HTTP/2 sending. An origin that
         // responds while reading can then exhaust its response window before the
@@ -688,9 +692,11 @@ namespace XMAT.WebServiceCapture.Proxy
                 statusCode != HttpStatusCode.NotModified;
         }
 
+        // "HTTP/1.1" or "HTTP/1.0" as the upstream's status line names them, and "HTTP/2" for HTTP/2, which has no minor
+        // version.
         private static string GetProtocol(Version version)
         {
-            return version.Minor == 0
+            return version.Major >= 2
                 ? $"HTTP/{version.Major}"
                 : $"HTTP/{version.Major}.{version.Minor}";
         }

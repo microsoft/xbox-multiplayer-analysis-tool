@@ -12,6 +12,7 @@ using XMAT.Models;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
@@ -587,7 +588,7 @@ namespace XMAT.Tests.Replay
             {
                 await RemoveAllAsync(reopened);
                 await RemoveAllAsync(model);
-                Directory.Delete(directory, true);
+                TestFolderCleanup.Delete(directory);
             }
         });
 
@@ -638,7 +639,7 @@ namespace XMAT.Tests.Replay
             {
                 await RemoveAllAsync(reopened);
                 await RemoveAllAsync(model);
-                Directory.Delete(directory, true);
+                TestFolderCleanup.Delete(directory);
             }
         });
 

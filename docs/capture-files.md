@@ -124,6 +124,38 @@ XMAT checks capture files before reading them and never changes them:
   timeline leave out a request whose time is unknown or earlier than 1601, which
   includes the year-1 times that earlier versions of XMAT saved for unknown times.
 
+### Replays saved by xmat
+
+`xmat replay` and `xmat compose` with `--save-saz` also save their sends as
+`replays.saz`, which **Import** opens like any other `.SAZ`. Session flags name each
+send, as [Command line](cli.md) lists them. Three say how a send went out, never to
+what or with what: `x-xmat-replay-transport` (`connect-to` or `proxy`, never the
+endpoint or the proxy) for a send that was not direct,
+`x-xmat-replay-client-certificate-configured` (`true`) for a send that could offer a
+client certificate, never which certificate or whether one was sent, and
+`x-xmat-replay-windows-auth-configured` (`true`) for a send that could answer with
+Windows authentication, never whether the server asked or authentication succeeded.
+The request of such a send is saved without the `Authorization` header that Windows
+authentication added, and the `WWW-Authenticate` and `Proxy-Authenticate` headers of its
+response keep only the scheme names of their `Negotiate`, `NTLM` and `Kerberos`
+challenges, without their tokens; other challenges are saved as received.
+
+A raw send of `xmat compose --raw` is saved normalized, as other replayed sends are: its
+method and HTTP version as sent, with its target in absolute form, the target origin in
+ASCII followed by the path and query as sent; `Host` first, written as that origin's
+authority whatever `Host` the request had; its other fields without the spaces around
+their values; a chunked body's `Transfer-Encoding` replaced by `Content-Length` with the
+decoded length; and the decoded body. Only `replays/NNNNN/request.http` holds its exact
+bytes, the request as attempted. Its session has two
+more flags: `x-xmat-replay-raw` (`true`) and `x-xmat-replay-request-write` (`none`,
+`partial`, `uncertain` or `complete`): how much of the request XMAT handed to the
+connection, never proof of what the server received.
+
+XMAT keeps the origin that a replayed send inherits, the one that it was captured,
+saved or first sent for, only in memory with its row in the **Replays** tab, so that a
+later send of it to another origin asks for consent. Saved and exported captures do not
+keep it.
+
 ## Export a sanitized capture
 
 1. Select the web proxy capture to share.
