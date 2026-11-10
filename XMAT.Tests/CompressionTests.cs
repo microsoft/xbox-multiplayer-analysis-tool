@@ -89,60 +89,6 @@ namespace XMAT.Tests
             memory.Dispose();
         }
 
-        [Fact]
-        public void BodyDecoding_HandlesGzipContentEncoding()
-        {
-            string original = "gzipped body content";
-            byte[] body = GzipCompress(Encoding.UTF8.GetBytes(original));
-
-            // Simulate BodyAsText logic for gzip
-            byte[] decoded = GzipDecompress(body);
-            string result = Encoding.ASCII.GetString(decoded);
-            Assert.Equal(original, result);
-        }
-
-        [Fact]
-        public void BodyDecoding_HandlesDeflateContentEncoding()
-        {
-            string original = "deflated body content";
-            byte[] body = DeflateCompress(Encoding.UTF8.GetBytes(original));
-
-            byte[] decoded = DeflateDecompress(body);
-            string result = Encoding.ASCII.GetString(decoded);
-            Assert.Equal(original, result);
-        }
-
-        [Fact]
-        public void BodyDecoding_ReturnsUtf8_ForJsonContent()
-        {
-            string original = "{ \"key\": \"value\" }";
-            byte[] body = Encoding.UTF8.GetBytes(original);
-
-            // Simulate BodyAsText for JSON content type
-            string result = Encoding.UTF8.GetString(body);
-            Assert.Equal(original, result);
-        }
-
-        [Fact]
-        public void BodyDecoding_ReturnsAscii_ForNonJsonContent()
-        {
-            string original = "plain text content";
-            byte[] body = Encoding.ASCII.GetBytes(original);
-
-            string result = Encoding.ASCII.GetString(body);
-            Assert.Equal(original, result);
-        }
-
-        [Fact]
-        public void BodyDecoding_HandlesNullBody()
-        {
-            byte[] body = null;
-            if (body == null)
-                body = new byte[0];
-            string result = Encoding.ASCII.GetString(body);
-            Assert.Equal("", result);
-        }
-
         #region Helpers
 
         private static byte[] GzipCompress(byte[] data)

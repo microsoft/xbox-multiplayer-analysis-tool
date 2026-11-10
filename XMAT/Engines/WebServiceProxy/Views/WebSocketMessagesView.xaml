@@ -7,10 +7,6 @@
              x:Name="Root"
              mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="800">
-    <UserControl.Resources>
-        <local:JsonConverter x:Key="JsonConverter"/>
-    </UserControl.Resources>
-
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="30"/>
@@ -64,44 +60,51 @@
             <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
                           ResizeDirection="Columns"/>
 
+            <!-- The Text, JSON and Hex tabs show one preview of the selected message, made in the background
+                 (WebSocketMessagesView.xaml.cs); what it says about the payload is in the message bar, apart from it. -->
             <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <TextBlock Grid.Row="0"
-                           Text="{Binding SelectedItem.PayloadNotice, ElementName=MessagesGrid}"
+                <TextBlock x:Name="PreviewMessage" Grid.Row="0"
                            Foreground="DarkOrange"
                            TextWrapping="Wrap"
-                           Margin="6"/>
+                           Margin="6"
+                           Visibility="Collapsed"/>
                 <TabControl Grid.Row="1">
                     <TabItem Header="Text">
-                        <TextBox Text="{Binding SelectedItem.PayloadText, ElementName=MessagesGrid, Mode=OneWay}"
-                                 IsReadOnly="True" TextWrapping="Wrap"
+                        <TextBox x:Name="PayloadTextBox"
+                                 IsReadOnly="True" TextWrapping="NoWrap"
                                  FontFamily="Consolas"
                                  VerticalScrollBarVisibility="Auto"
                                  HorizontalScrollBarVisibility="Auto"/>
                     </TabItem>
                     <TabItem Header="JSON">
-                        <TreeView ItemsSource="{Binding SelectedItem.PayloadText, ElementName=MessagesGrid, Converter={StaticResource JsonConverter}}">
-                            <TreeView.ItemTemplate>
-                                <HierarchicalDataTemplate DataType="{x:Type local:JsonTreeViewItem}"
-                                                          ItemsSource="{Binding JsonTreeViewItems}">
-                                    <TextBlock Text="{Binding PropertyDescriptor}"/>
-                                </HierarchicalDataTemplate>
-                            </TreeView.ItemTemplate>
-                            <TreeView.ItemContainerStyle>
-                                <Style TargetType="{x:Type TreeViewItem}">
-                                    <Setter Property="IsExpanded" Value="{Binding AutoExpandJson}"/>
-                                </Style>
-                            </TreeView.ItemContainerStyle>
-                        </TreeView>
+                        <DockPanel>
+                            <TextBlock x:Name="JsonMessage" DockPanel.Dock="Top" Margin="4,2" TextWrapping="Wrap"
+                                       FontStyle="Italic" Visibility="Collapsed"/>
+                            <TreeView x:Name="PayloadJsonTree" VirtualizingPanel.IsVirtualizing="True">
+                                <TreeView.ItemTemplate>
+                                    <HierarchicalDataTemplate DataType="{x:Type local:JsonTreeViewItem}"
+                                                              ItemsSource="{Binding JsonTreeViewItems}">
+                                        <TextBlock Text="{Binding PropertyDescriptor}"/>
+                                    </HierarchicalDataTemplate>
+                                </TreeView.ItemTemplate>
+                                <TreeView.ItemContainerStyle>
+                                    <Style TargetType="{x:Type TreeViewItem}">
+                                        <Setter Property="IsExpanded" Value="{Binding AutoExpandJson}"/>
+                                    </Style>
+                                </TreeView.ItemContainerStyle>
+                            </TreeView>
+                        </DockPanel>
                     </TabItem>
                     <TabItem Header="Hex">
-                        <TextBox Text="{Binding SelectedItem.PayloadHex, ElementName=MessagesGrid, Mode=OneWay}"
-                                 IsReadOnly="True" TextWrapping="Wrap"
+                        <TextBox x:Name="PayloadHexBox"
+                                 IsReadOnly="True" TextWrapping="NoWrap"
                                  FontFamily="Consolas"
-                                 VerticalScrollBarVisibility="Auto"/>
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"/>
                     </TabItem>
                 </TabControl>
             </Grid>

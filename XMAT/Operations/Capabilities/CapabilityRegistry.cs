@@ -35,6 +35,7 @@ namespace XMAT.Operations.Capabilities
         private const string ExportProgressXaml = "Windows/ExportProgressWindow.xaml";
         private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
         private const string SequenceRangeXaml = "Engines/WebServiceProxy/Windows/SequenceRangeWindow.xaml";
+        private const string VerifyDiffXaml = "Engines/WebServiceProxy/Windows/VerifyDiffWindow.xaml";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
@@ -235,7 +236,7 @@ namespace XMAT.Operations.Capabilities
             Capability.Supported(
                 "request.replay", "Replay captured requests, as captured or edited", "S9",
                 cli: "replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
-                    "[--verify] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
+                    "[--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
                     "[--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] " +
                     "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] " +
@@ -253,6 +254,9 @@ namespace XMAT.Operations.Capabilities
                     Click(ComposerXaml, "UploadFile_Click"),
                     Click(ComposerXaml, "ClearBody_Click"),
                     Click(ComposerXaml, "Close_Click"),
+                    Command(ProxyCommandsPrefix + "ViewVerifyDiff"),
+                    Window("XMAT.WebServiceCapture.VerifyDiffWindow"),
+                    Click(VerifyDiffXaml, "Close_Click"),
                 }),
             Capability.Supported(
                 "request.compose", "Compose and send a new request", "S9",

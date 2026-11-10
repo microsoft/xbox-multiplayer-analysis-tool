@@ -10,7 +10,6 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -198,58 +197,6 @@ namespace XMAT
             }
         }
 
-        public static byte[] DecodeGzippedData(byte[] gzipData)
-        {
-            byte[] bytes = new byte[8192];
-            byte[] decoded;
-
-            using (var stream = new GZipStream(new MemoryStream(gzipData), CompressionMode.Decompress))
-            {
-                using (var memory = new MemoryStream())
-                {
-                    int count = 0;
-                    do
-                    {
-                        count = stream.Read(bytes, 0, bytes.Length);
-                        if (count > 0)
-                        {
-                            memory.Write(bytes, 0, count);
-                        }
-                    }
-                    while (count > 0);
-                    decoded = memory.ToArray();
-                }
-            }
-
-            return decoded;
-        }
-
-        public static byte[] DecodeDeflatedData(byte[] deflateData)
-        {
-            byte[] bytes = new byte[8192];
-            byte[] decoded;
-
-            using (var stream = new DeflateStream(new MemoryStream(deflateData), CompressionMode.Decompress))
-            {
-                using (var memory = new MemoryStream())
-                {
-                    int count = 0;
-                    do
-                    {
-                        count = stream.Read(bytes, 0, bytes.Length);
-                        if (count > 0)
-                        {
-                            memory.Write(bytes, 0, count);
-                        }
-                    }
-                    while (count > 0);
-                    decoded = memory.ToArray();
-                }
-            }
-
-            return decoded;
-        }
-
         public static MemoryStream DecompressZipEntryToMemory(ZipArchiveEntry entry)
         {
             var memory = new MemoryStream();
@@ -294,57 +241,6 @@ namespace XMAT
         public static IDisposable BlockingOperation()
         {
             return new BlockingOperationDisposable();
-        }
-
-        public static string BodyAsText(Dictionary<string, string> headers, byte[] body)
-        {
-            if (body == null)
-            {
-                body = new byte[0];
-            }
-
-            if (headers.TryGetValue("Content-Encoding", out string encoding))
-            {
-                switch (encoding.ToLower())
-                {
-                    case "gzip":
-                        try
-                        {
-                            body = DecodeGzippedData(body);
-                        }
-                        catch
-                        {
-                            // header isn't correct, treat the body as something not encoded
-                        }
-                        break;
-                    case "deflate":
-                        try
-                        {
-                            body = DecodeDeflatedData(body);
-                        }
-                        catch
-                        {
-                            // header isn't correct, treat the body as something not encoded
-                        }
-                        break;
-                }
-            }
-
-            if (headers.TryGetValue("Content-Type", out string type))
-            {
-                if (type.Contains("json"))
-                {
-                    try
-                    {
-                        return Encoding.UTF8.GetString(body);
-                    }
-                    catch
-                    {
-                    }
-                }
-            }
-
-            return Encoding.ASCII.GetString(body);
         }
     }
 

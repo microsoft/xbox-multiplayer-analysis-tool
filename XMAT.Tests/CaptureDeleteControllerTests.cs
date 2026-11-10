@@ -90,7 +90,7 @@ namespace XMAT.Tests
                 capture.Frame(sibling, "sibling after clear");
 
                 WebSocketMessageModel message = Assert.Single(capture.Controller.WebSocketMessages);
-                Assert.Equal("sibling after clear", message.PayloadText);
+                Assert.Equal("sibling after clear", Encoding.UTF8.GetString(message.Payload));
                 Assert.Equal(sibling.Key.SourceId, message.RowKey.SourceId);
                 Assert.True(message.RowKey.Generation > sibling.Key.Generation);
                 Assert.NotEqual(sibling.Key, message.RowKey);
@@ -155,7 +155,7 @@ namespace XMAT.Tests
 
             WebSocketMessageModel message = Assert.Single(capture.Controller.WebSocketMessages);
             Assert.Equal(sibling.Key, message.RowKey);
-            Assert.Equal("sibling", message.PayloadText);
+            Assert.Equal("sibling", Encoding.UTF8.GetString(message.Payload));
         }
 
         private static void AssertResolverRace(RaceHarness capture)

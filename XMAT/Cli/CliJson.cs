@@ -202,6 +202,7 @@ namespace XMAT.Cli
             writer.WriteNumber("followRedirects", options.FollowRedirects);
             writer.WriteBoolean("unconditional", options.Unconditional);
             writer.WriteBoolean("verify", options.Verify);
+            writer.WriteBoolean("verifyDiff", options.VerifyDiff);
             writer.WriteBoolean("allowUnsafeMethods", options.AllowUnsafeMethods);
             writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
             writer.WriteString("httpVersion", ReplayTransportOptions.VersionName(options.HttpVersion));
@@ -262,6 +263,23 @@ namespace XMAT.Cli
                     writer.WriteStartObject("verify");
                     writer.WriteString("result", item.Verification.Matches ? "match" : "mismatch");
                     WriteStrings(writer, "differences", item.Verification.Differences);
+
+                    // The state of the send's diff.json, never its content, which can hold captured data; null without
+                    // --verify-diff.
+                    if (options.VerifyDiff && replay.Details.TryGetValue(item.Id, out VerifyDiffState state))
+                    {
+                        writer.WriteStartObject("detail");
+                        writer.WriteString("state", JsonNamingPolicy.CamelCase.ConvertName(state.ToString()));
+                        writer.WriteString(
+                            "file",
+                            includeFiles ? CliReplayCommand.FolderOf(item.Id) + "/" + CliReplayCommand.DiffFile : null);
+                        writer.WriteEndObject();
+                    }
+                    else
+                    {
+                        writer.WriteNull("detail");
+                    }
+
                     writer.WriteEndObject();
                 }
 
