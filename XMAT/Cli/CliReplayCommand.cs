@@ -5,11 +5,13 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Capture;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture;
 
@@ -18,13 +20,15 @@ namespace XMAT.Cli
     // xmat replay INPUT --request SPEC --out DIR [...] and xmat compose --url URL --out DIR [...]: the command-line
     // adapter of the shared replay operation (the GUI's adapter is the request composer). Nothing is sent unless every
     // selected request passes the operation's checks. A run that sent its requests publishes summary.json and each
-    // request and response under replays/, whatever the responses were, and with --verify-diff each verified send's
-    // diff.json: exit code 12 when a request got no complete response, otherwise 11 when --verify found a response that
-    // differs from the capture. CliStagedRun owns the publication boundary.
+    // request and response under replays/, whatever the responses were, with --verify-diff each verified send's
+    // diff.json, and with --save-saz every send as a session of replays.saz, a Fiddler archive: exit code 12 when a request
+    // got no complete response, otherwise 11 when --verify found a response that differs from the capture. CliStagedRun
+    // owns the publication boundary.
     internal static class CliReplayCommand
     {
         internal const string SummaryPath = "summary.json";
         internal const string ReplaysPath = "replays";
+        internal const string SazPath = "replays.saz";
         internal const string RequestFile = "request.http";
         internal const string ResponseFile = "response.http";
         internal const string DiffFile = "diff.json";
@@ -32,7 +36,13 @@ namespace XMAT.Cli
         // replays/00001, replays/00002, ...: one folder per send, in plan order.
         internal static string FolderOf(int id) => ReplaysPath + "/" + id.ToString("D5", CultureInfo.InvariantCulture);
 
-        internal static async Task<CliReport> RunAsync(CliRequest request, string runId, CancellationToken cancellationToken)
+        internal static Task<CliReport> RunAsync(CliRequest request, string runId, CancellationToken cancellationToken) =>
+            RunAsync(request, runId, configureStorage: true, cancellationToken);
+
+        // configureStorage is false only for a test that runs the command in its own process, whose legacy statics keep their
+        // files where they already do: HeadlessStorage is configured once, before any of them is used.
+        internal static async Task<CliReport> RunAsync(
+            CliRequest request, string runId, bool configureStorage, CancellationToken cancellationToken)
         {
             bool fromCapture = request.Command == CliCommands.Replay;
             var report = new CliReport(request.Command, runId)
@@ -40,29 +50,24 @@ namespace XMAT.Cli
                 Replay = new CliReplayReport(request.Replay, fromCapture ? request.Limits ?? CliLimits.Default : null),
             };
 
-            // The body file is read before anything is reserved or sent; its path and content never reach the output. A
-            // larger file than ReplayBodyFile.MaxBytes (64 MiB) is refused with exit code 3.
-            byte[] body = null;
-            if (request.Replay.BodyFile != null)
+            // The body is made before anything is reserved or sent: the --body-file, or the --form files, are read, and their
+            // paths and contents never reach the output. A larger file than ReplayBodyFile.MaxBytes (64 MiB), or a form
+            // larger than that, is refused with exit code 3 (CliRequestBody).
+            CliRequestBody prepared;
+            try
             {
-                ReplayBodyRead read;
-                try
+                (prepared, CliFailure bodyFailure) =
+                    await CliRequestBody.PrepareAsync(request.Replay, cancellationToken).ConfigureAwait(false);
+                if (bodyFailure != null)
                 {
-                    read = await ReplayBodyFile.ReadAsync(request.Replay.BodyFile, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    report.Cancel();
+                    report.Fail(bodyFailure.ExitCode, bodyFailure.Code, bodyFailure.Message);
                     return report;
                 }
-
-                if (!read.Succeeded)
-                {
-                    report.Fail(CliExitCodes.InvalidInput, read.Code, BodyFileMessage(read.Code));
-                    return report;
-                }
-
-                body = read.Body;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                report.Cancel();
+                return report;
             }
 
             // A request file (compose --request-file) is read next, as untrusted data: only its kind and SHA-256 reach the
@@ -128,7 +133,7 @@ namespace XMAT.Cli
                 await CliStagedRun.CompleteAsync(
                     report,
                     output,
-                    token => SendAsync(request, body, file, output, report, token),
+                    token => SendAsync(request, prepared, file, output, report, configureStorage, token),
                     null,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -137,9 +142,12 @@ namespace XMAT.Cli
             {
                 int sent = report.Replay.Items.Count;
                 int completed = report.Replay.Items.Count(item => item.Outcome == ReplayOutcome.Completed);
+                string written = request.Replay.SaveSaz
+                    ? $"{SummaryPath}, {ReplaysPath} and {SazPath}"
+                    : $"{SummaryPath} and {ReplaysPath}";
                 report.HumanLines.Add(
                     $"xmat: sent {sent} request(s): {completed} answered, {sent - completed} without a complete response; "
-                    + $"wrote {SummaryPath} and {ReplaysPath} to the --out folder.");
+                    + $"wrote {written} to the --out folder.");
                 if (request.Replay.VerifyDiff)
                 {
                     report.HumanLines.Add(
@@ -185,20 +193,27 @@ namespace XMAT.Cli
             };
 
         // Produces the results inside the staging folder; null when the run did not send its requests (the report says
-        // why).
+        // why). With --save-saz the archive is completed only when the run has results to publish, and closed, completed
+        // or abandoned, before this returns, so that a discard can remove it.
         private static async Task<IReadOnlyList<CliStagedFile>> SendAsync(
             CliRequest request,
-            byte[] body,
+            CliRequestBody prepared,
             RequestFileReadResult file,
             CliOutputFolder output,
             CliReport report,
+            bool configureStorage,
             CancellationToken cancellationToken)
         {
             // Isolation comes first, as for analyze: from here on, legacy statics that keep files use the private staging
             // folder and never the GUI's folder under %APPDATA%.
-            HeadlessStorage.Configure(output.WorkPath);
+            if (configureStorage)
+            {
+                HeadlessStorage.Configure(output.WorkPath);
+            }
+
+            using SazSink saz = request.Replay.SaveSaz ? SazSink.Create(output, cancellationToken) : null;
             OperationResult<ReplayResult> result = await new ReplayOperation().ExecuteAsync(
-                CreateRequest(request, body, file?.Content, new FileSink(output, report.Replay)),
+                CreateRequest(request, prepared, file?.Content, new FileSink(output, report.Replay, saz)),
                 OperationContext.None,
                 cancellationToken).ConfigureAwait(false);
             Apply(report, result);
@@ -213,15 +228,22 @@ namespace XMAT.Cli
                 return null;
             }
 
-            return new[]
+            var files = new List<CliStagedFile>
             {
                 new CliStagedFile("summary", SummaryPath, CliJson.SerializeReplaySummary(report)),
                 new CliStagedFile("replays", ReplaysPath, null),
             };
+            if (saz != null)
+            {
+                saz.Finish(cancellationToken);
+                files.Add(new CliStagedFile("saz", SazPath, null));
+            }
+
+            return files;
         }
 
         private static ReplayRequest CreateRequest(
-            CliRequest request, byte[] body, RequestFileContent file, IReplayExchangeSink sink)
+            CliRequest request, CliRequestBody prepared, RequestFileContent file, IReplayExchangeSink sink)
         {
             CliReplay replay = request.Replay;
 
@@ -260,7 +282,8 @@ namespace XMAT.Cli
                         Method: replay.Method,
                         SetHeaders: replay.Headers,
                         RemoveHeaders: replay.RemoveHeaders,
-                        Body: replay.EmptyBody ? Array.Empty<byte>() : body,
+                        Body: replay.EmptyBody ? Array.Empty<byte>() : prepared.Body,
+                        Form: prepared.Form,
                         ClearHeaders: replay.ClearHeaders),
                     sink);
             }
@@ -279,7 +302,8 @@ namespace XMAT.Cli
                     Method: replay.Method,
                     SetHeaders: replay.Headers,
                     RemoveHeaders: replay.RemoveHeaders,
-                    Body: body,
+                    Body: prepared.Body,
+                    Form: prepared.Form,
                     Unconditional: replay.Unconditional),
                 sink);
         }
@@ -327,17 +351,20 @@ namespace XMAT.Cli
             }
         }
 
-        // Writes the messages of each send into the staging folder as it completes, so the run holds one at a time, and with
-        // --verify-diff each verified send's detail (diff.json), whose state alone the report keeps.
+        // Writes the messages of each send into the staging folder as it completes, so the run holds one at a time, with
+        // --verify-diff each verified send's detail (diff.json), whose state alone the report keeps, and with --save-saz the
+        // send's session (SazSink).
         private sealed class FileSink : IReplayExchangeSink
         {
             private readonly CliOutputFolder _output;
             private readonly CliReplayReport _report;
+            private readonly SazSink _saz;
 
-            internal FileSink(CliOutputFolder output, CliReplayReport report)
+            internal FileSink(CliOutputFolder output, CliReplayReport report, SazSink saz)
             {
                 _output = output;
                 _report = report;
+                _saz = saz;
             }
 
             public void Add(ReplayItemResult result, ReplayExchange exchange)
@@ -358,7 +385,73 @@ namespace XMAT.Cli
                     _output.WriteFile(folder + "/" + DiffFile, stream => VerifyDiffJson.Write(diff, stream));
                     _report.Details[result.Id] = diff.State;
                 }
+
+                _saz?.Add(result, exchange);
             }
         }
+
+        // replays.saz, written as the sends complete: each is a session as ReplaySaz makes it, added as it completes, in
+        // completion order with its plan id, so the run holds only the send at hand (SazArchiveWriter). Finish completes the
+        // archive and closes it, once the run has results to publish; disposing it first abandons the archive, which the
+        // discard of the staging folder then removes. The run's token stops the writing (OperationCanceledException), and
+        // a failure to write is the run's (cli.output.write-failed).
+        private sealed class SazSink : IDisposable
+        {
+            private readonly FileStream _file;
+            private readonly Stream _stream;
+            private readonly SazArchiveWriter _writer;
+            private readonly CancellationToken _cancellationToken;
+
+            private SazSink(FileStream file, Stream stream, SazArchiveWriter writer, CancellationToken cancellationToken)
+            {
+                _file = file;
+                _stream = stream;
+                _writer = writer;
+                _cancellationToken = cancellationToken;
+            }
+
+            internal static SazSink Create(CliOutputFolder output, CancellationToken cancellationToken)
+            {
+                FileStream file = output.CreateFile(SazPath);
+                try
+                {
+                    Stream stream = SazStreamSeam.Value?.Invoke(file) ?? file;
+                    return new SazSink(file, stream, new SazArchiveWriter(stream), cancellationToken);
+                }
+                catch
+                {
+                    file.Dispose();
+                    throw;
+                }
+            }
+
+            internal void Add(ReplayItemResult result, ReplayExchange exchange)
+            {
+                SazSession session = ReplaySaz.ToSession(result, exchange);
+                if (session != null)
+                {
+                    _writer.Add(session, _cancellationToken);
+                }
+            }
+
+            internal void Finish(CancellationToken cancellationToken)
+            {
+                _writer.Complete(cancellationToken);
+                _stream.Flush();
+                _file.Flush(flushToDisk: true);
+                Dispose();
+            }
+
+            public void Dispose()
+            {
+                _writer.Dispose();
+                _stream.Dispose();
+                _file.Dispose();
+            }
+        }
+
+        // Test seam, null in production: wraps the stream that replays.saz is written through, so a test can fail or cancel
+        // a run at a point of its writing. AsyncLocal, so it reaches only the run of the test that sets it.
+        internal static readonly AsyncLocal<Func<Stream, Stream>> SazStreamSeam = new();
     }
 }

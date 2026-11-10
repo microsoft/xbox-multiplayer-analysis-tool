@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace XMAT
@@ -159,26 +160,33 @@ namespace XMAT
             return ReadLineCore(
                 obj,
                 null,
+                Encoding.ASCII,
                 out _);
         }
 
+        // A line of at most maxBytes, decoded with encoding: the SAZ reader decodes heads as Latin-1, which keeps every
+        // byte. Every other reader decodes lines as ASCII (ReadLine, ConvertToString).
         internal static string ReadLine(
             this BinaryReader obj,
             int maxBytes,
+            Encoding encoding,
             out int bytesRead)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(
                 maxBytes);
+            ArgumentNullException.ThrowIfNull(encoding);
 
             return ReadLineCore(
                 obj,
                 maxBytes,
+                encoding,
                 out bytesRead);
         }
 
         private static string ReadLineCore(
             BinaryReader obj,
             int? maxBytes,
+            Encoding encoding,
             out int bytesRead)
         {
             var bytes = new List<byte>();
@@ -195,7 +203,7 @@ namespace XMAT
                 int value = obj.BaseStream.ReadByte();
                 if (value < 0)
                 {
-                    return bytes.ConvertToString();
+                    return encoding.GetString(CollectionsMarshal.AsSpan(bytes));
                 }
 
                 bytes.Add((byte)value);
@@ -206,7 +214,7 @@ namespace XMAT
                     bytes[^2] == '\r' &&
                     obj.BaseStream.HasMoreBytes())
                 {
-                    return bytes.ConvertToString(bytes.Count - 2);
+                    return encoding.GetString(CollectionsMarshal.AsSpan(bytes)[..^2]);
                 }
             }
         }

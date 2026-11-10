@@ -61,16 +61,19 @@
           </Grid.RowDefinitions>
           <Label x:Name="MethodLabel" Target="{Binding ElementName=MethodBox}"/>
           <Label x:Name="UrlLabel" Grid.Column="1" Target="{Binding ElementName=UrlBox}"/>
-          <TextBox x:Name="MethodBox" Grid.Row="1" Margin="0,0,6,0" VerticalContentAlignment="Center"/>
+          <TextBox x:Name="MethodBox" Grid.Row="1" Margin="0,0,6,0" VerticalContentAlignment="Center"
+                   AutomationProperties.LabeledBy="{Binding ElementName=MethodLabel}"/>
           <TextBox x:Name="UrlBox" Grid.Row="1" Grid.Column="1" VerticalContentAlignment="Center"
-                   TextChanged="UrlBox_TextChanged"/>
+                   TextChanged="UrlBox_TextChanged" AutomationProperties.LabeledBy="{Binding ElementName=UrlLabel}"/>
         </Grid>
         <Label x:Name="HeadersLabel" Grid.Row="2" Target="{Binding ElementName=HeadersBox}"/>
         <TextBox x:Name="HeadersBox" Grid.Row="3" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
-                 HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
+                 HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                 AutomationProperties.LabeledBy="{Binding ElementName=HeadersLabel}"/>
         <DockPanel Grid.Row="4" Margin="0,6,0,0">
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
             <Button x:Name="UploadFileButton" Margin="4,0" Padding="8,2" Click="UploadFile_Click"/>
+          <Button x:Name="BuildFormButton" Margin="4,0" Padding="8,2" Click="BuildForm_Click"/>
             <Button x:Name="ClearBodyButton" Margin="4,0" Padding="8,2" Click="ClearBody_Click"/>
             <CheckBox x:Name="Base64Box" Margin="8,0,0,0" VerticalAlignment="Center"
                       Checked="BodyFormat_Changed" Unchecked="BodyFormat_Changed"/>
@@ -79,7 +82,8 @@
         </DockPanel>
         <Grid Grid.Row="5">
           <TextBox x:Name="BodyBox" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="True"
-                   HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
+                   HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                   AutomationProperties.LabeledBy="{Binding ElementName=BodyLabel}"/>
           <TextBlock x:Name="BodyFileText" Margin="4" TextWrapping="Wrap" Visibility="Collapsed"/>
         </Grid>
         <WrapPanel Grid.Row="6" Margin="0,8,0,0" Orientation="Horizontal">
@@ -91,7 +95,8 @@
         <WrapPanel Grid.Row="7" Margin="0,6,0,0" Orientation="Horizontal">
           <Label x:Name="HttpVersionLabel" Padding="0,0,6,0" VerticalAlignment="Center"
                  Target="{Binding ElementName=HttpVersionBox}"/>
-          <ComboBox x:Name="HttpVersionBox" MinWidth="130" VerticalAlignment="Center" SelectionChanged="HttpVersion_Changed"/>
+          <ComboBox x:Name="HttpVersionBox" MinWidth="130" VerticalAlignment="Center" SelectionChanged="HttpVersion_Changed"
+                    AutomationProperties.LabeledBy="{Binding ElementName=HttpVersionLabel}"/>
           <CheckBox x:Name="ConnectToBox" Margin="18,0,0,0" VerticalAlignment="Center"
                     Checked="ConnectTo_Changed" Unchecked="ConnectTo_Changed"/>
           <TextBox x:Name="ConnectToText" MinWidth="190" Margin="6,0,0,0" VerticalContentAlignment="Center"
@@ -116,6 +121,13 @@
       <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
         <Button x:Name="OpenRequestButton" MinWidth="110" Margin="4" Padding="8,4" Click="OpenRequest_Click"/>
         <Button x:Name="SaveRequestButton" MinWidth="110" Margin="4" Padding="8,4" Click="SaveRequest_Click"/>
+        <!-- History lists the requests that the Replays tab recorded, from the history as it is when the menu opens, and
+             keeps them current only while it is open; closing it keeps nothing of them. -->
+        <Button x:Name="HistoryButton" MinWidth="90" Margin="4" Padding="8,4" Click="History_Click">
+          <Button.ContextMenu>
+            <ContextMenu x:Name="HistoryMenu" Placement="Top" Opened="HistoryMenu_Opened" Closed="HistoryMenu_Closed"/>
+          </Button.ContextMenu>
+        </Button>
       </StackPanel>
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
         <Button x:Name="SendButton" MinWidth="90" Margin="4" Padding="8,4" Click="Send_Click"/>

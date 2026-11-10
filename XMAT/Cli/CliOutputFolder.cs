@@ -159,11 +159,19 @@ namespace XMAT.Cli
         // Writes a new file with what write puts in its stream, so large contents need not be assembled in memory first.
         internal void WriteFile(string relativePath, Action<Stream> write)
         {
-            string path = Path.Join(StagingPath, relativePath.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
-            using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            using FileStream stream = CreateFile(relativePath);
             write(stream);
             stream.Flush(flushToDisk: true);
+        }
+
+        // A new file in the staging folder that the caller writes as the run goes and then closes, such as an archive
+        // (relativePath uses '/'): never one that exists already, and opened by nothing else meanwhile. The caller closes it
+        // before the run ends, so that a discard can remove it.
+        internal FileStream CreateFile(string relativePath)
+        {
+            string path = Path.Join(StagingPath, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            return new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         }
 
         // Removes the folder where legacy statics kept files during the run; it is never published. A link in it is removed

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using Xunit.Abstractions;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using static XMAT.Tests.CaptureTimelineTestData;
@@ -10,6 +11,80 @@ namespace XMAT.Tests
 {
     public class CaptureTimelineLayoutTests
     {
+        private readonly ITestOutputHelper _output;
+
+        public CaptureTimelineLayoutTests(ITestOutputHelper output) => _output = output;
+
+        // Across a transition of this machine's zone, the timeline orders, places and measures requests by the time that
+        // passed, never by the local clock: a request an hour after the transition starts four hours after one that began
+        // three hours before it, and the span is the six hours that the first one took. In the hour that the clock repeats, a
+        // request in its second pass comes after one in its first, also when both read the same on the clock, and so does its
+        // host; moving a request from one pass to the other moves it. A zone without transitions cannot show it, which the
+        // output says.
+        [Fact]
+        public void AcrossThisMachinesTransitions_RequestsArePlacedByTheTimeThatPassed()
+        {
+            var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            var ran = new List<string>();
+            for (int count = 0; count < 2 && FiddlerSazReaderCorrectionTests.NextLocalTransition(start) is DateTimeOffset transition;
+                count++)
+            {
+                start = transition.AddMinutes(1);
+                ran.Add(transition.ToString("o"));
+                var early = CreateBetween(1, transition.AddHours(-3), transition.AddHours(3), "early.test");
+                var late = CreateBetween(2, transition.AddHours(1), transition.AddHours(1.5), "late.test");
+                var layout = new CaptureTimelineLayout();
+                layout.Reset([late, early]);
+                var rows = Rows(layout, true, 0, 100);
+                Assert.Equal(new[] { early, late }, rows.Select(row => row.Model));
+                Assert.Equal(early.RequestTime, layout.Origin);
+                Assert.Equal(TimeSpan.FromHours(6).TotalMilliseconds, layout.SpanMilliseconds);
+                Assert.Equal(TimeSpan.FromHours(4).TotalMilliseconds * layout.Scale, layout.GetBarBounds(rows[1]).Left, 3);
+
+                // Times of no kind name no instant, and are placed as they read: an hour either side of the transition, as
+                // the clock reads them, they are not two hours apart.
+                DateTime before = DateTime.SpecifyKind(transition.AddHours(-1).LocalDateTime, DateTimeKind.Unspecified);
+                DateTime after = DateTime.SpecifyKind(transition.AddHours(1).LocalDateTime, DateTimeKind.Unspecified);
+                Assert.NotEqual(TimeSpan.FromHours(2), after - before);
+                var read = Create(7, before, "read.test", TimeSpan.FromMinutes(1));
+                var readLater = Create(8, after, "read.test", TimeSpan.FromMinutes(1));
+                layout.Reset([readLater, read]);
+                rows = Rows(layout, true, 0, 100);
+                Assert.Equal(new[] { read, readLater }, rows.Select(row => row.Model));
+                Assert.Equal((after - before).TotalMilliseconds * layout.Scale, layout.GetBarBounds(rows[1]).Left, 3);
+
+                TimeSpan back = TimeZoneInfo.Local.GetUtcOffset(transition.AddMinutes(-1)) -
+                    TimeZoneInfo.Local.GetUtcOffset(transition.AddMinutes(1));
+                if (back <= TimeSpan.Zero)
+                {
+                    continue;
+                }
+
+                TimeSpan minute = TimeSpan.FromMinutes(1);
+                var firstPass = CreateBetween(3, transition - (back / 2), transition - (back / 2) + minute, "same.test");
+                var between = CreateBetween(4, transition, transition + minute, "other.test");
+                var secondPass = CreateBetween(5, transition + (back / 2), transition + (back / 2) + minute, "same.test");
+                Assert.Equal(firstPass.RequestTime, secondPass.RequestTime);
+                layout.Reset([secondPass, between]);
+                Assert.Equal(new[] { "other.test", "same.test" }, Hosts(layout));
+                layout.Add(firstPass);
+                Assert.Equal(new[] { firstPass, between, secondPass }, Rows(layout, true, 0, 100).Select(row => row.Model));
+                Assert.Equal(new[] { "same.test", "other.test" }, Hosts(layout));
+                layout.Remove(firstPass);
+                Assert.Equal(new[] { "other.test", "same.test" }, Hosts(layout));
+
+                var moved = CreateBetween(6, transition - (back / 2), transition - (back / 2) + minute, "moved.test");
+                layout.Reset([moved, between]);
+                UpdateBetween(moved, transition + (back / 2), transition + (back / 2) + minute, "moved.test");
+                Assert.True(layout.Update(moved));
+                Assert.Equal(new[] { between, moved }, Rows(layout, true, 0, 100).Select(row => row.Model));
+            }
+
+            _output.WriteLine(
+                ran.Count == 0
+                    ? $"Assertions did not run: {TimeZoneInfo.Local.Id} has no transition in two years."
+                    : $"Assertions ran: {TimeZoneInfo.Local.Id} changes its offset at {string.Join(" and ", ran)}.");
+        }
         [Fact]
         public void EmptyLayout_HasNoRowsOrTicks()
         {
@@ -106,6 +181,31 @@ namespace XMAT.Tests
             Assert.Equal(0, layout.Count);
         }
 
+        // A request is placed from the first FILETIME, 1601, as analysis places it: one whose time is unknown is not, however
+        // the capture table keeps that time, as it does now or as a UTC in the year 1, as XMAT kept it before, which reads
+        // back as a known time later in the year 1 east of UTC, and neither is any other request before 1601. A time without
+        // an offset is placed as analysis places it, as UTC.
+        [Theory]
+        [InlineData("0001-01-01T00:00:00.0000000", false)]
+        [InlineData("0001-01-01T00:00:00.0000000Z", false)]
+        [InlineData("0001-01-01T08:00:00.0000000Z", false)]
+        [InlineData("1600-12-31T23:59:59.9999999Z", false)]
+        [InlineData("1600-12-31T23:59:59.9999999", false)]
+        [InlineData("1601-01-01T00:00:00.0000000Z", true)]
+        [InlineData("1601-01-01T00:00:00.0000000", true)]
+        public void ARequestBeforeTheFirstFileTime_IsNotPlaced(string stored, bool placed)
+        {
+            var model = Create();
+            var layout = new CaptureTimelineLayout();
+            layout.Add(model);
+            Assert.Equal(1, layout.Count);
+
+            UpdateStored(model, stored, stored);
+            layout.Update(model);
+
+            Assert.Equal(placed ? 1 : 0, layout.Count);
+        }
+
         [Fact]
         public void ByHost_TracksGroupOrderAndOffsetsAcrossInsertionAndRemoval()
         {
@@ -192,5 +292,9 @@ namespace XMAT.Tests
             layout.GetVisibleRows(waterfall, offset, height, result);
             return result;
         }
+
+        // The hosts of the timeline by host, in their order.
+        private static string[] Hosts(CaptureTimelineLayout layout) =>
+            Rows(layout, false, 0, 1000).Where(row => row.Model == null).Select(row => row.Host).ToArray();
     }
 }

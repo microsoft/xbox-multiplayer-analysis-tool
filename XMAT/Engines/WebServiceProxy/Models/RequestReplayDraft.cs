@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
@@ -69,9 +70,18 @@ namespace XMAT.WebServiceCapture
         // Even a safe method needs confirmation when captured credentials could reach a different origin.
         internal bool RequiresConfirmation => UsesUnsafeMethod || ChangesOrigin;
 
-        internal static RequestReplayDraft FromCapture(ProxyConnectionModel capture)
+        internal static RequestReplayDraft FromCapture(ProxyConnectionModel capture) =>
+            FromCapture(capture, int.MaxValue, CancellationToken.None);
+
+        // Edit and resend's draft of a captured request, which can be made off the UI thread from a row that is no longer
+        // changed, such as a row of the Replays tab. A decoded body larger than maxShownBodyBytes stays its exact bytes
+        // (SetBodyBytes), and no text or Base64 is made of it; a smaller one is shown as text or Base64 as always.
+        // cancellationToken is checked before and after the body is decoded and before it is checked as UTF-8.
+        internal static RequestReplayDraft FromCapture(
+            ProxyConnectionModel capture, int maxShownBodyBytes, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(capture);
+            ArgumentOutOfRangeException.ThrowIfNegative(maxShownBodyBytes);
             if (!CanReplay(capture))
                 throw new ArgumentException(
                     "Only HTTP requests without a protocol upgrade, recorded with their request body, can be replayed.");
@@ -86,32 +96,37 @@ namespace XMAT.WebServiceCapture
             }
             else
             {
-                var authority = new UriBuilder(capture.Scheme, capture.Host);
-                if (!string.IsNullOrEmpty(capture.Port))
-                    authority.Port = int.Parse(capture.Port);
-                url = authority.Uri.GetLeftPart(UriPartial.Authority) +
-                    (path.StartsWith('/') ? path : "/" + path);
+                url = CaptureAuthority(capture) + (path.StartsWith('/') ? path : "/" + path);
             }
 
             // Keep the raw header lines: the capture's dictionary collapses repeated header names.
             string rawHeaders = capture.RequestLineAndHeaders ?? "";
             int firstLineEnd = rawHeaders.IndexOf('\n');
+            cancellationToken.ThrowIfCancellationRequested();
             byte[] body = GetCapturedBody(capture);
+            cancellationToken.ThrowIfCancellationRequested();
             var draft = new RequestReplayDraft
             {
                 Method = capture.Method,
                 Url = url,
                 _originalAuthority = new Uri(url).GetLeftPart(UriPartial.Authority),
                 HeadersText = firstLineEnd < 0 ? "" : rawHeaders[(firstLineEnd + 1)..].TrimEnd('\r', '\n'),
-                BodyIsBase64 = true,
-                BodyText = Convert.ToBase64String(body)
             };
+            if (body.LongLength > maxShownBodyBytes)
+            {
+                draft.SetBodyBytes(body);
+                return draft;
+            }
+
+            draft.BodyIsBase64 = true;
+            draft.BodyText = Convert.ToBase64String(body);
 
             // Encoded payloads must not be treated as editable text just because their bytes decode as UTF-8.
             bool encoded = capture.RequestHeaders.TryGetValue("Content-Encoding", out string encoding) &&
                 !string.Equals(encoding, "identity", StringComparison.OrdinalIgnoreCase);
             if (!encoded)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     string text = StrictUtf8.GetString(body);
@@ -127,6 +142,18 @@ namespace XMAT.WebServiceCapture
                 }
             }
             return draft;
+        }
+
+        // The scheme, host and port that FromCapture sends a request to when its path is relative to the recorded host, as
+        // Uri gives them: an IPv6 host in brackets, and the port only when it is not the scheme's default. It throws when
+        // the row's scheme, host or port make no URL, as FromCapture then does.
+        internal static string CaptureAuthority(ProxyConnectionModel capture)
+        {
+            ArgumentNullException.ThrowIfNull(capture);
+            var authority = new UriBuilder(capture.Scheme, capture.Host);
+            if (!string.IsNullOrEmpty(capture.Port))
+                authority.Port = int.Parse(capture.Port);
+            return authority.Uri.GetLeftPart(UriPartial.Authority);
         }
 
         // A draft from a request file. What the file left out stays omitted (Omissions) and shows as empty until it is
@@ -197,15 +224,17 @@ namespace XMAT.WebServiceCapture
             }
         }
 
+        // Read without making the row's header dictionary (HasRequestHeader), so checking a row whose head is large copies
+        // nothing of it; the answer is the dictionary's.
         internal static bool CanReplay(ProxyConnectionModel capture)
         {
             return capture != null &&
                 (capture.Scheme == Uri.UriSchemeHttp || capture.Scheme == Uri.UriSchemeHttps) &&
                 !string.IsNullOrWhiteSpace(capture.Method) &&
                 !string.Equals(capture.Method, "CONNECT", StringComparison.OrdinalIgnoreCase) &&
-                !capture.RequestHeaders.ContainsKey("Upgrade") &&
-                !capture.RequestHeaders.ContainsKey("Sec-WebSocket-Key") &&
-                !capture.RequestHeaders.ContainsKey(RequestBodyNotKeptHeader);
+                !capture.HasRequestHeader("Upgrade") &&
+                !capture.HasRequestHeader("Sec-WebSocket-Key") &&
+                !capture.HasRequestHeader(RequestBodyNotKeptHeader);
         }
 
         // The Replays tab records a send without a body that does not fit its body budget and says so with one of these
@@ -240,12 +269,7 @@ namespace XMAT.WebServiceCapture
             }
 
             // Connection can nominate additional hop-by-hop headers beyond the standard fixed list.
-            var connectionHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var header in headers.Where(h => h.Key.Equals("Connection", StringComparison.OrdinalIgnoreCase)))
-            {
-                foreach (string name in header.Value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-                    connectionHeaders.Add(name);
-            }
+            HashSet<string> connectionHeaders = ConnectionNominations(headers);
 
             var request = new ClientRequest { Method = Method, BodyBytes = body };
             foreach (var header in headers)
@@ -328,15 +352,42 @@ namespace XMAT.WebServiceCapture
         }
 
         // Replaces every header with this name by a single line, in place of the first one, or appends it.
-        internal void SetHeader(string name, string value)
+        internal void SetHeader(string name, string value) => HeadersText = SetHeaderIn(HeadersText, name, value);
+
+        // SetHeader's edit of header text, which it returns without changing anything: FormatException when the text or
+        // the line is not a valid header.
+        internal static string SetHeaderIn(string headersText, string name, string value)
         {
             ValidateHeader(name, value ?? "");
-            var headers = ParseHeaders();
+            var headers = ParseHeaders(headersText);
             int index = headers.FindIndex(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase));
             headers.RemoveAll(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase));
             headers.Insert(index < 0 ? headers.Count : index, new(name, (value ?? "").Trim(' ', '\t')));
-            HeadersText = FormatHeaders(headers);
+            return FormatHeaders(headers);
         }
+
+        // The names, in any case, that the Connection lines of these headers nominate: building the request drops every
+        // header with one of them (CreateRequest).
+        internal static HashSet<string> ConnectionNominations(IEnumerable<KeyValuePair<string, string>> headers)
+        {
+            var nominated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var header in headers.Where(h => h.Key.Equals("Connection", StringComparison.OrdinalIgnoreCase)))
+            {
+                foreach (string name in header.Value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                    nominated.Add(name);
+            }
+
+            return nominated;
+        }
+
+        // Whether a Connection line of these headers nominates this name, so that building the request drops it.
+        internal static bool IsNominatedByConnection(IEnumerable<KeyValuePair<string, string>> headers, string name) =>
+            ConnectionNominations(headers).Contains(name);
+
+        // Header text as the draft reads it: name and value pairs, in order; FormatException when a line is not a valid
+        // header.
+        internal static IReadOnlyList<KeyValuePair<string, string>> ParseHeaderText(string headersText) =>
+            ParseHeaders(headersText);
 
         internal void RemoveHeader(string name)
         {
@@ -605,7 +656,7 @@ namespace XMAT.WebServiceCapture
             return result;
         }
 
-        private static bool IsTokenCharacter(char c) =>
+        internal static bool IsTokenCharacter(char c) =>
             char.IsAsciiLetterOrDigit(c) || "!#$%&'*+-.^_`|~".Contains(c);
     }
 }

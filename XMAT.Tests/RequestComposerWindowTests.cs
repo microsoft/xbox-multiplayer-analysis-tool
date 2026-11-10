@@ -4,6 +4,8 @@
 
 using System.Net;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
@@ -456,6 +458,48 @@ namespace XMAT.Tests
             }
         });
 
+        // The request's fields, and the HTTP version, are named for automation as their labels read without the access
+        // key, before anything has made the labels' automation peers, as a screen reader that starts at the focused field
+        // finds them: a TextBox or ComboBox takes no name from a Label's Target, and the one that LabeledBy gives needs the
+        // label's peer. All five are asked before any is checked. Each label still targets its field, for its access key,
+        // and labels it for automation.
+        [Fact]
+        public Task Window_NamesTheRequestsFieldsForAutomation_AsTheirLabelsRead() => OnDispatcher(async () =>
+        {
+            var window = RequestComposerWindow.ForNewRequest();
+            try
+            {
+                (string Label, string Field, string Name)[] fields =
+                {
+                    ("MethodLabel", "MethodBox", "Method"),
+                    ("UrlLabel", "UrlBox", "URL"),
+                    ("HeadersLabel", "HeadersBox", "Headers (one Name: value per line)"),
+                    ("BodyLabel", "BodyBox", "Body"),
+                    ("HttpVersionLabel", "HttpVersionBox", "HTTP version"),
+                };
+
+                Assert.All(fields, field => Assert.Null(UIElementAutomationPeer.FromElement(Find<Label>(window, field.Label))));
+                Assert.Equal(
+                    fields.Select(field => field.Name).ToArray(),
+                    fields.Select(field => UIElementAutomationPeer.CreatePeerForElement(Field(window, field.Field)).GetName())
+                        .ToArray());
+
+                // A label's Target names a field that comes after it in the window, which its binding finds once the
+                // window's dispatcher has run.
+                await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                Assert.All(fields, field =>
+                {
+                    var label = Find<Label>(window, field.Label);
+                    Assert.Same(Field(window, field.Field), label.Target);
+                    Assert.Same(label, AutomationProperties.GetLabeledBy(Field(window, field.Field)));
+                });
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
         [Fact]
         public Task CaptureCommand_IsAvailableForHttpIncludingReadOnlyImports() => OnDispatcher(async () =>
         {
@@ -527,6 +571,9 @@ namespace XMAT.Tests
 
         private static T Find<T>(Window window, string name) where T : class =>
             Assert.IsType<T>(window.FindName(name));
+
+        // A field of the window: a TextBox, or a ComboBox for the HTTP version.
+        private static Control Field(Window window, string name) => Assert.IsAssignableFrom<Control>(window.FindName(name));
 
         // A captured GET to the discard port on this machine; tests that send it stub the transport.
         private static ProxyConnectionModel LoopbackGet() =>

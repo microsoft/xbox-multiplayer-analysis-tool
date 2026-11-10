@@ -543,6 +543,15 @@ namespace XMAT.Operations.Replay
 
         private static void ApplyEdits(IReadOnlyList<ReplayItem> items, ReplayEdits edits, CancellationToken cancellationToken)
         {
+            // The CLI refuses these together before anything runs; a form brings its own body and Content-Type.
+            if (edits.Form != null &&
+                (edits.Body != null ||
+                    (edits.SetHeaders ?? Array.Empty<KeyValuePair<string, string>>()).Any(header => IsContentType(header.Key)) ||
+                    (edits.RemoveHeaders ?? Array.Empty<string>()).Any(IsContentType)))
+            {
+                throw new InvalidOperationException("A form cannot be applied with a body or a Content-Type edit.");
+            }
+
             if (edits.Url != null && edits.Origin != null)
             {
                 throw new ReplayInputException(
@@ -610,7 +619,11 @@ namespace XMAT.Operations.Replay
                         draft.RemoveConditionalHeaders();
                     }
 
-                    if (edits.Body != null)
+                    if (edits.Form != null)
+                    {
+                        MultipartForm.ApplyTo(draft, edits.Form);
+                    }
+                    else if (edits.Body != null)
                     {
                         draft.CompleteBody(edits.Body);
                     }
@@ -619,8 +632,14 @@ namespace XMAT.Operations.Replay
                 {
                     throw Invalid(ex);
                 }
+                catch (MultipartFormException ex)
+                {
+                    throw new ReplayInputException(ex.Code, ex.Message);
+                }
             }
         }
+
+        private static bool IsContentType(string name) => string.Equals(name, "Content-Type", StringComparison.OrdinalIgnoreCase);
 
         // An origin is an absolute HTTP or HTTPS URL with nothing after its authority but an optional "/".
         internal static bool TryParseOrigin(string text, out string origin)

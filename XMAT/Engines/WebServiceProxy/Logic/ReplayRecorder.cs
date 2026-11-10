@@ -178,6 +178,7 @@ namespace XMAT.WebServiceCapture
         private readonly Func<ReplayItemResult, ReplayProvenance> _provenanceOf;
         private readonly Func<bool> _isOpen;
         private readonly Action _stop;
+        private readonly Action<ProxyConnectionModel> _recorded;
         private long _retainedBodyBytes;
         private long _retainedVerifyDiffBytes;
         private long _lastNumber;
@@ -186,7 +187,8 @@ namespace XMAT.WebServiceCapture
         // Created on the UI thread, which onUiThread runs an action on synchronously, or not at all once it no longer takes
         // rows (UI types pass their dispatcher). isOpen says, on the UI thread, whether the tab still takes rows, and stop
         // ends the run once it does not. Replay rows are numbered after the rows the tab already has, whose bodies and
-        // verification differences count against the budgets.
+        // verification differences count against the budgets. recorded is told, on the UI thread, of each row once it is in
+        // the tab and counted, and never of a send that was not recorded (the composer's history, ReplayHistory).
         internal ReplayRecorder(
             WebServiceDeviceCaptureController controller,
             IDataTable table,
@@ -195,7 +197,8 @@ namespace XMAT.WebServiceCapture
             Func<bool> isOpen = null,
             Action stop = null,
             long bodyBudgetBytes = DefaultBodyBudgetBytes,
-            long verifyDiffBudgetBytes = VerifyDiffLimits.MaxRetainedBytes)
+            long verifyDiffBudgetBytes = VerifyDiffLimits.MaxRetainedBytes,
+            Action<ProxyConnectionModel> recorded = null)
         {
             _controller = controller ?? throw new ArgumentNullException(nameof(controller));
             _table = table;
@@ -203,6 +206,7 @@ namespace XMAT.WebServiceCapture
             _provenanceOf = provenanceOf ?? throw new ArgumentNullException(nameof(provenanceOf));
             _isOpen = isOpen ?? (() => true);
             _stop = stop;
+            _recorded = recorded;
             ArgumentOutOfRangeException.ThrowIfNegative(bodyBudgetBytes);
             ArgumentOutOfRangeException.ThrowIfNegative(verifyDiffBudgetBytes);
             BodyBudgetBytes = bodyBudgetBytes;
@@ -261,10 +265,13 @@ namespace XMAT.WebServiceCapture
         }
 
         // A capture row for one send: the request as XMAT built it and the response, with no status when none came, and
-        // without the bodies that the tab does not keep, which a header in the head and the row's note account for. The
-        // note also says how a send with the composer's transport options went (TransportNote), from what the operation
-        // recorded for it (sent), never from the composer's current controls, and, for a verified send, its verdict and
-        // whether the tab kept its verification differences (VerifyNote), which the row keeps with it (verification).
+        // without the bodies that the tab does not keep, which a header in the head and the row's note account for: a body
+        // over what is left of the tab's budget, and a response body over the send's response size limit, which never came
+        // (TooLarge). The note also says how a send with the composer's transport options went (TransportNote), from what
+        // the operation recorded for it (sent), never from the composer's current controls, and, for a verified send, its
+        // verdict and whether the tab kept its verification differences (VerifyNote), which the row keeps with it
+        // (verification). The row's host and port are the URL's authority as it was sent (ReplayAuthority), and its request
+        // time is when the send began, as this PC's local time like every capture's, though the exchange keeps it in UTC.
         internal static ProxyConnectionModel ToRow(
             long number,
             ReplayProvenance provenance,
@@ -285,15 +292,11 @@ namespace XMAT.WebServiceCapture
             bool responseOmitted = !keepResponseBody && responseBody.Length != 0;
             bool responseTooLarge = exchange.Outcome == ReplayOutcome.TooLarge && response != null;
             string requestHead = Head(
-                request,
-                requestOmitted ? RequestReplayDraft.RequestBodyNotKeptHeader : null,
-                requestBody.LongLength.ToString(CultureInfo.InvariantCulture));
+                request, requestOmitted ? RequestReplayDraft.RequestBodyNotKeptHeader : null, Bytes(requestBody.LongLength));
             string responseHead = Head(
                 response,
                 responseOmitted || responseTooLarge ? RequestReplayDraft.ResponseBodyNotKeptHeader : null,
-                responseTooLarge
-                    ? response.DeclaredLength()
-                    : responseBody.LongLength.ToString(CultureInfo.InvariantCulture));
+                responseTooLarge ? response.DeclaredLength() : Bytes(responseBody.LongLength));
             long budgetMiB = bodyBudgetBytes / (1024 * 1024);
             string bodiesNote = (requestOmitted, responseOmitted) switch
             {
@@ -309,14 +312,16 @@ namespace XMAT.WebServiceCapture
                 ? Localization.GetLocalizedString("REPLAY_NOTE_RESPONSE_TOO_LARGE")
                 : null;
             string note = string.Join(
-                "\n", new[] { bodiesNote, tooLargeNote, TransportNote(sent), VerifyNote(verification) }.Where(line => line != null));
+                "\n",
+                new[] { bodiesNote, tooLargeNote, TransportNote(sent), VerifyNote(verification) }
+                    .Where(line => line != null));
             return new ProxyConnectionModel(
                 number,
                 exchange.StatusCode == 0 ? string.Empty : exchange.StatusCode.ToString(CultureInfo.InvariantCulture),
-                exchange.Started,
+                exchange.Started.ToLocalTime(),
                 exchange.Duration,
                 uri?.Scheme ?? string.Empty,
-                uri?.Authority ?? string.Empty,
+                uri == null ? string.Empty : ReplayAuthority.Ascii(uri),
                 request?.StartLine.Split(' ')[0] ?? string.Empty,
                 uri?.PathAndQuery ?? string.Empty,
                 requestHead,
@@ -410,6 +415,7 @@ namespace XMAT.WebServiceCapture
             _lastNumber++;
             Recorded++;
             LastRecorded = row;
+            _recorded?.Invoke(row);
         }
 
         // A send's verdict, with the verification differences that came with that very verdict while they fit what is left
@@ -466,8 +472,9 @@ namespace XMAT.WebServiceCapture
             (row.RequestBody?.LongLength ?? 0) + (row.ResponseBody?.LongLength ?? 0);
 
         // The start line and header lines, as captures store them, then the empty line that ends the head; notKeptHeader,
-        // when a body was not kept, adds that header with the body's size in bytes.
-        private static string Head(ReplayMessage message, string notKeptHeader, string notKeptBytes)
+        // when a body was not kept, adds that header with notKeptValue: the body's size in bytes, or what the response
+        // declared it to be.
+        private static string Head(ReplayMessage message, string notKeptHeader, string notKeptValue)
         {
             if (message == null)
             {
@@ -482,12 +489,13 @@ namespace XMAT.WebServiceCapture
 
             if (notKeptHeader != null)
             {
-                head.Append(notKeptHeader).Append(": ")
-                    .Append(notKeptBytes).Append("\r\n");
+                head.Append(notKeptHeader).Append(": ").Append(notKeptValue).Append("\r\n");
             }
 
             return head.Append("\r\n").ToString();
         }
+
+        private static string Bytes(long count) => count.ToString(CultureInfo.InvariantCulture);
     }
 
     // One run's hold on the Replays tab: the recorder that adds the run's rows, and the capture-data operation that keeps
@@ -562,6 +570,9 @@ namespace XMAT.WebServiceCapture
         // XMAT is exiting without waiting for replays (CaptureAppModel.BeginShutdown).
         internal bool IsShuttingDown => _model.IsShuttingDown;
 
+        // The rows that this session's Replays tab recorded, which every composer's history shows.
+        internal ReplayHistory History => _model.ReplayHistory;
+
         // Starts recording one run, on the UI thread; null when XMAT is busy or shutting down (CanBegin). Until the
         // recording is disposed, closing XMAT cancels the run through cancellation and waits for the recording to end.
         // show selects the tab.
@@ -589,7 +600,8 @@ namespace XMAT.WebServiceCapture
                     () => !_model.IsShuttingDown && _model.CaptureDeviceContexts.Contains(destination),
                     cancellation.Cancel,
                     _bodyBudgetBytes,
-                    _verifyDiffBudgetBytes);
+                    _verifyDiffBudgetBytes,
+                    row => _model.ReplayHistory.Add(destination, row));
                 if (show)
                 {
                     _model.SelectedDeviceContext = destination;
@@ -615,17 +627,25 @@ namespace XMAT.WebServiceCapture
         {
             ArgumentNullException.ThrowIfNull(recording);
             ProxyConnectionModel row = recording.Recorder.LastRecorded;
-            if (row == null ||
-                recording.IsRevoked ||
-                _model.IsShuttingDown ||
-                !_model.CaptureDeviceContexts.Any(context => ReferenceEquals(context, recording.Destination)) ||
-                recording.Destination.CaptureController is not WebServiceDeviceCaptureController controller ||
+            return row != null && !recording.IsRevoked && TrySelect(recording.Destination, row);
+        }
+
+        // Selects row in tab, by reference, as Inspect session does: nothing is selected, and false returned, once XMAT is
+        // shutting down, or when tab is no longer one of the application's tabs or row no longer one of its rows. The tab's
+        // selection is cleared first, so a view that does not show the row selects nothing rather than keeping another row.
+        internal bool TrySelect(ICaptureDeviceContext tab, ProxyConnectionModel row)
+        {
+            ArgumentNullException.ThrowIfNull(tab);
+            ArgumentNullException.ThrowIfNull(row);
+            if (_model.IsShuttingDown ||
+                !_model.CaptureDeviceContexts.Any(context => ReferenceEquals(context, tab)) ||
+                tab.CaptureController is not WebServiceDeviceCaptureController controller ||
                 !controller.ProxyConnections.Any(connection => ReferenceEquals(connection, row)))
             {
                 return false;
             }
 
-            _model.SelectedDeviceContext = recording.Destination;
+            _model.SelectedDeviceContext = tab;
             controller.SelectedConnectionModel = null;
             controller.SelectedConnectionModel = row;
             return true;

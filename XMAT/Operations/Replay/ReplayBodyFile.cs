@@ -24,8 +24,14 @@ namespace XMAT.Operations.Replay
         private const int ChunkBytes = 81920;
 
         // Throws OperationCanceledException when cancelled; any other failure is a result with its code.
-        internal static async Task<ReplayBodyRead> ReadAsync(string path, CancellationToken cancellationToken)
+        internal static Task<ReplayBodyRead> ReadAsync(string path, CancellationToken cancellationToken) =>
+            ReadAsync(path, MaxBytes, cancellationToken);
+
+        // The file's bytes, refused as soon as they exceed maxBytes: before anything of a longer file's size is allocated,
+        // and once a file that grows while it is read passes it. A maxBytes of 0 reads only an empty file.
+        internal static async Task<ReplayBodyRead> ReadAsync(string path, long maxBytes, CancellationToken cancellationToken)
         {
+            ArgumentOutOfRangeException.ThrowIfNegative(maxBytes);
             try
             {
                 await using var stream = new FileStream(
@@ -35,7 +41,7 @@ namespace XMAT.Operations.Replay
                     FileShare.Read,
                     ChunkBytes,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
-                return await ReadAsync(stream, MaxBytes, cancellationToken).ConfigureAwait(false);
+                return await ReadAsync(stream, maxBytes, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
