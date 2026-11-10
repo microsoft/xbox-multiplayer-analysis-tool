@@ -296,6 +296,7 @@ namespace XMAT.Tests
         [InlineData(null, true, false, "EXPORT_UNPROTECTED_WARNING")]
         [InlineData("export.cleanup.failed", true, true, "EXPORT_PUBLISHED_CLEANUP_FAILED")]
         [InlineData("export.cleanup.failed", false, null, "EXPORT_ERROR_CLEANUP")]
+        [InlineData(CaptureExportErrorCodes.TextAmbiguous, false, null, "CAPTURE_TEXT_EXPORT_POLICY_REQUIRED")]
         [InlineData("export.not-yet-known", false, null, "EXPORT_ERROR_UNKNOWN")]
         public void ResultMessage_IsLocalizedByCodeAndTruthfulAboutTheFile(
             string code, bool published, bool? outputProtected, string key)
@@ -511,6 +512,7 @@ namespace XMAT.Tests
             public string InputKind => "records";
             public SqLtFileIdentity? InputIdentity => null;
             public string InputSha256 => null;
+            public CaptureTextSource TextSource => CaptureTextSource.Literal;
 
             public CaptureExportChunk ReadChunk(IReadOnlyList<CaptureRowKey> keys, CancellationToken cancellationToken) =>
                 throw new NotSupportedException();

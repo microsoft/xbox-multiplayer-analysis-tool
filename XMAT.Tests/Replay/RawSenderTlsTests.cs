@@ -372,7 +372,7 @@ namespace XMAT.Tests.Replay
 
         // A server certificate for address signed by issuer, whose AIA extension names issuerUrl and whose CRL distribution
         // point is crlUrl (each left out when null), with its private key as PEM for a server outside .NET.
-        private static (X509Certificate2 Certificate, string KeyPem) Leaf(
+        internal static (X509Certificate2 Certificate, string KeyPem) Leaf(
             X509Certificate2 issuer, IPAddress address, string issuerUrl = null, string crlUrl = null)
         {
             using RSA key = RSA.Create(2048);
@@ -426,7 +426,7 @@ namespace XMAT.Tests.Replay
         // ClientHello, so every send would time out (seen on CI; the MSYS build that Git ships selects on stdin instead).
         // A send whose validation wrongly succeeded is answered at once rather than hanging. Ready once it accepts a
         // connection; disposing it ends the process and deletes its folder.
-        private sealed class OpenSslServer : IDisposable
+        internal sealed class OpenSslServer : IDisposable
         {
             private readonly System.Diagnostics.Process _process;
             private readonly string _folder;
@@ -523,7 +523,7 @@ namespace XMAT.Tests.Replay
         }
 
         // A loopback HTTP listener that serves the intermediate certificate at its one URL and counts the requests.
-        private sealed class IssuerListener : IDisposable
+        internal sealed class IssuerListener : IDisposable
         {
             private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
             private readonly byte[] _certificate;

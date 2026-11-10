@@ -182,7 +182,9 @@ namespace XMAT.Operations.Analysis
                     new CaptureRecordSet(
                         InputKindName(loaded.Kind),
                         loaded.InputSha256,
-                        devices),
+                        devices,
+                        loaded.TextSource,
+                        loaded.StoredText),
                     diagnostics);
             }
             catch (CaptureInputException ex)
@@ -341,6 +343,7 @@ namespace XMAT.Operations.Analysis
             var summary = new AnalysisSummary(
                 InputKindName(loaded.Kind),
                 loaded.InputSha256,
+                loaded.StoredText,
                 deviceSummaries,
                 totalCalls,
                 totalFindings);
@@ -861,17 +864,23 @@ namespace XMAT.Operations.Analysis
             IDataRecord,
             IRawBodyDataRecord,
             IOptionalTypedDataRecord,
-            IRawDataRecord
+            IRawDataRecord,
+            ICaptureTextSourceProvider
         {
             private readonly Dictionary<string, object> _values;
 
-            private AnalysisDataRecord(int rowId, Dictionary<string, object> values)
+            private AnalysisDataRecord(int rowId, Dictionary<string, object> values, CaptureTextSource captureTextSource)
             {
                 RowId = rowId;
                 _values = values;
+                CaptureTextSource = captureTextSource;
             }
 
             public int RowId { get; }
+
+            // The source of the model's stored text, which a model made from this record keeps: Literal for a SAZ
+            // record, as its parser's text is.
+            public CaptureTextSource CaptureTextSource { get; }
 
             public long Int(string fieldName)
             {
@@ -986,7 +995,7 @@ namespace XMAT.Operations.Analysis
                     values[field.Name] = field.Value;
                 }
 
-                return new AnalysisDataRecord(rowId, values);
+                return new AnalysisDataRecord(rowId, values, model.CaptureTextSource);
             }
 
             private static string EncodeBody(byte[] body)

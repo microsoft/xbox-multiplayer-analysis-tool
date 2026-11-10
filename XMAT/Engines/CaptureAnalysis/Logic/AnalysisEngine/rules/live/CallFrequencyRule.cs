@@ -181,22 +181,20 @@ namespace CaptureAnalysisEngine
             }
         }
 
-        private static string GetPath(ServiceCallItem serviceCall)
+        // The path that limits match: a URI without a scheme, such as a hostless capture's path or the path kept for an
+        // unknown scheme, parsed against a base that is never kept as call provenance; one with a scheme, as itself; and any
+        // other text, which neither parse reads, as it is.
+        internal static string GetPath(ServiceCallItem serviceCall)
         {
-            if (string.IsNullOrEmpty(serviceCall.Host) &&
-                !HasScheme(serviceCall.Uri) &&
-                Uri.TryCreate(
-                    serviceCall.Uri,
-                    UriKind.Relative,
-                    out Uri relative))
+            string uri = serviceCall.Uri ?? string.Empty;
+            if (!HasScheme(uri) &&
+                Uri.TryCreate(uri, UriKind.Relative, out Uri relative) &&
+                Uri.TryCreate(RelativeUriBase, relative, out Uri resolved))
             {
-                // The base is used only to parse the path and is never retained as call provenance.
-                return new Uri(
-                    RelativeUriBase,
-                    relative).AbsolutePath;
+                return resolved.AbsolutePath;
             }
 
-            return new Uri(serviceCall.Uri).AbsolutePath;
+            return Uri.TryCreate(uri, UriKind.Absolute, out Uri absolute) ? absolute.AbsolutePath : uri;
         }
 
         private static bool HasScheme(string value)

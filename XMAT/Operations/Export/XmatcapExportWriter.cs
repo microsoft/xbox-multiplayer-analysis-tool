@@ -32,7 +32,8 @@ namespace XMAT.Operations.Export
             string path,
             IReadOnlyList<SqLtSchemaColumn> captureFields,
             IReadOnlyList<SqLtSchemaColumn> deviceFields,
-            IReadOnlyDictionary<string, RawExportRow> deviceDescriptors)
+            IReadOnlyDictionary<string, RawExportRow> deviceDescriptors,
+            bool markLiteral = false)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
             ArgumentNullException.ThrowIfNull(captureFields);
@@ -54,6 +55,14 @@ namespace XMAT.Operations.Export
             try
             {
                 _connection.Open();
+                // Only a literal source keeps the text-format marker; an unmarked source stays unmarked so an
+                // export can't turn ambiguous text into text that reads as literal.
+                if (markLiteral)
+                {
+                    using SqliteCommand mark = _connection.CreateCommand();
+                    mark.CommandText = $"PRAGMA user_version={CaptureTextFormat.LiteralUserVersion}";
+                    mark.ExecuteNonQuery();
+                }
                 _transaction = _connection.BeginTransaction();
                 CreateTable("CaptureDevices", deviceFields);
                 CreateTable(WebServiceCaptureMethod.TableName, captureFields);

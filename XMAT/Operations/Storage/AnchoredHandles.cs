@@ -6,6 +6,7 @@ using System;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
 using System.Security.AccessControl;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -23,6 +24,7 @@ namespace XMAT.Operations.Storage
         private const uint ReadControl = 0x00020000;
         private const uint Synchronize = 0x00100000;
         private const uint ListDirectory = 0x0001;
+        private const uint ReadData = 0x0001;
         private const uint WriteData = 0x0002;
         private const uint AddFile = 0x0002;
         private const uint AddSubdirectory = 0x0004;
@@ -56,6 +58,7 @@ namespace XMAT.Operations.Storage
         private const int StatusAccessDenied = unchecked((int)0xC0000022);
         private const int StatusSharingViolation = unchecked((int)0xC0000043);
         private const int StatusDeletePending = unchecked((int)0xC0000056);
+        private const uint DuplicateOptionsNone = 0;
 
         // A held folder can be listed and shares reading and writing but not deletion: while it is held, it cannot be
         // renamed or removed. Its own share mode counts only because of the listing access.
@@ -225,6 +228,91 @@ namespace XMAT.Operations.Storage
             return status == StatusObjectNameCollision || Exists(parent, name)
                 ? null
                 : throw Failure("The file could not be created.", status);
+        }
+
+        // A least-privilege duplicate of a held folder for an operation that may open one existing child. The duplicate
+        // refers to the same folder and keeps its share mode, but has no deletion or child-creation access.
+        internal static SafeFileHandle DuplicateDirectoryHandle(
+            SafeFileHandle source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            if (!NativeMethods.DuplicateHandle(
+                    NativeMethods.GetCurrentProcess(),
+                    source,
+                    NativeMethods.GetCurrentProcess(),
+                    out SafeFileHandle duplicate,
+                    HoldAccess,
+                    false,
+                    DuplicateOptionsNone))
+            {
+                throw new IOException(
+                    "The held folder could not be duplicated.",
+                    new Win32Exception(
+                        Marshal.GetLastWin32Error()));
+            }
+
+            return duplicate;
+        }
+
+        // Opens one existing child relative to a held folder, as itself and synchronously. It can be read and written but
+        // never deleted, and it shares reads and writes but not deletion. Null when the name is absent.
+        internal static SafeFileHandle OpenExistingFile(
+            SafeFileHandle parent,
+            string name)
+        {
+            ArgumentNullException.ThrowIfNull(parent);
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            SafeFileHandle handle = Open(
+                parent,
+                name,
+                ReadData |
+                    WriteData |
+                    ReadAttributes |
+                    Synchronize,
+                ShareRead | ShareWrite,
+                FileOpen,
+                SynchronousIoNonAlert |
+                    OpenReparsePoint,
+                null,
+                out int status);
+            if (handle != null)
+            {
+                return handle;
+            }
+
+            return status is
+                StatusObjectNameNotFound or
+                StatusObjectPathNotFound
+                ? null
+                : throw Failure(
+                    "The prepared output file could not be opened.",
+                    status);
+        }
+
+        internal static AnchoredFileFacts FileFacts(
+            SafeFileHandle handle)
+        {
+            ArgumentNullException.ThrowIfNull(handle);
+            if (!NativeMethods.GetFileInformationByHandle(
+                    handle,
+                    out ByHandleFileInformation information))
+            {
+                throw new IOException(
+                    "The prepared output file could not be examined.",
+                    new Win32Exception(
+                        Marshal.GetLastWin32Error()));
+            }
+
+            long length =
+                ((long)information.FileSizeHigh << 32) |
+                information.FileSizeLow;
+            return new AnchoredFileFacts(
+                length,
+                (information.FileAttributes &
+                    (uint)FileAttributes.Directory) != 0,
+                (information.FileAttributes &
+                    FileAttributeReparsePoint) != 0,
+                information.NumberOfLinks);
         }
 
         // The folder's path with its volume's name, \\?\Volume{...}\..., which Windows uses as it is: no drive letter or
@@ -546,6 +634,21 @@ namespace XMAT.Operations.Storage
             internal uint ReparseTag;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ByHandleFileInformation
+        {
+            internal uint FileAttributes;
+            internal FILETIME CreationTime;
+            internal FILETIME LastAccessTime;
+            internal FILETIME LastWriteTime;
+            internal uint VolumeSerialNumber;
+            internal uint FileSizeHigh;
+            internal uint FileSizeLow;
+            internal uint NumberOfLinks;
+            internal uint FileIndexHigh;
+            internal uint FileIndexLow;
+        }
+
         // FILE_RENAME_INFORMATION, for its field offsets; the name follows FileNameLength.
         [StructLayout(LayoutKind.Sequential)]
         private struct FileRenameInformation
@@ -647,6 +750,35 @@ namespace XMAT.Operations.Storage
             [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
             [return: MarshalAs(UnmanagedType.Bool)]
             internal static extern bool FlushFileBuffers(SafeFileHandle file);
+
+            [DllImport("kernel32.dll", ExactSpelling = true)]
+            [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+            internal static extern IntPtr GetCurrentProcess();
+
+            [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+            [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool DuplicateHandle(
+                IntPtr sourceProcess,
+                SafeFileHandle source,
+                IntPtr targetProcess,
+                out SafeFileHandle target,
+                uint desiredAccess,
+                [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+                uint options);
+
+            [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+            [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool GetFileInformationByHandle(
+                SafeFileHandle file,
+                out ByHandleFileInformation information);
         }
     }
+
+    internal sealed record AnchoredFileFacts(
+        long Length,
+        bool IsDirectory,
+        bool IsReparsePoint,
+        uint LinkCount);
 }

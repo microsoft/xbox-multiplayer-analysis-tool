@@ -182,6 +182,7 @@ namespace XMAT.Tests.Operations.Export
         public string InputKind { get; init; } = "records";
         public SqLtFileIdentity? InputIdentity => null;
         public string InputSha256 => null;
+        public CaptureTextSource TextSource { get; init; } = CaptureTextSource.Literal;
         internal List<IReadOnlyList<CaptureRowKey>> ReadRequests { get; } = new();
         internal HashSet<CaptureRowKey> Missing { get; } = new();
         internal HashSet<CaptureRowKey> Mutated { get; } = new();

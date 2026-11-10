@@ -301,6 +301,7 @@ namespace XMAT.Tests.Operations.Export
             public string InputKind => inputKind;
             public SqLtFileIdentity? InputIdentity => inner.InputIdentity;
             public string InputSha256 => inner.InputSha256;
+            public CaptureTextSource TextSource => inner.TextSource;
             public CaptureExportChunk ReadChunk(
                 IReadOnlyList<CaptureRowKey> keys,
                 CancellationToken cancellationToken)

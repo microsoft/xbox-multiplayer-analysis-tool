@@ -508,7 +508,8 @@ namespace XMAT.Cli
                 VerifyDiff: replay.VerifyDiff,
                 AllowProxy: replay.AllowProxy,
                 AllowClientCertificate: replay.AllowClientCertificate,
-                AllowWindowsAuth: replay.AllowWindowsAuth);
+                AllowWindowsAuth: replay.AllowWindowsAuth,
+                AcceptStoredText: replay.AcceptStoredText);
             if (request.Command == CliCommands.Compose)
             {
                 // The operation applies and checks the method, headers and body of a composed request like any edit; with
@@ -586,6 +587,7 @@ namespace XMAT.Cli
             ReplayResult value = result.Value;
             report.Replay.InputKind = value.InputKind;
             report.Replay.InputSha256 = value.InputSha256;
+            report.Replay.StoredText = value.StoredText;
             report.Replay.Items = value.Items;
             if (value.Failed > 0)
             {

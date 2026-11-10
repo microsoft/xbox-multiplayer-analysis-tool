@@ -221,7 +221,7 @@ namespace XMAT.WebServiceCapture
         // Where Load sends the row's request (RequestReplayDraft.FromCapture): its authority as Uri gives it, then its path,
         // read only as far as the bound needs. A row whose path is an absolute URL, which the recorder never writes, is shown
         // as stored. A host or port too long for any URL that was sent, or that Uri refuses, is shown as stored, the host
-        // of an IPv6 address in brackets.
+        // of an IPv6 address in brackets, and so is a row whose scheme is unknown, without a scheme.
         private static string UrlPreview(ProxyConnectionModel row)
         {
             string path = row.Path ?? string.Empty;
@@ -248,6 +248,23 @@ namespace XMAT.WebServiceCapture
             }
 
             bool bracketed = host.Length <= MaxAuthorityHostChars && host.Contains(':');
+            if (scheme.Length == 0)
+            {
+                // An unknown scheme is shown as none rather than as a URL without one: the host and port before the path,
+                // or the path alone without a host.
+                return host.Length == 0
+                    ? UntrustedText.ShowParts(MaxUrlPreviewChars, path)
+                    : UntrustedText.ShowParts(
+                        MaxUrlPreviewChars,
+                        bracketed ? "[" : string.Empty,
+                        host,
+                        bracketed ? "]" : string.Empty,
+                        port.Length == 0 ? string.Empty : ":",
+                        port,
+                        separator,
+                        path);
+            }
+
             return UntrustedText.ShowParts(
                 MaxUrlPreviewChars,
                 scheme,

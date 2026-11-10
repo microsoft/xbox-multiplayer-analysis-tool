@@ -23,7 +23,8 @@ namespace XMAT.Tests.Fixtures
         int Devices = 1,
         int RequestsPerDevice = 4,
         bool IncludeCanaries = false,
-        bool IncludeXr049Violation = false);
+        bool IncludeXr049Violation = false,
+        uint UserVersion = CaptureTextFormat.LiteralUserVersion);
 
     internal sealed record SyntheticProcessXmatcapOptions(
         int Devices = 1,
@@ -32,6 +33,12 @@ namespace XMAT.Tests.Fixtures
         int ProcessId = 4242,
         string ProcessStatus = "local");
 
+    // A frame for the SAZ readers. Valid frames, and those with a malformed start line, have an absolute https request
+    // target; the hostless kinds have an origin-form target (a path), so the Host header alone could name the host, and the
+    // AbsoluteTarget kinds keep the absolute target, whose authority names the host whatever the Host header says
+    // (missing, malformed, another host's, empty or whitespace-only); but AbsoluteTargetIdnTooLong's URL has a host that
+    // Uri parses and IDN cannot convert (IdnTooLongHost), so its Host header names the host. Requests are written as
+    // Latin-1, as the readers read them.
     public enum SyntheticSazFrameKind
     {
         Valid,
@@ -41,11 +48,23 @@ namespace XMAT.Tests.Fixtures
         MalformedHost,
         EmptyHostWithPort,
         RequestOnly,
+        AbsoluteTargetMissingHost,
+        AbsoluteTargetMalformedHost,
+        AbsoluteTargetConflictingHost,
+        AbsoluteTargetEmptyHost,
+        AbsoluteTargetBlankHost,
+        AbsoluteTargetIdnTooLong,
     }
 
     internal static class SyntheticCaptures
     {
         internal const string Canary = "XMATCANARY7f3c";
+        internal const string ConflictingHost = "other.example.invalid";
+
+        // A host that Uri parses but whose first label, 55 letters and four U+00E9, is longer than 63 characters in
+        // punycode, so its IDN conversion fails (Uri.IdnHost throws). Every character is Latin-1.
+        internal const string IdnTooLongHost =
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabc\u00e9\u00e9\u00e9\u00e9.example.test";
         private const string PresenceHost = "userpresence.xboxlive.com";
         private static readonly DateTime SyntheticStartUtc =
             new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -182,6 +201,13 @@ namespace XMAT.Tests.Fixtures
             }
 
             database.SaveToFile(path);
+            if (options.UserVersion !=
+                CaptureTextFormat.LiteralUserVersion)
+            {
+                HostileSqliteSchemas.SetUserVersion(
+                    path,
+                    options.UserVersion);
+            }
             return path;
         }
 
@@ -401,15 +427,33 @@ namespace XMAT.Tests.Fixtures
                         request,
                         $"Malformed skipped header {Canary}");
                 }
+                if (frames[index] is
+                    SyntheticSazFrameKind.MissingHost or
+                    SyntheticSazFrameKind.MalformedHost or
+                    SyntheticSazFrameKind.EmptyHostWithPort)
+                {
+                    request = ReplaceStartLine(
+                        request,
+                        $"POST {data.PathAndQuery} HTTP/1.1");
+                }
                 if (frames[index] ==
-                    SyntheticSazFrameKind.MissingHost)
+                    SyntheticSazFrameKind.AbsoluteTargetIdnTooLong)
+                {
+                    request = ReplaceStartLine(
+                        request,
+                        $"POST http://{IdnTooLongHost}{data.PathAndQuery} HTTP/1.1");
+                }
+                if (frames[index] is
+                    SyntheticSazFrameKind.MissingHost or
+                    SyntheticSazFrameKind.AbsoluteTargetMissingHost)
                 {
                     request = RemoveHeader(
                         request,
                         "Host:");
                 }
-                else if (frames[index] ==
-                    SyntheticSazFrameKind.MalformedHost)
+                else if (frames[index] is
+                    SyntheticSazFrameKind.MalformedHost or
+                    SyntheticSazFrameKind.AbsoluteTargetMalformedHost)
                 {
                     request = ReplaceHeader(
                         request,
@@ -423,6 +467,30 @@ namespace XMAT.Tests.Fixtures
                         request,
                         "Host:",
                         "Host: :8080");
+                }
+                else if (frames[index] ==
+                    SyntheticSazFrameKind.AbsoluteTargetConflictingHost)
+                {
+                    request = ReplaceHeader(
+                        request,
+                        "Host:",
+                        $"Host: {ConflictingHost}");
+                }
+                else if (frames[index] ==
+                    SyntheticSazFrameKind.AbsoluteTargetEmptyHost)
+                {
+                    request = ReplaceHeader(
+                        request,
+                        "Host:",
+                        "Host:");
+                }
+                else if (frames[index] ==
+                    SyntheticSazFrameKind.AbsoluteTargetBlankHost)
+                {
+                    request = ReplaceHeader(
+                        request,
+                        "Host:",
+                        "Host:   ");
                 }
                 string response = frames[index] ==
                     SyntheticSazFrameKind.MalformedResponseStartLine
@@ -441,7 +509,7 @@ namespace XMAT.Tests.Fixtures
                     archive,
                     $"raw/{frame:D4}_c.txt",
                     request,
-                    Encoding.ASCII);
+                    Encoding.Latin1);
                 if (frames[index] != SyntheticSazFrameKind.RequestOnly)
                 {
                     WriteTextEntry(

@@ -46,6 +46,18 @@ namespace XMAT.Cli
                 return report;
             }
 
+            targetFailure =
+                CliOutputFolder.ProbeTarget(
+                    target);
+            if (targetFailure != null)
+            {
+                report.Fail(
+                    targetFailure.ExitCode,
+                    targetFailure.Code,
+                    targetFailure.Message);
+                return report;
+            }
+
             if (cancellationToken.IsCancellationRequested)
             {
                 report.Cancel();
@@ -180,6 +192,7 @@ namespace XMAT.Cli
             {
                 report.Analysis.InputKind = summary.InputKind;
                 report.Analysis.InputSha256 = summary.InputSha256;
+                report.Analysis.StoredText = summary.StoredText;
                 report.Analysis.Devices = summary.Devices ?? Array.Empty<DeviceSummary>();
                 report.Analysis.TotalCalls = summary.TotalCalls;
                 report.Analysis.TotalFindings = summary.TotalFindings;

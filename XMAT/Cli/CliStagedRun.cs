@@ -65,11 +65,8 @@ namespace XMAT.Cli
             {
                 if (!output.IsPrivate())
                 {
-                    report.Fail(
-                        CliExitCodes.Failed,
-                        "cli.output.unprotected",
-                        "xmat cannot keep its output private to your account where the --out folder would be created; it " +
-                            "needs a local NTFS volume. Nothing was published.");
+                    CliFailure failure = CliOutputFolder.Unprotected();
+                    report.Fail(failure.ExitCode, failure.Code, failure.Message);
                     return report;
                 }
 
@@ -174,11 +171,8 @@ namespace XMAT.Cli
             {
                 if (!output.IsPrivate())
                 {
-                    report.Fail(
-                        CliExitCodes.Failed,
-                        "cli.output.unprotected",
-                        "xmat cannot keep its output private to your account where the --out folder would be created; it " +
-                            "needs a local NTFS volume. Nothing was published.");
+                    CliFailure failure = CliOutputFolder.Unprotected();
+                    report.Fail(failure.ExitCode, failure.Code, failure.Message);
                     return report;
                 }
 

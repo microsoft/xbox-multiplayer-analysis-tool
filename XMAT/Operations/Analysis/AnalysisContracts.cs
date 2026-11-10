@@ -74,9 +74,14 @@ namespace XMAT.Operations.Analysis
         string Id,
         IReadOnlyList<ConsoleSummary> Consoles);
 
+    internal sealed record StoredTextSummary(
+        string Semantics,
+        string Policy);
+
     internal sealed record AnalysisSummary(
         string InputKind,
         string InputSha256,
+        StoredTextSummary StoredText,
         IReadOnlyList<DeviceSummary> Devices,
         int TotalCalls,
         int TotalFindings);

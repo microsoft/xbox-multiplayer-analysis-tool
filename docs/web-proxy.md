@@ -275,6 +275,13 @@ XMAT's reach.
 Loaded and imported captures can be resent too. Binary, compressed, and non-UTF-8
 request bodies are preserved as editable Base64; text bodies use UTF-8.
 
+The exception is an XMAT capture without the text-format marker (see
+[Capture text markers](capture-files.md#capture-text-markers-and-marked-copies)), whose
+stored text an older XMAT may have changed. For its requests, **Edit and resend**,
+**Replay**, and dragging one into a composer refuse, and nothing opens, is asked, or is
+sent. Create a marked copy with `xmat mark-capture-text`, open that copy, and use its
+requests instead.
+
 Requests are sent directly from this PC, unless you select **Upstream proxy** (see
 below), bypassing system proxies and capture scripts. HTTPS certificates are validated,
 redirects are not followed unless you select **Follow same-origin redirects** (see
@@ -286,6 +293,14 @@ names the method, the URL, and any origin that it is about, each shortened when 
 and with any character that could hide or reorder text, such as a bidirectional
 control, shown as `\uXXXX`; the request is sent with the whole method and URL as you
 entered them. CONNECT and WebSocket handshakes cannot be resent.
+
+HTTPS certificates are checked as Windows checks them, with two limits that every
+resent or composed request shares. Revocation is not checked, so a revoked certificate
+can pass when the rest of its validation succeeds. And no certificate is downloaded:
+validation never fetches an issuer certificate from an address in the server's
+certificate, and fetches no revocation data, so a server must send every intermediate
+certificate that this PC does not already have in its certificate stores or cache.
+Windows' automatic root update may still ask Windows Update about an unknown root.
 
 Use **Cancel request** to stop waiting. Sending has a 30-second timeout and a 16 MiB
 response limit for each request. Cancelling or timing out cannot undo changes already
