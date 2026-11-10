@@ -9,6 +9,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -21,6 +22,7 @@ using XMAT.Operations;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
+using XMAT.Operations.Replay;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 
@@ -54,6 +56,15 @@ namespace XMAT.WebServiceCapture
         private ListCollectionView _connectionsView;
         private INotifyCollectionChanged _attachedGridItems;
         private DispatcherOperation _pendingFilterRefresh;
+        private ReplayRecordingTarget _replayTarget;
+
+        // The row that the left button went down on, and where, until a drag starts or the button is released.
+        private ProxyConnectionModel _dragRow;
+        private Point _dragStart;
+
+        // The Replay menu run in progress, for Cancel replay, and whether the user cancelled it. Used on the UI thread.
+        private static CancellationTokenSource _reissueCancellation;
+        private static bool _reissueCancelledByUser;
         private DispatcherOperation _pendingProcessIndicator;
         private ProcessFilterSpec _processSpec = ProcessFilterSpec.Empty;
         private ProcessFilter _processMatcher;
@@ -171,6 +182,7 @@ namespace XMAT.WebServiceCapture
             ResponseViewControl.Title = Localization.GetLocalizedString("WEBCAP_REQRES_TITLE_RESPONSE");
 
             RequestIdLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_REQID");
+            ReplayOfLabel.Text = Localization.GetLocalizedString("REPLAY_OF_LABEL");
             TimeLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_TIME");
             DurationLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_DURATION");
 
@@ -195,7 +207,8 @@ namespace XMAT.WebServiceCapture
                 return;
             try
             {
-                var composer = new RequestComposerWindow((ProxyConnectionModel)e.Parameter)
+                var composer = new RequestComposerWindow(
+                    (ProxyConnectionModel)e.Parameter, recording: ReplayTarget, sourceName: SourceName)
                 {
                     Owner = Window.GetWindow(this)
                 };
@@ -211,12 +224,430 @@ namespace XMAT.WebServiceCapture
 
         private void ConnectionList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
         {
-            // Right-click need not select a row by default; replay the clicked request, not a previous selection.
+            // Right-click need not select a row by default; replay the clicked request, not a previous selection. A row
+            // that is already part of the selection keeps the selection, so several rows can be reissued together.
             if (e.OriginalSource is DependencyObject source &&
-                ItemsControl.ContainerFromElement(ConnectionList, source) is DataGridRow row)
+                ItemsControl.ContainerFromElement(ConnectionList, source) is DataGridRow row &&
+                !row.IsSelected)
             {
                 ConnectionList.SelectedItem = row.Item;
             }
+        }
+
+        // Drag a session: pressing on a row and moving past the system's drag distance drags that request into a composer
+        // (RequestComposerWindow.DropSession).
+        private void ConnectionList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _dragRow = e.OriginalSource is DependencyObject source &&
+                ItemsControl.ContainerFromElement(ConnectionList, source) is DataGridRow { Item: ProxyConnectionModel row }
+                    ? row
+                    : null;
+            _dragStart = e.GetPosition(ConnectionList);
+        }
+
+        private void ConnectionList_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (_dragRow == null)
+                return;
+            if (e.LeftButton != MouseButtonState.Pressed)
+            {
+                _dragRow = null;
+                return;
+            }
+
+            if (!IsPastDragThreshold(e.GetPosition(ConnectionList) - _dragStart))
+                return;
+            ProxyConnectionModel row = _dragRow;
+            _dragRow = null;
+            using ComposerSessionDragToken drag = BeginSessionDrag(row);
+            if (drag != null)
+            {
+                DragDrop.DoDragDrop(ConnectionList, drag.Data, DragDropEffects.Copy);
+            }
+        }
+
+        // Whether the mouse has moved far enough with its button down to start a drag.
+        internal static bool IsPastDragThreshold(Vector moved) =>
+            Math.Abs(moved.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+            Math.Abs(moved.Y) >= SystemParameters.MinimumVerticalDragDistance;
+
+        // Lends the pressed row to a composer for one drag: one replayable request, the only selected row; several selected
+        // rows are not dragged, since a composer takes one request. Null when nothing is dragged. Dispose it when the drag
+        // has ended.
+        internal ComposerSessionDragToken BeginSessionDrag(ProxyConnectionModel row) =>
+            row != null && ConnectionList.SelectedItems.Count == 1 && ReferenceEquals(ConnectionList.SelectedItem, row)
+                ? ComposerSessionDrag.Begin(row, SourceName)
+                : null;
+
+        // The rows that a Replay menu item applies to: the selection, in list order, when the clicked row is part of
+        // it; otherwise only the clicked row.
+        internal IReadOnlyList<ProxyConnectionModel> CapturesFor(DataGridRow row)
+        {
+            if (row?.Item is not ProxyConnectionModel clicked)
+                return Array.Empty<ProxyConnectionModel>();
+            var selected = new HashSet<ProxyConnectionModel>(ConnectionList.SelectedItems.OfType<ProxyConnectionModel>());
+            return selected.Contains(clicked)
+                ? ConnectionList.Items.OfType<ProxyConnectionModel>().Where(selected.Contains).ToList()
+                : new[] { clicked };
+        }
+
+        private MenuItem CreateReplayMenu(IReadOnlyList<ProxyConnectionModel> captures)
+        {
+            MenuItem Item(ReissueRequest request, string key, params object[] args) => new()
+            {
+                Header = Localization.GetLocalizedString(key, args),
+                Command = WebServiceProxyCommands.Reissue,
+                CommandTarget = this,
+                CommandParameter = request,
+            };
+
+            var several = new MenuItem { Header = Localization.GetLocalizedString("REPLAY_REISSUE_SEVERAL") };
+            foreach (int count in new[] { 2, 5, 10, 25, 100 })
+                several.Items.Add(Item(new ReissueRequest(captures, Repeat: count), "REPLAY_REISSUE_TIMES", count));
+
+            var menu = new MenuItem { Header = Localization.GetLocalizedString("REPLAY_MENU") };
+            menu.Items.Add(Item(new ReissueRequest(captures), "REPLAY_REISSUE"));
+            menu.Items.Add(Item(new ReissueRequest(captures, Unconditional: true), "REPLAY_REISSUE_UNCONDITIONALLY"));
+            menu.Items.Add(Item(new ReissueRequest(captures, Verify: true), "REPLAY_REISSUE_VERIFY"));
+            menu.Items.Add(several);
+            menu.Items.Add(new Separator());
+            menu.Items.Add(new MenuItem
+            {
+                Header = Localization.GetLocalizedString("REPLAY_CANCEL"),
+                Command = WebServiceProxyCommands.CancelReissue,
+                CommandTarget = this,
+            });
+            return menu;
+        }
+
+        // Where this view's replays and composer sends are recorded: by default the application's Replays tab.
+        internal ReplayRecordingTarget ReplayTarget
+        {
+            get => _replayTarget ??= ApplicationReplayTarget(Dispatcher);
+            set => _replayTarget = value;
+        }
+
+        // Asks the user to confirm a run (the message) and tells the user how a run went (the message and its image), with
+        // message boxes unless tests replace them.
+        internal Func<string, bool> ConfirmReplay { get; set; }
+
+        internal Action<string, MessageBoxImage> ShowReplayMessage { get; set; }
+
+        // A Replay menu run is in progress; one runs at a time. What protects its Replays tab is the capture-data operation
+        // that its recording holds (ReplayRecordingTarget).
+        internal static bool IsReissueRunning => _reissueCancellation != null;
+
+        // The application's Replays tab, whose rows are added through dispatcher.
+        internal static ReplayRecordingTarget ApplicationReplayTarget(Dispatcher dispatcher) =>
+            new(CaptureAppModel.AppModel, UiDispatch(dispatcher));
+
+        // Runs an action on dispatcher's thread and waits for it, or not at all once that dispatcher is shutting down, as
+        // when XMAT exits: the recorder then counts the send as not recorded instead of waiting for a thread that has gone.
+        internal static Action<Action> UiDispatch(Dispatcher dispatcher)
+        {
+            ArgumentNullException.ThrowIfNull(dispatcher);
+            return action =>
+            {
+                if (dispatcher.HasShutdownStarted)
+                {
+                    return;
+                }
+
+                try
+                {
+                    dispatcher.Invoke(action);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The dispatcher shut down before it ran the action, which then never runs.
+                }
+            };
+        }
+
+        // The name of this view's tab, for where its replays come from.
+        private string SourceName => (DataContext as ICaptureDeviceContext)?.DeviceName ?? string.Empty;
+
+        private void Reissue_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = !IsReissueRunning &&
+                e.Parameter is ReissueRequest request &&
+                request.Captures.Any(RequestReplayDraft.CanReplay) &&
+                ReplayTarget.CanBegin;
+            e.Handled = true;
+        }
+
+        private async void Reissue_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            e.Handled = true;
+            if (e.Parameter is ReissueRequest request)
+            {
+                await ReissueFromMenuAsync(request);
+            }
+        }
+
+        // Reissues the rows into the Replays tab, sequentially. The rows are copied first; methods that can change server
+        // state need the user's confirmation, which states every send of the run; and the copies are what is sent. Returns
+        // null when nothing was started.
+        internal async Task<ReplayRunResult> ReissueFromMenuAsync(ReissueRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            if (IsReissueRunning)
+            {
+                return null;
+            }
+
+            ReplaySnapshot snapshot = ReplaySnapshot.Of(request, SourceName);
+            if (snapshot.Captures.Count == 0)
+            {
+                return null;
+            }
+
+            Window owner = Window.GetWindow(this);
+            if (snapshot.UnsafeSends > 0 && !Confirm(owner, ConfirmationMessage(snapshot)))
+            {
+                return null;
+            }
+
+            ReplayRunResult run = await ReissueAsync(snapshot, snapshot.UnsafeSends > 0, ReplayTarget);
+            ShowReplayOutcome(owner, snapshot, run);
+            return run;
+        }
+
+        // States every send of the run, repeats included, and how many of them can change server state.
+        internal static string ConfirmationMessage(ReplaySnapshot snapshot)
+        {
+            ArgumentNullException.ThrowIfNull(snapshot);
+            return snapshot.Request.Repeat == 1
+                ? Localization.GetLocalizedString("REPLAY_CONFIRM_UNSAFE", snapshot.Sends, snapshot.UnsafeSends)
+                : Localization.GetLocalizedString(
+                    "REPLAY_CONFIRM_UNSAFE_REPEATED",
+                    snapshot.Sends,
+                    snapshot.Captures.Count,
+                    snapshot.Request.Repeat,
+                    snapshot.UnsafeSends);
+        }
+
+        // Runs a Replay menu snapshot through the shared ReplayOperation, recorded through target; Busy, with nothing sent,
+        // while another run, an analysis or another capture-data operation is running. IsReissueRunning holds while it
+        // runs; a failure of the Replays tab ends it as failed.
+        internal static async Task<ReplayRunResult> ReissueAsync(
+            ReplaySnapshot snapshot,
+            bool allowUnsafeMethods,
+            ReplayRecordingTarget target,
+            Func<ReplaySender> senderFactory = null)
+        {
+            ArgumentNullException.ThrowIfNull(snapshot);
+            ArgumentNullException.ThrowIfNull(target);
+            if (IsReissueRunning)
+            {
+                return ReplayRunResult.Busy;
+            }
+
+            using var cancellation = new CancellationTokenSource();
+            using ReplayRecording recording = target.TryBegin(cancellation, snapshot.ProvenanceOf, show: true);
+            if (recording == null)
+            {
+                return ReplayRunResult.Busy;
+            }
+
+            _reissueCancellation = cancellation;
+            _reissueCancelledByUser = false;
+            CommandManager.InvalidateRequerySuggested();
+            OperationResult<ReplayResult> result;
+            try
+            {
+                var operation = new ReplayOperation();
+                if (senderFactory != null)
+                {
+                    operation.SenderFactory = senderFactory;
+                }
+
+                result = await operation.ExecuteAsync(
+                    new ReplayRequest(
+                        ReplaySource.FromCaptures(snapshot.Captures),
+                        new ReplayOptions(
+                            Repeat: snapshot.Request.Repeat,
+                            Verify: snapshot.Request.Verify,
+                            AllowUnsafeMethods: allowUnsafeMethods),
+                        new ReplayEdits(Unconditional: snapshot.Request.Unconditional),
+                        recording.Recorder),
+                    OperationContext.None,
+                    cancellation.Token);
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Replay stopped: {exception.GetType().FullName}");
+                result = OperationResult<ReplayResult>.Failure(
+                    OperationOutcome.Failed,
+                    new OperationDiagnostic(
+                        "replay.gui.failed", OperationDiagnosticSeverity.Error, "The replay stopped before it completed."));
+            }
+            finally
+            {
+                _reissueCancellation = null;
+                CommandManager.InvalidateRequerySuggested();
+            }
+
+            ReplayRecorder recorder = recording.Recorder;
+            return new ReplayRunResult(
+                result,
+                Destination: recorder.Destination,
+                BodyBudgetBytes: recorder.BodyBudgetBytes,
+                Recorded: recorder.Recorded,
+                OmittedBodies: recorder.OmittedBodies,
+                NotRecorded: recorder.NotRecorded,
+                CancelledByUser: _reissueCancelledByUser);
+        }
+
+        private bool Confirm(Window owner, string message) =>
+            ConfirmReplay?.Invoke(message) ??
+            ShowMessageBox(owner, message, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) ==
+                MessageBoxResult.Yes;
+
+        private void Tell(Window owner, string message, MessageBoxImage image)
+        {
+            if (ShowReplayMessage != null)
+            {
+                ShowReplayMessage(message, image);
+            }
+            else
+            {
+                ShowMessageBox(owner, message, MessageBoxButton.OK, image, MessageBoxResult.OK);
+            }
+        }
+
+        private static MessageBoxResult ShowMessageBox(
+            Window owner, string message, MessageBoxButton buttons, MessageBoxImage image, MessageBoxResult defaultResult)
+        {
+            string title = Localization.GetLocalizedString("REPLAY_TITLE");
+            return owner == null
+                ? MessageBox.Show(message, title, buttons, image, defaultResult)
+                : MessageBox.Show(owner, message, title, buttons, image, defaultResult);
+        }
+
+        // Tells the user how a run went: why it did not run or failed, that it was cancelled, the verify summary or the
+        // sends without a complete response, then the bodies that the Replays tab did not keep and the sends it could not
+        // record. A run that exiting XMAT cancelled says nothing.
+        private void ShowReplayOutcome(Window owner, ReplaySnapshot snapshot, ReplayRunResult run)
+        {
+            if (ReplayTarget.IsShuttingDown)
+            {
+                return;
+            }
+
+            if (run.WasBusy)
+            {
+                Tell(owner, Localization.GetLocalizedString("REPLAY_BUSY"), MessageBoxImage.Information);
+                return;
+            }
+
+            OperationResult<ReplayResult> result = run.Result;
+            bool cancelled = result.Outcome == OperationOutcome.Cancelled;
+            if (cancelled && !run.CancelledByUser && run.NotRecorded == 0)
+            {
+                return;
+            }
+
+            var lines = new List<string>();
+            MessageBoxImage image = MessageBoxImage.Information;
+            if (cancelled && run.CancelledByUser)
+            {
+                // Cancelling does not unsend: the request in flight may have reached the server, and it has no row.
+                lines.Add(Localization.GetLocalizedString(
+                    "REPLAY_CANCELLED", run.Recorded, snapshot.Sends, run.Destination));
+                image = MessageBoxImage.Warning;
+            }
+            else if (!cancelled && !result.Succeeded)
+            {
+                lines.Add(Localization.GetLocalizedString(
+                    "REPLAY_FAILED", result.Diagnostics.Count > 0 ? result.Diagnostics[0].Message : string.Empty));
+                image = MessageBoxImage.Error;
+            }
+            else if (!cancelled && snapshot.Request.Verify)
+            {
+                lines.Add(VerifySummary(result.Value));
+                if (result.Value.Mismatched + result.Value.Failed + NotVerified(result.Value) > 0)
+                {
+                    image = MessageBoxImage.Warning;
+                }
+            }
+            else if (!cancelled && result.Value.Failed > 0)
+            {
+                lines.Add(Localization.GetLocalizedString(
+                    "REPLAY_SOME_FAILED", result.Value.Failed, result.Value.Items.Count, run.Destination));
+                image = MessageBoxImage.Warning;
+            }
+
+            if (run.OmittedBodies > 0)
+            {
+                lines.Add(Localization.GetLocalizedString(
+                    "REPLAY_BODIES_NOT_KEPT", run.OmittedBodies, run.Destination, run.BodyBudgetBytes / (1024 * 1024)));
+            }
+
+            if (run.NotRecorded > 0)
+            {
+                lines.Add(Localization.GetLocalizedString("REPLAY_NOT_RECORDED", run.NotRecorded, run.Destination));
+            }
+
+            if ((run.OmittedBodies > 0 || run.NotRecorded > 0) && image == MessageBoxImage.Information)
+            {
+                image = MessageBoxImage.Warning;
+            }
+
+            if (lines.Count > 0)
+            {
+                Tell(owner, string.Join("\n\n", lines), image);
+            }
+        }
+
+        // The outcome of Reissue and verify: the counts, including the requests not verified, then each request whose replay
+        // differed and how (at most 20).
+        internal static string VerifySummary(ReplayResult result)
+        {
+            int notVerified = NotVerified(result);
+            var summary = new StringBuilder(notVerified == 0
+                ? Localization.GetLocalizedString(
+                    "REPLAY_VERIFY_SUMMARY", result.Items.Count, result.Matched, result.Mismatched, result.Failed)
+                : Localization.GetLocalizedString(
+                    "REPLAY_VERIFY_SUMMARY_NOT_VERIFIED",
+                    result.Items.Count,
+                    result.Matched,
+                    result.Mismatched,
+                    result.Failed,
+                    notVerified));
+            foreach (ReplayItemResult item in result.Items.Where(item => item.Verification is { Matches: false }).Take(20))
+            {
+                string differences = string.Join(
+                    ", ",
+                    item.Verification.Differences.Select(difference => Localization.GetLocalizedString(
+                        difference == ReplayVerifier.StatusDifference ? "REPLAY_DIFFERENCE_STATUS" : "REPLAY_DIFFERENCE_BODY")));
+                summary.Append('\n').Append(Localization.GetLocalizedString(
+                    "REPLAY_VERIFY_DIFFERENCE", item.RequestNumber, differences));
+            }
+
+            return summary.ToString();
+        }
+
+        // The sends of a Reissue and verify run that got a response but were not compared with the captured one, because
+        // it was recorded without its body (ReplayOperation.VerifySkippedCode). They count as neither matched nor differed.
+        internal static int NotVerified(ReplayResult result) =>
+            result.Items.Count(item => item.Outcome == ReplayOutcome.Completed && item.Verification == null);
+
+        private void CancelReissue_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = _reissueCancellation is { IsCancellationRequested: false };
+            e.Handled = true;
+        }
+
+        private void CancelReissue_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (_reissueCancellation is { IsCancellationRequested: false } cancellation)
+            {
+                _reissueCancelledByUser = true;
+                cancellation.Cancel();
+            }
+
+            e.Handled = true;
         }
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
@@ -1121,6 +1552,7 @@ namespace XMAT.WebServiceCapture
                 CommandTarget = this,
                 CommandParameter = row.Item
             });
+            row.ContextMenu.Items.Add(CreateReplayMenu(CapturesFor(row)));
             CaptureProcessViewAdapter.AddMenuItems(
                 row.ContextMenu,
                 row.Item as ProxyConnectionModel,

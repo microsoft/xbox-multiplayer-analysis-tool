@@ -17,6 +17,8 @@ namespace XMAT.Cli
         internal const int Failed = 6;
         internal const int CleanupFailed = 7;
         internal const int FindingsFound = 10;
+        internal const int VerifyMismatch = 11;
+        internal const int RequestsFailed = 12;
         internal const int Internal = 70;
         internal const int Cancelled = 130;
 
@@ -38,8 +40,14 @@ namespace XMAT.Cli
         {
             Success => "succeeded",
             FindingsFound => "findingsFound",
+            VerifyMismatch => "mismatchFound",
+            RequestsFailed => "requestsFailed",
             Cancelled => "cancelled",
             _ => "failed",
         };
+
+        // Exit codes of runs that published their results.
+        internal static bool IsPublished(int exitCode) =>
+            exitCode is Success or FindingsFound or VerifyMismatch or RequestsFailed;
     }
 }

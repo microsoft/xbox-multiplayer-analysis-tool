@@ -255,16 +255,171 @@ Loaded and imported captures can be resent too. Binary, compressed, and non-UTF-
 request bodies are preserved as editable Base64; text bodies use UTF-8.
 
 Requests are sent directly from this PC, bypassing system proxies and capture scripts.
-HTTPS certificates are validated, redirects are not followed, and response cookies
-are not reused. **Captured headers, including credentials, are sent to the edited URL.**
-Host and Content-Length are regenerated, and connection-only headers are omitted.
-Methods other than GET, HEAD, and OPTIONS require confirmation, as does changing the
-captured origin. CONNECT and WebSocket handshakes cannot be resent.
+HTTPS certificates are validated, redirects are not followed unless you select **Follow
+same-origin redirects** (see below), and response cookies are not reused. **Captured
+headers, including credentials, are sent to the edited URL.** Host and Content-Length
+are regenerated, and connection-only headers are omitted. Methods other than exactly
+GET, HEAD, and OPTIONS, in capitals, require confirmation, as does changing the captured
+origin. CONNECT and WebSocket handshakes cannot be resent.
 
 Use **Cancel request** to stop waiting, or **Copy as cURL (PowerShell 7)** to copy a
 command for PowerShell 7 with `curl.exe` available. **Copied commands can contain
 credentials and body data.** Sending has a 30-second timeout and a 16 MiB response
-limit. Cancelling or timing out cannot undo changes already processed by the server.
+limit for each request. Cancelling or timing out cannot undo changes already processed
+by the server.
+
+To send a request that was never captured, select **Actions > Compose a New Request**.
+The composer opens with an empty GET request and works the same way.
+
+Each send from the composer is also recorded in the **XMAT Replays** tab, like the
+requests that **Replay** sends (see below). A send that you cancel is not recorded, but
+it may already have reached the server, and the status line says so. While a replay, an
+analysis, or a capture file operation such as an import runs, the composer does not
+send and says so; send again when it has finished.
+
+### Composer options
+
+- **Follow same-origin redirects, at most** *N* is off by default; *N* is 1 to 10, and
+  10 at first. XMAT follows a redirect only to the scheme, host, and port that the
+  request was sent to, and never from HTTPS to HTTP, so captured headers and the body
+  never go to another origin. Each redirect followed is another request: after a 303
+  it is a GET without the body, but a HEAD stays a HEAD, and after a 301 or 302 that
+  answers a POST it is a GET without the body, as browsers send it. When XMAT does not
+  follow a redirect, the redirect response is the result and the status line says why.
+  Without the option, a redirect response is shown as it is.
+- **Inspect session** is off by default. When it is selected, XMAT selects the last
+  request that the send recorded in the **XMAT Replays** tab once the send has ended,
+  also when that request failed or timed out, and also when you cancelled the send
+  after some of its requests were recorded. It selects nothing when the send recorded
+  nothing (never a request of an earlier send), when the tab or the composer was closed
+  meanwhile, or when XMAT stopped the send because it is closing or exiting.
+- **HTTP version** is **Automatic** by default, which lets the connection choose the
+  version, as before. **HTTP/1.1 only** and **HTTP/2 only** send exactly that version
+  and never fall back to another; **HTTP/2 only** needs an HTTPS URL.
+- **Connect to another endpoint** is off by default. It sends the request to an IP
+  address and port that you enter, such as `192.0.2.10:443` or `[2001:db8::10]:443`,
+  instead of the address that the URL's host resolves to, as Fiddler's `Fiddler-Host`
+  does; host names and URLs are not accepted. It works with HTTPS URLs only. The URL,
+  the `Host` header, and the certificate check stay those of the URL, so the endpoint
+  must present a certificate that is valid for the URL's host; XMAT never falls back to
+  DNS or a proxy, and redirects followed within the URL's origin go to the same
+  endpoint. Sending needs your confirmation, which names the URL's origin and the
+  endpoint, together with any other confirmation that the send needs.
+
+The options are fixed when you confirm or start a send: changing them while it runs, or
+while XMAT asks you about it, changes nothing for that send. In the **XMAT Replays**
+tab, a request sent with an HTTP version other than **Automatic** or with **Connect to
+another endpoint** has a note that says so, with the HTTP version requested and the one
+used. The note is kept in memory only.
+
+Fiddler's control headers `Fiddler-Host`, `X-OverrideHost`, `X-IgnoreCertCNMismatch`,
+and `X-OverrideGateway` are not applied, and XMAT does not send a request that has one:
+in the composer, delete it from the headers. Use **Connect to another endpoint** to send
+to another address.
+
+**Copy as cURL** copies one request with the default options only: it is not available
+for a numbered URL (see below), with **Follow same-origin redirects**, with an **HTTP
+version** other than **Automatic**, or with **Connect to another endpoint**, since the
+command would not send the same requests.
+
+### Numbered URLs
+
+As in Fiddler's composer, a `#` in the path or query of the URL sends one request per
+number. **Send** asks for **Start At** and **End At**, 1 and 1 at first, and every `#`
+in the URL is replaced by each number in turn. A leading `0` in **Start At** pads every
+number to its width: `http://example.com/#/?a=#` from `08` to `11` sends `/08/?a=08`,
+`/09/?a=09`, `/10/?a=10`, and `/11/?a=11`. Only the URL changes; a `#` in a header or
+the body is sent as it is. Write `%23` for a literal `#` in the URL. A `#` in the
+scheme, host, or port is refused, so numbers never lead to other hosts.
+
+The requests are checked before anything is sent and go out one at a time, at most
+10,000 of them. When they need confirmation, one question covers them all and says how
+many there are. **Cancel request** stops before the next request: the requests already
+sent stay in the **XMAT Replays** tab. The composer shows the last response only.
+
+### Upload a body from a file
+
+**Upload File** replaces the whole body with the bytes of a file, up to 64 MiB. The file
+is read once, when you choose it: later changes to it are not sent, and the composer
+keeps only its bytes and its name. Headers such as `Content-Type` are not changed.
+**Clear body** removes the uploaded body. A file that cannot be read leaves the body as
+it was. Fiddler's `<@INCLUDE@>` tokens and multipart forms are not supported: such text
+is sent as typed, and no file is read.
+
+### Drag a request into the composer
+
+Drag a request from a connections list onto an open composer to edit and send it there.
+One request is dragged at a time; CONNECT tunnels, protocol upgrades, and requests
+recorded without their body cannot be dragged. The composer loads a copy of the request
+as it was when the drag began, clears the previous response, and sends nothing. If you
+have edited the request in the composer, it asks before replacing it. Only requests
+dragged from XMAT can be dropped; text, links, and files are refused, and nothing can be
+dropped while the composer sends or reads a file.
+
+## Replay requests
+
+Right-click a request, or one of several selected requests, and open **Replay**:
+
+- **Reissue** sends the selected requests again, as captured, one after another.
+- **Reissue unconditionally** first removes `If-Match`, `If-None-Match`,
+  `If-Modified-Since`, `If-Unmodified-Since` and `If-Range`, so the server sends a full
+  response instead of 304 Not Modified.
+- **Reissue and verify** then compares each response with the captured one, by status
+  code and body (without chunked framing or gzip, deflate or Brotli encoding), and lists
+  the requests whose response differs. Headers are not compared. A request whose
+  captured response was recorded without its body (see the body limit below) is not
+  verified: XMAT counts it as not verified, neither matched nor differed, and warns.
+- **Reissue several times** sends the selected requests 2 to 100 times, all of them in
+  turn before the next round.
+- **Cancel replay** stops a replay that is running.
+
+Replays are sent the way the composer sends requests. Methods other than exactly GET,
+HEAD, and OPTIONS, in capitals, need confirmation, which states how many requests the
+replay sends, repeats included, and how many of them can change server data. The
+requests are copied when you choose the menu item, so the confirmed requests are exactly
+the ones sent, even if a running capture updates their rows meanwhile.
+
+Each request that was sent appears in the read-only **XMAT Replays** tab, with its
+response, or without one when the request failed or timed out. **Replay of** in the
+request details shows where it comes from: the tab and request number of the captured
+request, or that the request was composed from scratch. This link is kept in memory
+only. You can inspect and analyze replays like captured traffic, and edit and resend
+them.
+
+When you cancel a replay, the requests already recorded stay in the tab, and XMAT tells
+you how many there are. The request that was being sent when you cancelled is not
+recorded, but it may already have reached the server, which may have processed it.
+
+The tab belongs to the replay feature. No capture can have its name, so its rows never
+mix with a capture's, in analysis or in saved captures; a loaded or imported tab is
+never used for replays, and loads and imports never change the replay tab. While
+another tab with that name is open, such as one loaded from a saved capture, replays go
+to **XMAT Replays (2)**, and so on.
+
+**File > Save** saves the **XMAT Replays** tab with the other tabs, and opening the saved
+capture shows it as an ordinary read-only tab, without **Replay of**. **File > Export**
+to a Fiddler archive includes its requests.
+
+The **XMAT Replays** tab keeps at most 256 MiB of request and response bodies, counting
+the rows it already has. This limits the bodies it keeps, not XMAT's memory use. A
+request whose bodies do not fit still gets its row, with the status, headers, and timing
+but without those bodies. A note in the request details says so, and an
+`X-XMAT-Request-Body-Not-Kept` or `X-XMAT-Response-Body-Not-Kept` header in the
+recorded request or response gives the size of the body that was not kept, so saved
+captures and exports never show it as an empty body. A request whose body was not kept
+is never sent again, from the GUI or with `xmat replay`. After the replay, XMAT tells
+you how many bodies were not kept. Close the tab to make room for new bodies: the next
+replay starts a new one.
+
+While a replay or a send from the composer is in progress, XMAT does not load, import,
+save, or export captures, analyze, start a capture, or close tabs; **Cancel replay**
+stops a replay. Exiting XMAT cancels a replay or send in progress and waits for it to
+stop before closing. When Windows ends your session, or XMAT restarts itself as
+administrator, a replay or send in progress is cancelled without waiting, and nothing
+more is recorded.
+
+The command line does the same with `xmat replay` and `xmat compose`; see
+[Command line](cli.md).
 
 ## Block or bypass hosts
 

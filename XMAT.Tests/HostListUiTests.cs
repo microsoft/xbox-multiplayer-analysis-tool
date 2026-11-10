@@ -562,7 +562,7 @@ namespace XMAT.Tests
             });
         }
 
-        private static CaptureConnectionView CaptureView(HostListPolicy policy, params ProxyConnectionModel[] rows)
+        internal static CaptureConnectionView CaptureView(HostListPolicy policy, params ProxyConnectionModel[] rows)
         {
             var controller = new WebServiceDeviceCaptureController(
                 "Test device", DeviceType.Unknown, true, new ProxyPortPool(), hostListPolicy: policy);
@@ -579,14 +579,14 @@ namespace XMAT.Tests
         // Shows the capture view at its designed size. In the small default test window the fixed
         // toolbar, filter and timeline rows leave the grid no row viewport, so only its first row
         // container can be realized.
-        private static void ShowCaptureView(Window window, CaptureConnectionView view)
+        internal static void ShowCaptureView(Window window, CaptureConnectionView view)
         {
             window.Width = 1280;
             window.Height = 720;
             WpfTestHost.Show(window, view);
         }
 
-        private static DataGridRow Row(DataGrid grid, object item)
+        internal static DataGridRow Row(DataGrid grid, object item)
         {
             grid.ScrollIntoView(item);
             WpfTestHost.Pump();
@@ -606,7 +606,7 @@ namespace XMAT.Tests
 
         // Right-click route: the opening event is raised on the clicked element with cursor
         // coordinates and bubbles to the nearest element that owns a context menu.
-        private static ContextMenu Open(FrameworkElement clicked) => OpenThroughRoute(clicked, keyboard: false);
+        internal static ContextMenu Open(FrameworkElement clicked) => OpenThroughRoute(clicked, keyboard: false);
 
         // Menu-key route: the same event is raised on the focused element with the keyboard
         // coordinates (-1, -1). Logical focus stands in for keyboard focus deterministically.

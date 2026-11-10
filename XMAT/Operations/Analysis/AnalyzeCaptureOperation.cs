@@ -155,6 +155,47 @@ namespace XMAT.Operations.Analysis
             }
         }
 
+        // Reads a capture file with the analysis input rules (format detection, limits, schema checks and their
+        // diagnostics) for operations that need its requests rather than findings, such as replay. Devices get the
+        // ordinal ids that analysis reports. Cancellation throws OperationCanceledException.
+        internal OperationResult<CaptureRecordSet> ReadCapture(
+            string path,
+            AnalysisLimits limits,
+            CancellationToken cancellationToken)
+        {
+            var diagnostics = new List<OperationDiagnostic>();
+            try
+            {
+                limits ??= AnalysisLimits.Default;
+                CaptureInputReader.ValidateLimits(limits);
+                using LoadedInput loaded = _inputReader.Read(
+                    AnalysisInput.FromFile(path),
+                    limits,
+                    diagnostics,
+                    cancellationToken);
+                var devices = loaded.Devices
+                    .Select((device, index) => new CaptureDeviceRecords(
+                        CaptureDeviceIds.Ordinal(index),
+                        device.Records.ToList()))
+                    .ToList();
+                return OperationResult<CaptureRecordSet>.Success(
+                    new CaptureRecordSet(
+                        InputKindName(loaded.Kind),
+                        loaded.InputSha256,
+                        devices),
+                    diagnostics);
+            }
+            catch (CaptureInputException ex)
+            {
+                return OperationResult<CaptureRecordSet>.Failure(
+                    OperationOutcome.InvalidInput,
+                    new OperationDiagnostic(
+                        ex.Code,
+                        OperationDiagnosticSeverity.Error,
+                        ex.DiagnosticMessage));
+            }
+        }
+
         private OperationResult<AnalysisResult> ExecuteCore(
             AnalyzeCaptureRequest request,
             OperationContext context,
