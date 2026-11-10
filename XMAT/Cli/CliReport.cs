@@ -240,6 +240,8 @@ namespace XMAT.Cli
 
         internal CliMarkCaptureTextReport MarkCaptureText { get; set; }
 
+        internal CliExportSazReport ExportSaz { get; set; }
+
         internal IReadOnlyList<CliCommandHelp> Commands { get; set; }
 
         internal string Version { get; set; }

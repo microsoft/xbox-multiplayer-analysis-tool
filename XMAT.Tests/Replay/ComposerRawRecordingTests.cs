@@ -31,7 +31,7 @@ namespace XMAT.Tests.Replay
 
         // The target origin of the raw sends here: a documentation address that no route reaches, since a raw send goes to a
         // scripted connection (SeamConnection) and every other route to RefusingReplayTransport.
-        private const string RawTarget = "http://192.0.2.10:8080";
+        internal const string RawTarget = "http://192.0.2.10:8080";
 
         private const string MainWindowXaml = "Windows/MainWindow.xaml";
 
@@ -1183,14 +1183,14 @@ namespace XMAT.Tests.Replay
 
         private static string Words(string key, params object[] args) => Localization.GetLocalizedString(key, args);
 
-        private static T Find<T>(Window window, string name) where T : class =>
+        internal static T Find<T>(Window window, string name) where T : class =>
             Assert.IsType<T>(window.FindName(name));
 
         private static string Status(Window window) => Find<TextBlock>(window, "StatusText").Text;
 
         // Records into the model's Replays tab, on this test's UI thread, and into table, keeping at most bodyBudgetBytes of
         // bodies.
-        private static ReplayRecordingTarget Recording(
+        internal static ReplayRecordingTarget Recording(
             CaptureAppModel model, IDataTable table, long bodyBudgetBytes = ReplayRecorder.DefaultBodyBudgetBytes)
         {
             Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
@@ -1202,7 +1202,7 @@ namespace XMAT.Tests.Replay
 
         // Enters Raw mode as the user does, from a request to origin's /items without headers, which loses nothing: a GET,
         // or a POST of body.
-        private static async Task EnterRawModeAsync(RequestComposerWindow window, string origin, string body = "")
+        internal static async Task EnterRawModeAsync(RequestComposerWindow window, string origin, string body = "")
         {
             Find<TextBox>(window, "MethodBox").Text = body.Length == 0 ? "GET" : "POST";
             Find<TextBox>(window, "UrlBox").Text = origin + "/items";
@@ -1215,7 +1215,7 @@ namespace XMAT.Tests.Replay
         // A client over transport whose raw sends connect to connection, through seams when given (RawSenderSetup), and
         // whose raw run awaits ended, when given, once its send has ended and before its result goes to the recorder
         // (ReplayOperation.RawSendEnded). Every other route of its runs ends at transport, refused at once.
-        private static RequestReplayClient Scripted(
+        internal static RequestReplayClient Scripted(
             RefusingReplayTransport transport,
             SeamConnection connection,
             Func<int, Task> ended = null,

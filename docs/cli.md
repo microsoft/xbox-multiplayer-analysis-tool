@@ -15,6 +15,8 @@ both. Other capabilities move over time; the [capability table](#what-runs-headl
 ```
 xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N]
              [--max-record-mib N] [--max-records N]
+xmat export-saz INPUT --out DIR [--device ID] [--sanitize] [--accept-stored-text]
+                [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]
 xmat mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer [--max-input-mib N]
 xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional]
             [--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header "NAME: VALUE"]...
@@ -66,6 +68,15 @@ reservation-time storage failure.
   none of them can be renamed, replaced or turned into a link until the results are published or removed. `--device`
   limits a capture of several devices to one, by the id (`d1`, `d2`, ...) that an earlier run reported. With
   `--fail-on findings`, xmat exits with code 10 when the rules report findings (the results are still written).
+- `xmat export-saz` reads one web-proxy device from a `.xmatcap` or `.saz` and writes `capture.saz` plus
+  `summary.json` (schema `xmat-export-saz/1`) into a new `DIR`. With several devices, `--device dN` is required;
+  one device is selected automatically. `--sanitize` sends the same rows through the shared sanitizer.
+  An unmarked native capture requires `--accept-stored-text`; the resulting warning and summary record that decision.
+  The command checks and probes `--out` before reading the input, then reads and plans before reserving output. Errors
+  found only while projecting or sanitizing a row occur after staging was created, but publish nothing. `DIR` follows
+  the command-line output contract: a new folder on directly reached local NTFS, with no replacement and no copy
+  fallback. This intentionally differs from the GUI, which can ask before replacement and disclose a non-private,
+  non-atomic copy at other destinations.
 - `xmat mark-capture-text` creates a new marked `.xmatcap`; it never changes `INPUT`. The input must be an unmarked
   native XMAT capture. `--interpret as-stored` preserves every stored value and marks the copy as literal storage.
   `--interpret legacy-one-layer` first requires every known text value to be valid UTF-8 whose runs of `"` have even
@@ -711,7 +722,8 @@ run published after a cancellation), the same fields, and the run's `warnings` a
 
 For native captures, analyze reports `storedText.semantics` as `literal` or `ambiguousUnmarked`; SAZ input reports
 `notApplicable`. Its policy is `notNeeded`. An unmarked native capture is still analyzed as stored and adds the warning
-`capture.text.ambiguous`. `replay`, `save-request` and `curl` report `acceptStoredText` in `options`, whether
+`capture.text.ambiguous`. `replay`, `save-request` and `curl` report `acceptStoredText` in `options`, while
+`export-saz` reports it at the root, whether
 `--accept-stored-text` was given, and, in a run that published, the same `storedText` in the JSON output and in
 `summary.json`: `ambiguousUnmarked` with the policy `acceptedAsStored` for an unmarked capture used as stored,
 `literal` for a marked capture, and `notApplicable` for a Fiddler archive, a request file or a `--url` request, each
@@ -726,6 +738,12 @@ summary uses schema `xmat-mark-capture-text/1` and places the same fields at the
 `capture.repair.cancelled` while the shared publication boundary can report `cli.cancelled`; an unexpected operation
 failure reports `capture.repair.internal`.
 
+`export-saz` reports `input`, `limits`, `device`, `sanitize` and `acceptStoredText` once known. A published run also
+reports `storedText`, `export` (the operation's row, session, entry, omission, normalization and byte counts) and
+`sanitized` (null without `--sanitize`, otherwise the sanitizer's counts). It publishes `capture.saz` and
+`summary.json`; the summary has schema `xmat-export-saz/1`, adds `version`, and otherwise carries the same fields and
+warnings. A failed run publishes neither file and omits `storedText`, `export` and `sanitized`.
+
 If xmat cannot produce this document (an internal error), it writes a fixed fallback document instead, with only
 `schema`, `command`, `runId`, `status`, `exitCode`, `artifacts`, `cleanup`, empty `warnings` and the error
 `cli.internal.output`. The run keeps its exit code: 7 stays 7, and a run that published `DIR` keeps 0 or 10 and lists
@@ -738,7 +756,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 |---|---|
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
-| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, or capture-text marking refuses the input or interpretation; for `replay` and `compose` also a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint, proxy, client certificate or Windows authentication that cannot be used, a Fiddler control header, a `--raw` file or request that Raw mode refuses, or a request that needs `--allow-raw`, `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to`, `--allow-proxy`, `--allow-client-cert` or `--allow-windows-auth` for its origin (nothing is sent); and for `replay`, `save-request` and `curl` an unmarked XMAT capture without `--accept-stored-text` (`replay.capture-text.ambiguous`, `capture.text.ambiguous-export`; nothing is sent or published) |
+| 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, or capture-text marking refuses the input or interpretation; for `export-saz`, a planning or row-projection refusal; for `replay` and `compose`, a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint, proxy, client certificate or Windows authentication that cannot be used, a Fiddler control header, a `--raw` file or request that Raw mode refuses, or a request that needs `--allow-raw`, `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to`, `--allow-proxy`, `--allow-client-cert` or `--allow-windows-auth` for its origin (nothing is sent); and for `export-saz`, `replay`, `save-request` and `curl`, an unmarked XMAT capture without `--accept-stored-text` (`replay.capture-text.ambiguous`, `capture.text.ambiguous-export`; nothing is sent or published) |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists |
 | 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`) |
@@ -751,8 +769,8 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 
 ## Compatibility
 
-- The JSON on standard output (`xmat-cli/1`) and `summary.json` (`xmat-analysis/1`, `xmat-mark-capture-text/1`,
-  `xmat-replay/1`) only grow within their version: a release may add fields, diagnostic codes, commands and
+- The JSON on standard output (`xmat-cli/1`) and `summary.json` (`xmat-analysis/1`, `xmat-export-saz/1`,
+  `xmat-mark-capture-text/1`, `xmat-replay/1`) only grow within their version: a release may add fields, diagnostic codes, commands and
   capabilities, so ignore what you do not know. A change that removes or renames a field, changes its type or meaning,
   or changes what a status value means ships as a new schema version (`xmat-cli/2`, `xmat-analysis/2`,
   `xmat-mark-capture-text/2`, `xmat-replay/2`) together with migration guidance in this document.
@@ -788,12 +806,12 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Write the analysis HTML report (`analysis.html-report`) | (not available yet) | Planned (S3, XMAT-008) |
 | Analyze network traces (`analysis.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Analyze Xbox Live service calls (`analysis.xbox-live`) | `xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S1) |
-| Export captures as Fiddler archives (.saz) (`capture-file.export-saz`) | (not available yet) | Planned (S2, XMAT-021) |
+| Export captures as Fiddler archives (.saz) (`capture-file.export-saz`) | `xmat export-saz INPUT --out DIR [--device ID] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S2) |
 | Read network traces (.etl) (`capture-file.import-etl`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Read Fiddler archives (.saz) (`capture-file.import-saz`) | `xmat analyze INPUT.saz --out DIR` | Supported (S1) |
 | Mark or repair capture text storage (`capture-file.mark-text`) | `xmat mark-capture-text INPUT --out DIR --interpret as-stored\|legacy-one-layer [--max-input-mib N]` | Supported (S10) |
 | Read XMAT capture files (.xmatcap) (`capture-file.read-xmatcap`) | `xmat analyze INPUT.xmatcap --out DIR` | Supported (S1) |
-| Sanitize a capture into a Fiddler archive (`capture-file.sanitize`) | (not available yet) | Planned (S2, XMAT-021) |
+| Sanitize a capture into a Fiddler archive (`capture-file.sanitize`) | `xmat export-saz INPUT --out DIR --sanitize [--device ID] [--accept-stored-text] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S2) |
 | Save captures (.xmatcap) (`capture-file.save-xmatcap`) | (not available yet) | Planned (S5, XMAT-021) |
 | Choose the device and capture method (`capture.add-device`) | (not available yet) | Planned (S5, XMAT-021) |
 | Clear captured data (`capture.clear`) | (not available yet) | Planned (S8a, XMAT-021) |

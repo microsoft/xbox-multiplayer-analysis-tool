@@ -41,6 +41,9 @@ namespace XMAT.Operations.Storage
         private const uint OpenReparsePoint = 0x00200000;
         private const uint ObjectCaseInsensitive = 0x00000040;
         private const uint FileAttributeReparsePoint = 0x00000400;
+        private const uint FileAttributeReadOnly = 0x00000001;
+        private const uint FileFlagBackupSemantics = 0x02000000;
+        private const uint OpenExisting = 3;
         private const uint VolumeNameGuid = 0x1;
         private const uint VolumeNameNt = 0x2;
         private const int FileDispositionInfoClass = 4;
@@ -138,6 +141,31 @@ namespace XMAT.Operations.Storage
             throw Failure("A folder in the held path could not be opened.", status);
         }
 
+        // Opens and holds one folder by its path, following that path once. The returned folder itself is held without
+        // delete sharing, so it cannot be renamed or removed while the handle is alive.
+        internal static SafeFileHandle OpenFolderByPath(string path)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(path);
+            SafeFileHandle handle = NativeMethods.CreateFileW(
+                path,
+                HoldAccess,
+                HoldShare,
+                IntPtr.Zero,
+                OpenExisting,
+                FileFlagBackupSemantics,
+                IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                int error = Marshal.GetLastWin32Error();
+                handle.Dispose();
+                throw new IOException(
+                    "The destination folder could not be opened.",
+                    new Win32Exception(error));
+            }
+
+            return handle;
+        }
+
         // The reparse tag of the folder, or null when it has none.
         internal static uint? ReparseTag(SafeFileHandle handle)
         {
@@ -230,6 +258,126 @@ namespace XMAT.Operations.Storage
                 : throw Failure("The file could not be created.", status);
         }
 
+        // A private file that its publisher can read back through the same handle.
+        internal static SafeFileHandle CreateNewReadableFile(
+            SafeFileHandle parent,
+            string name,
+            FileSecurity security)
+        {
+            ArgumentNullException.ThrowIfNull(parent);
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            ArgumentNullException.ThrowIfNull(security);
+            SafeFileHandle handle = Open(
+                parent,
+                name,
+                Delete | ReadControl | Synchronize | ReadData | WriteData | ReadAttributes,
+                ShareRead,
+                FileCreate,
+                NonDirectoryFile | SynchronousIoNonAlert | OpenReparsePoint,
+                security.GetSecurityDescriptorBinaryForm(),
+                out int status);
+            if (handle != null)
+            {
+                return handle;
+            }
+
+            return status == StatusObjectNameCollision || Exists(parent, name)
+                ? null
+                : throw Failure("The file could not be created.", status);
+        }
+
+        // A new destination file with the folder's access. It never follows or replaces an existing entry.
+        internal static SafeFileHandle CreateNewCopyFile(
+            SafeFileHandle parent,
+            string name,
+            out AnchoredOpenFailure failure)
+        {
+            ArgumentNullException.ThrowIfNull(parent);
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            SafeFileHandle handle = Open(
+                parent,
+                name,
+                Delete | Synchronize | ReadData | WriteData | ReadAttributes,
+                0,
+                FileCreate,
+                NonDirectoryFile | SynchronousIoNonAlert | OpenReparsePoint,
+                null,
+                out int status);
+            failure = handle == null
+                ? OpenFailure(status)
+                : AnchoredOpenFailure.None;
+            return handle;
+        }
+
+        // Opens an entry only to classify it and fingerprint it, without following a reparse point.
+        internal static SafeFileHandle OpenEntryForAttributes(
+            SafeFileHandle parent,
+            string name,
+            out AnchoredOpenFailure failure)
+        {
+            ArgumentNullException.ThrowIfNull(parent);
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            SafeFileHandle handle = Open(
+                parent,
+                name,
+                ReadAttributes | Synchronize,
+                ShareRead | ShareWrite | ShareDelete,
+                FileOpen,
+                SynchronousIoNonAlert | OpenReparsePoint,
+                null,
+                out int status);
+            failure = handle == null
+                ? OpenFailure(status)
+                : AnchoredOpenFailure.None;
+            return handle;
+        }
+
+        // Opens a confirmed file for a private-kind move, denying every later write, rename or delete while held.
+        internal static SafeFileHandle OpenFileForMove(
+            SafeFileHandle parent,
+            string name,
+            out AnchoredOpenFailure failure)
+        {
+            ArgumentNullException.ThrowIfNull(parent);
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            SafeFileHandle handle = Open(
+                parent,
+                name,
+                Delete | ReadAttributes | Synchronize,
+                ShareRead,
+                FileOpen,
+                NonDirectoryFile | SynchronousIoNonAlert | OpenReparsePoint,
+                null,
+                out int status);
+            failure = handle == null
+                ? OpenFailure(status)
+                : AnchoredOpenFailure.None;
+            return handle;
+        }
+
+        // Opens a confirmed copy-kind file for in-place replacement, sharing nothing.
+        internal static SafeFileHandle OpenFileForCopy(
+            SafeFileHandle parent,
+            string name,
+            out AnchoredOpenFailure failure)
+        {
+            ArgumentNullException.ThrowIfNull(parent);
+            ArgumentException.ThrowIfNullOrEmpty(name);
+            SafeFileHandle handle = Open(
+                parent,
+                name,
+                Delete | ReadData | WriteData | ReadAttributes | Synchronize,
+                0,
+                FileOpen,
+                NonDirectoryFile | SynchronousIoNonAlert | OpenReparsePoint,
+                null,
+                out int status);
+            failure = handle == null
+                ? OpenFailure(status)
+                : AnchoredOpenFailure.None;
+            return handle;
+        }
+
         // A least-privilege duplicate of a held folder for an operation that may open one existing child. The duplicate
         // refers to the same folder and keeps its share mode, but has no deletion or child-creation access.
         internal static SafeFileHandle DuplicateDirectoryHandle(
@@ -312,7 +460,15 @@ namespace XMAT.Operations.Storage
                     (uint)FileAttributes.Directory) != 0,
                 (information.FileAttributes &
                     FileAttributeReparsePoint) != 0,
-                information.NumberOfLinks);
+                information.NumberOfLinks,
+                (information.FileAttributes &
+                    FileAttributeReadOnly) != 0,
+                information.VolumeSerialNumber,
+                ((ulong)information.FileIndexHigh << 32) |
+                    information.FileIndexLow,
+                ((long)information.LastWriteTime.dwHighDateTime << 32) |
+                    (uint)information.LastWriteTime.dwLowDateTime,
+                information.FileAttributes);
         }
 
         // The folder's path with its volume's name, \\?\Volume{...}\..., which Windows uses as it is: no drive letter or
@@ -436,6 +592,39 @@ namespace XMAT.Operations.Storage
         internal static void MarkFileForDeletion(SafeFileHandle handle)
         {
             MarkForDeletion(handle, "The file could not be removed.");
+        }
+
+        // Clears a file's pending deletion immediately before a non-cancellable commit.
+        internal static void ClearFileDeletion(SafeFileHandle handle)
+        {
+            ArgumentNullException.ThrowIfNull(handle);
+            IntPtr buffer = Marshal.AllocHGlobal(sizeof(int));
+            try
+            {
+                Marshal.WriteInt32(buffer, 0);
+                if (!NativeMethods.SetFileInformationByHandle(
+                        handle,
+                        FileDispositionInfoClass,
+                        buffer,
+                        sizeof(int)))
+                {
+                    throw new IOException(
+                        "The file could not be prepared for publication.",
+                        new Win32Exception(Marshal.GetLastWin32Error()));
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        // The last component of the name that the handle has now.
+        internal static string FileNameOf(SafeFileHandle handle)
+        {
+            string path = FinalPath(handle, 0);
+            return Path.GetFileName(
+                Path.TrimEndingDirectorySeparator(path));
         }
 
         private static void MarkForDeletion(SafeFileHandle handle, string message)
@@ -578,6 +767,19 @@ namespace XMAT.Operations.Storage
 
         private static IOException Failure(string message, int status) =>
             new(message, new Win32Exception(NativeMethods.RtlNtStatusToDosError(status)));
+
+        private static AnchoredOpenFailure OpenFailure(int status) =>
+            status switch
+            {
+                StatusObjectNameNotFound or
+                StatusObjectPathNotFound =>
+                    AnchoredOpenFailure.Missing,
+                StatusSharingViolation =>
+                    AnchoredOpenFailure.SharingViolation,
+                StatusAccessDenied =>
+                    AnchoredOpenFailure.AccessDenied,
+                _ => AnchoredOpenFailure.Other,
+            };
 
         private static string FinalPath(SafeFileHandle handle, uint flags)
         {
@@ -773,6 +975,22 @@ namespace XMAT.Operations.Storage
             internal static extern bool GetFileInformationByHandle(
                 SafeFileHandle file,
                 out ByHandleFileInformation information);
+
+            [DllImport(
+                "kernel32.dll",
+                CharSet = CharSet.Unicode,
+                SetLastError = true,
+                ExactSpelling = true)]
+            [DefaultDllImportSearchPaths(
+                DllImportSearchPath.System32)]
+            internal static extern SafeFileHandle CreateFileW(
+                string fileName,
+                uint desiredAccess,
+                uint shareMode,
+                IntPtr securityAttributes,
+                uint creationDisposition,
+                uint flagsAndAttributes,
+                IntPtr templateFile);
         }
     }
 
@@ -780,5 +998,19 @@ namespace XMAT.Operations.Storage
         long Length,
         bool IsDirectory,
         bool IsReparsePoint,
-        uint LinkCount);
+        uint LinkCount,
+        bool IsReadOnly,
+        uint VolumeSerialNumber,
+        ulong FileIndex,
+        long LastWriteTime,
+        uint Attributes);
+
+    internal enum AnchoredOpenFailure
+    {
+        None,
+        Missing,
+        SharingViolation,
+        AccessDenied,
+        Other,
+    }
 }

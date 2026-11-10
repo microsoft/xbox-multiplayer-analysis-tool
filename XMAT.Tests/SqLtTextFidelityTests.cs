@@ -7,6 +7,8 @@ using System.IO.Compression;
 using System.Reflection;
 using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations;
+using XMAT.Operations.Capture;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
@@ -447,6 +449,11 @@ namespace XMAT.Tests
                     controller);
             byte[][] requestEntries =
                 new byte[3][];
+            string exportedHeaders =
+                Headers.Replace(
+                    "GET / HTTP/1.1",
+                    "GET https://example.test/ HTTP/1.1",
+                    StringComparison.Ordinal);
             for (int cycle = 0;
                 cycle < requestEntries.Length;
                 cycle++)
@@ -455,8 +462,16 @@ namespace XMAT.Tests
                     Path.Join(
                         directory.Path,
                         $"cycle-{cycle}.saz");
-                captureMethod.ExportToFiddler(
-                    archive);
+                OperationResult<SazExportResult> exported =
+                    await ExportAsync(
+                        archive,
+                        cycleTable,
+                        Device);
+                Assert.True(
+                    exported.Succeeded,
+                    exported.Diagnostics
+                        .FirstOrDefault()?
+                        .Code);
                 requestEntries[cycle] =
                     RequestEntry(
                         archive);
@@ -468,10 +483,10 @@ namespace XMAT.Tests
                     Assert.Single(
                         controller.ProxyConnections);
                 Assert.Equal(
-                    Headers,
+                    exportedHeaders,
                     imported.RequestLineAndHeaders);
                 Assert.Equal(
-                    Headers,
+                    exportedHeaders,
                     Assert.Single(
                             cycleTable.Dataset.DataRecords)
                         .Str(
@@ -480,6 +495,114 @@ namespace XMAT.Tests
             Assert.Equal(
                 requestEntries[1],
                 requestEntries[2]);
+        }
+
+        // Save Captures keeps a stored head exactly, without the separator the archive export adds.
+        [Fact]
+        public void SaveCaptures_KeepsAnUnterminatedStoredHeadExactly()
+        {
+            const string Device = "Device 1";
+            byte[] body =
+                "X-Injected: 1\r\n\r\ntail"u8.ToArray();
+            using var directory = new TestDirectory();
+            string source =
+                XMAT.Tests.Replay.ReplayCaptures.WriteXmatcap(
+                    directory.Path,
+                    "source.xmatcap",
+                    (Device, new[]
+                    {
+                        new XMAT.Tests.Replay.CapturedExchange(
+                            "POST",
+                            "http://127.0.0.1/upload",
+                            Body: body),
+                    }));
+            string saved =
+                Path.Join(
+                    directory.Path,
+                    "saved.xmatcap");
+            string storedHead;
+            using (var input = new SqLtReadonlyDatabase(source))
+            {
+                IDataRecord record =
+                    Assert.Single(
+                        input.TableByName(
+                                WebServiceCaptureMethod.TableName)
+                            .Dataset.DataRecords);
+                storedHead =
+                    record.Str(
+                        WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders);
+                Assert.False(
+                    storedHead.EndsWith(
+                        "\r\n\r\n",
+                        StringComparison.Ordinal));
+                using var database = new SqLtDatabase();
+                database.Initialize();
+                database.CreateTable(
+                        "CaptureDevices",
+                        new Field<long>("DeviceType"),
+                        new Field<string>("DeviceName"),
+                        new Field<long>("CaptureType"))
+                    .AddRow(
+                        (long)DeviceType.XboxConsole,
+                        Device,
+                        (long)CaptureType.WebProxy);
+                new ProxyConnectionModel(record).AddToDataTable(
+                    Device,
+                    CreateWebProxyTable(database));
+                database.SaveToFile(saved);
+            }
+
+            using var reloaded = new SqLtReadonlyDatabase(saved);
+            IDataRecord savedRecord =
+                Assert.Single(
+                    reloaded.TableByName(
+                            WebServiceCaptureMethod.TableName)
+                        .Dataset.DataRecords);
+            Assert.Equal(
+                storedHead,
+                savedRecord.Str(
+                    WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders));
+            Assert.Equal(
+                Convert.ToBase64String(body),
+                savedRecord.Str(
+                    WebServiceCaptureMethod.FieldKey_RequestBody));
+        }
+
+        private static async Task<OperationResult<SazExportResult>>
+            ExportAsync(
+                string path,
+                IDataTable table,
+                string device)
+        {
+            var operation =
+                new SazExportOperation();
+            OperationResult<SazExportPlan> prepared =
+                await operation.PrepareAsync(
+                    new SazExportPlanRequest(
+                        SazExportSource.Active(
+                            table,
+                            device,
+                            CaptureTextSource.Of(table)),
+                        SazExportKind.Plain,
+                        null,
+                        SazExportBudgets.Default),
+                    OperationContext.None,
+                    CancellationToken.None);
+            Assert.True(prepared.Succeeded);
+            await using var output =
+                new FileStream(
+                    path,
+                    FileMode.Create,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+            return await operation.ExecuteAsync(
+                new SazExportRequest(
+                    prepared.Value,
+                    new SazExportDestination.ToStream(
+                        output),
+                    null),
+                OperationContext.None,
+                CancellationToken.None);
         }
 
         private static byte[] RequestEntry(

@@ -17,6 +17,8 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.NetworkTrace;
+using XMAT.Operations;
+using XMAT.Operations.Capture;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
@@ -166,6 +168,12 @@ namespace XMAT.Models
             CanModifyCaptureData &&
             !IsAnyCaptureRunning;
         internal bool CanStopCaptures => !IsAnalysisRunning;
+        // File > Export: a web proxy tab is selected, live, imported, loaded or the Replays tab, and no analysis or
+        // capture-data operation runs. Captures may keep running (A7), and an empty tab exports an empty archive.
+        internal bool CanExportCaptures =>
+            CanModifyCaptureData &&
+            SelectedDeviceContext?.CaptureType == CaptureType.WebProxy &&
+            SelectedDeviceContext.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController;
         internal bool CanExportSanitizedCaptures =>
             CanBeginCaptureDataOperation &&
             SelectedDeviceContext?.CaptureType == CaptureType.WebProxy &&
@@ -204,8 +212,6 @@ namespace XMAT.Models
         private TaskCompletionSource _cancellableOperationEnded;
         private CancellableOperationLease _cancellableOperationLease;
         private bool _isShuttingDown;
-
-        internal Action SanitizedExportWorkerStarting { get; set; }
 
         public CaptureAppModel() :
             this(Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher)
@@ -305,14 +311,16 @@ namespace XMAT.Models
         }
 
         // Begins a capture-data operation that closing XMAT may cancel through cancellation and then wait for, instead of
-        // refusing to close: a GUI replay (CancelCaptureDataOperationAsync). Disposing the lease ends the operation. None
-        // begins once XMAT is shutting down (BeginShutdown).
+        // refusing to close: a GUI replay or an export (CancelCaptureDataOperationAsync). Disposing the lease ends the
+        // operation. None begins once XMAT is shutting down (BeginShutdown), and with requireAllCapturesStopped none begins
+        // while a capture runs.
         internal bool TryBeginCancellableCaptureDataOperation(
             CancellationTokenSource cancellation,
-            out IDisposable operationLease)
+            out IDisposable operationLease,
+            bool requireAllCapturesStopped = false)
         {
             ArgumentNullException.ThrowIfNull(cancellation);
-            if (IsShuttingDown || !TryBeginCaptureDataOperation(out IDisposable lease))
+            if (IsShuttingDown || !TryBeginCaptureDataOperation(out IDisposable lease, requireAllCapturesStopped))
             {
                 operationLease = null;
                 return false;
@@ -1000,49 +1008,68 @@ namespace XMAT.Models
             }
         }
 
-        internal void ExportDataCaptures(ExportType exportType, string toFilePath)
+        // An export's first step (CaptureExportWorkflow, design 4.1), on the UI thread and O(1): the cancellable lease, which
+        // the sanitized export takes only while no capture runs, then the selected tab's frozen source. False when the export
+        // cannot begin; nothing has changed then.
+        internal bool BeginCaptureExport(
+            SazExportKind kind,
+            CancellationTokenSource cancellation,
+            out IDisposable operationLease,
+            out SazExportSource source)
         {
-            switch (exportType)
+            operationLease = null;
+            source = null;
+            bool sanitized = kind == SazExportKind.Sanitized;
+            if (!(sanitized ? CanExportSanitizedCaptures : CanExportCaptures) ||
+                SelectedDeviceContext?.CaptureController is not WebServiceCapture.WebServiceDeviceCaptureController controller ||
+                !TryBeginCancellableCaptureDataOperation(
+                    cancellation,
+                    out operationLease,
+                    requireAllCapturesStopped: sanitized))
             {
-                case ExportType.Fiddler:
-                    (SelectedDeviceContext.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ExportToFiddler(toFilePath);
-                    break;
+                return false;
             }
+
+            try
+            {
+                source = controller.ExportSource;
+            }
+            catch
+            {
+                operationLease.Dispose();
+                operationLease = null;
+                throw;
+            }
+
+            return true;
         }
 
-        internal async Task<WebServiceCapture.SanitizedExportSummary> ExportSanitizedDataCapturesAsync(
-            string toFilePath, CancellationToken cancellationToken = default)
+        // An export's planning step, on a worker: the operation's gate and plan for the frozen source, before any destination
+        // is chosen (R3-3). Cancellation is a Cancelled result.
+        internal Task<OperationResult<SazExportPlan>> PrepareCaptureExportAsync(
+            SazExportOperation operation,
+            SazExportPlanRequest request,
+            OperationContext context,
+            CancellationToken cancellationToken)
         {
-            if (!CanExportSanitizedCaptures ||
-                !TryBeginCaptureDataOperation(out var operation, requireAllCapturesStopped: true))
-            {
-                throw new InvalidOperationException(Localization.GetLocalizedString("SANITIZED_EXPORT_UNAVAILABLE"));
-            }
-            using (operation)
-            {
-                var controller = (WebServiceCapture.WebServiceDeviceCaptureController)SelectedDeviceContext.CaptureController;
-                CaptureTextSource source =
-                    controller.ExportTextSource;
-                if (source.Semantics !=
-                    CaptureTextSemantics.Literal)
-                {
-                    throw new InvalidOperationException(
-                        Localization.GetLocalizedString(
-                            "CAPTURE_TEXT_EXPORT_POLICY_REQUIRED"));
-                }
-                IEnumerable<WebServiceCapture.Models.ProxyConnectionModel> Records()
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    foreach (var record in controller.GetCaptureRecords())
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        yield return new WebServiceCapture.Models.ProxyConnectionModel(record);
-                    }
-                }
-                SanitizedExportWorkerStarting?.Invoke();
-                return await Task.Run(() => WebServiceCapture.FiddlerSazHandler.CreateSanitizedSazFile(toFilePath,
-                    Records(), cancellationToken));
-            }
+            ArgumentNullException.ThrowIfNull(operation);
+            return Task.Run(
+                () => operation.PrepareAsync(request, context, cancellationToken),
+                CancellationToken.None);
+        }
+
+        // An export's run, on a worker: the operation writes the plan to the admitted target and publishes it. Its result
+        // carries its value with every outcome (3.9).
+        internal Task<OperationResult<SazExportResult>> ExportCapturesAsync(
+            IOperation<SazExportRequest, SazExportResult> operation,
+            SazExportRequest request,
+            OperationContext context,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(operation);
+            return Task.Run(
+                () => operation.ExecuteAsync(request, context, cancellationToken),
+                CancellationToken.None);
         }
 
         internal ICaptureDeviceContext AddDeviceContext(

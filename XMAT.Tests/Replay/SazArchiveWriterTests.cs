@@ -315,6 +315,50 @@ namespace XMAT.Tests.Replay
             Assert.True(destination.Written > 0);
         }
 
+        // A body that deflate cannot shrink is stored, so no entry is larger than what it holds: Fastest would code
+        // these bytes, all of them 144 or more, at 9 bits each. A body that deflate shrinks is still deflated.
+        [Fact]
+        public void AnEntryThatDeflateWouldGrow_IsStored_AndOneThatItShrinks_IsDeflated()
+        {
+            var random = new Random(11);
+            byte[] incompressible = new byte[(2 * SazArchiveWriter.BodySliceBytes) + 3];
+            for (int index = 0; index < incompressible.Length; index++)
+            {
+                incompressible[index] = (byte)random.Next(0x90, 0x100);
+            }
+
+            byte[] compressible = Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat("{\"name\":\"value\"},", 50000)));
+            using var destination = new MemoryStream();
+            using (var writer = new SazArchiveWriter(destination))
+            {
+                writer.Add(
+                    Session(
+                        1,
+                        new SazMessage("PUT http://example.test/ HTTP/1.1", Fields(), incompressible),
+                        new SazMessage("HTTP/1.1 200 OK", Fields(), compressible)),
+                    CancellationToken.None);
+                writer.Complete(CancellationToken.None);
+            }
+
+            using ZipArchive archive = Read(destination);
+            ZipArchiveEntry request = archive.GetEntry("raw/1_c.txt");
+            Assert.Equal(request.Length, request.CompressedLength);
+            Assert.Equal(incompressible, Bytes(archive, "raw/1_c.txt")[^incompressible.Length..]);
+            ZipArchiveEntry response = archive.GetEntry("raw/1_s.txt");
+            Assert.True(response.CompressedLength < response.Length / 4, $"{response.CompressedLength} of {response.Length}");
+            Assert.Equal(compressible, Bytes(archive, "raw/1_s.txt")[^compressible.Length..]);
+            Assert.True(destination.Length < incompressible.Length + (64 * 1024), $"The archive was {destination.Length} bytes.");
+        }
+
+        [Fact]
+        public void DeflatesWithoutGrowing_IsFalseOnlyForBytesThatDoNotRepeat()
+        {
+            byte[] random = new byte[256 * 1024];
+            new Random(3).NextBytes(random);
+            Assert.False(SazArchiveWriter.DeflatesWithoutGrowing(stream => stream.Write(random)));
+            Assert.True(SazArchiveWriter.DeflatesWithoutGrowing(stream => stream.Write(new byte[256 * 1024])));
+        }
+
         internal static bool HasEndOfCentralDirectory(byte[] bytes)
         {
             for (int index = 0; index + 3 < bytes.Length; index++)

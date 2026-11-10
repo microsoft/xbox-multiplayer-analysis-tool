@@ -20,6 +20,7 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations.Capture;
 using XMAT.Scripting;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
@@ -224,6 +225,20 @@ namespace XMAT.WebServiceCapture
                 _captureDataSource == CaptureDataSource.LoadedDataset
                     ? _loadedCaptureDataset
                     : _dataTable);
+
+        // What an export of this tab reads (S2, 3.2): the rows that GetCaptureRecords enumerates, read by key, from the same
+        // table or loaded dataset, with ExportTextSource read once. It reads no row and does no I/O, so the UI thread freezes
+        // it when an export begins.
+        internal SazExportSource ExportSource
+        {
+            get
+            {
+                CaptureTextSource text = ExportTextSource;
+                return _captureDataSource == CaptureDataSource.LoadedDataset
+                    ? SazExportSource.Loaded(_loadedCaptureDataset, DeviceName, text)
+                    : SazExportSource.Active(_dataTable, DeviceName, text);
+            }
+        }
         private bool _initialized;
         private readonly ProxyPortPool _portPool;
         private readonly IProxyDeviceConfiguration _deviceConfiguration;

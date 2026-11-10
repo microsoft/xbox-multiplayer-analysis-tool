@@ -5,7 +5,10 @@
 using System.IO.Compression;
 using System.Net;
 using System.Text;
+using XMAT.Operations;
+using XMAT.Operations.Capture;
 using XMAT.Tests.Fixtures;
+using XMAT.Tests.Operations.Capture;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -729,12 +732,12 @@ namespace XMAT.Tests
             }
         }
 
-        // XMAT can record a message whose headers exceed the import limits and export it, plainly or sanitized; such an
-        // archive is refused on import rather than truncated.
+        // A stored head over S2's field-line budget leaves its row out, before either export can create an archive that
+        // the readers would have to truncate or refuse.
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
-        public void ExportsAboveTheHeaderLineLimit_AreRefusedOnImportRatherThanTruncated(
+        public void ExportsAboveTheHeaderLineLimit_LeaveTheRowOut(
             bool sanitized)
         {
             var headers = new StringBuilder(
@@ -768,23 +771,27 @@ namespace XMAT.Tests
                 string path = Path.Combine(
                     directory,
                     "over-limit.saz");
-                if (sanitized)
-                {
-                    FiddlerSazHandler.CreateSanitizedSazFile(
+                OperationResult<SazExportResult> exported =
+                    SazExportTestSupport.ExportRecords(
                         path,
-                        new[] { record });
-                }
-                else
-                {
-                    FiddlerSazHandler.CreateSazFile(
-                        path,
-                        new[] { record });
-                }
+                        new[] { record },
+                        sanitized
+                            ? SazExportKind.Sanitized
+                            : SazExportKind.Plain);
 
-                Assert.Throws<FiddlerSazHeaderLimitException>(
-                    () => FiddlerSazHandler.ImportSazFileWithDiagnostics(
-                        path,
-                        CancellationToken.None));
+                Assert.True(exported.Succeeded);
+                Assert.Equal(
+                    1,
+                    exported.Value.Summary.RowsOversized);
+                Assert.Equal(
+                    0,
+                    exported.Value.Summary.Sessions);
+                Assert.Empty(
+                    FiddlerSazHandler
+                        .ImportSazFileWithDiagnostics(
+                            path,
+                            CancellationToken.None)
+                        .Records);
             }
             finally
             {

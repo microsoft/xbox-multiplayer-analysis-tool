@@ -136,6 +136,16 @@ namespace XMAT.DataAbstractionLayer
             return _fieldDefinitions.Values;
         }
 
+        internal T ReadForSazExport<T>(
+            Func<SqliteConnection, string, T> read)
+        {
+            ArgumentNullException.ThrowIfNull(read);
+            ThrowIfDisposed();
+            return read(
+                _commandInterface.Connection,
+                _sourceTableName);
+        }
+
         private IEnumerable<IDataRecord> GetDataRecords()
         {
             ThrowIfDisposed();

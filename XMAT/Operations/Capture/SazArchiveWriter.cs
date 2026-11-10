@@ -20,12 +20,12 @@ namespace XMAT.Operations.Capture
         ReadOnlyMemory<byte> Body);
 
     // One session of a Fiddler archive. Id names its entries and is unique in the archive; Response is null for a request
-    // that got none; Started is a UTC time; Flags are its session flags, in order.
+    // that got none; Started is a UTC time or null when it is unknown; Flags are its session flags, in order.
     internal sealed record SazSession(
         long Id,
         SazMessage Request,
         SazMessage Response,
-        DateTime Started,
+        DateTime? Started,
         TimeSpan Duration,
         IReadOnlyList<KeyValuePair<string, string>> Flags);
 
@@ -61,6 +61,8 @@ namespace XMAT.Operations.Capture
         internal const int MaxFlags = 64;
         internal const int MaxFlagNameChars = 128;
         internal const int MaxFlagValueChars = 4096;
+        internal const string UnknownTimeText =
+            "0001-01-01T00:00:00.0000000";
 
         private static readonly string[] RequestTimers =
         {
@@ -106,12 +108,20 @@ namespace XMAT.Operations.Capture
                 cancellationToken.ThrowIfCancellationRequested();
                 ArgumentNullException.ThrowIfNull(session);
                 ArgumentNullException.ThrowIfNull(session.Request);
-                if (session.Started.Kind != DateTimeKind.Utc)
+                if (session.Started is DateTime started &&
+                    started.Kind != DateTimeKind.Utc)
                 {
                     throw new ArgumentException("A session's start is a UTC time.", nameof(session));
                 }
 
                 ArgumentOutOfRangeException.ThrowIfLessThan(session.Duration, TimeSpan.Zero, nameof(session));
+                if (!session.Started.HasValue &&
+                    session.Duration != TimeSpan.Zero)
+                {
+                    throw new ArgumentException(
+                        "A session without a start cannot have a duration.",
+                        nameof(session));
+                }
                 IReadOnlyList<KeyValuePair<string, string>> flags =
                     session.Flags ?? Array.Empty<KeyValuePair<string, string>>();
                 CheckFlags(flags);
@@ -127,16 +137,12 @@ namespace XMAT.Operations.Capture
                 }
 
                 string id = session.Id.ToString(CultureInfo.InvariantCulture);
-                WriteEntry($"raw/{id}_c.txt", session.Request, cancellationToken);
+                WriteMessageEntry($"raw/{id}_c.txt", session.Request, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                using (Stream metadata = _archive.CreateEntry($"raw/{id}_m.xml", CompressionLevel.Fastest).Open())
-                {
-                    WriteMetadata(metadata, session, flags);
-                }
-
+                WriteEntry($"raw/{id}_m.xml", stream => WriteMetadata(stream, session, flags));
                 if (session.Response != null)
                 {
-                    WriteEntry($"raw/{id}_s.txt", session.Response, cancellationToken);
+                    WriteMessageEntry($"raw/{id}_s.txt", session.Response, cancellationToken);
                 }
             }
             catch
@@ -193,12 +199,43 @@ namespace XMAT.Operations.Capture
             }
         }
 
-        private void WriteEntry(string name, SazMessage message, CancellationToken cancellationToken)
+        private void WriteMessageEntry(string name, SazMessage message, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using Stream stream = _archive.CreateEntry(name, CompressionLevel.Fastest).Open();
-            WriteHead(stream, message);
-            WriteBody(stream, message.Body.Span, cancellationToken);
+            WriteEntry(
+                name,
+                stream =>
+                {
+                    WriteHead(stream, message);
+                    WriteBody(stream, message.Body.Span, cancellationToken);
+                });
+        }
+
+        // An entry is deflated only when that makes it no larger than its content, and stored otherwise, so that no
+        // entry outgrows what it holds: Fastest codes bytes that do not repeat with fixed Huffman codes of up to 9 bits a
+        // byte, an eighth more than random content. The content is written twice, once to measure and once to keep.
+        private void WriteEntry(string name, Action<Stream> content)
+        {
+            CompressionLevel level = DeflatesWithoutGrowing(content)
+                ? CompressionLevel.Fastest
+                : CompressionLevel.NoCompression;
+            using Stream stream = _archive.CreateEntry(name, level).Open();
+            content(stream);
+        }
+
+        // Whether Fastest deflate codes the content in no more bytes than it has. The code goes to a sink that only
+        // counts it, and the measure gives up as soon as the code is longer than the content so far.
+        internal static bool DeflatesWithoutGrowing(Action<Stream> content)
+        {
+            var sink = new CountingSink();
+            var measure = new GrowthMeasure(sink);
+            using (var deflate = new DeflateStream(sink, CompressionLevel.Fastest, leaveOpen: true))
+            {
+                measure.Deflate = deflate;
+                content(measure);
+            }
+
+            return !measure.Grew && sink.Count <= measure.Count;
         }
 
         // A head that the archive can hold: its start line and fields are Latin-1, with no line break inside a line. Both
@@ -274,6 +311,94 @@ namespace XMAT.Operations.Capture
             }
         }
 
+        // A stream that keeps nothing and counts what is written to it.
+        private sealed class CountingSink : Stream
+        {
+            internal long Count { get; private set; }
+
+            public override bool CanRead => false;
+
+            public override bool CanSeek => false;
+
+            public override bool CanWrite => true;
+
+            public override long Length => throw new NotSupportedException();
+
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override void Write(byte[] buffer, int offset, int count) => Count += count;
+
+            public override void Write(ReadOnlySpan<byte> buffer) => Count += buffer.Length;
+
+            public override void WriteByte(byte value) => Count++;
+
+            public override void Flush()
+            {
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+            public override void SetLength(long value) => throw new NotSupportedException();
+        }
+
+        // Counts the content and passes it to the deflate stream until the code is longer than the content so far;
+        // from then on it only counts, since the entry will be stored.
+        private sealed class GrowthMeasure(CountingSink sink) : Stream
+        {
+            internal DeflateStream Deflate { get; set; }
+
+            internal long Count { get; private set; }
+
+            internal bool Grew { get; private set; }
+
+            public override bool CanRead => false;
+
+            public override bool CanSeek => false;
+
+            public override bool CanWrite => true;
+
+            public override long Length => throw new NotSupportedException();
+
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override void Write(byte[] buffer, int offset, int count) =>
+                Write(buffer.AsSpan(offset, count));
+
+            public override void Write(ReadOnlySpan<byte> buffer)
+            {
+                Count += buffer.Length;
+                if (Grew)
+                {
+                    return;
+                }
+
+                Deflate.Write(buffer);
+                Grew = sink.Count > Count;
+            }
+
+            public override void WriteByte(byte value) => Write(new ReadOnlySpan<byte>(in value));
+
+            public override void Flush()
+            {
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+            public override void SetLength(long value) => throw new NotSupportedException();
+        }
+
         private static void CheckFlags(IReadOnlyList<KeyValuePair<string, string>> flags)
         {
             if (flags.Count > MaxFlags)
@@ -325,8 +450,15 @@ namespace XMAT.Operations.Capture
         private static void WriteMetadata(
             Stream stream, SazSession session, IReadOnlyList<KeyValuePair<string, string>> flags)
         {
-            string begin = session.Started.ToString("o", CultureInfo.InvariantCulture);
-            string done = (session.Started + session.Duration).ToString("o", CultureInfo.InvariantCulture);
+            string begin = session.Started?.ToString(
+                "o",
+                CultureInfo.InvariantCulture) ??
+                UnknownTimeText;
+            string done = session.Started.HasValue
+                ? (session.Started.Value + session.Duration).ToString(
+                    "o",
+                    CultureInfo.InvariantCulture)
+                : UnknownTimeText;
             var settings = new XmlWriterSettings
             {
                 Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),

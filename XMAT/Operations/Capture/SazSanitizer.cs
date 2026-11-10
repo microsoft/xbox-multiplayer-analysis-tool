@@ -17,8 +17,9 @@ using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
 using XMAT.Operations.Privacy;
+using XMAT.WebServiceCapture;
 
-namespace XMAT.WebServiceCapture
+namespace XMAT.Operations.Capture
 {
     internal sealed class SanitizedExportSummary
     {
@@ -30,6 +31,53 @@ namespace XMAT.WebServiceCapture
     }
 
     internal readonly record struct SanitizedHttpMessage(string Headers, byte[] Body, bool BodyOmitted);
+
+    internal readonly struct SanitizerBody
+    {
+        private readonly byte[] _bytes;
+
+        private SanitizerBody(byte[] bytes, bool uninspected)
+        {
+            _bytes = bytes;
+            IsUninspected = uninspected;
+        }
+
+        internal static SanitizerBody Empty { get; } =
+            new(Array.Empty<byte>(), false);
+
+        internal static SanitizerBody Of(byte[] bytes)
+        {
+            ArgumentNullException.ThrowIfNull(bytes);
+            return bytes.Length == 0
+                ? Empty
+                : new SanitizerBody(bytes, false);
+        }
+
+        internal static SanitizerBody Uninspected { get; } =
+            new(Array.Empty<byte>(), true);
+
+        internal byte[] Bytes => _bytes ?? Array.Empty<byte>();
+
+        internal bool IsUninspected { get; }
+
+        internal bool HasContent => IsUninspected || Bytes.Length != 0;
+
+        internal static SanitizerBody FromNullable(byte[] bytes) =>
+            bytes == null ? Empty : Of(bytes);
+    }
+
+    internal sealed class SazSanitizeException : Exception
+    {
+        internal const string InvalidHttpCode =
+            "capture-file.sanitize.invalid-http";
+
+        internal SazSanitizeException(string message)
+            : base(message)
+        {
+        }
+
+        internal string Code => InvalidHttpCode;
+    }
 
     internal sealed class SazSanitizer
     {
@@ -115,17 +163,22 @@ namespace XMAT.WebServiceCapture
         }
 
         internal (SanitizedHttpMessage Request, SanitizedHttpMessage? Response) SanitizeSession(
-            string requestHeaders, byte[] requestBody, string responseHeaders, byte[] responseBody, string method)
+            string requestHeaders, SanitizerBody requestBody,
+            string responseHeaders, SanitizerBody responseBody,
+            string method)
         {
             ResetSession();
-            var request = InspectMessage(requestHeaders, requestBody, true, method);
+            var request = InspectBody(requestHeaders, requestBody, true, method);
             MessageInspection? response = string.IsNullOrEmpty(responseHeaders)
-                ? null : InspectMessage(responseHeaders, responseBody, false, method);
+                ? null : InspectBody(responseHeaders, responseBody, false, method);
             PrepareKnownSecrets();
             var before = (Summary.RedactedValues, Summary.OmittedBodies, Summary.OmittedHeaders, Summary.WorkBudgetOmissions);
-            var renderedRequest = OpaqueSession ? default : RenderMessage(requestHeaders, requestBody, true, method, request);
+            var renderedRequest = OpaqueSession
+                ? default
+                : RenderBody(requestHeaders, requestBody, true, method, request);
             SanitizedHttpMessage? renderedResponse = !OpaqueSession && response is { } inspected
-                ? RenderMessage(responseHeaders, responseBody, false, method, inspected) : null;
+                ? RenderBody(responseHeaders, responseBody, false, method, inspected)
+                : null;
             if (!OpaqueSession)
             {
                 return (renderedRequest, renderedResponse);
@@ -135,8 +188,11 @@ namespace XMAT.WebServiceCapture
             {
                 Summary.WorkBudgetOmissions++;
             }
-            return (OpaqueMessage(requestHeaders, requestBody, true, method, request),
-                response is { } omitted ? OpaqueMessage(responseHeaders, responseBody, false, method, omitted) : null);
+            return (
+                OpaqueBody(requestHeaders, requestBody, true, method, request),
+                response is { } omitted
+                    ? OpaqueBody(responseHeaders, responseBody, false, method, omitted)
+                    : null);
         }
 
         private void ResetSession()
@@ -150,28 +206,47 @@ namespace XMAT.WebServiceCapture
 
         private MessageInspection InspectMessage(string rawHeaders, byte[] body, bool request, string method)
         {
+            return InspectBody(
+                rawHeaders,
+                SanitizerBody.FromNullable(body),
+                request,
+                method);
+        }
+
+        private MessageInspection InspectBody(
+            string rawHeaders,
+            SanitizerBody body,
+            bool request,
+            string method)
+        {
             _remainingWork = MaximumInspectionWork;
             _messageHeaderCount = 0;
             if (OpaqueSession)
             {
-                return new(_remainingWork, body?.Length > 0, 0);
+                return new(_remainingWork, body.HasContent, 0);
             }
             var before = (Summary.RedactedValues, Summary.OmittedBodies, Summary.OmittedHeaders, Summary.WorkBudgetOmissions);
             _discovering = true;
             try
             {
                 // Reuse every detector without publishing its output or applying learned-value substitutions.
-                var inspected = SanitizeMessageCore(rawHeaders, body, request, method);
+                var inspected = SanitizeMessageCore(
+                    rawHeaders,
+                    body.Bytes,
+                    request,
+                    method,
+                    omitBody: body.IsUninspected,
+                    bodyPresent: body.HasContent);
                 return new(_remainingWork, inspected.BodyOmitted, _messageHeaderCount);
             }
             catch (InvalidDataException) when (OpaqueSession)
             {
-                return new(_remainingWork, body?.Length > 0, _messageHeaderCount);
+                return new(_remainingWork, body.HasContent, _messageHeaderCount);
             }
             catch (RegexMatchTimeoutException)
             {
                 _unsafeInspection = true;
-                return new(_remainingWork, body?.Length > 0, _messageHeaderCount);
+                return new(_remainingWork, body.HasContent, _messageHeaderCount);
             }
             finally
             {
@@ -183,10 +258,31 @@ namespace XMAT.WebServiceCapture
         private SanitizedHttpMessage RenderMessage(
             string rawHeaders, byte[] body, bool request, string method, MessageInspection inspection)
         {
+            return RenderBody(
+                rawHeaders,
+                SanitizerBody.FromNullable(body),
+                request,
+                method,
+                inspection);
+        }
+
+        private SanitizedHttpMessage RenderBody(
+            string rawHeaders,
+            SanitizerBody body,
+            bool request,
+            string method,
+            MessageInspection inspection)
+        {
             _remainingWork = inspection.RemainingWork;
             try
             {
-                return SanitizeMessageCore(rawHeaders, body, request, method, inspection.OmitBody);
+                return SanitizeMessageCore(
+                    rawHeaders,
+                    body.Bytes,
+                    request,
+                    method,
+                    inspection.OmitBody || body.IsUninspected,
+                    body.HasContent);
             }
             catch (InvalidDataException) when (OpaqueSession)
             {
@@ -201,6 +297,21 @@ namespace XMAT.WebServiceCapture
 
         private SanitizedHttpMessage OpaqueMessage(
             string rawHeaders, byte[] body, bool request, string method, MessageInspection inspection)
+        {
+            return OpaqueBody(
+                rawHeaders,
+                SanitizerBody.FromNullable(body),
+                request,
+                method,
+                inspection);
+        }
+
+        private SanitizedHttpMessage OpaqueBody(
+            string rawHeaders,
+            SanitizerBody body,
+            bool request,
+            string method,
+            MessageInspection inspection)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             using var reader = new StringReader(rawHeaders ?? string.Empty);
@@ -218,7 +329,7 @@ namespace XMAT.WebServiceCapture
                 output.Append("Content-Length: 0\r\n");
             }
             output.Append("\r\n");
-            var omitted = body?.Length > 0;
+            var omitted = body.HasContent;
             if (omitted)
             {
                 Summary.OmittedBodies++;
@@ -229,7 +340,7 @@ namespace XMAT.WebServiceCapture
 
         private SanitizedHttpMessage SanitizeMessageCore(
             string rawHeaders, byte[] body, bool request, string requestMethod,
-            bool omitBody = false)
+            bool omitBody = false, bool bodyPresent = false)
         {
             _messageHeaderCount = 0;
             SpendWork(rawHeaders?.Length ?? 0);
@@ -277,12 +388,13 @@ namespace XMAT.WebServiceCapture
             var bodyless = forbiddenLength || headOrNotModified || (!request && status == 205);
             var omissionsBefore = Summary.OmittedBodies;
             var originalBody = body ?? Array.Empty<byte>();
+            var hasBody = bodyPresent || originalBody.Length > 0;
             string contentType = null;
             byte[] outputBody;
             if (bodyless)
             {
                 outputBody = Array.Empty<byte>();
-                if (originalBody.Length > 0)
+                if (hasBody)
                 {
                     Summary.OmittedBodies++;
                 }
@@ -290,7 +402,7 @@ namespace XMAT.WebServiceCapture
             else if (omitBody)
             {
                 outputBody = Array.Empty<byte>();
-                if (originalBody.Length > 0)
+                if (hasBody)
                 {
                     Summary.OmittedBodies++;
                 }
@@ -301,9 +413,9 @@ namespace XMAT.WebServiceCapture
             }
             if (OpaqueSession)
             {
-                return new(string.Empty, Array.Empty<byte>(), originalBody.Length > 0);
+                return new(string.Empty, Array.Empty<byte>(), hasBody);
             }
-            var bodyChanged = originalBody.Length > 0;
+            var bodyChanged = hasBody;
             var output = new StringBuilder(startLine).Append("\r\n");
             foreach (var header in headers)
             {
@@ -1145,7 +1257,7 @@ namespace XMAT.WebServiceCapture
             var space = line.IndexOf(' ');
             if (space <= 0)
             {
-                throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                throw InvalidHttp();
             }
             var method = line.Substring(0, space);
             return method + " " +
@@ -1162,7 +1274,7 @@ namespace XMAT.WebServiceCapture
                 if (firstSpace <= 0 || lastSpace <= firstSpace ||
                     !line.Substring(lastSpace + 1).StartsWith("HTTP/", StringComparison.Ordinal))
                 {
-                    throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                    throw InvalidHttp();
                 }
                 var target = line.Substring(firstSpace + 1, lastSpace - firstSpace - 1);
                 var portSeparator = target.LastIndexOf(':');
@@ -1179,7 +1291,7 @@ namespace XMAT.WebServiceCapture
             }
             if (!line.StartsWith("HTTP/", StringComparison.Ordinal) || firstSpace < 0)
             {
-                throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                throw InvalidHttp();
             }
             var statusStart = firstSpace + 1;
             while (statusStart < line.Length && line[statusStart] == ' ')
@@ -1198,10 +1310,13 @@ namespace XMAT.WebServiceCapture
                 !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var status) ||
                 status is < 100 or > 999)
             {
-                throw new InvalidDataException(Localization.GetLocalizedString("SANITIZED_EXPORT_INVALID_HTTP"));
+                throw InvalidHttp();
             }
             return status;
         }
+
+        private static SazSanitizeException InvalidHttp() =>
+            new("The HTTP message is invalid and cannot be sanitized.");
 
         private string SanitizeUri(string value, int depth, bool replaceKnown = true)
         {

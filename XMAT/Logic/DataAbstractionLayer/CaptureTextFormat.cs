@@ -90,6 +90,23 @@ namespace XMAT.DataAbstractionLayer
                 isAvailable);
         }
 
+        // A source for text already read into memory from the file whose content had this SHA-256: bound, and available
+        // after the file is closed, because the text it describes no longer depends on the file.
+        internal static CaptureTextSource CreateSnapshot(
+            CaptureTextSemantics semantics,
+            SqLtFileIdentity identity,
+            string sha256)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(sha256);
+            var source = new CaptureTextSource(
+                semantics,
+                identity,
+                _ => throw new InvalidOperationException(),
+                () => true);
+            source._sha256 = sha256.ToLowerInvariant();
+            return source;
+        }
+
         internal static CaptureTextSource Of(object value) =>
             value is XMAT.SharedInterfaces.ICaptureTextSourceProvider provider
                 ? provider.CaptureTextSource ??

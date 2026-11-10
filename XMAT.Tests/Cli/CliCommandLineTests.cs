@@ -183,6 +183,42 @@ namespace XMAT.Tests.Cli
                 joined.Request);
         }
 
+        [Fact]
+        public void Parse_ReadsExportSazOptionsAndSwitches()
+        {
+            CliParseResult result =
+                CliCommandLine.Parse(
+                    new[]
+                    {
+                        "export-saz",
+                        "capture.xmatcap",
+                        "--out",
+                        "results",
+                        "--device",
+                        "d2",
+                        "--sanitize",
+                        "--accept-stored-text",
+                        "--max-records",
+                        "250000",
+                    });
+
+            Assert.True(result.Succeeded);
+            Assert.Equal(
+                CliCommands.ExportSaz,
+                result.Request.Command);
+            Assert.Equal(
+                "capture.xmatcap",
+                result.Request.Input);
+            Assert.Equal("results", result.Request.Output);
+            Assert.Equal("d2", result.Request.DeviceId);
+            Assert.True(result.Request.ExportSaz.Sanitize);
+            Assert.True(
+                result.Request.ExportSaz.AcceptStoredText);
+            Assert.Equal(
+                250_000,
+                result.Request.Limits.MaxRecords);
+        }
+
         [Theory]
         [InlineData("as-stored", (int)CaptureTextInterpretation.AsStored)]
         [InlineData("legacy-one-layer", (int)CaptureTextInterpretation.LegacyOneLayer)]
@@ -584,8 +620,8 @@ namespace XMAT.Tests.Cli
             Assert.Equal(
                 new[]
                 {
-                    CliCommands.Analyze, CliCommands.Compose, CliCommands.Curl, CliCommands.Doctor, CliCommands.MarkCaptureText,
-                    CliCommands.Replay, CliCommands.SaveRequest,
+                    CliCommands.Analyze, CliCommands.Compose, CliCommands.Curl, CliCommands.Doctor, CliCommands.ExportSaz,
+                    CliCommands.MarkCaptureText, CliCommands.Replay, CliCommands.SaveRequest,
                 },
                 report.Commands.Select(command => command.Name));
             foreach (Capability capability in CapabilityRegistry.All.Where(item => item.Status == CapabilityStatus.Supported))
@@ -620,6 +656,39 @@ namespace XMAT.Tests.Cli
             Assert.Equal(
                 accepted.OrderBy(name => name, StringComparer.Ordinal),
                 named.OrderBy(name => name, StringComparer.Ordinal));
+        }
+
+        [Fact]
+        public void ExportSazCapabilityLines_TogetherNameExactlyItsOptions()
+        {
+            IEnumerable<string> named =
+                CapabilityRegistry.All
+                    .Where(
+                        capability =>
+                            capability.Id is
+                                "capture-file.export-saz" or
+                                "capture-file.sanitize")
+                    .SelectMany(
+                        capability =>
+                            capability.CliRoute.Split(
+                                new[] { ' ', '[', ']' },
+                                StringSplitOptions.RemoveEmptyEntries))
+                    .Where(
+                        token =>
+                            token.StartsWith(
+                                "--",
+                                StringComparison.Ordinal))
+                    .Distinct(
+                        StringComparer.Ordinal);
+
+            Assert.Equal(
+                CliCommandLine.ExportSazOptionNames
+                    .OrderBy(
+                        name => name,
+                        StringComparer.Ordinal),
+                named.OrderBy(
+                    name => name,
+                    StringComparer.Ordinal));
         }
 
         [Theory]

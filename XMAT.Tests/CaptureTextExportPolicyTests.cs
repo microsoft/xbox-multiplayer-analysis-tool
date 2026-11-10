@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: MIT
 
 using System.Drawing;
+using System.Reflection;
+using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations.Capture;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
@@ -12,6 +15,10 @@ using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.Tests
 {
+    // Q's interim refusal of an unmarked capture's export (Q 3.6) and its source cases, on S2's gate (design section 9, H8;
+    // G13): the selected tab's own text source decides, never the loaded database's (M-Q13); a source that XMAT cannot bind,
+    // an unknown one or a custom dataset without a class (M-Q15), is refused before any question, worker or file; and a
+    // Literal active import passes the gate, asked nothing about its text.
     [Collection(CaptureUiApplicationCollection.Name)]
     public sealed class CaptureTextExportPolicyTests
     {
@@ -24,11 +31,18 @@ namespace XMAT.Tests
         }
 
         [Theory]
-        [InlineData("ambiguous")]
-        [InlineData("custom")]
-        public async Task SanitizedExport_RefusesTheSelectedUnknownSourceBeforeWorkerOrFileWork(
-            string sourceKind)
+        [InlineData("ambiguous", false)]
+        [InlineData("ambiguous", true)]
+        [InlineData("custom", false)]
+        [InlineData("custom", true)]
+        public async Task Export_RefusesTheSelectedUnknownSourceBeforeAQuestionWorkerOrFileWork(
+            string sourceKind,
+            bool sanitized)
         {
+            SazExportKind kind =
+                sanitized
+                    ? SazExportKind.Sanitized
+                    : SazExportKind.Plain;
             using var directory = new TestDirectory();
             string markedPath =
                 SyntheticCaptures.WriteXmatcap(
@@ -43,9 +57,10 @@ namespace XMAT.Tests
                 Path.Join(
                     directory.Path,
                     "refused.saz");
-            Task exporting = null;
-            bool workerStarting = false;
-            _application.Run(window =>
+            var logged = new List<string>();
+            ScriptedCaptureExportDialogs dialogs = null;
+            CaptureExportOutcome outcome = null;
+            await _application.RunAsync(async () =>
             {
                 var controller =
                     new WebServiceDeviceCaptureController(
@@ -68,98 +83,155 @@ namespace XMAT.Tests
                 var context =
                     new Context(controller);
                 var model =
-                    new CaptureAppModel
+                    new CaptureAppModel(
+                        Dispatcher.CurrentDispatcher)
                     {
                         LoadedDatabase = marked,
                         SelectedDeviceContext =
                             context,
-                        SanitizedExportWorkerStarting =
-                            () => workerStarting = true,
                     };
                 model.CaptureDeviceContexts.Add(
                     context);
-                exporting =
-                    model.ExportSanitizedDataCapturesAsync(
-                        destination);
+                dialogs =
+                    new ScriptedCaptureExportDialogs(
+                        new CaptureExportScript
+                        {
+                            Destination = destination,
+                            AcceptAsStored = true,
+                        });
+                CaptureExportWorkflow workflow =
+                    CaptureExportDriver.Workflow(
+                        dialogs);
+                workflow.LogError = logged.Add;
+                outcome =
+                    await workflow.RunAsync(
+                        model,
+                        kind,
+                        owner: null);
+                Assert.False(
+                    model.IsCaptureDataOperationRunning);
             });
 
-            InvalidOperationException exception =
-                await Assert.ThrowsAsync<InvalidOperationException>(
-                    () => exporting);
-
             Assert.Equal(
-                Localization.GetLocalizedString(
-                    "CAPTURE_TEXT_EXPORT_POLICY_REQUIRED"),
-                exception.Message);
+                CaptureTextSemantics.Literal,
+                marked.CaptureTextSource.Semantics);
             Assert.Equal(
-                "The sanitized export could not be completed. No successful export was recorded: " +
-                    "This capture has no XMAT text-format marker. Create a marked copy with xmat mark-capture-text, " +
-                    "open that copy, and export it instead.",
-                Localization.GetLocalizedString(
-                    "SANITIZED_EXPORT_FAILED",
-                    exception.Message));
-            Assert.False(workerStarting);
+                CaptureTextSourceException.SourceUnavailableCode,
+                outcome.Code);
+            Assert.Equal(
+                new[] { "EXPORT_SOURCE_UNAVAILABLE" },
+                outcome.Shown);
+            Assert.Empty(dialogs.Questions);
+            Assert.Empty(dialogs.Steps);
+            Assert.Equal(
+                CaptureExportWorkflow.LogPrefix +
+                    CaptureTextSourceException.SourceUnavailableCode,
+                Assert.Single(logged));
             Assert.False(File.Exists(destination));
             Assert.Empty(
                 Directory.GetFiles(
                     directory.Path,
-                    "*.tmp"));
+                    ".xmat-*"));
         }
 
-        [Fact]
-        public async Task SanitizedExport_LiteralSourcePassesTheGate()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task Export_LiteralActiveImportPassesTheGate(
+            bool sanitized)
         {
-            using var directory = new TestDirectory();
-            string destination =
-                Path.Join(
-                    directory.Path,
-                    "literal.saz");
-            Task exporting = null;
-            bool workerStarting = false;
-            var expected =
-                new InvalidOperationException(
-                    "worker seam");
-            _application.Run(window =>
+            SazExportKind kind =
+                sanitized
+                    ? SazExportKind.Sanitized
+                    : SazExportKind.Plain;
+            ScriptedCaptureExportDialogs dialogs = null;
+            CaptureExportOutcome outcome = null;
+            await _application.RunAsync(async () =>
             {
+                using var database = new SqLtDatabase();
+                database.Initialize();
+                IDataTable table =
+                    database.CreateTable(
+                        WebServiceCaptureMethod.TableName,
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_DeviceName),
+                        new Field<long>(WebServiceCaptureMethod.FieldKey_RequestNumber),
+                        new Field<long>(WebServiceCaptureMethod.FieldKey_ConnectionId),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_RequestTimestamp),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_RequestScheme),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_RequestHost),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPort),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_RequestMethod),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPath),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_RequestStatus),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_RequestBody),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseBody),
+                        new Field<string>(WebServiceCaptureMethod.FieldKey_ClientIP));
+                var imported =
+                    new ProxyConnectionModel(new DataRecord(1, "selected"));
+                ((IImportedCaptureTable)table).ReplaceImportedRows(
+                    CaptureTextSource.Literal,
+                    new FieldValue<string>(
+                        WebServiceCaptureMethod.FieldKey_DeviceName,
+                        "selected"),
+                    new[] { imported.ToDataTableValues("selected") });
                 var controller =
                     new WebServiceDeviceCaptureController(
                         "selected",
                         DeviceType.GenericProxyDevice,
                         true);
-                controller.LoadCaptureDataset(
-                    new SourceDataset(
-                        CaptureTextSource.Literal,
-                        new DataRecord(
-                            1,
-                            "selected")));
+                typeof(WebServiceDeviceCaptureController)
+                    .GetField(
+                        "_dataTable",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(controller, table);
+                foreach (IDataRecord record in controller.GetCaptureRecords().ToList())
+                {
+                    controller.ProxyConnections.AddFromDataRecord(
+                        record,
+                        true);
+                }
+
                 var context =
                     new Context(controller);
                 var model =
-                    new CaptureAppModel
+                    new CaptureAppModel(
+                        Dispatcher.CurrentDispatcher)
                     {
                         SelectedDeviceContext =
                             context,
-                        SanitizedExportWorkerStarting =
-                            () =>
-                            {
-                                workerStarting = true;
-                                throw expected;
-                            },
                     };
                 model.CaptureDeviceContexts.Add(
                     context);
-                exporting =
-                    model.ExportSanitizedDataCapturesAsync(
-                        destination);
+                Assert.Equal(
+                    CaptureTextSemantics.Literal,
+                    controller.ExportTextSource.Semantics);
+                dialogs =
+                    new ScriptedCaptureExportDialogs(
+                        new CaptureExportScript
+                        {
+                            Destination = null,
+                        });
+                outcome =
+                    await CaptureExportDriver.Workflow(
+                        dialogs).RunAsync(
+                            model,
+                            kind,
+                            owner: null);
             });
 
-            InvalidOperationException actual =
-                await Assert.ThrowsAsync<InvalidOperationException>(
-                    () => exporting);
-
-            Assert.Same(expected, actual);
-            Assert.True(workerStarting);
-            Assert.False(File.Exists(destination));
+            Assert.Equal(
+                kind == SazExportKind.Sanitized
+                    ? new[] { "SANITIZED_EXPORT_CONFIRM", "FILE_EXPORT_SANITIZED" }
+                    : new[] { "FILE_EXPORT_CAPTURES" },
+                outcome.Shown);
+            Assert.Equal(
+                new[] { CaptureExportStep.Preparing },
+                dialogs.Steps.Select(step => step.Step));
+            Assert.Null(outcome.Result);
+            Assert.Null(outcome.Code);
         }
 
         private sealed class SourceDataset(

@@ -10,6 +10,7 @@ using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.Operations;
+using XMAT.Operations.Capture;
 using XMAT.Operations.Replay;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
@@ -532,8 +533,8 @@ namespace XMAT.Tests.Replay
         });
 
         // File > Save keeps the tab: the saved capture opens it as an ordinary read-only tab with the same rows, including the
-        // headers that mark the bodies not kept, but without where they come from, and new replays do not go there. A
-        // Fiddler export of the capture table keeps the marks too.
+        // headers that mark the bodies not kept, but without where they come from, and new replays do not go there. File >
+        // Export of the tab keeps the marks too (S2, G10).
         [Fact]
         public Task ReplaysTab_SavedOrExported_KeepsItsRowsAndTheMarksOfBodiesNotKept() => _application.RunAsync(async () =>
         {
@@ -568,9 +569,13 @@ namespace XMAT.Tests.Replay
                 Assert.NotSame(loaded, next);
                 Assert.Equal(CaptureAppModel.ReplayContextName + " (2)", next.DeviceName);
 
-                // What File > Export does with the capture table.
+                // File > Export of the Replays tab keeps the marks too.
                 string exported = Path.Join(directory, "replays.saz");
-                FiddlerSazHandler.CreateSazFile(exported, table.Dataset.DataRecords.Select(record => new ProxyConnectionModel(record)));
+                model.SelectedDeviceContext = replays;
+                var dialogs = new ScriptedCaptureExportDialogs(new CaptureExportScript { Destination = exported });
+                CaptureExportOutcome outcome = await CaptureExportDriver.Workflow(dialogs)
+                    .RunAsync(model, SazExportKind.Plain, owner: null);
+                Assert.Equal(SazExportPublication.Created, outcome.Result.Publication);
                 ProxyConnectionModel[] imported = FiddlerSazHandler.ImportSazFile(exported, CancellationToken.None).ToArray();
                 Assert.Equal(2, imported.Length);
                 Assert.Equal("abcdef"u8.ToArray(), imported[0].RequestBody);

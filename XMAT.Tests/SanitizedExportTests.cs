@@ -10,8 +10,11 @@ using System.Text.Json;
 using System.Xml.Linq;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations;
+using XMAT.Operations.Capture;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
+using XMAT.Tests.Operations.Capture;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -38,11 +41,23 @@ namespace XMAT.Tests
             var originalResponse = record.ResponseLineAndHeaders;
             var originalBody = record.RequestBody.ToArray();
             var ordinary = Path.Join(_directory, "ordinary.saz");
-            FiddlerSazHandler.CreateSazFile(ordinary, new[] { record });
+            Assert.True(
+                SazExportTestSupport.ExportRecords(
+                    ordinary,
+                    new[] { record },
+                    SazExportKind.Plain)
+                .Succeeded);
             var ordinaryBytes = File.ReadAllBytes(ordinary);
 
             var path = Path.Join(_directory, "sanitized.saz");
-            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, new[] { record });
+            OperationResult<SazExportResult> exported =
+                SazExportTestSupport.ExportRecords(
+                    path,
+                    new[] { record },
+                    SazExportKind.Sanitized);
+            Assert.True(exported.Succeeded);
+            SanitizedExportSummary summary =
+                exported.Value.Summary.Sanitized;
             var entries = Entries(path);
             var all = string.Join("\n", entries.Values.Select(Encoding.UTF8.GetString));
             foreach (var secret in new[]
@@ -104,7 +119,14 @@ namespace XMAT.Tests
                 RequestBody: record.RequestBody.ToArray(), ResponseBody: record.ResponseBody.ToArray())).ToArray();
             var path = Path.Join(_directory, "multiple.saz");
 
-            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, records);
+            OperationResult<SazExportResult> exported =
+                SazExportTestSupport.ExportRecords(
+                    path,
+                    records,
+                    SazExportKind.Sanitized);
+            Assert.True(exported.Succeeded);
+            SanitizedExportSummary summary =
+                exported.Value.Summary.Sanitized;
             var entries = Entries(path);
 
             Assert.Equal(new[]
@@ -160,8 +182,8 @@ namespace XMAT.Tests
                 var record = records[index];
                 var metadata = XDocument.Parse(Encoding.UTF8.GetString(entries[$"raw/{record.RequestNumber}_m.xml"]));
                 var session = metadata.Element("Session");
-                Assert.Equal(record.RecordRowId.ToString(CultureInfo.InvariantCulture), (string)session.Attribute("SID"));
-                Assert.Equal("2100", (string)session.Attribute("BitFlags"));
+                Assert.Equal(record.RequestNumber.ToString(CultureInfo.InvariantCulture), (string)session.Attribute("SID"));
+                Assert.Equal("0", (string)session.Attribute("BitFlags"));
                 Assert.Equal(2, session.Elements().Count());
                 var timers = session.Element("SessionTimers");
                 Assert.Equal(16, timers.Attributes().Count());
@@ -505,18 +527,55 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void FailedExport_PreservesExistingDestinationAndRemovesTemporaryFile()
+        public async Task FailedExport_PreservesExistingDestinationAndRemovesTemporaryFile()
         {
             var path = Path.Join(_directory, "existing.saz");
             File.WriteAllText(path, "original destination");
-            IEnumerable<ProxyConnectionModel> BrokenRecords()
-            {
-                yield return Record();
-                throw new IOException("simulated source failure");
-            }
+            var source =
+                new SazExportTestSupport.ScriptedSource(
+                    new[]
+                    {
+                        new SazExportKey(
+                            1,
+                            1,
+                            0),
+                    },
+                    (_, _) =>
+                        throw new IOException(
+                            "simulated source failure"));
+            var operation = new SazExportOperation();
+            OperationResult<SazExportPlan> prepared =
+                await operation.PrepareAsync(
+                        new SazExportPlanRequest(
+                            source,
+                            SazExportKind.Sanitized,
+                            null,
+                            SazExportBudgets.Default),
+                        OperationContext.None,
+                        CancellationToken.None);
+            Assert.True(prepared.Succeeded);
+            using CaptureArchiveTarget target =
+                await operation.AdmitTargetAsync(
+                        path,
+                        OperationContext.None,
+                        CancellationToken.None);
+            OperationResult<SazExportResult> result =
+                await operation.ExecuteAsync(
+                        new SazExportRequest(
+                            prepared.Value,
+                            new SazExportDestination.ToTarget(
+                                target,
+                                target.ConfirmReplace()),
+                            null),
+                        OperationContext.None,
+                        CancellationToken.None);
 
-            Assert.Throws<IOException>(() => FiddlerSazHandler.CreateSanitizedSazFile(path, BrokenRecords()));
-
+            Assert.Equal(
+                OperationOutcome.Failed,
+                result.Outcome);
+            Assert.Equal(
+                SazExportPublication.NotPublished,
+                result.Value.Publication);
             Assert.Equal("original destination", File.ReadAllText(path));
             Assert.Single(Directory.GetFiles(_directory));
         }
@@ -526,7 +585,14 @@ namespace XMAT.Tests
         {
             var path = Path.Join(_directory, "omitted.saz");
             var record = Record("application/octet-stream");
-            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, new[] { record });
+            OperationResult<SazExportResult> exported =
+                SazExportTestSupport.ExportRecords(
+                    path,
+                    new[] { record },
+                    SazExportKind.Sanitized);
+            Assert.True(exported.Succeeded);
+            SanitizedExportSummary summary =
+                exported.Value.Summary.Sanitized;
             var entries = Entries(path);
             var metadata = XDocument.Parse(Encoding.UTF8.GetString(entries["raw/1_m.xml"]));
             var marker = metadata.Descendants("SessionFlag").Single(element =>
@@ -539,13 +605,22 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void SanitizedExport_CannotOverwriteNativeCaptureFiles()
+        public async Task SanitizedExport_CannotOverwriteNativeCaptureFiles()
         {
             var path = Path.Join(_directory, "capture.xmatcap");
             File.WriteAllText(path, "original capture");
 
-            Assert.Throws<ArgumentException>(() => FiddlerSazHandler.CreateSanitizedSazFile(path, new[] { Record() }));
+            var operation = new SazExportOperation();
+            SazExportException refusal =
+                await Assert.ThrowsAsync<SazExportException>(
+                    () => operation.AdmitTargetAsync(
+                        path,
+                        OperationContext.None,
+                        CancellationToken.None));
 
+            Assert.Equal(
+                SazExportCodes.SazRequired,
+                refusal.Code);
             Assert.Equal("original capture", File.ReadAllText(path));
             Assert.Single(Directory.GetFiles(_directory));
         }
@@ -553,28 +628,62 @@ namespace XMAT.Tests
         [Fact]
         public async Task Model_ExportsOnlySelectedLoadedCaptureAndKeepsSourceRecordsUnchanged()
         {
-            var selected = new DataRecord(1, "selected");
-            var other = new DataRecord(2, "other");
-            var original = selected.Str(WebServiceCaptureMethod.FieldKey_RequestBody);
-            Task<SanitizedExportSummary> exporting = null;
+            using SqLtDatabase database =
+                CaptureDatabase(
+                    out IDataTable table,
+                    (1, "selected"),
+                    (2, "other"));
+            string original =
+                Assert.Single(
+                        table.Dataset.DataRecordsWhen(
+                            new FieldValue<string>(
+                                WebServiceCaptureMethod
+                                    .FieldKey_DeviceName,
+                                "selected")))
+                    .Str(
+                        WebServiceCaptureMethod
+                            .FieldKey_RequestBody);
             CaptureAppModel model = null;
             var path = Path.Join(_directory, "selected.saz");
             _application.Run(window =>
             {
                 var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
-                controller.LoadCaptureDataset(new Dataset(selected, other));
+                controller.LoadCaptureDataset(table.Dataset);
                 var context = new Context(controller);
                 model = new CaptureAppModel { SelectedDeviceContext = context };
                 model.CaptureDeviceContexts.Add(context);
                 Assert.True(model.CanExportSanitizedCaptures);
-                exporting = model.ExportSanitizedDataCapturesAsync(path);
             });
-            var summary = await exporting;
+            CaptureExportOutcome outcome =
+                await CaptureExportDriver.RunAsync(
+                    _application,
+                    model,
+                    SazExportKind.Sanitized,
+                    new CaptureExportScript
+                    {
+                        Destination = path,
+                    });
 
-            Assert.Equal(1, summary.Sessions);
+            Assert.Equal(
+                SazExportPublication.Created,
+                outcome.Result.Publication);
+            Assert.Null(outcome.Code);
+            Assert.Equal(
+                1,
+                outcome.Result.Summary.Sanitized.Sessions);
             Assert.Equal(3, Entries(path).Count);
             Assert.DoesNotContain("body-canary", Encoding.UTF8.GetString(Entries(path)["raw/1_c.txt"]));
-            Assert.Equal(original, selected.Str(WebServiceCaptureMethod.FieldKey_RequestBody));
+            Assert.Equal(
+                original,
+                Assert.Single(
+                        table.Dataset.DataRecordsWhen(
+                            new FieldValue<string>(
+                                WebServiceCaptureMethod
+                                    .FieldKey_DeviceName,
+                                "selected")))
+                    .Str(
+                        WebServiceCaptureMethod
+                            .FieldKey_RequestBody));
             _application.Run(window =>
             {
                 Assert.False(model.IsCaptureDataOperationRunning);
@@ -585,38 +694,46 @@ namespace XMAT.Tests
         [Fact]
         public async Task CancellationAfterPublication_ReportsSuccessAndKeepsTheCompletedArchive()
         {
-            using var cancellation = new CancellationTokenSource();
+            using SqLtDatabase database =
+                CaptureDatabase(
+                    out IDataTable table,
+                    (1, "selected"));
             var path = Path.Join(_directory, "published.saz");
-            Task<SanitizedExportSummary> exporting = null;
             CaptureAppModel model = null;
-            var cancelledAfterPublication = false;
             _application.Run(window =>
             {
                 var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
-                controller.LoadCaptureDataset(new Dataset(new DataRecord(1, "selected")));
+                controller.LoadCaptureDataset(table.Dataset);
                 var context = new Context(controller);
                 model = new CaptureAppModel { SelectedDeviceContext = context };
                 model.CaptureDeviceContexts.Add(context);
-                model.PropertyChanged += (sender, args) =>
-                {
-                    if (args.PropertyName == nameof(CaptureAppModel.IsCaptureDataOperationRunning) &&
-                        !model.IsCaptureDataOperationRunning)
-                    {
-                        Assert.True(File.Exists(path));
-                        Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
-                        Assert.True(exporting == null || !exporting.IsCompleted);
-                        cancelledAfterPublication = true;
-                        cancellation.Cancel();
-                    }
-                };
-                exporting = model.ExportSanitizedDataCapturesAsync(path, cancellation.Token);
             });
-            var summary = await exporting;
+            var script = new CaptureExportScript
+            {
+                Destination = path,
+                OnResult = () =>
+                {
+                    _ = model.CancelCaptureDataOperationAsync();
+                },
+            };
+            CaptureExportOutcome outcome =
+                await CaptureExportDriver.RunAsync(
+                    _application,
+                    model,
+                    SazExportKind.Sanitized,
+                    script);
 
-            Assert.True(cancelledAfterPublication);
-            Assert.True(cancellation.IsCancellationRequested);
-            Assert.False(exporting.IsCanceled);
-            Assert.Equal(1, summary.Sessions);
+            Assert.Equal(
+                SazExportPublication.Created,
+                outcome.Result.Publication);
+            Assert.Null(outcome.Code);
+            Assert.Equal(
+                1,
+                outcome.Result.Summary.Sanitized.Sessions);
+            Assert.Empty(
+                Directory.GetFiles(
+                    _directory,
+                    ".xmat-*.tmp"));
             var entries = Entries(path);
             Assert.Equal(new[] { "raw/1_c.txt", "raw/1_m.xml", "raw/1_s.txt" },
                 entries.Keys.OrderBy(name => name, StringComparer.Ordinal));
@@ -637,18 +754,104 @@ namespace XMAT.Tests
                 Assert.Equal(body.Length, int.Parse(length.Substring("Content-Length:".Length), CultureInfo.InvariantCulture));
                 Assert.Equal(body, suffix == "c" ? reimported.RequestBody : reimported.ResponseBody);
             }
-            _application.Run(window =>
+            await _application.RunAsync(
+                async () =>
+                {
+                    Assert.False(model.IsCaptureDataOperationRunning);
+                    Assert.True(await model.CanCloseAsync());
+                    model.SelectedDeviceContext = null;
+                });
+        }
+
+        private static SqLtDatabase CaptureDatabase(
+            out IDataTable table,
+            params (long Number, string Device)[] rows)
+        {
+            var database = new SqLtDatabase();
+            database.Initialize();
+            table = database.CreateTable(
+                WebServiceCaptureMethod.TableName,
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_DeviceName),
+                new Field<long>(
+                    WebServiceCaptureMethod
+                        .FieldKey_RequestNumber),
+                new Field<long>(
+                    WebServiceCaptureMethod
+                        .FieldKey_ConnectionId),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_RequestTimestamp),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_ResponseTimestamp),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_RequestScheme),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_RequestHost),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_RequestPort),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_RequestMethod),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_RequestPath),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_RequestStatus),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_RequestLineAndHeaders),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_RequestBody),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_ResponseLineAndHeaders),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_ResponseBody),
+                new Field<string>(
+                    WebServiceCaptureMethod
+                        .FieldKey_ClientIP));
+            foreach ((long number, string device) in rows)
             {
-                Assert.False(model.IsCaptureDataOperationRunning);
-                Assert.True(model.CanCloseAsync().GetAwaiter().GetResult());
-                model.SelectedDeviceContext = null;
-            });
+                ProxyConnectionModel record = Record();
+                table.AddRow(
+                    device,
+                    number,
+                    number,
+                    ProxyConnectionModel.ToDateTimeString(
+                        record.RequestTime),
+                    ProxyConnectionModel.ToDateTimeString(
+                        record.ResponseDoneTime),
+                    record.Scheme,
+                    record.Host,
+                    record.Port,
+                    record.Method,
+                    record.Path,
+                    record.Status,
+                    record.RequestLineAndHeaders,
+                    Convert.ToBase64String(
+                        record.RequestBody),
+                    record.ResponseLineAndHeaders,
+                    Convert.ToBase64String(
+                        record.ResponseBody),
+                    record.ClientIP);
+            }
+
+            return database;
         }
 
         [Fact]
-        public void CommandEligibility_RejectsEmptyRunningAndBusyCapturesButAllowsReadOnlyWebCapture()
+        public async Task CommandEligibility_RejectsEmptyRunningAndBusyCapturesButAllowsReadOnlyWebCapture()
         {
-            _application.Run(window =>
+            await _application.RunAsync(async () =>
             {
                 var model = new CaptureAppModel();
                 Assert.False(model.CanExportSanitizedCaptures);
@@ -666,10 +869,10 @@ namespace XMAT.Tests
                 using (operation)
                 {
                     Assert.False(model.CanExportSanitizedCaptures);
-                    Assert.False(model.CanCloseAsync().GetAwaiter().GetResult());
+                    Assert.False(await model.CanCloseAsync());
                 }
                 Assert.True(model.CanExportSanitizedCaptures);
-                Assert.True(model.CanCloseAsync().GetAwaiter().GetResult());
+                Assert.True(await model.CanCloseAsync());
                 model.SelectedDeviceContext = new Context(controller, CaptureType.NetworkTrace);
                 Assert.False(model.CanExportSanitizedCaptures);
                 model.SelectedDeviceContext = null;

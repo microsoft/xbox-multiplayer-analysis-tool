@@ -909,7 +909,28 @@ to **XMAT Replays (2)**, and so on.
 
 **File > Save** saves the **XMAT Replays** tab with the other tabs, and opening the saved
 capture shows it as an ordinary read-only tab, without **Replay of**. **File > Export**
-to a Fiddler archive includes its requests.
+writes only the selected tab to a Fiddler archive, so it writes the tab's requests when
+the **XMAT Replays** tab is selected. A request that Raw mode sent, or attempted, is
+written as the normalized view that its row holds, not as the bytes that Raw mode
+prepared, and without the Raw mark and the write state that the tab shows: only
+`--save-saz` of `xmat replay` and `xmat compose` records those (see
+[Command line](cli.md)).
+
+Where an export goes depends on the drive that you choose. On a local NTFS drive, the
+archive is private to your account and appears whole or not at all, and a file that it
+replaces becomes private too, with none of the earlier file's access or streams. While
+XMAT replaces a file there, no file has its name between moving the earlier file aside
+and renaming the new archive in; if XMAT ends then, the earlier file stays whole in that
+folder, named `.xmat-`, a random name, and `.old`, beside the new archive as a private
+file named `.xmat-`, a random name, and `.tmp`. On a network share, a mapped drive, or a
+FAT or exFAT drive, XMAT prepares the archive privately and then copies it there, so the
+copy has that location's access, is not atomic, exists incomplete while it is copied,
+and can be left incomplete by a failure; XMAT says so before the copy starts and again
+when the export ends. XMAT asks before replacing any file, and replaces only the file
+that it asked about. An export goes only into the folder that you chose, as it was
+then, even if a link or a drive mapping in its path changes meanwhile. `xmat export-saz`
+does not copy: it writes only a new folder on a local NTFS drive (see
+[Command line](cli.md)).
 
 The **XMAT Replays** tab keeps at most 256 MiB of request and response bodies, counting
 the rows it already has. This limits the bodies it keeps, not XMAT's memory use. A

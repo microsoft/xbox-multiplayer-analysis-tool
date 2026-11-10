@@ -279,6 +279,18 @@ namespace XMAT.DataAbstractionLayer
             }
         }
 
+        internal T ReadForSazExport<T>(
+            Func<SqliteConnection, string, T> read)
+        {
+            ArgumentNullException.ThrowIfNull(read);
+            lock (_lockObj)
+            {
+                return read(
+                    _connection,
+                    _name);
+            }
+        }
+
         private IDataset GetSubset(params string[] fieldNames)
         {
             lock (_lockObj)

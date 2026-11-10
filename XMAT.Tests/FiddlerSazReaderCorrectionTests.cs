@@ -7,8 +7,11 @@ using System.Net;
 using System.Text;
 using CaptureAnalysisEngine;
 using Xunit.Abstractions;
+using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Capture;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Operations.Capture;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using XMAT.XboxLiveCaptureAnalysis;
@@ -548,8 +551,8 @@ namespace XMAT.Tests
                 ProxyConnectionModel again = SaveAndRead(read, sanitized);
                 if (beginHeld)
                 {
-                    Assert.Equal(Fiddler(begin).UtcDateTime, again.RequestTime.ToUniversalTime());
-                    Assert.Equal(bothHeld ? Fiddler(done) - Fiddler(begin) : TimeSpan.Zero, again.Duration);
+                    Assert.Equal(read.RequestTime.ToUniversalTime(), again.RequestTime.ToUniversalTime());
+                    Assert.Equal(read.Duration, again.Duration);
                 }
                 else
                 {
@@ -914,11 +917,6 @@ namespace XMAT.Tests
             return local >= DateTime.MinValue.Ticks && local <= DateTime.MaxValue.Ticks;
         }
 
-        // The instant as a Fiddler archive keeps it: XMAT's export writes five digits of a second, and offsets are whole
-        // minutes, so the instant loses the rest of its ticks.
-        private static DateTimeOffset Fiddler(DateTimeOffset instant) =>
-            new(instant.UtcTicks - (instant.UtcTicks % 100), TimeSpan.Zero);
-
         // A request time in local time at begin, a duration from begin to done, and an end at done in local time too.
         private static void AssertTimes(ProxyConnectionModel record, DateTimeOffset begin, DateTimeOffset done)
         {
@@ -955,14 +953,14 @@ namespace XMAT.Tests
             string path = Path.Join(Path.GetTempPath(), "xmat-timers-" + Guid.NewGuid().ToString("N") + ".saz");
             try
             {
-                if (sanitized)
-                {
-                    FiddlerSazHandler.CreateSanitizedSazFile(path, new[] { record });
-                }
-                else
-                {
-                    FiddlerSazHandler.CreateSazFile(path, new[] { record });
-                }
+                OperationResult<SazExportResult> exported =
+                    SazExportTestSupport.ExportRecords(
+                        path,
+                        new[] { record },
+                        sanitized
+                            ? SazExportKind.Sanitized
+                            : SazExportKind.Plain);
+                Assert.True(exported.Succeeded);
 
                 return Assert.Single(FiddlerSazHandler.ImportSazFileWithDiagnostics(path, CancellationToken.None).Records);
             }

@@ -9,6 +9,7 @@ using System.Text.Json;
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Capture;
 using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
 using XMAT.Operations.Replay;
@@ -34,6 +35,10 @@ namespace XMAT.Cli
 
         // summary.json of a published curl run.
         internal const string CurlSummarySchema = "xmat-curl/1";
+
+        // summary.json of a published capture archive export.
+        internal const string ExportSazSummarySchema =
+            "xmat-export-saz/1";
 
         // The only error of the fallback document (SerializeFallback).
         internal static readonly OperationDiagnostic OutputFailure = new(
@@ -95,6 +100,14 @@ namespace XMAT.Cli
                         report.MarkCaptureText,
                         report.Artifacts.Count != 0);
                     writer.WriteEndObject();
+                }
+
+                if (report.ExportSaz != null)
+                {
+                    WriteExportSaz(
+                        writer,
+                        report.ExportSaz,
+                        report.Artifacts.Count != 0);
                 }
 
                 if (report.Commands != null)
@@ -232,6 +245,44 @@ namespace XMAT.Cli
                     writer,
                     report.MarkCaptureText ??
                         new CliMarkCaptureTextReport(),
+                    includePublishedResults: true);
+                WriteDiagnostics(
+                    writer,
+                    "warnings",
+                    report.Warnings);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+
+        internal static byte[] SerializeExportSazSummary(
+            CliReport report)
+        {
+            using var stream =
+                new MemoryStream();
+            using (var writer =
+                new Utf8JsonWriter(
+                    stream,
+                    Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString(
+                    "schema",
+                    ExportSazSummarySchema);
+                writer.WriteString(
+                    "command",
+                    CliCommands.ExportSaz);
+                writer.WriteString(
+                    "runId",
+                    report.RunId);
+                writer.WriteString(
+                    "version",
+                    CliReport.ToolVersion);
+                WriteExportSaz(
+                    writer,
+                    report.ExportSaz ??
+                        new CliExportSazReport(),
                     includePublishedResults: true);
                 WriteDiagnostics(
                     writer,
@@ -613,6 +664,136 @@ namespace XMAT.Cli
             writer.WriteStartObject("storedText");
             writer.WriteString("semantics", storedText.Semantics);
             writer.WriteString("policy", storedText.Policy);
+            writer.WriteEndObject();
+        }
+
+        private static void WriteExportSaz(
+            Utf8JsonWriter writer,
+            CliExportSazReport report,
+            bool includePublishedResults)
+        {
+            if (report.InputKind != null ||
+                report.InputSha256 != null)
+            {
+                writer.WriteStartObject("input");
+                writer.WriteString(
+                    "kind",
+                    report.InputKind);
+                writer.WriteString(
+                    "sha256",
+                    report.InputSha256);
+                writer.WriteEndObject();
+            }
+
+            if (report.Limits != null)
+            {
+                WriteLimits(
+                    writer,
+                    report.Limits);
+            }
+
+            if (report.DeviceId != null)
+            {
+                writer.WriteString(
+                    "device",
+                    report.DeviceId);
+            }
+
+            writer.WriteBoolean(
+                "sanitize",
+                report.Sanitize);
+            writer.WriteBoolean(
+                "acceptStoredText",
+                report.AcceptStoredText);
+            if (!includePublishedResults ||
+                report.Export == null ||
+                report.StoredText == null)
+            {
+                return;
+            }
+
+            WriteStoredText(
+                writer,
+                report.StoredText);
+            WriteSazExportSummary(
+                writer,
+                report.Export);
+            if (report.Sanitized == null)
+            {
+                writer.WriteNull("sanitized");
+            }
+            else
+            {
+                writer.WriteStartObject("sanitized");
+                writer.WriteNumber(
+                    "redactedValues",
+                    report.Sanitized.RedactedValues);
+                writer.WriteNumber(
+                    "omittedBodies",
+                    report.Sanitized.OmittedBodies);
+                writer.WriteNumber(
+                    "omittedHeaders",
+                    report.Sanitized.OmittedHeaders);
+                writer.WriteNumber(
+                    "workBudgetOmissions",
+                    report.Sanitized.WorkBudgetOmissions);
+                writer.WriteEndObject();
+            }
+        }
+
+        private static void WriteSazExportSummary(
+            Utf8JsonWriter writer,
+            SazExportSummary summary)
+        {
+            writer.WriteStartObject("export");
+            writer.WriteNumber(
+                "rowsPlanned",
+                summary.RowsPlanned);
+            writer.WriteNumber(
+                "sessions",
+                summary.Sessions);
+            writer.WriteNumber(
+                "entries",
+                summary.Entries);
+            writer.WriteNumber(
+                "rowsWithoutRequest",
+                summary.RowsWithoutRequest);
+            writer.WriteNumber(
+                "rowsOversized",
+                summary.RowsOversized);
+            writer.WriteNumber(
+                "rowsUnreadable",
+                summary.RowsUnreadable);
+            writer.WriteNumber(
+                "bodiesNotKept",
+                summary.BodiesNotKept);
+            writer.WriteNumber(
+                "bodiesUndecodable",
+                summary.BodiesUndecodable);
+            writer.WriteNumber(
+                "renumberedSessions",
+                summary.RenumberedSessions);
+            writer.WriteNumber(
+                "replacedHeadCharacters",
+                summary.ReplacedHeadCharacters);
+            writer.WriteNumber(
+                "droppedHeaderLines",
+                summary.DroppedHeaderLines);
+            writer.WriteNumber(
+                "reformattedHeaderLines",
+                summary.ReformattedHeaderLines);
+            writer.WriteNumber(
+                "absoluteTargets",
+                summary.AbsoluteTargets);
+            writer.WriteNumber(
+                "discardedClientAddresses",
+                summary.DiscardedClientAddresses);
+            writer.WriteNumber(
+                "adjustedTimes",
+                summary.AdjustedTimes);
+            writer.WriteNumber(
+                "archiveBytes",
+                summary.ArchiveBytes);
             writer.WriteEndObject();
         }
 

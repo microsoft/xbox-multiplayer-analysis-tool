@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: MIT
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -231,22 +230,6 @@ namespace XMAT.WebServiceCapture
                     PublicUtilities.AppLog(LogLevel.ERROR, message);
                 }
             }
-        }
-
-        public void ExportToFiddler(string toFilePath)
-        {
-            var list = new List<ProxyConnectionModel>();
-            if (WebProxyConnectionsTable != null)
-            {
-                var records = WebProxyConnectionsTable.Dataset.DataRecords;
-                foreach (var record in records)
-                {
-                    var m = new ProxyConnectionModel(record);
-                    list.Add(m);
-                }
-            }
-
-            FiddlerSazHandler.CreateSazFile(toFilePath, list);
         }
     }
 }

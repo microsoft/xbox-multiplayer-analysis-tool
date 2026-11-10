@@ -21,6 +21,7 @@ namespace XMAT.Cli
         internal const string Compose = "compose";
         internal const string Curl = "curl";
         internal const string Doctor = "doctor";
+        internal const string ExportSaz = "export-saz";
         internal const string Help = "help";
         internal const string MarkCaptureText = "mark-capture-text";
         internal const string Replay = "replay";
@@ -29,7 +30,7 @@ namespace XMAT.Cli
 
         // The commands xmat.exe runs. Each one needs a Supported capability in the registry (XMAT.Tests/Cli checks it).
         internal static IReadOnlyList<string> Implemented { get; } =
-            new[] { Analyze, Compose, Curl, Doctor, MarkCaptureText, Replay, SaveRequest };
+            new[] { Analyze, Compose, Curl, Doctor, ExportSaz, MarkCaptureText, Replay, SaveRequest };
     }
 
     internal sealed record CliRequest(
@@ -43,7 +44,8 @@ namespace XMAT.Cli
         CliLimits Limits = null,
         CliReplay Replay = null,
         CaptureTextInterpretation? Interpretation = null,
-        int MaxInputMib = 0);
+        int MaxInputMib = 0,
+        CliExportSaz ExportSaz = null);
 
     // What xmat replay, compose and save-request send or save, as their command lines give it. Headers and RemoveHeaders
     // keep the order they were given in; BodyFile and RequestFile are read when the run starts. Selection is the --request
@@ -176,6 +178,7 @@ namespace XMAT.Cli
         internal const string AllowRawSwitch = "--allow-raw";
         internal const string FixContentLengthSwitch = "--fix-content-length";
         internal const string AcceptStoredTextSwitch = "--accept-stored-text";
+        internal const string SanitizeSwitch = "--sanitize";
 
         internal const string HttpVersionMessage = "--http-version takes auto, 1.1 or 2.";
 
@@ -445,6 +448,24 @@ namespace XMAT.Cli
                 CliLimits.InputOption,
             };
 
+        private static readonly HashSet<string> ExportSazOptions =
+            new(StringComparer.Ordinal)
+            {
+                OutOption,
+                DeviceOption,
+                CliLimits.InputOption,
+                CliLimits.DataOption,
+                CliLimits.RecordOption,
+                CliLimits.RecordsOption,
+            };
+
+        private static readonly HashSet<string> ExportSazSwitches =
+            new(StringComparer.Ordinal)
+            {
+                SanitizeSwitch,
+                AcceptStoredTextSwitch,
+            };
+
         // The options that analyze accepts; its command line in the capability registry names exactly these.
         internal static IReadOnlySet<string> AnalyzeOptionNames => AnalyzeOptions;
 
@@ -460,6 +481,11 @@ namespace XMAT.Cli
         internal static IReadOnlySet<string> CurlOptionNames => SaveRequestOptionNames;
         internal static IReadOnlySet<string> MarkCaptureTextOptionNames =>
             MarkCaptureTextOptions;
+        internal static IReadOnlySet<string> ExportSazOptionNames { get; } =
+            new HashSet<string>(
+                ExportSazOptions.Concat(
+                    ExportSazSwitches),
+                StringComparer.Ordinal);
 
         internal static CliParseResult Parse(IReadOnlyList<string> args)
         {
@@ -494,6 +520,11 @@ namespace XMAT.Cli
             if (first == CliCommands.MarkCaptureText)
             {
                 return ParseMarkCaptureText(args);
+            }
+
+            if (first == CliCommands.ExportSaz)
+            {
+                return ParseExportSaz(args);
             }
 
             if (first == CliCommands.Replay)
@@ -744,6 +775,101 @@ namespace XMAT.Cli
                     Output: output,
                     Interpretation: parsedInterpretation,
                     MaxInputMib: maxInputMib));
+        }
+
+        private static CliParseResult ParseExportSaz(
+            IReadOnlyList<string> args)
+        {
+            const string command =
+                CliCommands.ExportSaz;
+            var arguments = new CliArguments();
+            CliParseResult error =
+                arguments.Read(
+                    args,
+                    command,
+                    ExportSazOptions,
+                    allowedSwitches:
+                        ExportSazSwitches);
+            if (error != null)
+            {
+                return error;
+            }
+
+            if (arguments.HelpRequested)
+            {
+                return HelpFor(command);
+            }
+
+            if (arguments.Positionals.Count == 0)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-argument",
+                    "export-saz needs the INPUT capture file.");
+            }
+
+            if (arguments.Positionals.Count > 1)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.unexpected-argument",
+                    "export-saz takes a single INPUT capture file.");
+            }
+
+            if (!arguments.Options.TryGetValue(
+                    OutOption,
+                    out string output))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-option",
+                    "export-saz needs --out DIR.");
+            }
+
+            if (arguments.Options.TryGetValue(
+                    DeviceOption,
+                    out string deviceId) &&
+                !IsDeviceId(deviceId))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    "--device takes a device id such as d1 from a previous summary.");
+            }
+
+            CliLimits limits = CliLimits.Read(
+                arguments.Options,
+                out CliLimitOption invalidLimit);
+            if (limits == null)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    invalidLimit.RangeMessage);
+            }
+
+            if (limits.MaxRecordMib >
+                limits.MaxDataMib)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    CliLimits.RecordOverDataMessage);
+            }
+
+            return CliParseResult.Success(
+                new CliRequest(
+                    command,
+                    Input:
+                        arguments.Positionals[0],
+                    Output: output,
+                    DeviceId: deviceId,
+                    Limits: limits,
+                    ExportSaz: new CliExportSaz(
+                        arguments.Switches.Contains(
+                            SanitizeSwitch),
+                        arguments.Switches.Contains(
+                            AcceptStoredTextSwitch))));
         }
 
         private static CliParseResult ParseReplay(IReadOnlyList<string> args)

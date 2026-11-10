@@ -12,8 +12,11 @@ using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations;
+using XMAT.Operations.Capture;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
+using XMAT.Tests.Operations.Capture;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -90,7 +93,12 @@ namespace XMAT.Tests
                     method + " " + (method == "CONNECT" ? "example.test:443" : "/") + " HTTP/1.1\r\nHost: example.test\r\n\r\n",
                     Array.Empty<byte>(),
                     "HTTP/1.1 200 OK\r\nContent-Length: 12345\r\n\r\n", Array.Empty<byte>(), "0.0.0.0");
-                FiddlerSazHandler.CreateSanitizedSazFile(path, new[] { record });
+                Assert.True(
+                    SazExportTestSupport.ExportRecords(
+                        path,
+                        new[] { record },
+                        SazExportKind.Sanitized)
+                    .Succeeded);
                 using var archive = ZipFile.OpenRead(path);
                 using var reader = new StreamReader(archive.GetEntry("raw/1_s.txt").Open());
                 var response = reader.ReadToEnd();
@@ -436,46 +444,68 @@ namespace XMAT.Tests
         {
             var directory = Path.Join(Path.GetTempPath(), "XMAT-export-reader-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
+            Exception bodyFailure = null;
             try
             {
-                using var dataset = new ReaderDataset(Path.Join(directory, "source.sqlite"));
-                Task<SanitizedExportSummary> exporting = null;
+                using SqLtDatabase database =
+                    CaptureDatabase(
+                        out IDataTable table);
                 CaptureAppModel model = null;
+                string destination = failureMode == "extension"
+                    ? Path.Join(directory, "wrong.xmatcap")
+                    : Path.Join(directory, "missing", "output.saz");
                 _application.Run(window =>
                 {
                     var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
-                    controller.LoadCaptureDataset(dataset);
-                    Assert.Equal(0, dataset.OpenReaders);
+                    controller.LoadCaptureDataset(table.Dataset);
                     var context = new Context(controller);
                     model = new CaptureAppModel { SelectedDeviceContext = context };
                     model.CaptureDeviceContexts.Add(context);
-                    var destination = failureMode == "extension"
-                        ? Path.Join(directory, "wrong.xmatcap") : Path.Join(directory, "missing", "output.saz");
-                    exporting = model.ExportSanitizedDataCapturesAsync(destination);
                 });
-                if (failureMode == "extension")
-                {
-                    await Assert.ThrowsAsync<ArgumentException>(() => exporting);
-                }
-                else
-                {
-                    await Assert.ThrowsAsync<DirectoryNotFoundException>(() => exporting);
-                }
-                Assert.Equal(0, dataset.OpenReaders);
-                using var external = new SqliteConnection(dataset.ConnectionString);
-                external.Open();
-                using var command = external.CreateCommand();
-                command.CommandText = "DROP TABLE SourceRows";
-                command.ExecuteNonQuery();
+                CaptureExportOutcome outcome =
+                    await CaptureExportDriver.RunAsync(
+                        _application,
+                        model,
+                        SazExportKind.Sanitized,
+                        new CaptureExportScript
+                        {
+                            Destination = destination,
+                        });
+                string expectedCode =
+                    failureMode == "extension"
+                        ? SazExportCodes.SazRequired
+                        : SazExportCodes.UnsupportedLocation;
+                string expectedText =
+                    failureMode == "extension"
+                        ? "EXPORT_SAZ_REQUIRED"
+                        : "EXPORT_UNSUPPORTED";
+                Assert.Null(outcome.Result);
+                Assert.Equal(expectedCode, outcome.Code);
+                Assert.Contains(expectedText, outcome.Shown);
+                AddRow(table, 2);
                 _application.Run(window =>
                 {
                     Assert.False(model.IsCaptureDataOperationRunning);
                     model.SelectedDeviceContext = null;
                 });
             }
+            catch (Exception exception)
+            {
+                bodyFailure = exception;
+                throw;
+            }
             finally
             {
-                TestFolderCleanup.Delete(directory);
+                try
+                {
+                    TestFolderCleanup.Delete(directory);
+                }
+                catch (Exception cleanup) when (
+                    bodyFailure != null &&
+                    (cleanup is IOException or
+                     UnauthorizedAccessException))
+                {
+                }
             }
         }
 
@@ -484,78 +514,296 @@ namespace XMAT.Tests
         {
             var directory = Path.Join(Path.GetTempPath(), "XMAT-export-cancel-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
+            Exception bodyFailure = null;
             try
             {
-                using var dataset = new ReaderDataset(Path.Join(directory, "source.sqlite"));
-                using var cancellation = new CancellationTokenSource();
+                using SqLtDatabase database =
+                    CaptureDatabase(
+                        out IDataTable table);
                 using var releaseCleanup = new ManualResetEventSlim();
-                var cleanupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 var destination = Path.Join(directory, "existing.saz");
-                FiddlerSazHandler.CreateSanitizedSazFile(destination, new[] { new ProxyConnectionModel(new DataRecord()) });
+                File.WriteAllBytes(
+                    destination,
+                    "existing archive"u8.ToArray());
                 var original = File.ReadAllBytes(destination);
-                Task<SanitizedExportSummary> exporting = null;
                 CaptureAppModel model = null;
+                _application.Run(window =>
+                {
+                    var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
+                    controller.LoadCaptureDataset(table.Dataset);
+                    var context = new Context(controller);
+                    model = new CaptureAppModel { SelectedDeviceContext = context };
+                    model.CaptureDeviceContexts.Add(context);
+                });
+                var script = new CaptureExportScript
+                {
+                    Destination = destination,
+                    Replace = true,
+                };
+                var dialogs =
+                    new ScriptedCaptureExportDialogs(
+                        script);
+                BlockingExportSource blocked = null;
+                CaptureExportWorkflow workflow =
+                    CaptureExportDriver.Workflow(
+                        dialogs);
+                workflow.SourceFrozen = source =>
+                    blocked =
+                        new BlockingExportSource(
+                            source,
+                            releaseCleanup);
+                Task<bool> closing = null;
+                dialogs.DuringStep = async progress =>
+                {
+                    if (progress.Step !=
+                        CaptureExportStep.Writing)
+                    {
+                        return;
+                    }
+
+                    await blocked.ReadingStarted.Task
+                        .WaitAsync(
+                            TimeSpan.FromSeconds(10));
+                    Assert.True(
+                        progress.RequestCancellation());
+                    await blocked.CleanupStarted.Task
+                        .WaitAsync(
+                            TimeSpan.FromSeconds(10));
+                    try
+                    {
+                        Assert.True(
+                            model.IsCaptureDataOperationRunning);
+                        Assert.False(
+                            model.CanExportSanitizedCaptures);
+                        Assert.False(
+                            model.CanModifyCaptureData);
+                        closing =
+                            model.CanCloseAsync();
+                        Assert.False(
+                            closing.IsCompleted);
+                        Assert.False(
+                            model.TryBeginCaptureDataOperation(
+                                out _));
+                        Assert.Equal(
+                            original,
+                            File.ReadAllBytes(destination));
+                    }
+                    finally
+                    {
+                        releaseCleanup.Set();
+                    }
+                };
+                CaptureExportOutcome outcome = null;
                 try
                 {
-                    _application.Run(window =>
-                    {
-                        var controller = new WebServiceDeviceCaptureController("selected", DeviceType.GenericProxyDevice, true);
-                        controller.LoadCaptureDataset(dataset);
-                        var context = new Context(controller);
-                        model = new CaptureAppModel { SelectedDeviceContext = context };
-                        model.CaptureDeviceContexts.Add(context);
-                        dataset.BeforeRead = cancellation.Cancel;
-                        dataset.BeforeDispose = () =>
+                    await _application.RunAsync(
+                        async () =>
                         {
-                            cleanupStarted.TrySetResult();
-                            if (!releaseCleanup.Wait(TimeSpan.FromSeconds(30)))
-                            {
-                                throw new TimeoutException("The test did not release reader cleanup.");
-                            }
-                        };
-                        exporting = model.ExportSanitizedDataCapturesAsync(destination, cancellation.Token);
-                    });
-                    await cleanupStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
-
-                    Assert.True(cancellation.IsCancellationRequested);
-                    Assert.False(exporting.IsCompleted);
-                    Assert.Equal(1, dataset.OpenReaders);
-                    _application.Run(window =>
-                    {
-                        Assert.True(model.IsCaptureDataOperationRunning);
-                        Assert.False(model.CanExportSanitizedCaptures);
-                        Assert.False(model.CanModifyCaptureData);
-                        Assert.False(model.CanCloseAsync().GetAwaiter().GetResult());
-                        Assert.False(model.TryBeginCaptureDataOperation(out _));
-                    });
-                    Assert.Equal(original, File.ReadAllBytes(destination));
+                            outcome =
+                                await workflow.RunAsync(
+                                    model,
+                                    SazExportKind.Sanitized,
+                                    owner: null);
+                            Assert.NotNull(closing);
+                            Assert.True(
+                                await closing.WaitAsync(
+                                    TimeSpan.FromSeconds(10)));
+                            Assert.False(
+                                model.IsCaptureDataOperationRunning);
+                        });
                 }
                 finally
                 {
                     releaseCleanup.Set();
                 }
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => exporting);
 
-                Assert.Equal(0, dataset.OpenReaders);
+                Assert.Equal(
+                    SazExportCodes.Cancelled,
+                    outcome.Code);
+                Assert.DoesNotContain(
+                    "EXPORT_CANCELLED",
+                    outcome.Shown);
                 Assert.Equal(original, File.ReadAllBytes(destination));
-                Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
-                Assert.Single(FiddlerSazHandler.ImportSazFile(destination, CancellationToken.None));
-                using var external = new SqliteConnection(dataset.ConnectionString);
-                external.Open();
-                using var command = external.CreateCommand();
-                command.CommandText = "DROP TABLE SourceRows";
-                command.ExecuteNonQuery();
-                _application.Run(window =>
-                {
-                    Assert.False(model.IsCaptureDataOperationRunning);
-                    Assert.True(model.CanCloseAsync().GetAwaiter().GetResult());
-                    Assert.True(model.CanExportSanitizedCaptures);
-                    model.SelectedDeviceContext = null;
-                });
+                Assert.Empty(
+                    Directory.GetFiles(
+                        directory,
+                        ".xmat-*.tmp"));
+                await _application.RunAsync(
+                    async () =>
+                    {
+                        Assert.False(
+                            model.IsCaptureDataOperationRunning);
+                        Assert.True(
+                            model.CanExportSanitizedCaptures);
+                        model.SelectedDeviceContext = null;
+                    });
+            }
+            catch (Exception exception)
+            {
+                bodyFailure = exception;
+                throw;
             }
             finally
             {
-                TestFolderCleanup.Delete(directory);
+                try
+                {
+                    TestFolderCleanup.Delete(directory);
+                }
+                catch (Exception cleanup) when (
+                    bodyFailure != null &&
+                    (cleanup is IOException or
+                     UnauthorizedAccessException))
+                {
+                }
+            }
+        }
+
+        private static SqLtDatabase CaptureDatabase(
+            out IDataTable table)
+        {
+            var database = new SqLtDatabase();
+            database.Initialize();
+            table = database.CreateTable(
+                WebServiceCaptureMethod.TableName,
+                new Field<string>(WebServiceCaptureMethod.FieldKey_DeviceName),
+                new Field<long>(WebServiceCaptureMethod.FieldKey_RequestNumber),
+                new Field<long>(WebServiceCaptureMethod.FieldKey_ConnectionId),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestTimestamp),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestScheme),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestHost),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPort),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestMethod),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPath),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestStatus),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_RequestBody),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseBody),
+                new Field<string>(WebServiceCaptureMethod.FieldKey_ClientIP));
+            AddRow(table, 1);
+            return database;
+        }
+
+        private static void AddRow(
+            IDataTable table,
+            long number)
+        {
+            var record = new DataRecord();
+            table.AddRow(
+                "selected",
+                number,
+                number,
+                record.Str(WebServiceCaptureMethod.FieldKey_RequestTimestamp),
+                record.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp),
+                record.Str(WebServiceCaptureMethod.FieldKey_RequestScheme),
+                record.Str(WebServiceCaptureMethod.FieldKey_RequestHost),
+                record.Str(WebServiceCaptureMethod.FieldKey_RequestPort),
+                record.Str(WebServiceCaptureMethod.FieldKey_RequestMethod),
+                record.Str(WebServiceCaptureMethod.FieldKey_RequestPath),
+                record.Str(WebServiceCaptureMethod.FieldKey_RequestStatus),
+                record.Str(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders),
+                string.Empty,
+                record.Str(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders),
+                string.Empty,
+                "0.0.0.0");
+        }
+
+        private sealed class BlockingExportSource :
+            SazExportSource
+        {
+            private readonly SazExportSource _inner;
+            private readonly ManualResetEventSlim _release;
+
+            internal BlockingExportSource(
+                SazExportSource inner,
+                ManualResetEventSlim release)
+                : base(inner.TextSource)
+            {
+                _inner = inner;
+                _release = release;
+            }
+
+            internal TaskCompletionSource ReadingStarted { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            internal TaskCompletionSource CleanupStarted { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            internal override bool IsUnsupported =>
+                _inner.IsUnsupported;
+
+            internal override long? GetWatermark(
+                CancellationToken cancellationToken) =>
+                _inner.GetWatermark(
+                    cancellationToken);
+
+            internal override SazExportPage ReadPage(
+                long? afterRowId,
+                long throughRowId,
+                int scan,
+                SazExportBudgets budgets,
+                CancellationToken cancellationToken) =>
+                _inner.ReadPage(
+                    afterRowId,
+                    throughRowId,
+                    scan,
+                    budgets,
+                    cancellationToken);
+
+            internal override SazExportPage ReadPageForKind(
+                long? afterRowId,
+                long throughRowId,
+                int scan,
+                SazExportBudgets budgets,
+                SazExportKind kind,
+                CancellationToken cancellationToken) =>
+                _inner.ReadPageForKind(
+                    afterRowId,
+                    throughRowId,
+                    scan,
+                    budgets,
+                    kind,
+                    cancellationToken);
+
+            internal override StoredRow ReadRow(
+                SazExportKey key,
+                SazExportBudgets budgets,
+                CancellationToken cancellationToken) =>
+                ReadRowForKind(
+                    key,
+                    budgets,
+                    SazExportKind.Plain,
+                    cancellationToken);
+
+            internal override StoredRow ReadRowForKind(
+                SazExportKey key,
+                SazExportBudgets budgets,
+                SazExportKind kind,
+                CancellationToken cancellationToken)
+            {
+                ReadingStarted.TrySetResult();
+                if (!cancellationToken.WaitHandle.WaitOne(
+                        TimeSpan.FromSeconds(30)))
+                {
+                    throw new TimeoutException(
+                        "The test did not cancel the export read.");
+                }
+
+                CleanupStarted.TrySetResult();
+                if (!_release.Wait(
+                        TimeSpan.FromSeconds(30)))
+                {
+                    throw new TimeoutException(
+                        "The test did not release export cleanup.");
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                return _inner.ReadRowForKind(
+                    key,
+                    budgets,
+                    kind,
+                    cancellationToken);
             }
         }
 
@@ -599,7 +847,12 @@ namespace XMAT.Tests
                 }
                 else
                 {
-                    Assert.IsType<InvalidDataException>(exception.InnerException);
+                    var invalid =
+                        Assert.IsType<SazSanitizeException>(
+                            exception.InnerException);
+                    Assert.Equal(
+                        SazSanitizeException.InvalidHttpCode,
+                        invalid.Code);
                 }
                 Assert.False((bool)typeof(SazSanitizer).GetProperty("OpaqueSession",
                     BindingFlags.Instance | BindingFlags.NonPublic).GetValue(sanitizer));

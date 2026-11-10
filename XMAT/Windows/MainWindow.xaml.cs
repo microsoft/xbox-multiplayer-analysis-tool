@@ -3,15 +3,16 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations.Capture;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
@@ -25,11 +26,12 @@ namespace XMAT
         private const string XMATCaptureFileExtension = "xmatcap";
         private const string FiddlerFileExtension = "saz";
         private const string NetTraceFileExtension = "etl";
+        private const string FiddlerFilter = $"Fiddler SAZ files (*.{FiddlerFileExtension})|*.{FiddlerFileExtension}";
         private readonly string XMATFilter = $"{PublicUtilities.AppName} files (*.{XMATCaptureFileExtension})|*.{XMATCaptureFileExtension}";
-        private readonly string FiddlerFilter = $"Fiddler SAZ files (*.{FiddlerFileExtension})|*.{FiddlerFileExtension}";
         private readonly string NetTraceFilter = $"Network trace files (*.{NetTraceFileExtension})|*.{NetTraceFileExtension}";
         private readonly AnalysisReportExportWorkflow
             _analysisReportExportWorkflow;
+        private readonly CaptureExportWorkflow _captureExportWorkflow;
 
         private Cursor _originalCursor;
         private bool _isCloseInProgress;
@@ -47,6 +49,8 @@ namespace XMAT
                     this,
                     new WpfAnalysisReportExportDialogService(),
                     ExportAnalysisReportAsync);
+            var captureExport = new SazExportOperation();
+            _captureExportWorkflow = new CaptureExportWorkflow(captureExport, captureExport, new CaptureExportDialogs());
 
             InitializeComponent();
 
@@ -515,24 +519,14 @@ namespace XMAT
             }
         }
 
-        private void Export_Executed(object sender, RoutedEventArgs e)
+        private void Export_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
-            if (!CaptureAppModel.AppModel.CanModifyCaptureData)
-            {
-                return;
-            }
+            e.CanExecute = CaptureAppModel.AppModel.CanExportCaptures;
+        }
 
-            var saveFileDialog = new SaveFileDialog
-            {
-                Filter = FiddlerFilter
-            };
-
-            if (saveFileDialog.ShowDialog() == true && !string.IsNullOrEmpty(saveFileDialog.FileName))
-            {
-                // TODO: for now, hard-coding Fiddler export type.  In the future, if we have other types,
-                // setup the filter above and call export with the appropriate type
-                CaptureAppModel.AppModel.ExportDataCaptures(ExportType.Fiddler, saveFileDialog.FileName);
-            }
+        private async void Export_Executed(object sender, RoutedEventArgs e)
+        {
+            await RunCaptureExportAsync(SazExportKind.Plain);
         }
 
         private void ExportSanitized_CanExecute(object sender, CanExecuteRoutedEventArgs e)
@@ -542,64 +536,153 @@ namespace XMAT
 
         private async void ExportSanitized_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            if (!CaptureAppModel.AppModel.CanExportSanitizedCaptures)
+            await RunCaptureExportAsync(SazExportKind.Sanitized);
+        }
+
+        // Both exports run the one workflow, which shows every outcome itself; nothing that an export throws reaches the
+        // dispatcher.
+        private async Task RunCaptureExportAsync(SazExportKind kind)
+        {
+            try
             {
-                return;
+                await _captureExportWorkflow.RunAsync(CaptureAppModel.AppModel, kind, this);
             }
-            if (MessageBox.Show(
-                Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM"),
-                Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
-                return;
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    CaptureExportWorkflow.LogPrefix + exception.GetType().FullName);
             }
-            var dialog = new SaveFileDialog
+        }
+
+        // The exports' destination dialog: the Fiddler filter, .saz as its default extension, and OverwritePrompt off, since
+        // XMAT asks its own question, and only about a file that admission found (S2-V1).
+        internal static SaveFileDialog CreateCaptureExportDialog(SazExportKind kind)
+        {
+            bool sanitized = kind == SazExportKind.Sanitized;
+            return new SaveFileDialog
             {
                 Filter = FiddlerFilter,
                 DefaultExt = ".saz",
                 AddExtension = true,
-                FileName = "sanitized-capture.saz",
-                Title = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED")
+                OverwritePrompt = false,
+                FileName = sanitized ? "sanitized-capture.saz" : string.Empty,
+                Title = Localization.GetLocalizedString(sanitized ? "FILE_EXPORT_SANITIZED" : "FILE_EXPORT_CAPTURES"),
             };
-            if (dialog.ShowDialog(this) != true)
+        }
+
+        // The exports' dialogs in this window (CaptureExportWorkflow).
+        internal sealed class CaptureExportDialogs : ICaptureExportDialogService
+        {
+            public Task<bool> AskAsync(object owner, CaptureExportQuestion question)
             {
-                return;
+                bool yesNo = question.Answers == CaptureExportAnswers.YesNo;
+                MessageBoxResult yes = yesNo ? MessageBoxResult.Yes : MessageBoxResult.OK;
+                MessageBoxResult no = yesNo ? MessageBoxResult.No : MessageBoxResult.Cancel;
+                MessageBoxResult answer = MessageBox.Show(
+                    OwnerOf(owner),
+                    Join(question.Parts),
+                    Localization.GetLocalizedString(question.TitleKey),
+                    yesNo ? MessageBoxButton.YesNo : MessageBoxButton.OKCancel,
+                    MessageBoxImage.Warning,
+                    question.DefaultYes ? yes : no);
+                return Task.FromResult(answer == yes);
             }
-            using var cancellation = new CancellationTokenSource();
-            try
+
+            public Task<string> ChooseDestinationAsync(object owner, SazExportKind kind)
             {
-                WebServiceCapture.SanitizedExportSummary summary;
+                SaveFileDialog dialog = CreateCaptureExportDialog(kind);
+                return Task.FromResult(
+                    dialog.ShowDialog(OwnerOf(owner)) == true && !string.IsNullOrEmpty(dialog.FileName)
+                        ? dialog.FileName
+                        : null);
+            }
+
+            public async Task RunAsync(object owner, CaptureExportProgress progress, Func<Task> start)
+            {
                 using (PublicUtilities.BlockingOperation())
                 {
-                    var operation = CaptureAppModel.AppModel.ExportSanitizedDataCapturesAsync(dialog.FileName, cancellation.Token);
-                    if (await Task.WhenAny(operation, Task.Delay(250)) != operation && !operation.IsCompleted)
+                    Task work = null;
+                    if (progress.Delay > TimeSpan.Zero)
                     {
-                        var progress = new SanitizedExportProgressWindow(operation, cancellation.Cancel) { Owner = this };
-                        progress.ShowDialog();
+                        work = start();
+                        if (await Task.WhenAny(work, Task.Delay(progress.Delay)) == work)
+                        {
+                            return;
+                        }
                     }
-                    summary = await operation;
+
+                    // The window starts a step that has not started once it is shown: the copy kind's notice comes first.
+                    var started = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    if (work != null)
+                    {
+                        started.SetResult(work);
+                    }
+
+                    Task operation = started.Task.Unwrap();
+                    var window = new SanitizedExportProgressWindow(
+                        operation,
+                        () => progress.RequestCancellation(),
+                        Localization.GetLocalizedString(progress.TitleKey),
+                        Localization.GetLocalizedString(progress.StatusKey),
+                        Localization.GetLocalizedString("EXPORT_PROGRESS_DETAILS"),
+                        progress.Notice?.Localize())
+                    {
+                        Owner = OwnerOf(owner),
+                    };
+                    void Update(object sender, EventArgs e)
+                    {
+                        if (progress.HasCount)
+                        {
+                            window.ShowCount(progress.Processed, progress.Total);
+                        }
+
+                        if (!progress.CanCancel)
+                        {
+                            window.EndCancellation();
+                        }
+                    }
+
+                    if (work == null)
+                    {
+                        window.ContentRendered += (_, _) => started.TrySetResult(start());
+                    }
+
+                    progress.Changed += Update;
+                    try
+                    {
+                        window.ShowDialog();
+                    }
+                    finally
+                    {
+                        progress.Changed -= Update;
+                    }
+
+                    await Task.WhenAny(operation);
                 }
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_COMPLETE",
-                        summary.Sessions, summary.RedactedValues, summary.OmittedBodies, summary.OmittedHeaders),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
             }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+
+            public Task ShowAsync(object owner, CaptureExportMessage message)
             {
                 MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLED"),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
+                    OwnerOf(owner),
+                    Join(message.Parts),
+                    Localization.GetLocalizedString(message.TitleKey),
+                    MessageBoxButton.OK,
+                    message.Severity switch
+                    {
+                        CaptureExportSeverity.Error => MessageBoxImage.Error,
+                        CaptureExportSeverity.Warning => MessageBoxImage.Warning,
+                        _ => MessageBoxImage.Information,
+                    });
+                return Task.CompletedTask;
             }
-            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
-            {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"Sanitized export failed: {exception}");
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_FAILED", exception.Message),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+
+            private static string Join(IReadOnlyList<CaptureExportText> parts) =>
+                string.Join("\n\n", parts.Select(part => part.Localize()));
+
+            private static Window OwnerOf(object owner) =>
+                owner as Window ?? throw new ArgumentException("The export's dialogs need a window.", nameof(owner));
         }
 
         private void Exit_Executed(object sender, RoutedEventArgs e)

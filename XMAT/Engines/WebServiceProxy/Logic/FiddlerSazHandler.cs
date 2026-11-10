@@ -169,10 +169,14 @@ namespace XMAT.WebServiceCapture
                         // path, *, a CONNECT's authority, or what Uri reads as a file or UNC path, is kept as written, with an
                         // unknown scheme rather than a guess.
                         call = firstLineSplit[1];
-                        if (TryReadAbsoluteTarget(method, call, out Uri target, out targetAuthority))
+                        if (SazRequestTarget.TryReadAbsoluteTarget(
+                                method,
+                                call,
+                                out SazAbsoluteTarget target))
                         {
-                            call = target.PathAndQuery;
-                            scheme = target.Scheme;
+                            call = target.Uri.PathAndQuery;
+                            scheme = target.Uri.Scheme;
+                            targetAuthority = target.Authority;
                         }
                     }
 
@@ -298,71 +302,6 @@ namespace XMAT.WebServiceCapture
                 clientIP);
 
             return model;
-        }
-
-        // A request target in absolute form whose scheme makes a URL (UriUtils.IsUrlScheme), and its authority written as a
-        // Host header would be: the host as Uri reads it (a name in lower case, an IDN in punycode, an IPv4 address dotted,
-        // an IPv6 address canonical and in brackets, with its zone's lexical spelling kept), and the port only when it is
-        // not the scheme's default. User information is no part of it. A CONNECT's target is not one, nor is a target whose
-        // host is no host identity, has no IDN form, or whose port is outside 1-65535.
-        private static bool TryReadAbsoluteTarget(string method, string target, out Uri uri, out string authority)
-        {
-            authority = null;
-            if (method != "CONNECT" &&
-                StoredAuthority.TryParseAbsoluteTarget(target, out _, out _) &&
-                Uri.TryCreate(target, UriKind.Absolute, out uri) &&
-                UriUtils.IsUrlScheme(uri.Scheme) &&
-                TryGetHostText(uri, out string hostText))
-            {
-                string written;
-                if (uri.HostNameType == UriHostNameType.IPv6)
-                {
-                    written = "[" + hostText + "]";
-                }
-                else
-                {
-                    if (!HostAuthority.TryNormalizeHost(hostText, out string normalizedHost))
-                    {
-                        uri = null;
-                        return false;
-                    }
-
-                    written = normalizedHost;
-                }
-
-                if (!uri.IsDefaultPort)
-                {
-                    written += ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
-                }
-
-                if (StoredAuthority.TryParse(written, out string storedHost, out int? storedPort))
-                {
-                    authority = StoredAuthority.Format(storedHost, storedPort);
-                    return true;
-                }
-            }
-
-            uri = null;
-            return false;
-        }
-
-        // The host text that Uri gives a host identity: an IPv4 address dotted, an IPv6 address with its zone, or a name in
-        // lower case and punycode. A name that Uri parses but whose IDN conversion fails, such as a label longer than 63
-        // characters in punycode, has none: Uri.IdnHost throws UriFormatException for it or, for a name that Uri keeps as a
-        // Basic host, gives it unconverted, which the caller's HostAuthority.TryNormalizeHost then refuses, as it refuses
-        // any name that is not in ASCII.
-        private static bool TryGetHostText(Uri uri, out string host)
-        {
-            try
-            {
-                host = uri.HostNameType == UriHostNameType.IPv6 ? uri.DnsSafeHost : uri.IdnHost;
-                return true;
-            }
-            catch (UriFormatException)
-            {
-                host = null;
-                return false;
-            }
         }
 
         public static ProxyConnectionsCollection ImportSazFile(
@@ -714,189 +653,5 @@ namespace XMAT.WebServiceCapture
 
         private static bool IsHeaderValueTrimCharacter(char value) =>
             value is '\t' or '\n' or '\v' or '\f' or '\r' or ' ';
-
-        public static void CreateSazFile(string filename, IEnumerable<ProxyConnectionModel> records)
-        {
-            // always overwrite
-            ZipArchive archive = new ZipArchive(File.Create(filename), ZipArchiveMode.Update);
-
-            foreach (var record in records)
-            {
-                AddEntry(archive, EntryType.Request, record.RequestNumber, record.RequestLineAndHeaders, record.RequestBody);
-
-                var metaData = new FiddlerMetaData(record.RecordRowId);
-                metaData.SetClientIP(record.ClientIP);
-                metaData.ClientBeginRequest = record.RequestTime;
-                metaData.ClientDoneResponse = record.ResponseDoneTime;
-                AddMetaEntry(archive, record.RequestNumber, metaData);
-
-                if (!string.IsNullOrEmpty(record.ResponseLineAndHeaders))
-                {
-                    AddEntry(archive, EntryType.Response, record.RequestNumber, record.ResponseLineAndHeaders, record.ResponseBody);
-                }
-            }
-            archive.Dispose();
-        }
-
-        internal static SanitizedExportSummary CreateSanitizedSazFile(
-            string filename, IEnumerable<ProxyConnectionModel> records, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!string.Equals(Path.GetExtension(filename), ".saz", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new ArgumentException(Localization.GetLocalizedString("SANITIZED_EXPORT_SAZ_REQUIRED"), nameof(filename));
-            }
-            var destination = Path.GetFullPath(filename);
-            var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            var sanitizer = new SazSanitizer(cancellationToken);
-            try
-            {
-                using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
-                {
-                    foreach (var record in records)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        var (request, response) = sanitizer.SanitizeSession(
-                            record.RequestLineAndHeaders, record.RequestBody,
-                            record.ResponseLineAndHeaders, record.ResponseBody, record.Method);
-                        AddEntry(archive, EntryType.Request, record.RequestNumber, request.Headers, request.Body, cancellationToken);
-                        var metadata = new FiddlerMetaData(record.RecordRowId)
-                        {
-                            ClientBeginRequest = record.RequestTime,
-                            ClientDoneResponse = record.ResponseDoneTime
-                        };
-                        metadata.SetClientIP("0.0.0.0");
-                        if (!string.IsNullOrEmpty(record.ClientIP) && record.ClientIP != "0.0.0.0")
-                        {
-                            sanitizer.Summary.RedactedValues++;
-                        }
-                        if (request.BodyOmitted)
-                        {
-                            metadata.SessionFlags["x-xmat-request-body-omitted"] = "uninspectable";
-                        }
-                        if (response?.BodyOmitted == true)
-                        {
-                            metadata.SessionFlags["x-xmat-response-body-omitted"] = "uninspectable";
-                        }
-                        AddMetaEntry(archive, record.RequestNumber, metadata, cancellationToken);
-                        if (response is { } sanitizedResponse)
-                        {
-                            AddEntry(archive, EntryType.Response, record.RequestNumber,
-                                sanitizedResponse.Headers, sanitizedResponse.Body, cancellationToken);
-                        }
-                        sanitizer.Summary.Sessions++;
-                    }
-                }
-                cancellationToken.ThrowIfCancellationRequested();
-                File.Move(temporary, destination, true);
-                return sanitizer.Summary;
-            }
-            finally
-            {
-                try
-                {
-                    File.Delete(temporary);
-                }
-                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-                {
-                    PublicUtilities.AppLog(LogLevel.ERROR, "Could not remove a sanitized export temporary file.");
-                }
-            }
-        }
-
-        private static void AddMetaEntry(ZipArchive archive, long id, FiddlerMetaData metaDataToSerialize,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ZipArchiveEntry entry = archive.CreateEntry($"raw/{id}{EntryTypeMap[EntryType.Meta]}");
-            using Stream s = entry.Open();
-            string xmlText = metaDataToSerialize.ToXmlString();
-            var xmlTextBytes = Encoding.UTF8.GetBytes(xmlText);
-            s.Write(xmlTextBytes);
-        }
-
-        private static void AddEntry(ZipArchive archive, EntryType entryType, long id, string headers, byte[] body,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ZipArchiveEntry entry = archive.CreateEntry($"raw/{id}{EntryTypeMap[entryType]}");
-            using Stream s = entry.Open();
-            var headerBytes = Encoding.ASCII.GetBytes(headers);
-            s.Write(headerBytes);
-            ReadOnlySpan<byte> bodySpan = body;
-            for (var offset = 0; offset < bodySpan.Length; offset += 8192)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                s.Write(bodySpan.Slice(offset, Math.Min(8192, bodySpan.Length - offset)));
-            }
-        }
-
-        private class FiddlerMetaData
-        {
-            public const long DefaultFiddlerBitFlags = 2100;
-
-            public long SID { get; }
-            public long BitFlags { get; }
-            public DateTime ClientBeginRequest { private get; set; }
-            public DateTime ClientDoneResponse { private get; set; }
-            public Dictionary<string, string> SessionFlags { get; }
-
-            public string DateTimeFormat(DateTime dateTime)
-            {
-                // NOTE: this is very *close* to ISO8601, which would require
-                // to just call .ToString("o") but ... Fiddler only uses 5 decimal
-                // places after the seconds rather than 7.
-                return dateTime.ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss.fffffK");
-            }
-
-            public FiddlerMetaData(Int64 sid, Int64 bitflags = DefaultFiddlerBitFlags)
-            {
-                SessionFlags = new();
-                SID = sid;
-                BitFlags = bitflags;
-            }
-
-            public void SetClientIP(string clientIP)
-            {
-                SessionFlags["x-clientip"] = clientIP;
-            }
-
-            public string ToXmlString()
-            {
-                StringBuilder sb = new();
-                sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-                sb.AppendLine($"<Session SID=\"{SID}\" BitFlags=\"{BitFlags}\">");
-
-                sb.Append("<SessionTimers ");
-                sb.Append($"ClientConnected=\"{DateTimeFormat(ClientBeginRequest)}\" ");
-                sb.Append($"ClientBeginRequest=\"{DateTimeFormat(ClientBeginRequest)}\" ");
-                sb.Append($"GotRequestHeaders=\"{DateTimeFormat(ClientBeginRequest)}\" ");
-                sb.Append($"ClientDoneRequest=\"{DateTimeFormat(ClientBeginRequest)}\" ");
-                sb.Append("GatewayTime=\"0\" ");
-                sb.Append("DNSTime=\"0\" ");
-                sb.Append("TCPConnectTime=\"0\" ");
-                sb.Append("HTTPSHandshakeTime=\"0\" ");
-                sb.Append($"ServerConnected=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"FiddlerBeginRequest=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"ServerGotRequest=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"ServerBeginResponse=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"GotResponseHeaders=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"ServerDoneResponse=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"ClientBeginResponse=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append($"ClientDoneResponse=\"{DateTimeFormat(ClientDoneResponse)}\" ");
-                sb.Append("/>");
-
-                sb.AppendLine();
-                sb.AppendLine($"  <SessionFlags>");
-                foreach (var sessionFlag in SessionFlags)
-                {
-                    sb.AppendLine($"    <SessionFlag N=\"{sessionFlag.Key}\" V=\"{sessionFlag.Value}\" />");
-                }
-                sb.AppendLine($"  </SessionFlags>");
-                sb.AppendLine($"</Session>");
-                return sb.ToString();
-            }
-        }
     }
 }

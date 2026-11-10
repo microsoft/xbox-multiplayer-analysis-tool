@@ -9,9 +9,11 @@ using CaptureAnalysisEngine;
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Capture;
 using XMAT.Operations.Replay;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
+using XMAT.Tests.Operations.Capture;
 using XMAT.Tests.Replay;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
@@ -681,7 +683,12 @@ namespace XMAT.Tests.Operations.Analysis
                 ("GET", "https://["),
             }.Select((frame, index) => ReadTarget((uint)(index + 1), frame.Item1, frame.Item2)).ToArray();
             string path = System.IO.Path.Join(directory.Path, "targets.saz");
-            FiddlerSazHandler.CreateSazFile(path, models);
+            Assert.True(
+                SazExportTestSupport.ExportRecords(
+                    path,
+                    models,
+                    SazExportKind.Plain)
+                .Succeeded);
 
             OperationResult<AnalysisResult> fromRecords = await AnalyzeRecords(
                 models.Select(
@@ -765,7 +772,12 @@ namespace XMAT.Tests.Operations.Analysis
                 "<SessionFlags><SessionFlag N=\"x-clientip\" V=\"10.0.0.1\" /></SessionFlags></Session>");
             Assert.Equal((DateTime.MinValue, DateTimeKind.Unspecified), (unknown.RequestTime, unknown.RequestTime.Kind));
             string path = System.IO.Path.Join(directory.Path, "unknown-time.saz");
-            FiddlerSazHandler.CreateSazFile(path, new[] { unknown, known });
+            Assert.True(
+                SazExportTestSupport.ExportRecords(
+                    path,
+                    new[] { unknown, known },
+                    SazExportKind.Plain)
+                .Succeeded);
 
             OperationResult<AnalysisResult> fromRecords = await AnalyzeRecords(
                 new[] { unknown, known }.Select(

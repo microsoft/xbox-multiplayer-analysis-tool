@@ -10,7 +10,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
+using XMAT.Operations;
+using XMAT.Operations.Capture;
 using XMAT.Tests.Fixtures;
+using XMAT.Tests.Operations.Capture;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using Xunit.Abstractions;
@@ -207,7 +210,7 @@ namespace XMAT.Tests
 
             Assert.Equal(0, evidence.Summary.OmittedBodies);
             Assert.Equal(body, Encoding.UTF8.GetString(Body(evidence, true)));
-            Assert.StartsWith("POST /public/%41%2Bpath?keep=A%2BB+C HTTP/1.1",
+            Assert.StartsWith("POST https://example.test/public/%41%2Bpath?keep=A%2BB+C HTTP/1.1",
                 Encoding.ASCII.GetString(evidence.Entries["raw/1_c.txt"]));
         }
 
@@ -428,61 +431,121 @@ namespace XMAT.Tests
         [InlineData("before-first")]
         [InlineData("between-records")]
         [InlineData("after-last")]
-        public void CancelledArchiveExport_DisposesTheSourceAndNeverReplacesTheDestination(string point)
+        public async Task CancelledArchiveExport_NeverReplacesTheDestination(string point)
         {
             Export("text/plain", "visible");
             var path = Assert.Single(Directory.GetFiles(_directory, "*.saz"));
             var original = File.ReadAllBytes(path);
             var record = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
             using var cancellation = new CancellationTokenSource();
-            var disposed = false;
-            IEnumerable<ProxyConnectionModel> Records()
+            int rows = point == "between-records"
+                ? 2
+                : 1;
+            var keys = Enumerable.Range(1, rows)
+                .Select(
+                    number =>
+                        new SazExportKey(
+                            number,
+                            number,
+                            0))
+                .ToArray();
+            var source =
+                new SazExportTestSupport.ScriptedSource(
+                    keys,
+                    (index, token) =>
+                    {
+                        if (point == "between-records" &&
+                            index == 1)
+                        {
+                            cancellation.Cancel();
+                            token.ThrowIfCancellationRequested();
+                        }
+
+                        StoredRow row =
+                            SazExportTestSupport.Stored(
+                                record,
+                                index + 1);
+                        if (point == "after-last")
+                        {
+                            cancellation.Cancel();
+                        }
+
+                        return row;
+                    });
+            var operation = new SazExportOperation();
+            OperationResult<SazExportPlan> prepared =
+                await operation.PrepareAsync(
+                        new SazExportPlanRequest(
+                            source,
+                            SazExportKind.Sanitized,
+                            null,
+                            SazExportBudgets.Default),
+                        OperationContext.None,
+                        CancellationToken.None);
+            Assert.True(prepared.Succeeded);
+            using CaptureArchiveTarget target =
+                await operation.AdmitTargetAsync(
+                        path,
+                        OperationContext.None,
+                        CancellationToken.None);
+            CaptureArchiveReplaceDecision decision =
+                target.ConfirmReplace();
+            if (point == "before-first")
             {
-                try
-                {
-                    if (point == "before-first")
-                    {
-                        cancellation.Cancel();
-                    }
-                    yield return record;
-                    cancellation.Cancel();
-                    if (point == "between-records")
-                    {
-                        yield return record;
-                    }
-                }
-                finally
-                {
-                    disposed = true;
-                }
+                cancellation.Cancel();
             }
 
-            Assert.ThrowsAny<OperationCanceledException>(() =>
-                FiddlerSazHandler.CreateSanitizedSazFile(path, Records(), cancellation.Token));
+            OperationResult<SazExportResult> result =
+                await operation.ExecuteAsync(
+                        new SazExportRequest(
+                            prepared.Value,
+                            new SazExportDestination.ToTarget(
+                                target,
+                                decision),
+                            null),
+                        OperationContext.None,
+                        cancellation.Token);
 
-            Assert.True(disposed);
+            Assert.Equal(
+                OperationOutcome.Cancelled,
+                result.Outcome);
+            Assert.Equal(
+                SazExportCodes.Cancelled,
+                result.Value.Code);
             Assert.Equal(original, File.ReadAllBytes(path));
-            Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
+            Assert.Empty(
+                Directory.GetFiles(
+                    _directory,
+                    ".xmat-*.tmp"));
             var retained = Assert.Single(FiddlerSazHandler.ImportSazFile(path, CancellationToken.None));
             Assert.Equal("visible", Encoding.UTF8.GetString(retained.ResponseBody));
         }
 
         [Fact]
-        public void AlreadyCancelledExport_DoesNotOpenTheSourceOrCreateATemporaryArchive()
+        public async Task AlreadyCancelledExport_DoesNotOpenTheSourceOrCreateATemporaryArchive()
         {
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
-            var enumerated = false;
-            IEnumerable<ProxyConnectionModel> Records()
-            {
-                enumerated = true;
-                yield break;
-            }
+            var source =
+                new SazExportTestSupport.ScriptedSource(
+                    Array.Empty<SazExportKey>(),
+                    (_, _) =>
+                        throw new InvalidOperationException());
+            var operation = new SazExportOperation();
+            OperationResult<SazExportPlan> result =
+                await operation.PrepareAsync(
+                        new SazExportPlanRequest(
+                            source,
+                            SazExportKind.Sanitized,
+                            null,
+                            SazExportBudgets.Default),
+                        OperationContext.None,
+                        cancellation.Token);
 
-            Assert.ThrowsAny<OperationCanceledException>(() => FiddlerSazHandler.CreateSanitizedSazFile(
-                Path.Join(_directory, "cancelled.saz"), Records(), cancellation.Token));
-
-            Assert.False(enumerated);
+            Assert.Equal(
+                OperationOutcome.Cancelled,
+                result.Outcome);
+            Assert.Equal(0, source.Reads);
             Assert.Empty(Directory.GetFiles(_directory));
         }
 
@@ -1335,7 +1398,12 @@ namespace XMAT.Tests
                 "Cookie: a=1\r\nCookie: sid=IMPORT-COOKIE-CANARY\r\n",
                 "Set-Cookie: lang=en; Path=/\r\nSet-Cookie: sid=IMPORT-SETCOOKIE-CANARY" +
                 (expires ? "; Expires=Wed, 21 Oct 2037 07:28:00 GMT" : "") + "; HttpOnly\r\n");
-            FiddlerSazHandler.CreateSazFile(original, new[] { source });
+            Assert.True(
+                SazExportTestSupport.ExportRecords(
+                    original,
+                    new[] { source },
+                    SazExportKind.Plain)
+                .Succeeded);
             var imported = Assert.Single(FiddlerSazHandler.ImportSazFile(original, CancellationToken.None));
             Assert.Contains("\r\nCookie: a=1\r\nCookie: sid=IMPORT-COOKIE-CANARY\r\n", imported.RequestLineAndHeaders);
             Assert.Contains(
@@ -1398,24 +1466,34 @@ namespace XMAT.Tests
             int megabytes, bool inResponse)
         {
             var header = "X-Trace: " + new string('a', megabytes * 1024 * 1024) + "\r\n";
-            var evidence = ExportRecords(PairRecord(1, "{\"keep\":\"public-marker\"}", "{\"keep\":\"public-marker\"}",
-                extraRequestHeaders: inResponse ? "" : header,
-                extraResponseHeaders: inResponse ? header : ""));
+            ProxyConnectionModel record = PairRecord(
+                1,
+                "{\"keep\":\"public-marker\"}",
+                "{\"keep\":\"public-marker\"}",
+                extraRequestHeaders:
+                    inResponse ? "" : header,
+                extraResponseHeaders:
+                    inResponse ? header : "");
+            string path = Path.Join(
+                _directory,
+                Guid.NewGuid().ToString("N") +
+                    ".saz");
+            OperationResult<SazExportResult> result =
+                SazExportTestSupport.ExportRecords(
+                    path,
+                    new[] { record },
+                    SazExportKind.Sanitized);
 
-            if (megabytes == 1)
-            {
-                Assert.Equal(0, evidence.Summary.OmittedBodies);
-                Assert.Contains("public-marker", evidence.DecodedContent);
-            }
-            else
-            {
-                Assert.Equal(1, evidence.Summary.WorkBudgetOmissions);
-                Assert.Equal(2, evidence.Summary.OmittedBodies);
-                Assert.Empty(Body(evidence, true));
-                Assert.Empty(Body(evidence));
-                Assert.DoesNotContain("public-marker", evidence.DecodedContent);
-                Assert.Contains("Host: redacted.invalid", evidence.DecodedContent);
-            }
+            Assert.True(result.Succeeded);
+            Assert.Equal(
+                1,
+                result.Value.Summary.RowsOversized);
+            Assert.Equal(
+                0,
+                result.Value.Summary.Sessions);
+            using var archive =
+                ZipFile.OpenRead(path);
+            Assert.Empty(archive.Entries);
         }
 
         [Fact]
@@ -1478,7 +1556,14 @@ namespace XMAT.Tests
             var originals = records.Select(record => (
                 Request: record.RequestBody.ToArray(), Response: record.ResponseBody.ToArray(),
                 RequestHeaders: record.RequestLineAndHeaders, ResponseHeaders: record.ResponseLineAndHeaders)).ToArray();
-            var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, records);
+            OperationResult<SazExportResult> exported =
+                SazExportTestSupport.ExportRecords(
+                    path,
+                    records,
+                    SazExportKind.Sanitized);
+            Assert.True(exported.Succeeded);
+            SanitizedExportSummary summary =
+                exported.Value.Summary.Sanitized;
             for (var index = 0; index < records.Length; index++)
             {
                 Assert.Equal(originals[index].Request, records[index].RequestBody);
@@ -1519,8 +1604,8 @@ namespace XMAT.Tests
             foreach (var record in records)
             {
                 var metadata = XDocument.Parse(Encoding.UTF8.GetString(entries[$"raw/{record.RequestNumber}_m.xml"]));
-                Assert.Equal(record.RecordRowId.ToString(CultureInfo.InvariantCulture), (string)metadata.Root.Attribute("SID"));
-                Assert.Equal("2100", (string)metadata.Root.Attribute("BitFlags"));
+                Assert.Equal(record.RequestNumber.ToString(CultureInfo.InvariantCulture), (string)metadata.Root.Attribute("SID"));
+                Assert.Equal("0", (string)metadata.Root.Attribute("BitFlags"));
                 Assert.Equal(16, metadata.Root.Element("SessionTimers").Attributes().Count());
                 var flags = metadata.Descendants("SessionFlag").ToDictionary(flag => (string)flag.Attribute("N"),
                     flag => (string)flag.Attribute("V"));

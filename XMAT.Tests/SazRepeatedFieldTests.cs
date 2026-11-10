@@ -4,8 +4,10 @@
 
 using System.IO.Compression;
 using System.Text;
+using XMAT.Operations.Capture;
 using XMAT.Operations.Replay;
 using XMAT.Tests.Fixtures;
+using XMAT.Tests.Operations.Capture;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -74,7 +76,14 @@ namespace XMAT.Tests
             }
 
             string exported = Path.Combine(directory.Path, "exported.saz");
-            FiddlerSazHandler.CreateSazFile(exported, FiddlerSazHandler.ImportSazFile(archive, CancellationToken.None));
+            Assert.True(
+                SazExportTestSupport.ExportRecords(
+                    exported,
+                    FiddlerSazHandler.ImportSazFile(
+                        archive,
+                        CancellationToken.None),
+                    SazExportKind.Plain)
+                .Succeeded);
             foreach (ProxyConnectionModel record in ReadWithBothReaders(exported))
             {
                 AssertKept(record);

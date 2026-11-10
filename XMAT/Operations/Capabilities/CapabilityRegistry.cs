@@ -16,6 +16,7 @@ namespace XMAT.Operations.Capabilities
         internal const string AnalyzeCaptureOperation = "XMAT.Operations.Analysis.AnalyzeCaptureOperation";
         internal const string ReplayOperation = "XMAT.Operations.Replay.ReplayOperation";
         internal const string MarkCaptureTextOperation = "XMAT.Operations.CaptureFiles.MarkCaptureTextOperation";
+        internal const string SazExportOperation = "XMAT.Operations.Capture.SazExportOperation";
 
         private const string Owner = "XMAT-021";
         private const string MainWindowXaml = "Windows/MainWindow.xaml";
@@ -112,18 +113,23 @@ namespace XMAT.Operations.Capabilities
                 "S10",
                 cli: "mark-capture-text INPUT --out DIR --interpret as-stored|legacy-one-layer [--max-input-mib N]",
                 operation: MarkCaptureTextOperation),
-            // The headless SAZ writer exists (SazArchiveWriter: xmat replay and compose --save-saz); exporting captures with
-            // it, and moving the GUI's export onto it, is S2 work.
-            Capability.Planned(
-                "capture-file.export-saz", "Export captures as Fiddler archives (.saz)", "S2", Owner,
+            Capability.Supported(
+                "capture-file.export-saz", "Export captures as Fiddler archives (.saz)", "S2",
+                cli: "export-saz INPUT --out DIR [--device ID] [--accept-stored-text] [--max-input-mib N] " +
+                    "[--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: SazExportOperation,
                 gui: new[]
                 {
                     Command(AppCommandsPrefix + "Export"),
                     EnumValue("XMAT.Models.ExportType", "Fiddler"),
+                    Window("XMAT.SanitizedExportProgressWindow"),
+                    Click(SanitizedExportXaml, "CancelExport_Click"),
                 }),
-            // XMAT-019 implements sanitized export in the GUI; its headless support is not done yet.
-            Capability.Planned(
-                "capture-file.sanitize", "Sanitize a capture into a Fiddler archive", "S2", Owner,
+            Capability.Supported(
+                "capture-file.sanitize", "Sanitize a capture into a Fiddler archive", "S2",
+                cli: "export-saz INPUT --out DIR --sanitize [--device ID] [--accept-stored-text] [--max-input-mib N] " +
+                    "[--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: SazExportOperation,
                 gui: new[]
                 {
                     Command(AppCommandsPrefix + "ExportSanitized"),
