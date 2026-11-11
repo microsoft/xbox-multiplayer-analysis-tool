@@ -126,6 +126,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
             _logger.Log(connectionID, LogLevel.INFO, $"Accepting connection from {remoteEndPoint}");
 
+            Guid? sslRegistration = null;
             try
             {
                 ProxyRequestReadResult readResult =
@@ -194,6 +195,14 @@ namespace XMAT.WebServiceCapture.Proxy
                     _proxy.GetNextRequestID();
                 if (request.Method == "CONNECT")
                 {
+                    request.Scheme = "https";
+                    sslRegistration = _proxy.TrackSslConnection(
+                        connectionID,
+                        (connection.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? remoteEndPoint,
+                        request,
+                        () => connection.Abort(new ConnectionAbortedException(
+                            "The enabled SSL script rejected this active connection.")),
+                        cancellationToken);
                     await HandleConnectAsync(connectionID, stream, request, remoteEndPoint, processContext,
                         cancellationToken).ConfigureAwait(false);
                 }
@@ -230,6 +239,8 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             finally
             {
+                if (sslRegistration.HasValue)
+                    _proxy.UntrackSslConnection(sslRegistration.Value);
                 _proxy.RaiseConnectionClosed(connectionID, processContext);
             }
         }

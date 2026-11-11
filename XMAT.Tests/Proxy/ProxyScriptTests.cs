@@ -5,6 +5,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -82,6 +83,269 @@ namespace XMAT.Tests.Proxy
 
             Assert.Empty(origin.Requests);
             Assert.IsAssignableFrom<HttpRequestException>(failure);
+        }
+
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(true, false)]
+        [InlineData(false, true)]
+        [InlineData(true, true)]
+        public async Task SslConnectionScript_EnabledDuringCapture_BlocksExistingTunnelAndReconnects(
+            bool http2,
+            bool bypass)
+        {
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync();
+            if (bypass)
+            {
+                capture.Controller.BypassList.Add("127.0.0.1");
+                capture.Proxy.BypassList = capture.Controller.BypassList;
+            }
+            var connects = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            capture.Proxy.ReceivedSslConnectionRequest += (_, args) =>
+                connects.Enqueue(args.Request.Host);
+
+            async Task<string> GetAsync(string url)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, url)
+                {
+                    Version = http2 ? HttpVersion.Version20 : HttpVersion.Version11,
+                    VersionPolicy = HttpVersionPolicy.RequestVersionExact
+                };
+                using var response = await capture.Client.SendAsync(request);
+                return await response.Content.ReadAsStringAsync();
+            }
+
+            string blockedUrl = origin.Url("/blocked");
+            string allowedUrl = origin.Url("/allowed").Replace("127.0.0.1", "localhost");
+            Assert.Equal("origin-ok", await GetAsync(blockedUrl));
+            Assert.Equal("origin-ok", await GetAsync(allowedUrl));
+            int recordsBeforeEnable = capture.CapturedRecordCount;
+            await capture.EnableScriptAsync(
+                WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                "if (Params.Request.Host == \"127.0.0.1\") { Params.Continue = false; }");
+
+            Assert.Equal(recordsBeforeEnable, capture.CapturedRecordCount);
+            Exception failure = await Record.ExceptionAsync(() => GetAsync(blockedUrl));
+            Assert.IsAssignableFrom<HttpRequestException>(failure);
+            Assert.Equal("origin-ok", await GetAsync(allowedUrl));
+            Assert.Single(connects, host => host == "localhost");
+            Assert.Single(origin.Requests, request => request.Path == "/blocked");
+
+            capture.Controller.Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest]
+                .DisableScript();
+            Assert.Equal("origin-ok", await GetAsync(blockedUrl));
+            Assert.Equal(2, origin.Requests.Count(request => request.Path == "/blocked"));
+        }
+
+        [Fact]
+        public async Task SslConnectionScript_RecheckUsesCopyAndIgnoresDisabledScriptResult()
+        {
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync();
+            Assert.Equal("origin-ok", await capture.Client.GetStringAsync(origin.Url("/before")));
+            var connects = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            capture.Proxy.ReceivedSslConnectionRequest += (_, args) => connects.Enqueue(args.Request.Host);
+            string key = $"live-ssl-{Guid.NewGuid():N}";
+            var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            AppDomain.CurrentDomain.SetData(key + "-started", started);
+            AppDomain.CurrentDomain.SetData(key + "-release", release.Task);
+            Task activation = null;
+            try
+            {
+                activation = capture.EnableScriptAsync(
+                    WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                    $"var started = (System.Threading.Tasks.TaskCompletionSource<bool>)System.AppDomain.CurrentDomain.GetData(\"{key}-started\"); " +
+                    $"var release = (System.Threading.Tasks.Task)System.AppDomain.CurrentDomain.GetData(\"{key}-release\"); " +
+                    "Params.Request.Host = \"changed.invalid\"; Params.Request.Headers[\"X-Recheck\"] = \"changed\"; " +
+                    "started.TrySetResult(true); await release; Params.Continue = false;");
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.False(activation.IsCompleted);
+                capture.Controller.Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest]
+                    .DisableScript();
+                release.TrySetResult(true);
+                await activation.WaitAsync(TimeSpan.FromSeconds(10));
+
+                Assert.Equal("origin-ok", await capture.Client.GetStringAsync(origin.Url("/after")));
+                Assert.Empty(connects);
+                Assert.All(origin.Requests, request => Assert.False(request.Headers.ContainsKey("X-Recheck")));
+            }
+            finally
+            {
+                release.TrySetResult(true);
+                if (activation != null)
+                    await activation.WaitAsync(TimeSpan.FromSeconds(10));
+                AppDomain.CurrentDomain.SetData(key + "-started", null);
+                AppDomain.CurrentDomain.SetData(key + "-release", null);
+            }
+        }
+
+        [Theory]
+        [InlineData("disable")]
+        [InlineData("edit")]
+        [InlineData("recompile")]
+        [InlineData("replace")]
+        public async Task SslConnectionScript_InvalidatedAtAbortHandoff_PreservesExistingTunnel(
+            string invalidation)
+        {
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync();
+            Assert.Equal("origin-ok", await capture.Client.GetStringAsync(origin.Url("/before")));
+            var connects = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            capture.Proxy.ReceivedSslConnectionRequest += (_, args) => connects.Enqueue(args.Request.Host);
+            var beforeAbort = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            capture.Proxy.BeforeSslConnectionRecheckAbortAsync = async () =>
+            {
+                beforeAbort.TrySetResult(true);
+                await release.Task;
+            };
+            string key = $"ssl-handoff-{Guid.NewGuid():N}";
+            AppDomain.CurrentDomain.SetData(key, false);
+            Task activation = null;
+            try
+            {
+                activation = capture.EnableScriptAsync(
+                    WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                    $"Params.Continue = System.AppDomain.CurrentDomain.GetData(\"{key}\") is true;");
+                await beforeAbort.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                Assert.False(activation.IsCompleted);
+                ScriptModel model = capture.Controller.Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest];
+                switch (invalidation)
+                {
+                    case "disable":
+                        model.DisableScript();
+                        break;
+                    case "edit":
+                        model.Script = "Params.Continue = true;";
+                        break;
+                    case "recompile":
+                        AppDomain.CurrentDomain.SetData(key, true);
+                        Assert.Equal(ScriptActivationResult.Enabled,
+                            await model.EnableScriptAsync<WebServiceCaptureScriptParams>());
+                        break;
+                    case "replace":
+                        await capture.EnableScriptAsync(
+                            WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                            "Params.Continue = true;");
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(invalidation));
+                }
+                release.TrySetResult(true);
+                await activation.WaitAsync(TimeSpan.FromSeconds(15));
+
+                Assert.Equal("origin-ok", await capture.Client.GetStringAsync(origin.Url("/after")));
+                Assert.Empty(connects);
+            }
+            finally
+            {
+                release.TrySetResult(true);
+                if (activation != null)
+                    await activation.WaitAsync(TimeSpan.FromSeconds(15));
+                capture.Proxy.BeforeSslConnectionRecheckAbortAsync = null;
+                AppDomain.CurrentDomain.SetData(key, null);
+            }
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task SslConnectionScript_InvalidOrThrowingScript_DoesNotDisconnectActiveTunnel(
+            bool compilationError)
+        {
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync();
+            Assert.Equal("origin-ok", await capture.Client.GetStringAsync(origin.Url("/before")));
+            var connects = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            capture.Proxy.ReceivedSslConnectionRequest += (_, args) => connects.Enqueue(args.Request.Host);
+            ScriptModel model = capture.Controller.Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest];
+            model.Script = compilationError
+                ? "this is not valid C#;"
+                : "throw new System.InvalidOperationException(\"recheck failure\");";
+
+            Assert.Equal(
+                compilationError ? ScriptActivationResult.Failed : ScriptActivationResult.Enabled,
+                await model.EnableScriptAsync<WebServiceCaptureScriptParams>());
+
+            Assert.Equal("origin-ok", await capture.Client.GetStringAsync(origin.Url("/after")));
+            Assert.Empty(connects);
+        }
+
+        [Fact]
+        public async Task SslConnectionScript_EnableWhileInitialDecisionAwaits_CannotLeaveApprovedTunnel()
+        {
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: true);
+            await using var capture = await ScriptedCapture.StartAsync();
+            var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var policy = capture.Proxy.SslConnectionRequestPolicyAsync;
+            capture.Proxy.SslConnectionRequestPolicyAsync = async (args, token) =>
+            {
+                bool accepted = await policy(args, token);
+                started.TrySetResult(true);
+                await release.Task;
+                return accepted;
+            };
+            Task<string> request = capture.Client.GetStringAsync(origin.Url("/racing"));
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                await capture.EnableScriptAsync(
+                    WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                    "Params.Continue = false;");
+            }
+            finally
+            {
+                release.TrySetResult(true);
+            }
+            await Assert.ThrowsAsync<HttpRequestException>(() => request);
+            Assert.Empty(origin.Requests);
+        }
+
+        [Fact]
+        public async Task SslConnectionScript_EnableDisconnectsEstablishedWebSocket()
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var received = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var origin = await LoopbackOrigin.StartAsync(
+                async context =>
+                {
+                    using WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
+                    var buffer = new byte[32];
+                    WebSocketReceiveResult message = await socket.ReceiveAsync(buffer, timeout.Token);
+                    await socket.SendAsync(
+                        new ArraySegment<byte>(buffer, 0, message.Count),
+                        WebSocketMessageType.Text, true, timeout.Token);
+                    try
+                    {
+                        await socket.ReceiveAsync(buffer, timeout.Token);
+                    }
+                    catch (WebSocketException)
+                    {
+                        received.TrySetResult(true);
+                    }
+                },
+                useTls: true,
+                useWebSockets: true);
+            await using var capture = await ScriptedCapture.StartAsync();
+            using var client = new ClientWebSocket();
+            client.Options.Proxy = new WebProxy($"http://127.0.0.1:{capture.ProxyPort}");
+            client.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+            await client.ConnectAsync(
+                new Uri($"wss://127.0.0.1:{origin.Port}/socket"), timeout.Token);
+            await client.SendAsync(
+                Encoding.UTF8.GetBytes("ping"), WebSocketMessageType.Text, true, timeout.Token);
+            var reply = new byte[32];
+            Assert.Equal(4, (await client.ReceiveAsync(reply, timeout.Token)).Count);
+
+            await capture.EnableScriptAsync(
+                WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                "if (Params.Request.Host == \"127.0.0.1\") { Params.Continue = false; }");
+            await Assert.ThrowsAsync<WebSocketException>(
+                () => client.ReceiveAsync(reply, timeout.Token));
+            await received.Task.WaitAsync(timeout.Token);
         }
 
         // The BlockList is checked after the request script, so it must wait for the script too.
@@ -722,6 +986,9 @@ namespace XMAT.Tests.Proxy
                     .SetValue(controller, captureCancellation);
 
                 ProxyTestHarness proxy = await ProxyTestHarness.StartAsync();
+                typeof(WebServiceDeviceCaptureController)
+                    .GetField("_webProxy", PrivateInstance)
+                    .SetValue(controller, proxy.Proxy);
                 proxy.Proxy.SslConnectionRequestPolicyAsync = Policy<SslConnectionRequestEventArgs>(
                     controller, "WebProxy_ReceivedSslConnectionRequestAsync");
                 proxy.Proxy.WebRequestPolicyAsync = Policy<HttpRequestEventArgs>(

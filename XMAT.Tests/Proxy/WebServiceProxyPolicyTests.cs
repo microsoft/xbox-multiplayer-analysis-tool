@@ -38,6 +38,99 @@ namespace XMAT.Tests.Proxy
         }
 
         [Fact]
+        public async Task LiveSslRecheck_TracksBeforeInitialDecisionAndRemovesClosedConnections()
+        {
+            var proxy = new WebServiceProxy();
+            var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int aborted = 0;
+            var request = new ClientRequest { Method = "CONNECT", Host = "blocked.test", Path = "blocked.test:443" };
+            proxy.SslConnectionRequestPolicyAsync = async (_, _) =>
+            {
+                started.TrySetResult(true);
+                await release.Task;
+                return true;
+            };
+            Guid registration = proxy.TrackSslConnection(
+                1000, "127.0.0.1", request,
+                () => Interlocked.Increment(ref aborted), CancellationToken.None);
+            Task<bool> initialDecision = proxy.RaiseReceivedSslConnectionRequestAsync(
+                1000, "127.0.0.1", request, CancellationToken.None);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                await proxy.RecheckSslConnectionsAsync((_, _) => Task.FromResult(false), action => action());
+                Assert.Equal(1, aborted);
+                proxy.UntrackSslConnection(registration);
+                await proxy.RecheckSslConnectionsAsync((_, _) => Task.FromResult(false), action => action());
+                Assert.Equal(1, aborted);
+            }
+            finally
+            {
+                release.TrySetResult(true);
+                await initialDecision;
+            }
+        }
+
+        [Fact]
+        public async Task LiveSslRecheck_DoesNotAbortConnectionClosedWhilePolicyAwaits()
+        {
+            var proxy = new WebServiceProxy();
+            var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int aborted = 0;
+            Guid registration = proxy.TrackSslConnection(
+                1000, "127.0.0.1", new ClientRequest(),
+                () => Interlocked.Increment(ref aborted), CancellationToken.None);
+            Task recheck = proxy.RecheckSslConnectionsAsync(async (_, _) =>
+            {
+                started.TrySetResult(true);
+                await release.Task;
+                return false;
+            }, action => action());
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                proxy.UntrackSslConnection(registration);
+            }
+            finally
+            {
+                release.TrySetResult(true);
+                await recheck;
+            }
+            Assert.Equal(0, aborted);
+        }
+
+        [Fact]
+        public async Task LiveSslRecheck_ResetDisplayIds_DoesNotLoseOrConfuseActiveConnections()
+        {
+            var proxy = new WebServiceProxy();
+            proxy.Reset();
+            int blockedId = proxy.GetNextConnectionID();
+            int blockedAborts = 0;
+            Guid blocked = proxy.TrackSslConnection(
+                blockedId, "127.0.0.1", new ClientRequest { Host = "blocked.test" },
+                () => ++blockedAborts, CancellationToken.None);
+            proxy.Reset();
+            int allowedId = proxy.GetNextConnectionID();
+            Assert.Equal(blockedId, allowedId);
+            int allowedAborts = 0;
+            Guid allowed = proxy.TrackSslConnection(
+                allowedId, "127.0.0.1", new ClientRequest { Host = "allowed.test" },
+                () => ++allowedAborts, CancellationToken.None);
+
+            await proxy.RecheckSslConnectionsAsync(
+                (args, _) => Task.FromResult(args.Request.Host != "blocked.test"), action => action());
+            Assert.Equal(1, blockedAborts);
+            Assert.Equal(0, allowedAborts);
+            proxy.UntrackSslConnection(allowed);
+            await proxy.RecheckSslConnectionsAsync((_, _) => Task.FromResult(false), action => action());
+            Assert.Equal(2, blockedAborts);
+            Assert.Equal(0, allowedAborts);
+            proxy.UntrackSslConnection(blocked);
+        }
+
+        [Fact]
         public async Task VetoObserversReceiveIdentityWithoutChangingTheirDecision()
         {
             var proxy =

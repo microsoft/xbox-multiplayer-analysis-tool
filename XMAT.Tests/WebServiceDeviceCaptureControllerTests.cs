@@ -1049,6 +1049,11 @@ namespace XMAT.Tests
                 return Task.CompletedTask;
             }
 
+            public Task RecheckSslConnectionsAsync(
+                Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> policy,
+                Action<Action> applyRejection,
+                CancellationToken cancellationToken = default) => Task.CompletedTask;
+
             public void Reset()
             {
             }

@@ -657,6 +657,8 @@ namespace XMAT.WebServiceCapture
             MethodFilterList = new ObservableCollection<CheckedListItem>();
             WebSocketMessages = new WebSocketMessagesCollection();
             Scripts = new ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
+            Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest].EnabledAsync =
+                RecheckSslConnectionsAsync;
             ScriptTypes = new ScriptTypeCollection(new Type[] { typeof(WebServiceCaptureScriptParams), typeof(ClientRequest), typeof(ServerResponse), typeof(HeaderCollection) });
             _uiUpdateQueue = new BatchedDispatcherQueue(
                 Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher,
@@ -1958,6 +1960,40 @@ namespace XMAT.WebServiceCapture
 
             // The list model compares the host without its port (DNS spelling kept).
             return BlockList.IsBlocked(host, path);
+        }
+
+        private async Task RecheckSslConnectionsAsync(ScriptModel.Activation activation)
+        {
+            if (_webProxy == null)
+                return;
+
+            await _webProxy.RecheckSslConnectionsAsync(
+                (connection, token) => ExecuteCapturePolicyAsync(
+                    "Live SSL connection",
+                    async cancellationToken =>
+                    {
+                        if (!activation.IsCurrent)
+                            return true;
+
+                        var parameters = new WebServiceCaptureScriptParams
+                        {
+                            Request = connection.Request,
+                            Response = null
+                        };
+                        ScriptPolicyResult result = await RunScriptPolicyAsync(
+                            WebServiceCaptureScriptableEventType.SslConnectionRequest,
+                            parameters,
+                            "Live SSL connection",
+                            cancellationToken).ConfigureAwait(false);
+
+                        // A disabled, edited, or superseded script must not disconnect
+                        // a connection on the strength of a late result.
+                        return !activation.IsCurrent ||
+                            result == ScriptPolicyResult.FailedOpen ||
+                            (result == ScriptPolicyResult.Completed && parameters.Continue);
+                    },
+                    token),
+                activation.ApplyIfCurrent).ConfigureAwait(false);
         }
 
         private Task<bool> WebProxy_ReceivedSslConnectionRequestAsync(
