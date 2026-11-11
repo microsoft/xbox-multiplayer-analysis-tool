@@ -188,7 +188,11 @@ namespace NetworkTraceCaptureControls
 
         private void Ntdcc_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
-            if (e.PropertyName == nameof(NetworkTraceCaptureController.NetworkTracePackets))
+            if (e.PropertyName == nameof(NetworkTraceCaptureController.DeviceStatus))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
+            else if (e.PropertyName == nameof(NetworkTraceCaptureController.NetworkTracePackets))
             {
                 UpdateFilteredData();
             }

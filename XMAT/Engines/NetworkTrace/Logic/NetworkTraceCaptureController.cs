@@ -232,7 +232,14 @@ namespace XMAT.NetworkTrace
             }
             finally
             {
-                await CompleteCaptureAsync(preserveCaptureError: captureFailed);
+                try
+                {
+                    await CompleteCaptureAsync(preserveCaptureError: captureFailed);
+                }
+                finally
+                {
+                    CommandManager.InvalidateRequerySuggested();
+                }
             }
         }
 
@@ -268,7 +275,6 @@ namespace XMAT.NetworkTrace
             finally
             {
                 DeviceStatus = DeviceStatusEnum.Idle;
-                CommandManager.InvalidateRequerySuggested();
             }
         }
 

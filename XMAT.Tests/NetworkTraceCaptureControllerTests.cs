@@ -4,6 +4,7 @@
 
 using System.Drawing;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using NetworkTraceCaptureControls;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
@@ -232,6 +233,34 @@ namespace XMAT.Tests
                 Assert.Equal(1, nextEngine.SubscriberCount);
                 controller.StopCapture(null).GetAwaiter().GetResult();
                 Assert.Equal(new INetworkTraceEngine[] { engine, nextEngine }, disconnected);
+            });
+        }
+
+        [Fact]
+        public void DeviceStatusChange_RefreshesCaptureCommandAvailability()
+        {
+            _application.Run(window =>
+            {
+                var controller = new NetworkTraceCaptureController("Test device", DeviceType.LocalPC)
+                {
+                    NetworkTracePackets = new NetworkTracePacketsCollection()
+                };
+                var view = new NetworkTraceCaptureView
+                {
+                    DataContext = new TestCaptureDeviceContext(controller)
+                };
+                WpfTestHost.Show(window, view);
+                var toolbar = ((Grid)view.Content).Children.OfType<ToolBar>().Single();
+                var button = toolbar.Items.OfType<ToggleButton>().Single();
+                Assert.True(button.IsEnabled);
+
+                controller.DeviceStatus = DeviceStatusEnum.Disconnecting;
+                WpfTestHost.Pump();
+                Assert.False(button.IsEnabled);
+
+                controller.DeviceStatus = DeviceStatusEnum.Idle;
+                WpfTestHost.Pump();
+                Assert.True(button.IsEnabled);
             });
         }
 
