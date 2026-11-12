@@ -72,6 +72,10 @@ namespace XMAT.WebServiceCapture.Proxy
     {
         internal CaptureRowKey RowKey { get; set; }
 
+        // The client sent the body without a length (chunked HTTP/1.1, or HTTP/2 without
+        // content-length); it is forwarded the same way rather than re-framed with Content-Length.
+        internal bool UnknownLengthBody { get; set; }
+
         [Description("WEB_SVC_SCRIPT_PROP_DESC_SCHEME")]
         public string Scheme { get; set; }
         [Description("WEB_SVC_SCRIPT_PROP_DESC_HOST")]
@@ -92,6 +96,14 @@ namespace XMAT.WebServiceCapture.Proxy
         public string Status { get; set; }
         [Description("WEB_SVC_SCRIPT_PROP_DESC_STATUSDESC")]
         public string StatusDescription { get; set; }
+
+        // Trailer fields that followed the body (chunked HTTP/1.1 or HTTP/2).
+        internal HeaderCollection Trailers { get; } = new();
+
+        // When the body passed the capture limit, BodyBytes keeps only its first
+        // CaptureTruncatedAt bytes and the full body was still forwarded; 0 when complete.
+        internal int CaptureTruncatedAt { get; set; }
+
         public override string FirstLineAndHeaders { get => RefreshFirstLineAndHeaders($"{Version} {Status} {StatusDescription}"); }
     }
 }
