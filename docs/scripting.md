@@ -28,6 +28,11 @@ unless it checks `Params.Request.Host`. A Web Response script should skip `CONNE
 requests unless changing tunnel behavior is intentional; delaying that reply delays
 every HTTPS tunnel.
 
+**Streamed responses:** event streams, audio, video and bodies larger than the capture
+limit reach the device as they arrive (see
+[Streaming and large responses](web-proxy.md#streaming-and-large-responses)). A Web
+Response script sees a copy after such a response ends and can't change or cancel it.
+
 ## Write and enable a script
 
 1. Select an event and edit its script.
