@@ -285,6 +285,40 @@ namespace XMAT.Tests.Proxy
             Assert.Equal("payload", Encoding.ASCII.GetString(captured.BodyBytes));
         }
 
+        [Theory]
+        [InlineData("http11")]
+        [InlineData("https11")]
+        [InlineData("https2")]
+        public async Task StreamedResponse_IsCapturedEvenWhenTheClientClosesRightAway(string route)
+        {
+            (Version version, bool tls) = Route(route);
+            byte[] payload = Enumerable.Range(0, 2 * 1024 * 1024).Select(i => (byte)(i * 13)).ToArray();
+            await using var origin = await LoopbackOrigin.StartAsync(async context =>
+            {
+                context.Response.ContentType = "audio/mpeg";
+                await context.Response.Body.WriteAsync(payload);
+            }, useTls: tls);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            var policyRan = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.Proxy.WebResponsePolicyAsync = (args, _) =>
+            {
+                if (args.Response.StatusDescription != "Connection Established")
+                    policyRan.TrySetResult(args.Response.BodyBytes.Length);
+                return Task.FromResult(true);
+            };
+
+            using (HttpClient client = proxy.CreateClient())
+            {
+                using var request = NewRequest(HttpMethod.Get, origin.Url("/audio"), version);
+                using HttpResponseMessage response = await client.SendAsync(request);
+                Assert.Equal(payload, await response.Content.ReadAsByteArrayAsync());
+            }
+
+            Assert.Equal(payload.Length, await policyRan.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+            ServerResponse captured = await WaitForCapturedResponseAsync(proxy);
+            Assert.Equal(payload, captured.BodyBytes);
+        }
+
         [Fact]
         public void Preferences_ClampTheCaptureLimit()
         {

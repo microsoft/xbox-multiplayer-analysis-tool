@@ -667,6 +667,9 @@ namespace XMAT.WebServiceCapture.Proxy
                     Method = method,
                     Path = path,
                     Version = version,
+                    UnknownLengthBody =
+                        framing.Kind ==
+                        BodyKind.Chunked,
                 };
 
             var hostCount = 0;
