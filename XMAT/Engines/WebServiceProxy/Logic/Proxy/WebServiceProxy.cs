@@ -46,6 +46,17 @@ namespace XMAT.WebServiceCapture.Proxy
         public Func<HttpRequestEventArgs, CancellationToken, Task<bool>> WebRequestPolicyAsync { get; set; }
         public Func<HttpResponseEventArgs, CancellationToken, Task<bool>> WebResponsePolicyAsync { get; set; }
 
+        // Capture-only notice for streamed responses: raised when their headers have been sent and
+        // when the captured body reaches the capture limit, before the response ends. It cannot
+        // change or block the response; WebResponsePolicyAsync still runs once the body ends.
+        internal Func<HttpResponseEventArgs, CancellationToken, Task> WebResponseProgressAsync { get; set; }
+
+        // This proxy's streaming options; null follows the preferences (ResponseStreamingOptions.Current).
+        internal ResponseStreamingOptions ResponseStreaming { get; set; }
+
+        internal ResponseStreamingOptions EffectiveResponseStreaming =>
+            ResponseStreaming ?? ResponseStreamingOptions.Current;
+
         internal ProxyState State
         {
             get { lock (_stateLock) { return _state; } }
@@ -896,7 +907,8 @@ namespace XMAT.WebServiceCapture.Proxy
             ClientRequest request,
             ServerResponse response,
             CancellationToken cancellationToken,
-            ClientProcessContext processContext = null)
+            ClientProcessContext processContext = null,
+            bool responseForwarded = false)
         {
             if (_cts?.IsCancellationRequested == true || cancellationToken.IsCancellationRequested)
             {
@@ -911,6 +923,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 Response = response,
                 SendResponse = true,
                 ProcessContext = processContext,
+                ResponseForwarded = responseForwarded,
             };
 
             bool observersAccepted = InvokeVetoObservers(
@@ -925,6 +938,44 @@ namespace XMAT.WebServiceCapture.Proxy
             return args.SendResponse &&
                 _cts?.IsCancellationRequested != true &&
                 !cancellationToken.IsCancellationRequested;
+        }
+
+        // Capture-only: failures are logged and never interrupt the stream being forwarded.
+        internal async Task RaiseWebResponseProgressAsync(
+            int connectionID,
+            ClientRequest request,
+            ServerResponse response,
+            CancellationToken cancellationToken,
+            ClientProcessContext processContext = null)
+        {
+            var progress = WebResponseProgressAsync;
+            if (progress == null ||
+                _cts?.IsCancellationRequested == true ||
+                cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                await progress(new HttpResponseEventArgs
+                {
+                    ConnectionID = connectionID,
+                    Timestamp = DateTime.Now,
+                    Request = request,
+                    Response = response,
+                    SendResponse = true,
+                    ProcessContext = processContext,
+                    ResponseForwarded = true,
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                _logger.Log(connectionID, LogLevel.ERROR, $"Streamed response capture update failed: {ex}");
+            }
         }
 
         private bool InvokeVetoObservers<TEventArgs>(

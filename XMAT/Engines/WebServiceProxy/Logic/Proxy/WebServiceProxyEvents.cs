@@ -58,6 +58,10 @@ namespace XMAT.WebServiceCapture.Proxy
         public ServerResponse Response { get; set; }
         public bool SendResponse { get; set; }
         internal ClientProcessContext ProcessContext { get; set; }
+
+        // The response was streamed to the client before this event; handlers see a copy
+        // and can neither change nor block what the client received.
+        internal bool ResponseForwarded { get; set; }
     }
 
     public class ConnectionClosedEventArgs : EventArgs
