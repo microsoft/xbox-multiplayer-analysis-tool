@@ -256,19 +256,21 @@ then forwards it. These responses stream to the device as they arrive instead:
 - Any body larger than the **Capture limit** (32 MB by default, 1 to 768 MB), including
   one whose `Content-Length` already says it is larger.
 
-Change these settings in **Edit > Preferences > Web Proxy**. New responses use them
-after you click **Save**.
+Change these settings in **Edit > Preferences > Web Proxy > Streaming**. New responses
+use them after you click **Save**.
 
 For a streamed response:
 
-- The capture row appears when the headers arrive. Its body is filled in when it
-  reaches the capture limit or the response ends; a stream that never ends keeps
-  flowing to the device.
-- The capture keeps the body only up to the capture limit and says so in the response
-  view. The device still gets the full response.
+- The capture row shows the status and headers as soon as they arrive. The body appears
+  when it reaches the capture limit or the response ends, and the duration when the
+  response ends, also when the device or the server closes it early. A stream that never
+  ends keeps flowing to the device.
+- The capture keeps the body only up to the capture limit, and the response view says
+  where it was truncated. The device still gets the full response.
 - A Web Response script runs after the response ends, on a copy. Its changes and
   **Continue** = `false` don't reach the device; XMAT logs a warning instead.
-- If the server sends nothing for 100 seconds, XMAT ends the response.
+
+XMAT ends any response when the server sends nothing for 100 seconds.
 
 XMAT keeps the server's framing toward the device. A chunked response stays chunked
 for HTTP/1.1 devices, including its trailers; `Content-Length` stays `Content-Length`

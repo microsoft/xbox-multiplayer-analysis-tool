@@ -442,7 +442,10 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             bool originChunked = result.Headers.TransferEncodingChunked == true;
             long? declaredLength = result.Content.Headers.ContentLength;
-            bool http10Client = string.Equals(clientRequest.Version, "HTTP/1.0", StringComparison.OrdinalIgnoreCase);
+            // Chunked framing needs HTTP/1.1 on both sides: the status line carries the origin's version.
+            bool chunkedAllowed =
+                !string.Equals(clientRequest.Version, "HTTP/1.0", StringComparison.OrdinalIgnoreCase) &&
+                result.Version >= HttpVersion.Version11;
             ServerResponse serverResponse = CreateServerResponse(result);
             serverResponse.RequestNumber = clientRequest.RequestNumber;
 
@@ -489,7 +492,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
                     // Chunked stays chunked (and carries trailers) for HTTP/1.1 clients, like Fiddler;
                     // otherwise the possibly script-edited body gets its own Content-Length.
-                    bool chunked = !http10Client && (originChunked || serverResponse.Trailers.Count > 0);
+                    bool chunked = chunkedAllowed && (originChunked || serverResponse.Trailers.Count > 0);
                     await WriteResponseAsync(
                         connectionID,
                         clientStream,
@@ -501,7 +504,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
             ResponseFraming framing = declaredLength.HasValue
                 ? ResponseFraming.ContentLength
-                : http10Client ? ResponseFraming.CloseDelimited : ResponseFraming.Chunked;
+                : chunkedAllowed ? ResponseFraming.Chunked : ResponseFraming.CloseDelimited;
             await StreamResponseAsync(
                 connectionID,
                 clientStream,
@@ -623,12 +626,13 @@ namespace XMAT.WebServiceCapture.Proxy
                 TimeoutException or
                 OperationCanceledException)
             {
+                // The response ended early, but it ended: its capture completes with what arrived. Release
+                // the origin first, because the capture event may wait for a script.
                 LogConnection(
                     connectionID,
                     LogLevel.WARN,
                     $"Streamed response ended early: {ex.Message}");
-                await NotifyCaptureAsync().ConfigureAwait(false);
-                return;
+                result.Dispose();
             }
 
             capture.CopyTo(serverResponse);

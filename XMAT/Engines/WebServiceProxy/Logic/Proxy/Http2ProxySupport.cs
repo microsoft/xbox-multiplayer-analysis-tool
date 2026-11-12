@@ -641,11 +641,12 @@ namespace XMAT.WebServiceCapture.Proxy
                 !_stoppingToken.IsCancellationRequested &&
                 ex is IOException or HttpRequestException or TimeoutException or OperationCanceledException)
             {
-                // The status line is gone, so the client can only see the stream end early.
+                // The status line is gone, so the client can only see the stream end early. The response
+                // ended all the same, so its capture completes with what arrived. Release the origin first,
+                // because the capture event may wait for a script.
                 Log(tunnel.ConnectionId, LogLevel.WARN, $"Streamed response ended early: {ex.Message}");
                 context.Abort();
-                await NotifyCaptureAsync().ConfigureAwait(false);
-                return;
+                upstreamResponse.Dispose();
             }
 
             capture.CopyTo(serverResponse);

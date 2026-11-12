@@ -63,9 +63,10 @@ present and valid, and otherwise reads the archive as Fiddler wrote it.
 
 A response body that passes the capture limit (see [Web proxy](web-proxy.md)) still
 reaches the device in full, but its capture keeps only the first part, and the response
-pane says where it was truncated. Trailer fields that followed a response body are listed
-under its headers. `.XMATCAP` files keep both in two optional columns of the
-`WebProxyConnections` table: `ResponseTrailers` (the trailer lines) and
+pane says where it was truncated. The stored headers stay as the server sent them, so a
+truncated body can be shorter than its `Content-Length`. Trailer fields that followed a
+response body are listed under its headers. `.XMATCAP` files keep both in two optional
+columns of the `WebProxyConnections` table: `ResponseTrailers` (the trailer lines) and
 `ResponseBodyTruncatedAt` (the body bytes kept; 0 when the body is complete). Captures
 saved without these columns load with complete bodies and no trailers. A `.SAZ` export
 writes them as the `x-xmat-response-trailers` and `x-xmat-response-body-truncated-at`

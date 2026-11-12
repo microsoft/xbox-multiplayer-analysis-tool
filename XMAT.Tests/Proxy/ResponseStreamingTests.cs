@@ -98,7 +98,7 @@ namespace XMAT.Tests.Proxy
         [InlineData("http11")]
         [InlineData("https11")]
         [InlineData("https2")]
-        public async Task ClientDisconnectMidStream_CancelsUpstream(string route)
+        public async Task ClientDisconnectMidStream_CancelsUpstreamAndCompletesTheCapture(string route)
         {
             (Version version, bool tls) = Route(route);
             var aborted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -124,6 +124,14 @@ namespace XMAT.Tests.Proxy
                 }
             }, useTls: tls);
             await using var proxy = await ProxyTestHarness.StartAsync();
+            var policyRan = new TaskCompletionSource<(bool Forwarded, string Body)>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.Proxy.WebResponsePolicyAsync = (args, _) =>
+            {
+                if (args.Response.StatusDescription != "Connection Established")
+                    policyRan.TrySetResult((args.ResponseForwarded, Encoding.ASCII.GetString(args.Response.BodyBytes)));
+                return Task.FromResult(true);
+            };
             using (HttpClient client = proxy.CreateClient())
             {
                 using var request = NewRequest(HttpMethod.Get, origin.Url("/never-ends"), version);
@@ -136,6 +144,12 @@ namespace XMAT.Tests.Proxy
             Task done = await Task.WhenAny(aborted.Task, Task.Delay(TimeSpan.FromSeconds(10)));
             Assert.True(ReferenceEquals(done, aborted.Task),
                 $"{route}: the upstream request was not cancelled after the client disconnected");
+
+            // The stream ended when the device closed it: its capture completes with what arrived.
+            Task<(bool Forwarded, string Body)> policy = policyRan.Task;
+            Assert.Same(policy, await Task.WhenAny(policy, Task.Delay(TimeSpan.FromSeconds(10))));
+            Assert.True(policy.Result.Forwarded);
+            Assert.StartsWith("data: first\n\n", policy.Result.Body, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -183,6 +197,21 @@ namespace XMAT.Tests.Proxy
             Assert.Null(response.Header("Transfer-Encoding"));
             Assert.Null(response.Header("Trailer"));
             Assert.Equal("part1-part2", response.Body);
+        }
+
+        // The status line carries the origin's version, and HTTP/1.0 has no chunked framing.
+        [Fact]
+        public async Task PlainHttp11Client_StreamFromHttp10OriginIsNotChunked()
+        {
+            await using var origin = RawOrigin.Start(
+                "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: first\n\ndata: second\n\n");
+            await using var proxy = await ProxyTestHarness.StartAsync();
+
+            RawResponse response = await SendRawThroughProxyAsync(proxy.Port, origin.Port, "HTTP/1.1");
+
+            Assert.StartsWith("HTTP/1.0 200", response.StatusLine, StringComparison.Ordinal);
+            Assert.Null(response.Header("Transfer-Encoding"));
+            Assert.Equal("data: first\n\ndata: second\n\n", response.Body);
         }
 
         [Fact]
