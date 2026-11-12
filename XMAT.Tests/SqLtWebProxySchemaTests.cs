@@ -14,7 +14,7 @@ namespace XMAT.Tests
     public sealed class SqLtWebProxySchemaTests
     {
         [Fact]
-        public void WritableWebProxyTableAppendsTypedProcessColumns()
+        public void WritableWebProxyTableAppendsTypedOptionalColumns()
         {
             using var database = new SqLtDatabase();
             database.Initialize();
@@ -28,13 +28,15 @@ namespace XMAT.Tests
                 BindingFlags.NonPublic).Invoke(method, null);
 
             IFieldDefinition[] fields = method.WebProxyConnectionsTable.Dataset.FieldDefs.ToArray();
-            Assert.Equal(20, fields.Length);
+            Assert.Equal(22, fields.Length);
             Assert.Collection(
                 fields.Skip(16),
                 field => AssertField(field, WebProxyCaptureSchema.ClientProcessName, FieldValueType.String),
                 field => AssertField(field, WebProxyCaptureSchema.ClientProcessId, FieldValueType.Integer),
                 field => AssertField(field, WebProxyCaptureSchema.ClientProcessStartTime, FieldValueType.String),
-                field => AssertField(field, WebProxyCaptureSchema.ClientProcessStatus, FieldValueType.String));
+                field => AssertField(field, WebProxyCaptureSchema.ClientProcessStatus, FieldValueType.String),
+                field => AssertField(field, WebProxyCaptureSchema.ResponseTrailers, FieldValueType.String),
+                field => AssertField(field, WebProxyCaptureSchema.ResponseBodyTruncatedAt, FieldValueType.Integer));
         }
 
         private static void AssertField(IFieldDefinition field, string name, FieldValueType type)

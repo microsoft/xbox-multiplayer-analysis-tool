@@ -2444,7 +2444,9 @@ namespace XMAT.Tests
                 string.Empty,
                 0L,
                 string.Empty,
-                string.Empty
+                string.Empty,
+                string.Empty,
+                0L
             };
         }
 

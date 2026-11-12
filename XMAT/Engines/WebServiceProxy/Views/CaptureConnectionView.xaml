@@ -282,6 +282,8 @@
                                                HeaderDictionary="{Binding SelectedItem.ResponseHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.ResponseBody, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyIsDecoded="{Binding SelectedItem.IsReplay, ElementName=ConnectionList, Mode=OneWay}"
+                                               Notice="{Binding SelectedItem.ResponseCaptureNotice, ElementName=ConnectionList, Mode=OneWay}"
+                                               Trailers="{Binding SelectedItem.ResponseTrailers, ElementName=ConnectionList, Mode=OneWay}"
                                                />
 
                     <Grid Grid.Row="1" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch">

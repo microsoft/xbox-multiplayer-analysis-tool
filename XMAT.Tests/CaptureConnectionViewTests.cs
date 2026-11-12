@@ -485,6 +485,61 @@ namespace XMAT.Tests
             });
         }
 
+        // The response pane notes a capture that the capture limit truncated and lists the trailers that followed the body.
+        // A complete response without trailers shows neither, and the request pane never does.
+        [Fact]
+        public void ResponsePane_ShowsTheTruncationNoticeAndTheTrailers()
+        {
+            _application.Run(window =>
+            {
+                using var tab = new LiveCaptureTab();
+                tab.Add(1, status: null);
+                Assert.True(tab.Respond(1, forwarded: true, change: response =>
+                {
+                    response.Trailers.Add("x-checksum", "abc123");
+                    response.CaptureTruncatedAt = 64 * 1024;
+                }));
+                ProxyConnectionModel streamed = tab.Controller.ProxyConnections.Single(row => row.RequestNumber == 1);
+                ProxyConnectionModel complete = tab.Add(2);
+                var view = new CaptureConnectionView { AutoScroll = false, DataContext = tab };
+                CaptureProcessFilterViewTests.ShowCaptureView(window, view);
+                var grid = (DataGrid)view.FindName("ConnectionList");
+                var request = (RequestResponseView)view.FindName("RequestViewControl");
+                var response = (RequestResponseView)view.FindName("ResponseViewControl");
+
+                grid.SelectedItem = streamed;
+                WpfTestHost.Pump();
+
+                Assert.Equal(
+                    (Visibility.Visible, "Capture truncated at 64 KB. The full response was forwarded."),
+                    Shown<TextBlock>(response, "NoticeText"));
+                Assert.Equal((Visibility.Visible, "x-checksum: abc123\r\n"), Shown<TextBox>(response, "TrailersText"));
+                Assert.Equal((Visibility.Visible, "Trailers"), Shown<TextBlock>(response, "TrailersLabel"));
+                Assert.Equal(Visibility.Collapsed, Shown<TextBlock>(request, "NoticeText").Visibility);
+                Assert.Equal(Visibility.Collapsed, Shown<TextBlock>(request, "TrailersLabel").Visibility);
+
+                grid.SelectedItem = complete;
+                WpfTestHost.Pump();
+
+                Assert.Equal(Visibility.Collapsed, Shown<TextBlock>(response, "NoticeText").Visibility);
+                Assert.Equal(Visibility.Collapsed, Shown<TextBox>(response, "TrailersText").Visibility);
+                Assert.Equal(Visibility.Collapsed, Shown<TextBlock>(response, "TrailersLabel").Visibility);
+                view.DataContext = null;
+            });
+        }
+
+        private static (Visibility Visibility, string Text) Shown<T>(RequestResponseView pane, string name)
+            where T : FrameworkElement
+        {
+            T element = Assert.IsType<T>(pane.FindName(name));
+            return (element.Visibility, element switch
+            {
+                TextBlock text => text.Text,
+                TextBox text => text.Text,
+                _ => null,
+            });
+        }
+
         private sealed class UnusedConfiguration : IProxyDeviceConfiguration
         {
             private readonly TaskCompletionSource<ProxyConfiguration> _pending = new();

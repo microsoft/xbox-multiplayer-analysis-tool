@@ -10,7 +10,7 @@
         WindowStartupLocation="CenterOwner"
         WindowStyle="SingleBorderWindow"
         ResizeMode="NoResize"
-        x:Name="PreferencesWindowTitle" Title="Preferences" Height="300" Width="370">
+        x:Name="PreferencesWindowTitle" Title="Preferences" SizeToContent="Height" Width="370">
     <Window.CommandBindings>
         <CommandBinding Command="Save" Executed="Save_Executed"/>
     </Window.CommandBindings>

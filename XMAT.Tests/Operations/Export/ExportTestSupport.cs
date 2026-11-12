@@ -146,6 +146,8 @@ namespace XMAT.Tests.Operations.Export
                 [WebProxyCaptureSchema.ClientProcessId] = 4100L,
                 [WebProxyCaptureSchema.ClientProcessStartTime] = string.Empty,
                 [WebProxyCaptureSchema.ClientProcessStatus] = "local",
+                [WebProxyCaptureSchema.ResponseTrailers] = string.Empty,
+                [WebProxyCaptureSchema.ResponseBodyTruncatedAt] = 0L,
             };
         }
 
