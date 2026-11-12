@@ -64,6 +64,30 @@ namespace XMAT.Tests.Inspection
         }
 
         [Theory]
+        [InlineData("00")]
+        [InlineData("1F-00")]
+        public void AShortInvalidGzipHeader_IsMalformedAndShownAsStoredBytes(string hex)
+        {
+            byte[] body = Convert.FromHexString(hex.Replace("-", "", StringComparison.Ordinal));
+
+            BodyPreview preview = Preview(body, "text/plain", "gzip");
+
+            Assert.Equal((BodyPreviewState.Malformed, BodyPreviewTextKind.Bytes), (preview.State, preview.TextKind));
+            Assert.Equal(Dump(body), preview.Text);
+            Assert.Equal(new[] { BodyPreviewNotice.MalformedCoding }, preview.Notices);
+        }
+
+        [Fact]
+        public void AValidPartialGzipHeader_RemainsTruncated()
+        {
+            BodyPreview preview = Preview(new byte[] { 0x1F, 0x8B, 8 }, "text/plain", "gzip");
+
+            Assert.Equal(BodyPreviewState.Truncated, preview.State);
+            Assert.Contains(BodyPreviewNotice.Incomplete, preview.Notices);
+            Assert.DoesNotContain(BodyPreviewNotice.MalformedCoding, preview.Notices);
+        }
+
+        [Theory]
         [InlineData("compress", null)]
         [InlineData("gzip, br", null)]
         [InlineData("zstd", null)]

@@ -30,14 +30,30 @@ namespace XMAT.Operations.Inspection
             Span<byte> fixedPart = stackalloc byte[10];
             Span<byte> one = stackalloc byte[1];
             Span<byte> two = stackalloc byte[2];
-            if (!TryRead(source, fixedPart))
-            {
-                return -1;
-            }
-
-            if (fixedPart[0] != 0x1F || fixedPart[1] != 0x8B || fixedPart[2] != 8 || (fixedPart[3] & ReservedFlags) != 0)
+            int fixedLength = ReadAvailable(source, fixedPart);
+            if (fixedLength > 0 && fixedPart[0] != 0x1F)
             {
                 throw new InvalidDataException();
+            }
+
+            if (fixedLength > 1 && fixedPart[1] != 0x8B)
+            {
+                throw new InvalidDataException();
+            }
+
+            if (fixedLength > 2 && fixedPart[2] != 8)
+            {
+                throw new InvalidDataException();
+            }
+
+            if (fixedLength > 3 && (fixedPart[3] & ReservedFlags) != 0)
+            {
+                throw new InvalidDataException();
+            }
+
+            if (fixedLength != fixedPart.Length)
+            {
+                return -1;
             }
 
             byte flags = fixedPart[3];
@@ -129,6 +145,23 @@ namespace XMAT.Operations.Inspection
             }
 
             return true;
+        }
+
+        private static int ReadAvailable(Stream source, Span<byte> buffer)
+        {
+            int filled = 0;
+            while (filled < buffer.Length)
+            {
+                int read = source.Read(buffer[filled..]);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                filled += read;
+            }
+
+            return filled;
         }
 
         private static uint Update(uint crc, ReadOnlySpan<byte> data)
