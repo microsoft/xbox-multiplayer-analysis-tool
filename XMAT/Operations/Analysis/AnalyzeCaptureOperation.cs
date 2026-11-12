@@ -940,6 +940,8 @@ namespace XMAT.Operations.Analysis
                         model.ResponseBody,
                     [WebServiceCaptureMethod.FieldKey_ClientIP] =
                         model.ClientIP ?? string.Empty,
+                    [WebProxyCaptureSchema.ResponseTrailers] = model.ResponseTrailers ?? string.Empty,
+                    [WebProxyCaptureSchema.ResponseBodyTruncatedAt] = model.ResponseBodyTruncatedAt,
                 };
                 foreach (IFieldValue field in ClientProcessRecordCodec.ToFields(model.ClientProcess))
                 {

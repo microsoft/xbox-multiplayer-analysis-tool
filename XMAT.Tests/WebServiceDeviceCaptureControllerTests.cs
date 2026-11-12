@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -12,6 +13,7 @@ using XMAT.DataAbstractionLayer;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
+using XMAT.Scripting;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Proxy;
 using XMAT.WebServiceCapture;
@@ -1491,6 +1493,212 @@ namespace XMAT.Tests
             Assert.Null(exception);
         }
 
+        // A streamed response's row shows its status and headers as soon as the proxy forwarded them, then the body that
+        // the capture kept once it reached the capture limit, while the response is still streaming. No script runs, and
+        // the response time is recorded only when the body ends: until then a live export skips the row as incomplete
+        // rather than failing when it changes again.
+        [Fact]
+        public async Task StreamedResponseProgress_UpdatesTheRowAtHeadersAndAtTheCaptureLimit()
+        {
+            await using var capture = new ProxiedCapture();
+            await capture.EnableScriptAsync("Params.Response.Status = \"500\";");
+            ClientRequest request = await capture.RequestAsync("/events");
+            ServerResponse response = StreamedResponse(request, string.Empty);
+
+            await capture.Proxy.RaiseWebResponseProgressAsync(1001, request, response, CancellationToken.None);
+
+            IDataRecord atHeaders = capture.Row;
+            var headers = new ProxyConnectionModel(atHeaders);
+            Assert.Equal("200", headers.Status);
+            Assert.Equal(response.FirstLineAndHeaders, headers.ResponseLineAndHeaders);
+            Assert.Equal(string.Empty, atHeaders.Str(WebServiceCaptureMethod.FieldKey_ResponseBody));
+            Assert.Equal(0L, headers.ResponseBodyTruncatedAt);
+            Assert.False(headers.HasRecordedResponseTimestamp);
+
+            response.BodyBytes = "data: a first ev"u8.ToArray();
+            response.CaptureTruncatedAt = 16;
+            await capture.Proxy.RaiseWebResponseProgressAsync(1001, request, response, CancellationToken.None);
+
+            var atLimit = new ProxyConnectionModel(capture.Row);
+            Assert.Equal("data: a first ev"u8.ToArray(), atLimit.ResponseBody);
+            Assert.Equal(16L, atLimit.ResponseBodyTruncatedAt);
+            Assert.Equal("200", atLimit.Status);
+            Assert.False(atLimit.HasRecordedResponseTimestamp);
+            Assert.Equal("200", response.Status);
+
+            Assert.True(await capture.Proxy.RaiseReceivedWebResponseAsync(
+                1001, request, response, CancellationToken.None, responseForwarded: true));
+
+            Assert.True(new ProxyConnectionModel(capture.Row).HasRecordedResponseTimestamp);
+        }
+
+        // A streamed response was forwarded before its WebResponse script ran, so the script gets a copy: its changes and
+        // Continue = false reach neither the response nor its row, which keeps what the client received, and the capture
+        // warns once that they were ignored. Changes to the request alone are not warned about.
+        [Theory]
+        [InlineData("Params.Response.Status = \"500\";", true)]
+        [InlineData("Params.Response.BodyBytes = new byte[] { 1 };", true)]
+        [InlineData("Params.Response.Headers[\"X-Changed\"] = \"yes\";", true)]
+        [InlineData("Params.Continue = false;", true)]
+        [InlineData("Params.Request.Path = \"/changed\";", false)]
+        public async Task ForwardedResponse_ScriptRunsOnACopy_AndTheRowKeepsWhatWasForwarded(string script, bool ignored)
+        {
+            await using var capture = new ProxiedCapture();
+            await capture.EnableScriptAsync(
+                "Params.Request.Headers[\"X-Script-Saw\"] = " +
+                "System.Text.Encoding.ASCII.GetString(Params.Response.BodyBytes); " +
+                script);
+            ClientRequest request = await capture.RequestAsync("/events");
+            ServerResponse response = StreamedResponse(request, "data: first");
+            response.Trailers.Add("x-checksum", "abc123");
+            string forwarded = response.FirstLineAndHeaders;
+
+            bool sent = await capture.Proxy.RaiseReceivedWebResponseAsync(
+                1001, request, response, CancellationToken.None, responseForwarded: true);
+
+            Assert.True(sent);
+            Assert.Equal("data: first", request.Headers["X-Script-Saw"]);
+            Assert.Equal(forwarded, response.FirstLineAndHeaders);
+            Assert.Equal("data: first"u8.ToArray(), response.BodyBytes);
+            var row = new ProxyConnectionModel(capture.Row);
+            Assert.Equal(("200", forwarded), (row.Status, row.ResponseLineAndHeaders));
+            Assert.Equal("data: first"u8.ToArray(), row.ResponseBody);
+            Assert.Equal(("x-checksum: abc123\r\n", 0L), (row.ResponseTrailers, row.ResponseBodyTruncatedAt));
+            Assert.Equal(ignored ? 1 : 0, capture.Warnings.Count);
+        }
+
+        // A WebResponse script that misses its deadline cannot abort a response that was already forwarded: the row still
+        // records what the client received.
+        [Fact]
+        public async Task ForwardedResponse_ScriptDeadlineStillRecordsTheForwardedResponse()
+        {
+            await using var capture = new ProxiedCapture(TimeSpan.FromSeconds(1));
+            await capture.EnableScriptAsync("Params.Response.Status = \"500\"; System.Threading.Thread.Sleep(3000);");
+            ClientRequest request = await capture.RequestAsync("/events");
+            ServerResponse response = StreamedResponse(request, "data: first");
+            response.CaptureTruncatedAt = 11;
+
+            bool sent = await capture.Proxy.RaiseReceivedWebResponseAsync(
+                1001, request, response, CancellationToken.None, responseForwarded: true);
+
+            Assert.True(sent);
+            var row = new ProxyConnectionModel(capture.Row);
+            Assert.Equal(("200", 11L), (row.Status, row.ResponseBodyTruncatedAt));
+            Assert.Single(capture.Warnings);
+        }
+
+        // A buffered response is recorded as its script left it, which is what the client receives, with its trailers.
+        [Fact]
+        public async Task BufferedResponse_RowHasTheScriptChangesAndTheTrailers()
+        {
+            await using var capture = new ProxiedCapture();
+            await capture.EnableScriptAsync("Params.Response.Status = \"503\";");
+            ClientRequest request = await capture.RequestAsync("/buffered");
+            ServerResponse response = StreamedResponse(request, "complete");
+            response.Trailers.Add("x-checksum", "abc123");
+
+            bool sent = await capture.Proxy.RaiseReceivedWebResponseAsync(
+                1001, request, response, CancellationToken.None);
+
+            Assert.True(sent);
+            Assert.Equal("503", response.Status);
+            var row = new ProxyConnectionModel(capture.Row);
+            Assert.Equal("503", row.Status);
+            Assert.Equal(("x-checksum: abc123\r\n", 0L), (row.ResponseTrailers, row.ResponseBodyTruncatedAt));
+            Assert.Empty(capture.Warnings);
+        }
+
+        private static ServerResponse StreamedResponse(ClientRequest request, string body)
+        {
+            var response = new ServerResponse
+            {
+                RequestNumber = request.RequestNumber,
+                Version = "HTTP/1.1",
+                Status = "200",
+                StatusDescription = "OK",
+                BodyBytes = System.Text.Encoding.ASCII.GetBytes(body),
+            };
+            response.ContentHeaders["Content-Type"] = "text/event-stream";
+            return response;
+        }
+
+        // A controller attached to a real proxy that is not listening, with a capture table of its own: the proxy's raise
+        // methods run the controller's handlers as they do for live traffic.
+        private sealed class ProxiedCapture : IAsyncDisposable
+        {
+            private readonly SqLtDatabase _database = new();
+            private readonly IDataTable _table;
+            private readonly AsyncOperationTracker _callbacks;
+            private readonly ConcurrentQueue<string> _warnings = new();
+
+            internal ProxiedCapture(TimeSpan? scriptExecutionDeadline = null)
+            {
+                _database.Initialize();
+                Proxy = new WebServiceProxy();
+                Controller = new WebServiceDeviceCaptureController(
+                    "streaming-test",
+                    DeviceType.GenericProxyDevice,
+                    false,
+                    new ProxyPortPool(),
+                    scriptExecutionDeadline: scriptExecutionDeadline,
+                    proxyFactory: () => Proxy);
+                Controller.Initialize(deferPortAllocation: true);
+                _table = CreateConnectionsTable(_database);
+                SetPrivateField(Controller, "_dataTable", _table);
+                Controller.LogObserver = (level, message) =>
+                {
+                    if (level == LogLevel.WARN)
+                    {
+                        _warnings.Enqueue(message);
+                    }
+                };
+                _callbacks = CallbacksOf(Controller);
+                _callbacks.StartAccepting();
+            }
+
+            internal WebServiceProxy Proxy { get; }
+            internal WebServiceDeviceCaptureController Controller { get; }
+            internal IDataRecord Row => Assert.Single(_table.Dataset.DataRecords);
+            internal IReadOnlyCollection<string> Warnings => _warnings;
+
+            internal async Task EnableScriptAsync(string script)
+            {
+                ScriptModel model = Controller.Scripts[WebServiceCaptureScriptableEventType.WebResponse];
+                model.Script = script;
+                Assert.Equal(
+                    ScriptActivationResult.Enabled,
+                    await model.EnableScriptAsync<WebServiceCaptureScriptParams>());
+            }
+
+            internal async Task<ClientRequest> RequestAsync(string path)
+            {
+                var request = new ClientRequest
+                {
+                    RequestNumber = 1,
+                    Version = "HTTP/1.1",
+                    Scheme = "http",
+                    Host = "example.test",
+                    Port = 80,
+                    Method = "GET",
+                    Path = path,
+                };
+                Assert.True(await Proxy.RaiseReceivedWebRequestAsync(1001, request, CancellationToken.None));
+                return request;
+            }
+
+            public async ValueTask DisposeAsync()
+            {
+                try
+                {
+                    await _callbacks.StopAcceptingAndWaitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                }
+                finally
+                {
+                    _database.Dispose();
+                }
+            }
+        }
+
         private static IDataRecord CreateAnalyzableRecord(string deviceName)
         {
             var requestTime = DateTime.UtcNow;
@@ -1547,7 +1755,9 @@ namespace XMAT.Tests
             string.Empty,
             0L,
             string.Empty,
-            string.Empty);
+            string.Empty,
+            string.Empty,
+            0L);
 
         private static void SetPrivateField(object target, string name, object value)
         {

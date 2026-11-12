@@ -52,6 +52,17 @@ namespace XMAT.WebServiceCapture.Models
         public byte[] ResponseBody { get; private set; }
         public string ClientIP { get; private set; }
 
+        // Trailer lines ("name: value\r\n") that followed the response body; empty when there were none.
+        public string ResponseTrailers { get; private set; } = string.Empty;
+
+        // The response body bytes the capture kept when it passed the capture limit; 0 when it is complete.
+        public long ResponseBodyTruncatedAt { get; private set; }
+
+        public string ResponseCaptureNotice =>
+            ResponseBodyTruncatedAt > 0
+                ? Localization.GetLocalizedString("WEBCAP_RESPONSE_TRUNCATED", FormatSize(ResponseBodyTruncatedAt))
+                : string.Empty;
+
         private Dictionary<string, string> _requestHeaders;
         private Dictionary<string, string> _responseHeaders;
 
@@ -169,6 +180,8 @@ namespace XMAT.WebServiceCapture.Models
             RequestBody = model.RequestBody;
             ResponseBody = model.ResponseBody;
             ClientIP = model.ClientIP;
+            ResponseTrailers = model.ResponseTrailers;
+            ResponseBodyTruncatedAt = model.ResponseBodyTruncatedAt;
             ClientProcess = model.ClientProcess;
             IsProcessResolving = model.IsProcessResolving;
 
@@ -237,6 +250,24 @@ namespace XMAT.WebServiceCapture.Models
         {
             RequestNumber = requestNumber;
             Id = connectionId;
+        }
+
+        internal void SetResponseCaptureDetails(string trailers, long truncatedAt)
+        {
+            ResponseTrailers = trailers ?? string.Empty;
+            ResponseBodyTruncatedAt = Math.Max(truncatedAt, 0);
+        }
+
+        // Megabytes of 1,048,576 bytes, as the capture limit counts them.
+        private static string FormatSize(long bytes)
+        {
+            const long Kilobyte = 1024;
+            const long Megabyte = 1024 * Kilobyte;
+            return bytes >= Megabyte
+                ? Localization.GetLocalizedString("WEBCAP_SIZE_MB", Math.Round(bytes / (double)Megabyte, 1))
+                : bytes >= Kilobyte
+                    ? Localization.GetLocalizedString("WEBCAP_SIZE_KB", Math.Round(bytes / (double)Kilobyte, 1))
+                    : Localization.GetLocalizedString("WEBCAP_SIZE_BYTES", bytes);
         }
 
         internal void SetClientProcess(ClientProcessInfo info, bool resolving = false)
@@ -319,6 +350,8 @@ namespace XMAT.WebServiceCapture.Models
                     [WebServiceCaptureMethod
                         .FieldKey_ClientIP] =
                         ClientIP,
+                    [WebProxyCaptureSchema.ResponseTrailers] = ResponseTrailers,
+                    [WebProxyCaptureSchema.ResponseBodyTruncatedAt] = ResponseBodyTruncatedAt,
                 },
                 ClientProcess);
         }
@@ -440,6 +473,9 @@ namespace XMAT.WebServiceCapture.Models
             {
                 ClientIP = clientIP;
             }
+
+            ResponseTrailers = WebProxyCaptureSchema.ReadResponseTrailers(dataRecord);
+            ResponseBodyTruncatedAt = WebProxyCaptureSchema.ReadResponseBodyTruncatedAt(dataRecord);
 
             ClientProcessInfo process = ClientProcessRecordCodec.Read(dataRecord);
             if (ClientProcess.Status != ClientProcessStatus.NotRecorded && process != ClientProcess)

@@ -68,14 +68,24 @@ namespace XMAT.Tests
             return Controller.ProxyConnections.Last(row => row.RequestNumber == number);
         }
 
-        // The response to request NUMBER, as the proxy reports it; returns whether the proxy forwards it.
-        internal bool Respond(int number, string status = "200")
+        // The response to request NUMBER, as the proxy reports it; returns whether the proxy forwards it. FORWARDED reports
+        // a response that was streamed to the client before this event.
+        internal bool Respond(
+            int number, string status = "200", Action<ServerResponse> change = null, bool forwarded = false)
         {
             (ClientProcessContext client, ClientRequest request) = _sessions[number];
             var response = new ServerResponse
                 { RequestNumber = number, Version = "HTTP/1.1", Status = status, BodyBytes = Encoding.UTF8.GetBytes("body " + number) };
+            change?.Invoke(response);
             return Raise("WebProxy_ReceivedWebResponseAsync", new HttpResponseEventArgs
-                { ConnectionID = number, Timestamp = DateTime.Now, Request = request, Response = response, ProcessContext = client });
+            {
+                ConnectionID = number,
+                Timestamp = DateTime.Now,
+                Request = request,
+                Response = response,
+                ProcessContext = client,
+                ResponseForwarded = forwarded,
+            });
         }
 
         // A WebSocket frame on request NUMBER's connection.

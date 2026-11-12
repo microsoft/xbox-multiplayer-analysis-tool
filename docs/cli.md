@@ -56,9 +56,11 @@ xmat --version
   column may be NULL, which counts nothing; a NULL in a known column is rejected (`analysis.input.malformed`).
   WebProxyConnections may also hold, among its extra columns, the optional client process columns that XMAT writes
   (`ClientProcessName` TEXT, `ClientProcessId` INTEGER, `ClientProcessStartTime` TEXT and `ClientProcessStatus` TEXT;
-  see [Capture files](capture-files.md#process-information)). One of them spelled or typed otherwise is rejected
-  (`analysis.input.schema`), but a NULL or unreadable value in them is read as missing, never rejected: a session
-  without usable process information counts as unknown, as in a capture saved without these columns. A Fiddler
+  see [Capture files](capture-files.md#process-information)) and its optional response columns (`ResponseTrailers`
+  TEXT and `ResponseBodyTruncatedAt` INTEGER; see [Capture files](capture-files.md#streamed-responses)). One of them
+  spelled or typed otherwise is rejected (`analysis.input.schema`), but a NULL or unreadable value in them is read as
+  missing, never rejected: a session without usable process information counts as unknown, as in a capture saved
+  without these columns, and one without response columns has no trailers and a complete body. A Fiddler
   archive whose directory records are missing, inconsistent or span several disks is rejected too
   (`analysis.input.malformed`); single-disk ZIP64 archives are supported. These limits bound the capture data that
   xmat reads, not its exact memory use, and how many calls fit depends on the data: typical Xbox Live traffic stores
@@ -301,6 +303,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Capture this PC (`capture.local-pc`) | (not available yet) | Planned (S6, XMAT-021) |
 | Capture low-level network traces (`capture.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Filter captured sessions by client process (`capture.process-filter`) | `xmat analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...`<br>`xmat export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S9) |
+| Stream responses and limit how much of each response body a capture keeps (`capture.response-streaming`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Run capture scripts (`capture.scripts`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Stop a running capture (`capture.stop`) | (not available yet) | Planned (S5, XMAT-021) |
 | Record WebSocket handshakes and report observed frames without their payloads (`capture.websocket-handshakes`) | (not available yet) | Planned (S4, XMAT-021) |

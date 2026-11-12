@@ -131,6 +131,23 @@ namespace XMAT.Tests
         }
 
         [Theory]
+        [InlineData("ResponseTrailers INTEGER")]
+        [InlineData("ResponseBodyTruncatedAt TEXT")]
+        [InlineData("ResponseBodyTruncatedAt")]
+        public void Preflight_RejectsMistypedKnownOptionalResponseColumns(string wrongDeclaration)
+        {
+            using var directory = new TestDirectory();
+            string path = HostileSqliteSchemas.CreateOrdinaryCapture(
+                directory.Path,
+                "response-column-wrong-type.xmatcap",
+                HostileSqliteSchemas.AppendWebProxyColumns(wrongDeclaration));
+
+            SqLtSchemaException exception = Assert.Throws<SqLtSchemaException>(() => ValidateGui(path));
+
+            Assert.Equal(SqLtSchemaFailure.Unsupported, exception.Failure);
+        }
+
+        [Theory]
         [InlineData(
             "CREATE INDEX ExtraIndex ON WebProxyConnections(RequestNumber)")]
         [InlineData(

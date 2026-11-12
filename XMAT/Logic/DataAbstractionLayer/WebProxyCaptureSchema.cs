@@ -17,6 +17,8 @@ namespace XMAT.DataAbstractionLayer
         internal const string ClientProcessId = "ClientProcessId";
         internal const string ClientProcessStartTime = "ClientProcessStartTime";
         internal const string ClientProcessStatus = "ClientProcessStatus";
+        internal const string ResponseTrailers = "ResponseTrailers";
+        internal const string ResponseBodyTruncatedAt = "ResponseBodyTruncatedAt";
 
         internal static IReadOnlyList<IField> Fields { get; } =
             Array.AsReadOnly<IField>(
@@ -42,9 +44,24 @@ namespace XMAT.DataAbstractionLayer
                     new Field<long>(ClientProcessId),
                     new Field<string>(ClientProcessStartTime),
                     new Field<string>(ClientProcessStatus),
+                    new Field<string>(ResponseTrailers),
+                    new Field<long>(ResponseBodyTruncatedAt),
                 });
 
         internal static IField[] CreateFields() => Fields.ToArray();
+
+        // Captures saved before these optional columns existed have no trailers and complete response bodies.
+        internal static string ReadResponseTrailers(IDataRecord record) =>
+            record is IOptionalTypedDataRecord optional && optional.TryReadString(ResponseTrailers, out string trailers)
+                ? trailers
+                : string.Empty;
+
+        internal static long ReadResponseBodyTruncatedAt(IDataRecord record) =>
+            record is IOptionalTypedDataRecord optional &&
+                optional.TryReadInt64(ResponseBodyTruncatedAt, out long truncatedAt) &&
+                truncatedAt > 0
+                ? truncatedAt
+                : 0;
 
         internal static object[] Project(IReadOnlyDictionary<string, object> values, ClientProcessInfo process)
         {

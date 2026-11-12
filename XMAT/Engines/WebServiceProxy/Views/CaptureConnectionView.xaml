@@ -246,6 +246,8 @@
                                                HeaderDictionary="{Binding SelectedItem.ResponseHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.ResponseBody, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyText="{Binding SelectedItem.ResponseText, ElementName=ConnectionList, Mode=OneWay}"
+                                               Notice="{Binding SelectedItem.ResponseCaptureNotice, ElementName=ConnectionList, Mode=OneWay}"
+                                               Trailers="{Binding SelectedItem.ResponseTrailers, ElementName=ConnectionList, Mode=OneWay}"
                                                />
 
                     <Grid Grid.Row="0" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch">

@@ -95,6 +95,26 @@ namespace XMAT.WebServiceCapture
         public static readonly DependencyProperty BodyBytesProperty =
            DependencyProperty.Register("BodyBytes", typeof(byte[]), typeof(RequestResponseView));
 
+        // A note about the captured message, such as a truncated capture; hidden when empty.
+        public string Notice
+        {
+            get => (string)GetValue(NoticeProperty);
+            set => SetValue(NoticeProperty, value);
+        }
+
+        public static readonly DependencyProperty NoticeProperty =
+            DependencyProperty.Register(nameof(Notice), typeof(string), typeof(RequestResponseView));
+
+        // Trailer lines that followed the body; their section is hidden when empty.
+        public string Trailers
+        {
+            get => (string)GetValue(TrailersProperty);
+            set => SetValue(TrailersProperty, value);
+        }
+
+        public static readonly DependencyProperty TrailersProperty =
+            DependencyProperty.Register(nameof(Trailers), typeof(string), typeof(RequestResponseView));
+
         public RequestResponseView()
         {
             InitializeComponent();
@@ -102,6 +122,7 @@ namespace XMAT.WebServiceCapture
             HeadersTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_HEADERS");
             BodyTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_BODY");
             JsonTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_JSON");
+            TrailersLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_TRAILERS");
         }
     }
 }

@@ -367,6 +367,154 @@ namespace XMAT.Tests
             });
         }
 
+        // The streaming check boxes edit the preferences directly, like the other check box; the capture limit, like the
+        // port range, is committed only on Save.
+        [Fact]
+        public void Preferences_StreamingEdits_AndTheCaptureLimitIsCommittedOnlyOnSave()
+        {
+            _application.Run(window =>
+            {
+                var preferences = new XMAT.WebServiceCapture.Models.PreferencesModel();
+                var options = new CaptureOptionsFull { DataContext = preferences };
+                WpfTestHost.Show(window, options);
+                Assert.Equal("32", ((TextBox)options.FindName("CaptureLimit")).Text);
+
+                ((CheckBox)options.FindName("AutoStreamCheckBox")).SetCurrentValue(
+                    System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, false);
+                ((CheckBox)options.FindName("StreamAllCheckBox")).SetCurrentValue(
+                    System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, true);
+                EditCaptureLimit(options, "128");
+
+                Assert.Equal((false, true, 32), (preferences.AutoStreamMediaAndEvents, preferences.StreamAllResponses,
+                    preferences.CaptureLimitMegabytes));
+                options.CommitCaptureLimit();
+                Assert.Equal(128, preferences.CaptureLimitMegabytes);
+            });
+        }
+
+        [Theory]
+        [InlineData("0")]
+        [InlineData("769")]
+        [InlineData("32.5")]
+        [InlineData("")]
+        public void Preferences_RejectAnInvalidCaptureLimitBeforeSaving(string limit)
+        {
+            _application.Run(window =>
+            {
+                var preferences = new XMAT.WebServiceCapture.Models.PreferencesModel();
+                var options = new CaptureOptionsFull { DataContext = preferences };
+                WpfTestHost.Show(window, options);
+                EditCaptureLimit(options, limit);
+
+                ArgumentException error = Assert.Throws<ArgumentException>(options.CommitCaptureLimit);
+
+                Assert.Equal(Localization.GetLocalizedString("PROXY_PREFS_CAPTURE_LIMIT_INVALID"), error.Message);
+                Assert.DoesNotContain("NO_IMPL_", error.Message, StringComparison.Ordinal);
+                Assert.Equal(32, preferences.CaptureLimitMegabytes);
+            });
+        }
+
+        // Preferences > Web Proxy keeps its streaming settings inside the window.
+        [Fact]
+        public void PreferencesWindow_ShowsEveryWebProxySetting()
+        {
+            _application.Run(_ =>
+            {
+                var dialog = new PreferencesWindow
+                {
+                    DataContext = new AppPreferencesModel
+                    {
+                        WebProxyCapturePreferences = new XMAT.WebServiceCapture.Models.PreferencesModel(),
+                    },
+                    Left = -12000,
+                    Top = -12000,
+                    ShowInTaskbar = false,
+                };
+                try
+                {
+                    dialog.Show();
+                    WpfTestHost.Pump();
+                    var tabs = (TabControl)((Grid)dialog.Content).Children[0];
+                    var limit = (TextBox)((FrameworkElement)dialog.FindName("ProxyOptions")).FindName("CaptureLimit");
+
+                    double bottom = limit.TranslatePoint(new System.Windows.Point(0, limit.ActualHeight), tabs).Y;
+
+                    Assert.True(limit.IsVisible && bottom <= tabs.ActualHeight,
+                        $"The capture limit ends at {bottom} in a {tabs.ActualHeight} high tab control.");
+                }
+                finally
+                {
+                    dialog.Close();
+                    WpfTestHost.Pump();
+                }
+            });
+        }
+
+        // Settings saved by an older XMAT have no streaming settings and keep the defaults. Loading the settings applies
+        // them to new responses, as saving does.
+        [Fact]
+        public void Preferences_StreamingSettingsRoundTripAndApplyWhenLoadedOrSaved()
+        {
+            ResponseStreamingOptions previous = ResponseStreamingOptions.Current;
+            try
+            {
+                var saved = new XMAT.WebServiceCapture.Models.PreferencesModel
+                {
+                    AutoStreamMediaAndEvents = false,
+                    StreamAllResponses = true,
+                    CaptureLimitMegabytes = 64,
+                };
+                var loaded = new XMAT.WebServiceCapture.Models.PreferencesModel();
+
+                loaded.DeserializeFrom(JsonSerializer.SerializeToElement<object>(saved));
+
+                Assert.Equal((false, true, 64), (loaded.AutoStreamMediaAndEvents, loaded.StreamAllResponses,
+                    loaded.CaptureLimitMegabytes));
+                Assert.Equal(
+                    ResponseStreamingOptions.FromPreferences(false, true, 64),
+                    ResponseStreamingOptions.Current);
+
+                var older = new XMAT.WebServiceCapture.Models.PreferencesModel();
+                older.DeserializeFrom(JsonSerializer.SerializeToElement(new { PromptToDisableOnClose = false }));
+
+                Assert.Equal((true, false, 32), (older.AutoStreamMediaAndEvents, older.StreamAllResponses,
+                    older.CaptureLimitMegabytes));
+                Assert.Equal(new ResponseStreamingOptions(), ResponseStreamingOptions.Current);
+
+                older.StreamAllResponses = true;
+                older.Serialized();
+
+                Assert.Equal(
+                    ResponseStreamingOptions.FromPreferences(true, true, 32),
+                    ResponseStreamingOptions.Current);
+            }
+            finally
+            {
+                ResponseStreamingOptions.Current = previous;
+            }
+        }
+
+        [Theory]
+        [InlineData(0, 1)]
+        [InlineData(5000, 768)]
+        public void Preferences_ClampALoadedCaptureLimit(int saved, int expected)
+        {
+            ResponseStreamingOptions previous = ResponseStreamingOptions.Current;
+            try
+            {
+                var loaded = new XMAT.WebServiceCapture.Models.PreferencesModel();
+
+                loaded.DeserializeFrom(JsonSerializer.SerializeToElement(new { CaptureLimitMegabytes = saved }));
+
+                Assert.Equal(expected, loaded.CaptureLimitMegabytes);
+                Assert.Equal(expected * 1024 * 1024, ResponseStreamingOptions.Current.CaptureLimitBytes);
+            }
+            finally
+            {
+                ResponseStreamingOptions.Current = previous;
+            }
+        }
+
         [Theory]
         [InlineData(DeviceType.XboxConsole, false, false)]
         [InlineData(DeviceType.XboxConsole, true, false)]
@@ -617,6 +765,14 @@ namespace XMAT.Tests
             starting.GetBindingExpression(TextBox.TextProperty).UpdateSource();
             ending.SetCurrentValue(TextBox.TextProperty, last);
             ending.GetBindingExpression(TextBox.TextProperty).UpdateSource();
+            WpfTestHost.Pump();
+        }
+
+        private static void EditCaptureLimit(CaptureOptionsFull options, string megabytes)
+        {
+            var limit = (TextBox)options.FindName("CaptureLimit");
+            limit.SetCurrentValue(TextBox.TextProperty, megabytes);
+            limit.GetBindingExpression(TextBox.TextProperty).UpdateSource();
             WpfTestHost.Pump();
         }
 

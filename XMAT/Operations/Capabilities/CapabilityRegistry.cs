@@ -225,6 +225,19 @@ namespace XMAT.Operations.Capabilities
                     Click(BypassListXaml, "RemoveSelected_Click"),
                     Click(BypassListXaml, "ClearAll_Click"),
                 }),
+            // Changes what the proxy forwards as it arrives and how much of each response a capture keeps, so it is not
+            // presentation.
+            Capability.Planned(
+                "capture.response-streaming",
+                "Stream responses and limit how much of each response body a capture keeps",
+                "S8a",
+                Owner,
+                gui: new[]
+                {
+                    Preference(ProxyPreferences, "AutoStreamMediaAndEvents"),
+                    Preference(ProxyPreferences, "StreamAllResponses"),
+                    Preference(ProxyPreferences, "CaptureLimitMegabytes"),
+                }),
 
             // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.
             Capability.Planned(

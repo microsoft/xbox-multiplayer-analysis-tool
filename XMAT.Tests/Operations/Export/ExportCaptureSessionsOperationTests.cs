@@ -124,6 +124,39 @@ namespace XMAT.Tests.Operations.Export
             Assert.True(analysis.Value.Summary.TotalCalls > 0);
         }
 
+        // xmat export reads XMAT's SAZ flags for a streamed response's trailers and truncated capture, and keeps both in the
+        // optional columns of an XMATCAP.
+        [Fact]
+        public async Task Execute_SazResponseTrailersAndTruncationRoundTripThroughXmatcap()
+        {
+            using var directory = new ExportTestDirectory();
+            string source = directory.PathOf("streamed.saz");
+            ProxyConnectionModel streamed = ProcessCaptures.ExportRecord(1);
+            streamed.SetResponseCaptureDetails("x-checksum: abc123\r\n", 16);
+            SazArchive.Write(source, new[] { streamed });
+            string output = directory.PathOf("streamed.xmatcap");
+
+            OperationResult<ExportCaptureResult> export = await new ExportCaptureSessionsOperation().ExecuteAsync(
+                new ExportCaptureRequest(
+                    source,
+                    null,
+                    null,
+                    Selection(),
+                    CaptureExportFormat.Xmatcap,
+                    output,
+                    ReplaceExisting: false,
+                    AnalysisLimits.Default,
+                    AllowUnprotectedOutput: false),
+                OperationContext.None,
+                CancellationToken.None);
+
+            Assert.Equal(OperationOutcome.Succeeded, export.Outcome);
+            using var capture = new SqLtReadonlyDatabase(output);
+            var model = new ProxyConnectionModel(
+                Assert.Single(capture.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords));
+            Assert.Equal(("x-checksum: abc123\r\n", 16L), (model.ResponseTrailers, model.ResponseBodyTruncatedAt));
+        }
+
         [Fact]
         public async Task Execute_CountsIncompleteAndUnavailableRowsWithoutSubstitution()
         {

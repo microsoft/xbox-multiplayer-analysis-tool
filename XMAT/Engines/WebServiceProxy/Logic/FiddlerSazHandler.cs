@@ -61,6 +61,11 @@ namespace XMAT.WebServiceCapture
         private const string RequestPathFlag = "x-xmat-request-path";
         private const string ClientIpFlag = "x-xmat-clientip";
 
+        // A streamed response's trailer lines and the body bytes its capture kept when it passed the capture limit. A
+        // sanitized archive never carries the trailers, whose values can hold secrets.
+        private const string ResponseTrailersFlag = "x-xmat-response-trailers";
+        private const string ResponseBodyTruncatedAtFlag = "x-xmat-response-body-truncated-at";
+
         enum EntryType
         {
             Request,
@@ -262,6 +267,8 @@ namespace XMAT.WebServiceCapture
             ClientProcessInfo clientProcess = ClientProcessInfo.NotRecorded;
             long requestNumber = id;
             long connectionId = id;
+            string responseTrailers = string.Empty;
+            long responseBodyTruncatedAt = 0;
             if (metadataStream != null)
             {
                 RewindIfSeekable(metadataStream);
@@ -344,6 +351,14 @@ namespace XMAT.WebServiceCapture
                     call = string.IsNullOrEmpty(exactPath) ? call : exactPath;
                     string exactClientIp = xmatFlags.GetValueOrDefault(ClientIpFlag);
                     clientIP = string.IsNullOrEmpty(exactClientIp) ? clientIP : exactClientIp;
+                    if (TryReadPositive(xmatFlags.GetValueOrDefault(ResponseBodyTruncatedAtFlag), out long truncatedAt))
+                    {
+                        responseBodyTruncatedAt = truncatedAt;
+                    }
+                    if (TryReadTrailers(xmatFlags.GetValueOrDefault(ResponseTrailersFlag), out string trailers))
+                    {
+                        responseTrailers = trailers;
+                    }
 
                     clientProcess = ReadClientProcess(processInfo, processStartTime, processStatus);
                 }
@@ -365,6 +380,7 @@ namespace XMAT.WebServiceCapture
                 clientIP);
             model.SetImportedIdentity(requestNumber, connectionId);
             model.SetClientProcess(clientProcess);
+            model.SetResponseCaptureDetails(responseTrailers, responseBodyTruncatedAt);
 
             return model;
         }
@@ -423,6 +439,23 @@ namespace XMAT.WebServiceCapture
 
         private static bool TryReadPositive(string value, out long number) =>
             long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out number) && number > 0;
+
+        // Trailer lines as XMAT writes them ("name: value\r\n"); a flag with any malformed line is ignored.
+        private static bool TryReadTrailers(string value, out string trailers)
+        {
+            string[] lines = TrailerLines(value);
+            trailers = lines.Length != 0 && lines.All(IsValidHeaderLine)
+                ? string.Concat(lines.Select(line => line + "\r\n"))
+                : string.Empty;
+            return trailers.Length != 0;
+        }
+
+        private static string[] TrailerLines(string trailers) =>
+            (trailers ?? string.Empty)
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length != 0)
+                .ToArray();
 
         // XMAT stores times as round-trip strings (ProxyConnectionModel.ToDateTimeString); like a loaded capture, the
         // model holds them as local time.
@@ -803,6 +836,10 @@ namespace XMAT.WebServiceCapture
                 metadata.SetExact(RequestTimestampFlag, started ? requested : null);
                 metadata.SetExact(ResponseTimestampFlag, ended ? responded : null);
                 metadata.SetExact(SchemeFlag, Uri.CheckSchemeName(scheme) ? scheme : null);
+                metadata.SetPositive(
+                    ResponseBodyTruncatedAtFlag,
+                    Number(values, WebProxyCaptureSchema.ResponseBodyTruncatedAt));
+                string responseTrailers = Text(values, WebProxyCaptureSchema.ResponseTrailers);
 
                 SanitizedHttpMessage request;
                 SanitizedHttpMessage? response;
@@ -828,6 +865,8 @@ namespace XMAT.WebServiceCapture
                     {
                         _sanitizer.Summary.RedactedValues++;
                     }
+                    // Trailers are never written; each one left out counts as an omitted header.
+                    _sanitizer.Summary.OmittedHeaders += TrailerLines(responseTrailers).Length;
                     if (request.BodyOmitted)
                     {
                         metadata.SessionFlags["x-xmat-request-body-omitted"] = "uninspectable";
@@ -846,6 +885,7 @@ namespace XMAT.WebServiceCapture
                     metadata.SetExact(ClientIpFlag, clientIp);
                     metadata.SetExact(RequestPathFlag, Text(values, WebServiceCaptureMethod.FieldKey_RequestPath));
                     metadata.SetClientProcess(process);
+                    metadata.SetExact(ResponseTrailersFlag, responseTrailers);
                 }
 
                 string frame = (++_rows).ToString(_frameFormat, CultureInfo.InvariantCulture);

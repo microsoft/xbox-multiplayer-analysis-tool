@@ -165,6 +165,9 @@ namespace XMAT.WebServiceCapture
         internal ClientProcessResolver ProcessResolverOverride { get; set; }
         internal TimeSpan? CaptureCallbackDrainTimeoutOverride { get; set; }
 
+        // Also receives the warnings that this controller writes to the application log.
+        internal Action<LogLevel, string> LogObserver { get; set; }
+
         internal CaptureDeleteResult DeleteSessions(
             IReadOnlyList<CaptureDeleteTarget> targets,
             IReadOnlySet<CaptureRowKey> currentlyVisible)
@@ -699,6 +702,10 @@ namespace XMAT.WebServiceCapture
                 _webProxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
                 _webProxy.WebRequestPolicyAsync = WebProxy_ReceivedWebRequestAsync;
                 _webProxy.WebResponsePolicyAsync = WebProxy_ReceivedWebResponseAsync;
+                if (_webProxy is WebServiceProxy streamingProxy)
+                {
+                    streamingProxy.WebResponseProgressAsync = WebProxy_WebResponseProgressAsync;
+                }
                 _webProxy.WebSocketMessage += WebProxy_WebSocketMessage;
                 _webProxy.WebSocketClosed += WebProxy_WebSocketClosed;
                 _webProxy.ConnectionClosed += WebProxy_ConnectionClosed;
@@ -2372,6 +2379,13 @@ namespace XMAT.WebServiceCapture
                 "Web response",
                 async cancellationToken =>
                 {
+                    if (responseEvent.ResponseForwarded)
+                    {
+                        await RunForwardedResponseScriptAsync(responseEvent, cancellationToken).ConfigureAwait(false);
+                        UpdateResponseRow(responseEvent, ended: true);
+                        return true;
+                    }
+
                     var scriptParameters = new WebServiceCaptureScriptParams
                     {
                         Request = responseEvent.Request,
@@ -2391,44 +2405,146 @@ namespace XMAT.WebServiceCapture
                         scriptResult == ScriptPolicyResult.FailedOpen ||
                         scriptParameters.Continue;
                     cancellationToken.ThrowIfCancellationRequested();
-
-                    IDataRecord record = FindCaptureRecord(
-                        responseEvent.ProcessContext,
-                        responseEvent.Request,
-                        out CaptureRowKey key);
-
-                    if (record != null)
-                    {
-                        var base64Body = Convert.ToBase64String(responseEvent.Response.BodyBytes);
-
-                        void Update()
-                        {
-                            _dataTable.UpdateRow(
-                                record.RowId,
-                                new FieldValue<string>(
-                                    WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
-                                    ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)),
-                                new FieldValue<string>(
-                                    WebServiceCaptureMethod.FieldKey_RequestStatus,
-                                    responseEvent.Response.Status),
-                                new FieldValue<string>(
-                                    WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders,
-                                    responseEvent.Response.FirstLineAndHeaders),
-                                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body));
-                        }
-                        if (TryUpdateCaptureRecord(responseEvent.ProcessContext, key, Update))
-                        {
-                            IDataRecord updatedRecord = DataRecordFromRow(record.RowId);
-                            if (updatedRecord != null)
-                            {
-                                _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord, key));
-                            }
-                        }
-                    }
-
+                    UpdateResponseRow(responseEvent, ended: true);
                     return sendResponse;
                 },
                 requestCancellation);
+        }
+
+        // A streamed response's row shows its status and headers once they were forwarded, then the body that the capture
+        // kept when it reached the capture limit. Its script runs, and its response time is recorded, only when the body
+        // ends: until then a live export skips the row as incomplete instead of failing when the row changes again.
+        private Task WebProxy_WebResponseProgressAsync(
+            HttpResponseEventArgs responseEvent,
+            CancellationToken requestCancellation)
+        {
+            return ExecuteCapturePolicyAsync(
+                "Web response progress",
+                cancellationToken =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    UpdateResponseRow(responseEvent, ended: false);
+                    return Task.FromResult(true);
+                },
+                requestCancellation);
+        }
+
+        // The client already has a streamed response, so its script runs on a copy (as in Fiddler) and its changes and
+        // Continue = false are ignored, which is logged.
+        private async Task RunForwardedResponseScriptAsync(
+            HttpResponseEventArgs responseEvent,
+            CancellationToken cancellationToken)
+        {
+            if (!Scripts[WebServiceCaptureScriptableEventType.WebResponse].IsEnabled)
+            {
+                return;
+            }
+
+            ServerResponse forwarded = responseEvent.Response;
+            ServerResponse copy = CopyResponse(forwarded);
+            var scriptParameters = new WebServiceCaptureScriptParams
+            {
+                Request = responseEvent.Request,
+                Response = copy
+            };
+            ScriptPolicyResult scriptResult = await RunScriptPolicyAsync(
+                WebServiceCaptureScriptableEventType.WebResponse,
+                scriptParameters,
+                "WebResponse",
+                cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (scriptResult == ScriptPolicyResult.Aborted ||
+                !scriptParameters.Continue ||
+                !ReferenceEquals(scriptParameters.Response, copy) ||
+                copy.FirstLineAndHeaders != forwarded.FirstLineAndHeaders ||
+                copy.BodyBytes == null ||
+                !copy.BodyBytes.AsSpan().SequenceEqual(forwarded.BodyBytes))
+            {
+                ClientRequest request = responseEvent.Request;
+                LogWarning(
+                    "WebResponse script changes do not apply to streamed responses: the response to " +
+                    $"{request?.Method} {request?.Host}{request?.Path} was already forwarded to the client.");
+            }
+        }
+
+        private static ServerResponse CopyResponse(ServerResponse response)
+        {
+            var copy = new ServerResponse
+            {
+                RequestNumber = response.RequestNumber,
+                Version = response.Version,
+                StreamId = response.StreamId,
+                Status = response.Status,
+                StatusDescription = response.StatusDescription,
+                BodyBytes = (byte[])response.BodyBytes?.Clone() ?? Array.Empty<byte>(),
+                CaptureTruncatedAt = response.CaptureTruncatedAt,
+            };
+            CopyHeaders(response.Headers, copy.Headers);
+            CopyHeaders(response.ContentHeaders, copy.ContentHeaders);
+            CopyHeaders(response.Trailers, copy.Trailers);
+            return copy;
+        }
+
+        private static void CopyHeaders(HeaderCollection source, HeaderCollection target)
+        {
+            foreach (KeyValuePair<string, IEnumerable<string>> header in
+                (IEnumerable<KeyValuePair<string, IEnumerable<string>>>)source)
+            {
+                foreach (string value in header.Value)
+                {
+                    target.Add(header.Key, value);
+                }
+            }
+        }
+
+        // Records the response as the client received it in its request's row; ENDED records its response time too.
+        private void UpdateResponseRow(HttpResponseEventArgs responseEvent, bool ended)
+        {
+            ServerResponse response = responseEvent.Response;
+            IDataRecord record = FindCaptureRecord(
+                responseEvent.ProcessContext,
+                responseEvent.Request,
+                out CaptureRowKey key);
+            if (record == null)
+            {
+                return;
+            }
+
+            var fields = new List<IFieldValue>
+            {
+                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, response.Status),
+                new FieldValue<string>(
+                    WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders,
+                    response.FirstLineAndHeaders),
+                new FieldValue<string>(
+                    WebServiceCaptureMethod.FieldKey_ResponseBody,
+                    Convert.ToBase64String(response.BodyBytes)),
+                new FieldValue<string>(WebProxyCaptureSchema.ResponseTrailers, response.Trailers.ToString()),
+                new FieldValue<long>(WebProxyCaptureSchema.ResponseBodyTruncatedAt, response.CaptureTruncatedAt),
+            };
+            if (ended)
+            {
+                fields.Add(new FieldValue<string>(
+                    WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
+                    ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)));
+            }
+            if (TryUpdateCaptureRecord(
+                    responseEvent.ProcessContext,
+                    key,
+                    () => _dataTable.UpdateRow(record.RowId, fields.ToArray())))
+            {
+                IDataRecord updatedRecord = DataRecordFromRow(record.RowId);
+                if (updatedRecord != null)
+                {
+                    _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord, key));
+                }
+            }
+        }
+
+        private void LogWarning(string message)
+        {
+            PublicUtilities.AppLog(LogLevel.WARN, message);
+            LogObserver?.Invoke(LogLevel.WARN, message);
         }
 
         private void WebProxy_WebSocketMessage(object sender, WebSocketMessageEventArgs messageEvent)
