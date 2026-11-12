@@ -2,7 +2,10 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections.Concurrent;
+using System.IO.Compression;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
 using Microsoft.AspNetCore.Http;
@@ -148,8 +151,9 @@ namespace XMAT.Tests.Proxy
             // The stream ended when the device closed it: its capture completes with what arrived.
             Task<(bool Forwarded, string Body)> policy = policyRan.Task;
             Assert.Same(policy, await Task.WhenAny(policy, Task.Delay(TimeSpan.FromSeconds(10))));
-            Assert.True(policy.Result.Forwarded);
-            Assert.StartsWith("data: first\n\n", policy.Result.Body, StringComparison.Ordinal);
+            (bool forwarded, string capturedBody) = await policy;
+            Assert.True(forwarded);
+            Assert.StartsWith("data: first\n\n", capturedBody, StringComparison.Ordinal);
         }
 
         // Only waiting on the origin counts towards the idle timeout, not a device that reads slowly.
@@ -184,6 +188,20 @@ namespace XMAT.Tests.Proxy
                 received += read;
 
             Assert.Equal((long)blocks * block.Length, received);
+        }
+
+        [Theory]
+        [InlineData("http10")]
+        [InlineData("https11")]
+        public async Task PostStreamCompletion_DoesNotHoldTheClientTransportOpen(string route)
+        {
+            if (route == "http10")
+            {
+                await VerifyHttp10EofPrecedesCompletionAsync();
+                return;
+            }
+
+            await VerifyHttps11ConnectionReusePrecedesCompletionAsync();
         }
 
         [Fact]
@@ -229,6 +247,7 @@ namespace XMAT.Tests.Proxy
             RawResponse response = await SendRawThroughProxyAsync(proxy.Port, origin.Port, "HTTP/1.0");
 
             Assert.Null(response.Header("Transfer-Encoding"));
+            Assert.Null(response.Header("Content-Length"));
             Assert.Null(response.Header("Trailer"));
             Assert.Equal("part1-part2", response.Body);
         }
@@ -299,6 +318,30 @@ namespace XMAT.Tests.Proxy
             Assert.Equal("part1-part2", await response.Content.ReadAsStringAsync());
         }
 
+        [Theory]
+        [InlineData("http11")]
+        [InlineData("https11")]
+        [InlineData("https2")]
+        public async Task UnsupportedResponseTransferCoding_ReturnsBadGatewayBeforeForwardingItsBody(string route)
+        {
+            byte[] encoded = Gzip("decoded-payload"u8.ToArray());
+            (Version version, bool tls) = Route(route);
+            await using var proxy = await ProxyTestHarness.StartAsync(
+                upstreamHandler: new UnsupportedTransferCodingResponseHandler(encoded));
+            using HttpClient client = proxy.CreateClient();
+            string scheme = tls ? "https" : "http";
+            using var request = NewRequest(
+                HttpMethod.Get,
+                $"{scheme}://unsupported-transfer-coding.test/download",
+                version);
+
+            using HttpResponseMessage response = await client.SendAsync(request);
+            byte[] body = await response.Content.ReadAsByteArrayAsync();
+
+            Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+            Assert.False(encoded.AsSpan().SequenceEqual(body), "the transfer-coded body reached the client unchanged");
+        }
+
         [Fact]
         public async Task Http2Client_ReceivesOriginTrailers()
         {
@@ -332,6 +375,43 @@ namespace XMAT.Tests.Proxy
         }
 
         [Theory]
+        [InlineData("http11", false)]
+        [InlineData("http11", true)]
+        [InlineData("https2", true)]
+        public async Task OnlyAllowedTrailerNamesAreAnnouncedAndForwarded(string route, bool streamed)
+        {
+            (Version version, bool tls) = Route(route);
+            await using var proxy = await ProxyTestHarness.StartAsync(
+                upstreamHandler: new DeclaredTrailerResponseHandler(streamed));
+            proxy.Proxy.ResponseStreaming = new ResponseStreamingOptions { StreamAllResponses = streamed };
+
+            if (!tls)
+            {
+                RawResponse response = await SendRawThroughProxyAsync(
+                    proxy.Port,
+                    originPort: 1,
+                    clientVersion: "HTTP/1.1");
+                Assert.Equal("payload", response.DecodedBody);
+                Assert.Equal("x-checksum", response.Header("Trailer"));
+                Assert.Equal("abc123", response.Trailers.GetValueOrDefault("x-checksum"));
+                return;
+            }
+
+            using HttpClient client = proxy.CreateClient();
+            using var request = NewRequest(
+                HttpMethod.Get,
+                "https://declared-trailers.test/resource",
+                version);
+            using HttpResponseMessage intercepted = await client.SendAsync(request);
+
+            Assert.Equal(HttpStatusCode.OK, intercepted.StatusCode);
+            Assert.Equal("payload", await intercepted.Content.ReadAsStringAsync());
+            Assert.Equal(["x-checksum"], intercepted.Headers.Trailer.ToArray());
+            Assert.True(intercepted.TrailingHeaders.TryGetValues("x-checksum", out IEnumerable<string> values));
+            Assert.Equal("abc123", Assert.Single(values));
+        }
+
+        [Theory]
         [InlineData("http11")]
         [InlineData("https11")]
         public async Task ChunkedUpload_IsForwardedChunked(string route)
@@ -357,6 +437,26 @@ namespace XMAT.Tests.Proxy
                     StringComparison.OrdinalIgnoreCase);
             }
             Assert.Equal(body, Assert.Single(proxy.CapturedRequests).BodyBytes);
+        }
+
+        [Theory]
+        [InlineData("http11")]
+        [InlineData("https11")]
+        public async Task UnsupportedUploadTransferCoding_ReturnsNotImplementedAndNeverReachesOrigin(string route)
+        {
+            (Version version, bool tls) = Route(route);
+            await using var origin = await LoopbackOrigin.StartAsync(useTls: tls);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            using HttpClient client = proxy.CreateClient();
+            byte[] encoded = Gzip("upload-payload"u8.ToArray());
+            using var request = NewRequest(HttpMethod.Post, origin.Url("/unsupported-upload"), version);
+            request.Content = new ByteArrayContent(encoded);
+            request.Headers.TryAddWithoutValidation("Transfer-Encoding", "gzip, chunked");
+
+            using HttpResponseMessage response = await client.SendAsync(request);
+
+            Assert.Equal(HttpStatusCode.NotImplemented, response.StatusCode);
+            Assert.Empty(origin.Requests);
         }
 
         [Theory]
@@ -412,6 +512,109 @@ namespace XMAT.Tests.Proxy
                 Version = version,
                 VersionPolicy = HttpVersionPolicy.RequestVersionExact,
             };
+
+        private static async Task VerifyHttp10EofPrecedesCompletionAsync()
+        {
+            await using var origin = RawOrigin.Start(
+                "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\n\r\npayload");
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            proxy.Proxy.ResponseStreaming = new ResponseStreamingOptions { StreamAllResponses = true };
+            var completionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.Proxy.WebResponsePolicyAsync = async (args, cancellationToken) =>
+            {
+                if (!args.ResponseForwarded)
+                    return true;
+                completionStarted.TrySetResult();
+                await releaseCompletion.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                return true;
+            };
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, proxy.Port);
+            NetworkStream stream = client.GetStream();
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(
+                $"GET http://127.0.0.1:{origin.Port}/eof HTTP/1.0\r\n" +
+                $"Host: 127.0.0.1:{origin.Port}\r\n\r\n"));
+            await stream.FlushAsync();
+            Task<string> response = ReadRawToEndAsync(stream, TimeSpan.FromSeconds(15));
+            await completionStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            Task completed;
+            try
+            {
+                completed = await Task.WhenAny(response, Task.Delay(TimeSpan.FromSeconds(5)));
+            }
+            finally
+            {
+                releaseCompletion.TrySetResult();
+            }
+            Assert.Contains("payload", await response, StringComparison.Ordinal);
+            Assert.Same(response, completed);
+        }
+
+        private static async Task VerifyHttps11ConnectionReusePrecedesCompletionAsync()
+        {
+            await using var origin = await LoopbackOrigin.StartAsync(async context =>
+            {
+                context.Response.ContentType = "text/event-stream";
+                await context.Response.WriteAsync(context.Request.Path.Value);
+            }, useTls: true);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            proxy.Proxy.ResponseStreaming = new ResponseStreamingOptions { StreamAllResponses = true };
+            var completionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var connectionIds = new ConcurrentQueue<int>();
+            proxy.Proxy.ReceivedWebRequest += (_, args) => connectionIds.Enqueue(args.ConnectionID);
+            proxy.Proxy.WebResponsePolicyAsync = async (args, cancellationToken) =>
+            {
+                if (!args.ResponseForwarded || args.Request.Path != "/first")
+                    return true;
+                completionStarted.TrySetResult();
+                await releaseCompletion.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                return true;
+            };
+            using var handler = new HttpClientHandler
+            {
+                Proxy = new WebProxy($"http://127.0.0.1:{proxy.Port}"),
+                UseProxy = true,
+                MaxConnectionsPerServer = 1,
+                ServerCertificateCustomValidationCallback = (_, _, _, _) => true,
+            };
+            using var client = new HttpClient(handler);
+            using var firstRequest = NewRequest(HttpMethod.Get, origin.Url("/first"), HttpVersion.Version11);
+            using HttpResponseMessage first = await client.SendAsync(
+                firstRequest,
+                HttpCompletionOption.ResponseHeadersRead);
+            Assert.Equal("/first", await first.Content.ReadAsStringAsync());
+            await completionStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            using var secondRequest = NewRequest(HttpMethod.Get, origin.Url("/second"), HttpVersion.Version11);
+            Task<HttpResponseMessage> secondResponse = client.SendAsync(secondRequest);
+
+            Task completed;
+            try
+            {
+                completed = await Task.WhenAny(secondResponse, Task.Delay(TimeSpan.FromSeconds(5)));
+            }
+            finally
+            {
+                releaseCompletion.TrySetResult();
+            }
+
+            using HttpResponseMessage second = await secondResponse;
+            Assert.Same(secondResponse, completed);
+            Assert.Equal("/second", await second.Content.ReadAsStringAsync());
+            int[] observedConnections = connectionIds.ToArray();
+            Assert.Equal(2, observedConnections.Length);
+            Assert.Equal(observedConnections[0], observedConnections[1]);
+        }
+
+        private static async Task<string> ReadRawToEndAsync(Stream stream, TimeSpan timeout)
+        {
+            using var cancellation = new CancellationTokenSource(timeout);
+            using var bytes = new MemoryStream();
+            await stream.CopyToAsync(bytes, cancellation.Token);
+            return Encoding.ASCII.GetString(bytes.ToArray());
+        }
 
         // Sends the request and reads until the expected text arrives, the body ends or the
         // first-bytes timeout expires; buffering proxies hold the headers until the body ends.
@@ -493,6 +696,62 @@ namespace XMAT.Tests.Proxy
             }
         }
 
+        private sealed class UnsupportedTransferCodingResponseHandler(byte[] encodedBody) : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                _ = request;
+                cancellationToken.ThrowIfCancellationRequested();
+                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Version = HttpVersion.Version11,
+                    Content = new ByteArrayContent(encodedBody),
+                };
+                response.Content.Headers.ContentLength = null;
+                response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                response.Headers.TransferEncoding.Add(new TransferCodingHeaderValue("gzip"));
+                response.Headers.TransferEncodingChunked = true;
+                return Task.FromResult(response);
+            }
+        }
+
+        private sealed class DeclaredTrailerResponseHandler(bool streamed) : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                _ = request;
+                cancellationToken.ThrowIfCancellationRequested();
+                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Version = HttpVersion.Version11,
+                    Content = new ByteArrayContent("payload"u8.ToArray()),
+                };
+                response.Content.Headers.ContentLength = null;
+                response.Content.Headers.ContentType = new MediaTypeHeaderValue(
+                    streamed ? "text/event-stream" : "text/plain");
+                response.Headers.TransferEncodingChunked = true;
+                response.Headers.TryAddWithoutValidation(
+                    "Trailer",
+                    "Content-Length, Host, Content-Type, x-checksum");
+                response.TrailingHeaders.TryAddWithoutValidation("x-checksum", "abc123");
+                return Task.FromResult(response);
+            }
+        }
+
+        private static byte[] Gzip(byte[] body)
+        {
+            using var compressed = new MemoryStream();
+            using (var gzip = new GZipStream(compressed, CompressionLevel.Optimal, leaveOpen: true))
+            {
+                gzip.Write(body);
+            }
+            return compressed.ToArray();
+        }
+
         internal static async Task<RawResponse> SendRawThroughProxyAsync(
             int proxyPort,
             int originPort,
@@ -547,7 +806,11 @@ namespace XMAT.Tests.Proxy
                 foreach (string line in lines.Skip(1))
                 {
                     int colon = line.IndexOf(':');
-                    headers[line[..colon].Trim()] = line[(colon + 1)..].Trim();
+                    string name = line[..colon].Trim();
+                    string value = line[(colon + 1)..].Trim();
+                    headers[name] = headers.TryGetValue(name, out string existing)
+                        ? existing + ", " + value
+                        : value;
                 }
                 var response = new RawResponse(lines[0], headers, raw[(end + 4)..]);
                 if (string.Equals(response.Header("Transfer-Encoding"), "chunked", StringComparison.OrdinalIgnoreCase))

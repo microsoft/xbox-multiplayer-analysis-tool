@@ -151,6 +151,99 @@ namespace XMAT.Tests.Proxy
         }
 
         [Fact]
+        public async Task Stop_WaitsForAdmittedStreamFinalization_AndPublishesTheTransportEndTime()
+        {
+            byte[] prefix = "data: before stop\n\n"u8.ToArray();
+            await using var origin = await LoopbackOrigin.StartAsync(async context =>
+            {
+                context.Response.ContentType = "text/event-stream";
+                await context.Response.Body.WriteAsync(prefix, context.RequestAborted);
+                await context.Response.Body.FlushAsync(context.RequestAborted);
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, context.RequestAborted);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            });
+            int port = GetFreePort();
+            var proxy = new WebServiceProxy();
+            var finalizationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseFinalization = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var finalizationFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var callbackCount = 0;
+            DateTime transportEndedAt = default;
+            DateTime callbackStartedAt = default;
+            byte[] captured = null;
+            proxy.ResponseStreaming = new ResponseStreamingOptions { StreamAllResponses = true };
+            proxy.WebResponsePolicyAsync = async (args, cancellationToken) =>
+            {
+                if (!args.ResponseForwarded)
+                    return true;
+                Interlocked.Increment(ref callbackCount);
+                transportEndedAt = args.Timestamp;
+                callbackStartedAt = DateTime.Now;
+                captured = args.Response.BodyBytes;
+                finalizationStarted.TrySetResult();
+                await releaseFinalization.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                finalizationFinished.TrySetResult();
+                return true;
+            };
+            await proxy.StartProxyAsync(Options(port));
+            Task stop = null;
+            try
+            {
+                using var handler = new HttpClientHandler
+                {
+                    Proxy = new WebProxy($"http://127.0.0.1:{port}"),
+                    UseProxy = true,
+                };
+                using var client = new HttpClient(handler);
+                using var request = new HttpRequestMessage(HttpMethod.Get, origin.Url("/shutdown"))
+                {
+                    Version = HttpVersion.Version11,
+                    VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+                };
+                using HttpResponseMessage response = await client.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead);
+                Stream body = await response.Content.ReadAsStreamAsync();
+                byte[] received = new byte[prefix.Length];
+                await body.ReadExactlyAsync(received).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(prefix, received);
+
+                stop = proxy.StopProxyAsync();
+                await finalizationStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+                Assert.False(stop.IsCompleted, "stop completed while an admitted finalizer was still running");
+                Assert.Equal(prefix, captured);
+                Assert.NotEqual(default(DateTime), transportEndedAt);
+                Assert.True(
+                    transportEndedAt <= callbackStartedAt,
+                    $"transport ended at {transportEndedAt:o}, callback started at {callbackStartedAt:o}");
+                releaseFinalization.TrySetResult();
+                await stop.WaitAsync(TimeSpan.FromSeconds(15));
+                await finalizationFinished.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(1, Volatile.Read(ref callbackCount));
+                await Task.Delay(200);
+                Assert.Equal(1, Volatile.Read(ref callbackCount));
+            }
+            finally
+            {
+                releaseFinalization.TrySetResult();
+                if (stop != null)
+                {
+                    await stop.WaitAsync(TimeSpan.FromSeconds(15));
+                }
+                else if (proxy.State != ProxyState.Stopped)
+                {
+                    await proxy.StopProxyAsync().WaitAsync(TimeSpan.FromSeconds(15));
+                }
+            }
+        }
+
+        [Fact]
         public async Task Stop_WithFailingCleanup_StaysFaulted_ThenRetrySucceeds()
         {
             int port = GetFreePort();

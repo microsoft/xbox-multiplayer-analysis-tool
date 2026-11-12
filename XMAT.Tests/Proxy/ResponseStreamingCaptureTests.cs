@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using XMAT.WebServiceCapture.Proxy;
@@ -159,6 +160,65 @@ namespace XMAT.Tests.Proxy
             Assert.Equal(payload, captured.BodyBytes);
         }
 
+        [Fact]
+        public async Task UnknownLengthTransition_ReusesOneBoundedFrozenPrefix()
+        {
+            const int limit = 1024 * 1024;
+            byte[] payload = Enumerable.Range(0, limit + (2 * ProxyResponseStreaming.ReadBufferSize))
+                .Select(i => (byte)(i * 17 + 3))
+                .ToArray();
+            using var source = new MemoryStream(payload, writable: false);
+            var reader = new IdleTimeoutReader(source, Timeout.InfiniteTimeSpan, CancellationToken.None);
+            var capture = new CapturedResponseBody(limit);
+            var progressResponse = new ServerResponse();
+            var finalResponse = new ServerResponse();
+            long forwarded = 0;
+            var progressCount = 0;
+
+            Task Forward(ReadOnlyMemory<byte> data)
+            {
+                forwarded += data.Length;
+                return Task.CompletedTask;
+            }
+
+            Task CaptureFilled()
+            {
+                progressCount++;
+                capture.CopyTo(progressResponse);
+                return Task.CompletedTask;
+            }
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            (byte[] received, bool complete) = await ProxyResponseStreaming.ReadUpToLimitAsync(
+                reader,
+                limit,
+                declaredLength: null);
+            await ProxyResponseStreaming.RelayBodyAsync(
+                reader,
+                received,
+                capture,
+                Forward,
+                CaptureFilled);
+            capture.CopyTo(finalResponse);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.False(complete);
+            Assert.Equal(payload.Length, forwarded);
+            Assert.Equal(2, progressCount);
+            Assert.Equal(limit, progressResponse.CaptureTruncatedAt);
+            Assert.Same(progressResponse.BodyBytes, finalResponse.BodyBytes);
+            Assert.True(
+                finalResponse.BodyBytes.AsSpan().SequenceEqual(payload.AsSpan(0, limit)),
+                "the frozen capture prefix did not contain the first N payload bytes");
+#if DEBUG
+            const int payloadCopies = 4;
+#else
+            const int payloadCopies = 3;
+#endif
+            long ceiling = ((long)payloadCopies * limit) + (4L * ProxyResponseStreaming.ReadBufferSize);
+            Assert.True(allocated <= ceiling, $"transition allocated {allocated:N0} bytes; ceiling {ceiling:N0}");
+        }
+
         [Theory]
         [InlineData("http11")]
         [InlineData("https11")]
@@ -206,58 +266,103 @@ namespace XMAT.Tests.Proxy
             }
         }
 
-        [Theory]
-        [InlineData("http11")]
-        [InlineData("https2")]
-        public async Task StreamedResponse_ReportsProgressAtHeadersAndAtCaptureLimit(string route)
+        [Fact]
+        public async Task StreamedResponse_ReportsExactFillThenFirstOverflowWithoutRunningTheScriptEarly()
         {
             const int limit = 16;
-            (Version version, bool tls) = Route(route);
-            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            await using var origin = await LoopbackOrigin.StartAsync(
-                HoldingOrigin("text/event-stream", "data: a first event\n\n", "data: second\n\n", release.Task), useTls: tls);
+            byte[] prefix = "data: a first ev"u8.ToArray();
+            var sendOverflow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var origin = await LoopbackOrigin.StartAsync(async context =>
+            {
+                context.Response.ContentType = "text/event-stream";
+                await context.Response.Body.WriteAsync(prefix);
+                await context.Response.Body.FlushAsync();
+                await sendOverflow.Task.WaitAsync(TimeSpan.FromSeconds(30), context.RequestAborted);
+                await context.Response.Body.WriteAsync("!"u8.ToArray());
+                await context.Response.Body.FlushAsync();
+                await finish.Task.WaitAsync(TimeSpan.FromSeconds(30), context.RequestAborted);
+            });
             await using var proxy = await ProxyTestHarness.StartAsync();
             proxy.Proxy.ResponseStreaming = new ResponseStreamingOptions { CaptureLimitBytes = limit };
-            var progress = new ConcurrentQueue<(string Status, bool Forwarded, int BodyLength, int TruncatedAt, string ContentType)>();
+            var progress = new ConcurrentQueue<(
+                int BodyLength,
+                int TruncatedAt,
+                byte[] Body,
+                ServerResponse Response)>();
+            var scriptCalls = 0;
+            var scriptFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             proxy.Proxy.WebResponseProgressAsync = (args, _) =>
             {
                 progress.Enqueue((
-                    args.Response.Status,
-                    args.ResponseForwarded,
                     args.Response.BodyBytes.Length,
                     args.Response.CaptureTruncatedAt,
-                    args.Response.ContentHeaders["Content-Type"]));
+                    args.Response.BodyBytes,
+                    args.Response));
                 return Task.CompletedTask;
+            };
+            proxy.Proxy.WebResponsePolicyAsync = (args, _) =>
+            {
+                if (args.ResponseForwarded)
+                {
+                    Interlocked.Increment(ref scriptCalls);
+                    scriptFinished.TrySetResult();
+                }
+                return Task.FromResult(true);
             };
             using HttpClient client = proxy.CreateClient();
             try
             {
-                using var request = NewRequest(HttpMethod.Get, origin.Url("/events"), version);
-                (HttpResponseMessage response, string first) = await ReadFirstBytesAsync(client, request, "data: a first event");
-                using (response)
-                {
-                    Assert.True(first.Contains("data: a first event", StringComparison.Ordinal), $"{route}: the event stream was not streamed");
-                    DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-                    while (progress.Count < 2 && DateTime.UtcNow < deadline)
-                        await Task.Delay(20);
+                using var request = NewRequest(HttpMethod.Get, origin.Url("/events"), HttpVersion.Version11);
+                using HttpResponseMessage response = await client.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead);
+                Stream body = await response.Content.ReadAsStreamAsync();
+                byte[] receivedPrefix = new byte[limit];
+                await body.ReadExactlyAsync(receivedPrefix).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(prefix, receivedPrefix);
 
-                    // Both notices arrive while the origin still holds the response open.
-                    var notices = progress.ToArray();
-                    Assert.Equal(2, notices.Length);
-                    Assert.Equal(("200", true, 0, 0), (notices[0].Status, notices[0].Forwarded, notices[0].BodyLength, notices[0].TruncatedAt));
-                    Assert.StartsWith("text/event-stream", notices[0].ContentType, StringComparison.OrdinalIgnoreCase);
-                    Assert.Equal(("200", true, limit, limit), (notices[1].Status, notices[1].Forwarded, notices[1].BodyLength, notices[1].TruncatedAt));
-                    release.TrySetResult();
-                    await ReadToEndAsync(response);
-                }
+                await WaitForProgressAsync(2);
+                (int fillLength, int fillTruncatedAt, byte[] filledBody, ServerResponse filledResponse) =
+                    progress.ElementAt(1);
+                Assert.Equal((limit, 0), (fillLength, fillTruncatedAt));
+                Assert.Equal(prefix, filledBody);
+                Assert.Equal(0, Volatile.Read(ref scriptCalls));
 
+                sendOverflow.TrySetResult();
+                byte[] overflow = new byte[1];
+                await body.ReadExactlyAsync(overflow).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal((byte)'!', overflow[0]);
+                await WaitForProgressAsync(3);
+                (int overflowLength, int overflowTruncatedAt, byte[] overflowBody, ServerResponse overflowResponse) =
+                    progress.ElementAt(2);
+                Assert.Equal((limit, limit), (overflowLength, overflowTruncatedAt));
+                Assert.Same(filledBody, overflowBody);
+                Assert.Same(filledResponse, overflowResponse);
+                Assert.Equal(0, Volatile.Read(ref scriptCalls));
+
+                finish.TrySetResult();
+                Assert.Equal(string.Empty, await ReadToEndAsync(response));
+                await scriptFinished.Task.WaitAsync(TimeSpan.FromSeconds(10));
                 ServerResponse captured = await WaitForCapturedResponseAsync(proxy);
                 Assert.Equal(limit, captured.CaptureTruncatedAt);
-                Assert.Equal("data: a first ev", Encoding.ASCII.GetString(captured.BodyBytes));
+                Assert.Equal(prefix, captured.BodyBytes);
+                Assert.Same(filledBody, captured.BodyBytes);
+                Assert.Same(filledResponse, captured);
+                Assert.Equal(1, Volatile.Read(ref scriptCalls));
+
+                async Task WaitForProgressAsync(int count)
+                {
+                    DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+                    while (progress.Count < count && DateTime.UtcNow < deadline)
+                        await Task.Delay(20);
+                    Assert.True(progress.Count >= count, $"received {progress.Count} of {count} progress updates");
+                }
             }
             finally
             {
-                release.TrySetResult();
+                sendOverflow.TrySetResult();
+                finish.TrySetResult();
             }
         }
 
@@ -319,15 +424,18 @@ namespace XMAT.Tests.Proxy
             Assert.Equal(payload, captured.BodyBytes);
         }
 
-        [Fact]
-        public void Preferences_ClampTheCaptureLimit()
+        [Theory]
+        [InlineData("text/event-stream; charset=utf-8", true)]
+        [InlineData("AUDIO/mpeg", true)]
+        [InlineData("video/mp4; codecs=h264", true)]
+        [InlineData("application/json", false)]
+        public void AutoStreamedTypes_AreRecognizedCaseInsensitivelyWithParameters(
+            string contentType,
+            bool expected)
         {
-            Assert.Equal(1024 * 1024, ResponseStreamingOptions.FromPreferences(true, false, 0).CaptureLimitBytes);
-            Assert.Equal(32 * 1024 * 1024, ResponseStreamingOptions.FromPreferences(true, false, 32).CaptureLimitBytes);
-            Assert.Equal(640 * 1024 * 1024, ResponseStreamingOptions.FromPreferences(true, false, 5000).CaptureLimitBytes);
-            Assert.True(ResponseStreamingOptions.IsAutoStreamedType(MediaTypeHeaderValue.Parse("text/event-stream; charset=utf-8")));
-            Assert.True(ResponseStreamingOptions.IsAutoStreamedType(MediaTypeHeaderValue.Parse("AUDIO/mpeg")));
-            Assert.False(ResponseStreamingOptions.IsAutoStreamedType(MediaTypeHeaderValue.Parse("application/json")));
+            Assert.Equal(
+                expected,
+                ResponseStreamingOptions.IsAutoStreamedType(MediaTypeHeaderValue.Parse(contentType)));
         }
     }
 }

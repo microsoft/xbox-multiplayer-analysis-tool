@@ -74,6 +74,8 @@ namespace XMAT.WebServiceCapture.Proxy
         // Test seam: called with the phase name after each startup step so tests can inject failures.
         internal Action<string> StartupFaultInjection { get; set; }
 
+        internal Func<string, X509Certificate2> InterceptedCertificateOverride { get; set; }
+
         // Test seam: called during teardown, after the hosts are stopped.
         internal Action ShutdownFaultInjection { get; set; }
 
