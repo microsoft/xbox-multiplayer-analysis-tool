@@ -31,8 +31,7 @@ namespace XMAT
         {
             try
             {
-                ProxyOptions.CommitPortRange();
-                ProxyOptions.CommitCaptureLimit();
+                ProxyOptions.CommitPreferences();
             }
             catch (ArgumentException ex)
             {

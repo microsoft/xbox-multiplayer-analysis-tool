@@ -57,10 +57,12 @@ namespace XMAT.Tests.Cli
             Assert.Equal(new AnalysisLimits(1024 * Mib, 64 * Mib, 512 * Mib, 250_000), spaced.ToAnalysisLimits());
         }
 
-        // A limit that is not given keeps its default. Leading zeros are allowed: the value is still decimal.
+        // A limit that is not given keeps its default, except that the record limit is the data limit when that is lower.
+        // Leading zeros are allowed: the value is still decimal.
         [Theory]
         [InlineData("--max-input-mib 1", 1, 256, 128, 100_000)]
-        [InlineData("--max-data-mib 128", 512, 128, 128, 100_000)]
+        [InlineData("--max-data-mib 64", 512, 64, 64, 100_000)]
+        [InlineData("--max-data-mib 512", 512, 512, 128, 100_000)]
         [InlineData("--max-record-mib 1", 512, 256, 1, 100_000)]
         [InlineData("--max-records 1", 512, 256, 128, 1)]
         [InlineData("--max-records 0100", 512, 256, 128, 100)]
@@ -194,10 +196,9 @@ namespace XMAT.Tests.Cli
                 $"The {name} option needs a value.");
         }
 
-        // The record limit never exceeds the data limit, the default of an option that was not given included.
+        // A record limit that was given never exceeds the data limit: it is rejected, never lowered.
         [Theory]
         [InlineData("--max-data-mib 40 --max-record-mib 48")]
-        [InlineData("--max-data-mib 16")]
         [InlineData("--max-record-mib 120 --max-data-mib 100")]
         public void Parse_RejectsARecordLimitAboveTheDataLimit(string options)
         {
@@ -206,7 +207,8 @@ namespace XMAT.Tests.Cli
             AssertUsageError(
                 result,
                 "cli.usage.invalid-value",
-                "--max-record-mib must not exceed --max-data-mib (128 and 256 by default).");
+                "--max-record-mib must not exceed --max-data-mib (256 by default). Without --max-record-mib, the " +
+                "record limit is 128 or the data limit, whichever is lower.");
         }
 
         // A value is never repeated: it could be a path or a secret.

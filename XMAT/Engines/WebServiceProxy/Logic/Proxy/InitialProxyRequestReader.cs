@@ -291,6 +291,8 @@ namespace XMAT.WebServiceCapture.Proxy
         BodyTooLarge,
         BufferExhausted,
         Timeout,
+        UnsupportedTransferCoding,
+        UnsupportedExpectation,
     }
 
     internal enum ProxyRequestBodyReadFailure
@@ -391,6 +393,17 @@ namespace XMAT.WebServiceCapture.Proxy
             PipeReader reader,
             CancellationToken cancellationToken)
         {
+            return await ReadAsync(
+                reader,
+                sendContinue: null,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        internal async Task<ProxyRequestReadResult> ReadAsync(
+            PipeReader reader,
+            Func<CancellationToken, Task> sendContinue,
+            CancellationToken cancellationToken)
+        {
             ArgumentNullException.ThrowIfNull(reader);
             using ProxyRequestBufferLease headerLease =
                 _budget.CreateLease();
@@ -407,6 +420,10 @@ namespace XMAT.WebServiceCapture.Proxy
                 RetainParsedRequest(
                     parsed.Request,
                     headerLease);
+                if (parsed.SendContinue && sendContinue != null)
+                {
+                    await sendContinue(cancellationToken).ConfigureAwait(false);
+                }
 
                 BodyRead body =
                     parsed.Framing.Kind switch
@@ -661,6 +678,11 @@ namespace XMAT.WebServiceCapture.Proxy
 
             BodyFraming framing =
                 ParseFraming(headers);
+            bool sendContinue = ParseExpectation(
+                headers,
+                version,
+                framing,
+                out bool hasExpectation);
             var request =
                 new ClientRequest
                 {
@@ -694,6 +716,10 @@ namespace XMAT.WebServiceCapture.Proxy
                     header.Name.Equals(
                         "Transfer-Encoding",
                         StringComparison.OrdinalIgnoreCase) ||
+                    (hasExpectation &&
+                     header.Name.Equals(
+                         "Expect",
+                         StringComparison.OrdinalIgnoreCase)) ||
                     (framing.Kind ==
                         BodyKind.Chunked &&
                      header.Name.Equals(
@@ -746,7 +772,8 @@ namespace XMAT.WebServiceCapture.Proxy
             var parsed =
                 new ParsedRequest(
                     request,
-                    framing);
+                    framing,
+                    sendContinue);
             RawHeaderLifetimeObserver?.Invoke(
                 new WeakReference<byte[]>(
                     headerBytes));
@@ -1068,6 +1095,53 @@ namespace XMAT.WebServiceCapture.Proxy
             lease.Shrink(oldBytes);
         }
 
+        private static bool ParseExpectation(
+            IReadOnlyList<RawHeader> headers,
+            string version,
+            BodyFraming framing,
+            out bool hasExpectation)
+        {
+            hasExpectation = false;
+            foreach (RawHeader header in headers)
+            {
+                if (!header.Name.Equals(
+                        "Expect",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                hasExpectation = true;
+                ReadOnlySpan<char> remaining = header.Value.AsSpan();
+                while (true)
+                {
+                    int separator = remaining.IndexOf(',');
+                    ReadOnlySpan<char> expectation =
+                        (separator < 0 ? remaining : remaining[..separator]).Trim();
+                    if (!expectation.Equals(
+                            "100-continue",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new ProxyRequestReadException(
+                            ProxyRequestReadFailure.UnsupportedExpectation);
+                    }
+                    if (separator < 0)
+                        break;
+                    remaining = remaining[(separator + 1)..];
+                }
+            }
+
+            if (!hasExpectation)
+                return false;
+            if (!string.Equals(version, "HTTP/1.1", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ProxyRequestReadException(
+                    ProxyRequestReadFailure.UnsupportedExpectation);
+            }
+            return framing.Kind == BodyKind.Chunked ||
+                (framing.Kind == BodyKind.ContentLength && framing.ContentLength != 0);
+        }
+
         private BodyFraming ParseFraming(
             IReadOnlyList<RawHeader> headers)
         {
@@ -1097,6 +1171,8 @@ namespace XMAT.WebServiceCapture.Proxy
             if (hasTransferEncoding)
             {
                 var codingCount = 0;
+                var chunkedCount = 0;
+                var lastWasChunked = false;
                 foreach (RawHeader header in
                     headers)
                 {
@@ -1117,16 +1193,26 @@ namespace XMAT.WebServiceCapture.Proxy
                                 ? remaining
                                 : remaining[..separator])
                             .Trim();
-                        codingCount++;
-                        if (coding.Length == 0 ||
-                            coding.Contains(
-                                ';') ||
-                            codingCount > 1 ||
-                            !coding.Equals(
-                                "chunked",
-                                StringComparison.OrdinalIgnoreCase))
+                        int parameter = coding.IndexOf(';');
+                        ReadOnlySpan<char> name =
+                            (parameter < 0 ? coding : coding[..parameter]).Trim();
+                        if (name.Length == 0 || !IsToken(name))
                         {
                             throw Malformed();
+                        }
+                        if (parameter >= 0 &&
+                            name.Equals("chunked", StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw Malformed();
+                        }
+                        codingCount++;
+                        lastWasChunked =
+                            name.Equals(
+                                "chunked",
+                                StringComparison.OrdinalIgnoreCase);
+                        if (lastWasChunked)
+                        {
+                            chunkedCount++;
                         }
                         if (separator < 0)
                         {
@@ -1137,11 +1223,16 @@ namespace XMAT.WebServiceCapture.Proxy
                                 (separator + 1)..];
                     }
                 }
-                if (codingCount != 1)
+
+                if (chunkedCount != 0 &&
+                    (!lastWasChunked || chunkedCount != 1))
                 {
                     throw Malformed();
                 }
-                return BodyFraming.Chunked;
+                if (codingCount == 1 && chunkedCount == 1)
+                    return BodyFraming.Chunked;
+                throw new ProxyRequestReadException(
+                    ProxyRequestReadFailure.UnsupportedTransferCoding);
             }
             if (!hasContentLength)
             {
@@ -1597,7 +1688,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private sealed record ParsedRequest(
             ClientRequest Request,
-            BodyFraming Framing);
+            BodyFraming Framing,
+            bool SendContinue);
 
         private sealed record RawHeader(
             string Name,

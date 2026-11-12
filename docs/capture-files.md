@@ -61,9 +61,11 @@ present and valid, and otherwise reads the archive as Fiddler wrote it.
 
 ### Streamed responses
 
-A response body that passes the capture limit (see [Web proxy](web-proxy.md)) still
-reaches the device in full, but its capture keeps only the first part, and the response
-pane says where it was truncated. The stored headers stay as the server sent them, so a
+A response body that passes the capture limit (see
+[Streaming and large responses](web-proxy.md#streaming-and-large-responses)) is captured
+only up to the limit, and the response pane says where it was truncated: "Capture
+truncated at 32 MB; additional bytes are not captured." XMAT keeps forwarding the rest of
+the body to the device. The stored headers stay as the server sent them, so a
 truncated body can be shorter than its `Content-Length`. Trailer fields that followed a
 response body are listed under its headers. `.XMATCAP` files keep both in two optional
 columns of the `WebProxyConnections` table: `ResponseTrailers` (the trailer lines) and

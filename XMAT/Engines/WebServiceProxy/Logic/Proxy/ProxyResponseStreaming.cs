@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -37,37 +38,59 @@ namespace XMAT.WebServiceCapture.Proxy
                 response.Content.Headers.ContentLength > options.CaptureLimitBytes;
         }
 
-        // Buffers the body until it ends (Complete) or passes the limit; the bytes read so far
-        // are returned either way so a body that outgrew the limit can continue as a stream.
-        internal static async Task<(byte[] Bytes, bool Complete)> ReadUpToLimitAsync(
+        // Buffers into the same bounded accumulator that a body crossing the limit continues to
+        // use. At most one read buffer is retained for the bytes beyond the captured prefix.
+        internal static async Task<BufferedResponseBody> ReadUpToLimitAsync(
             IdleTimeoutReader reader,
             int limit,
             long? declaredLength)
         {
-            int capacity = declaredLength is long length && length <= limit ? (int)length : 0;
-            using var body = new MemoryStream(capacity);
+            _ = declaredLength;
+            var capture = new CapturedResponseBody(limit);
             byte[] buffer = new byte[ReadBufferSize];
             while (true)
             {
                 int read = await reader.ReadAsync(buffer).ConfigureAwait(false);
                 if (read == 0)
-                    return (body.ToArray(), true);
-                body.Write(buffer, 0, read);
-                if (body.Length > limit)
-                    return (body.ToArray(), false);
+                    return new BufferedResponseBody(capture, complete: true, ReadOnlyMemory<byte>.Empty);
+
+                int captured = Math.Min(capture.Remaining, read);
+                capture.AppendPrefix(buffer.AsSpan(0, captured));
+                if (captured != read)
+                {
+                    return new BufferedResponseBody(
+                        capture,
+                        complete: false,
+                        buffer.AsMemory(captured, read - captured));
+                }
             }
         }
 
-        // Forwards the bytes already read, then the rest of the body as it arrives, keeping the
-        // capture copy; captureFilled runs once, when the body first outgrows the capture limit.
+        // Forwards a prefix buffered while deciding whether to stream, then the rest as it arrives.
+        // captureChanged runs at exact fill and again on the first byte beyond the limit.
         internal static async Task RelayBodyAsync(
             IdleTimeoutReader reader,
-            byte[] received,
             CapturedResponseBody capture,
+            ReadOnlyMemory<byte> overflow,
             Func<ReadOnlyMemory<byte>, Task> forward,
-            Func<Task> captureFilled)
+            Func<Task> captureChanged)
         {
-            await RelayAsync(received).ConfigureAwait(false);
+            if (capture.Length != 0)
+            {
+                if (!capture.IsFull)
+                    throw new InvalidOperationException("Only a full buffered prefix can transition to streaming.");
+
+                byte[] prefix = capture.Freeze();
+                for (var offset = 0; offset < prefix.Length; offset += ReadBufferSize)
+                {
+                    await forward(prefix.AsMemory(
+                        offset,
+                        Math.Min(ReadBufferSize, prefix.Length - offset))).ConfigureAwait(false);
+                }
+                await captureChanged().ConfigureAwait(false);
+            }
+            await RelayAsync(overflow).ConfigureAwait(false);
+
             byte[] buffer = new byte[ReadBufferSize];
             int read;
             while ((read = await reader.ReadAsync(buffer).ConfigureAwait(false)) > 0)
@@ -79,11 +102,49 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 if (data.IsEmpty)
                     return;
+
+                if (!capture.IsFull)
+                {
+                    int captured = Math.Min(capture.Remaining, data.Length);
+                    ReadOnlyMemory<byte> prefix = data[..captured];
+                    await forward(prefix).ConfigureAwait(false);
+                    capture.AppendPrefix(prefix.Span);
+                    data = data[captured..];
+                    if (capture.IsFull)
+                    {
+                        capture.Freeze();
+                        await captureChanged().ConfigureAwait(false);
+                    }
+                }
+
+                if (data.IsEmpty)
+                    return;
+
                 await forward(data).ConfigureAwait(false);
-                if (capture.Append(data.Span))
-                    await captureFilled().ConfigureAwait(false);
+                if (!capture.Truncated)
+                {
+                    capture.MarkTruncated();
+                    await captureChanged().ConfigureAwait(false);
+                }
             }
         }
+    }
+
+    internal sealed class BufferedResponseBody
+    {
+        internal BufferedResponseBody(
+            CapturedResponseBody capture,
+            bool complete,
+            ReadOnlyMemory<byte> overflow)
+        {
+            Capture = capture;
+            Complete = complete;
+            Overflow = overflow;
+        }
+
+        internal CapturedResponseBody Capture { get; }
+        internal bool Complete { get; }
+        internal ReadOnlyMemory<byte> Overflow { get; }
     }
 
     /// <summary>
@@ -128,36 +189,87 @@ namespace XMAT.WebServiceCapture.Proxy
     /// </summary>
     internal sealed class CapturedResponseBody
     {
-        private readonly MemoryStream _bytes = new();
+        private readonly List<byte[]> _segments = new();
+        private byte[] _frozen;
+        private int _tailLength;
+        private int _length;
 
         internal CapturedResponseBody(int limit)
         {
+            ArgumentOutOfRangeException.ThrowIfNegative(limit);
             Limit = limit;
         }
 
         internal int Limit { get; }
 
+        internal int Length => _length;
+
+        internal int Remaining => Limit - _length;
+
+        internal bool IsFull => _length == Limit;
+
         internal bool Truncated { get; private set; }
 
-        // Returns true when this data first made the body longer than the limit.
-        internal bool Append(ReadOnlySpan<byte> data)
+        internal void AppendPrefix(ReadOnlySpan<byte> data)
         {
-            if (Truncated)
-                return false;
-            int room = Limit - (int)_bytes.Length;
-            if (data.Length <= room)
+            if (data.Length > Remaining)
+                throw new ArgumentOutOfRangeException(nameof(data));
+            if (_frozen != null && !data.IsEmpty)
+                throw new InvalidOperationException("The capture prefix is already immutable.");
+
+            while (!data.IsEmpty)
             {
-                _bytes.Write(data);
-                return false;
+                if (_segments.Count == 0 || _tailLength == _segments[^1].Length)
+                {
+                    int segmentLength = Math.Min(ProxyResponseStreaming.ReadBufferSize, Remaining);
+                    _segments.Add(new byte[segmentLength]);
+                    _tailLength = 0;
+                }
+
+                byte[] tail = _segments[^1];
+                int copied = Math.Min(tail.Length - _tailLength, data.Length);
+                data[..copied].CopyTo(tail.AsSpan(_tailLength));
+                data = data[copied..];
+                _tailLength += copied;
+                _length += copied;
             }
-            _bytes.Write(data[..room]);
-            Truncated = true;
-            return true;
         }
 
-        internal void CopyTo(ServerResponse response)
+        internal void MarkTruncated()
         {
-            response.BodyBytes = _bytes.ToArray();
+            if (!IsFull)
+                throw new InvalidOperationException("A capture cannot be truncated before reaching its limit.");
+            Truncated = true;
+        }
+
+        internal byte[] Freeze()
+        {
+            if (_frozen != null)
+                return _frozen;
+
+            _frozen = GC.AllocateUninitializedArray<byte>(_length);
+            int offset = 0;
+            for (var index = 0; index < _segments.Count; index++)
+            {
+                byte[] segment = _segments[index];
+                int count = index == _segments.Count - 1 ? _tailLength : segment.Length;
+                segment.AsSpan(0, count).CopyTo(_frozen.AsSpan(offset));
+                offset += count;
+            }
+            _segments.Clear();
+            _tailLength = 0;
+            return _frozen;
+        }
+
+        internal void CopyProgressTo(ServerResponse response)
+        {
+            response.BodyBytes = IsFull ? Freeze() : Array.Empty<byte>();
+            response.CaptureTruncatedAt = Truncated ? Limit : 0;
+        }
+
+        internal void CopyFinalTo(ServerResponse response)
+        {
+            response.BodyBytes = Freeze();
             response.CaptureTruncatedAt = Truncated ? Limit : 0;
         }
     }

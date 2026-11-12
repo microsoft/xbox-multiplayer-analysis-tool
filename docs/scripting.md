@@ -28,10 +28,13 @@ unless it checks `Params.Request.Host`. A Web Response script should skip `CONNE
 requests unless changing tunnel behavior is intentional; delaying that reply delays
 every HTTPS tunnel.
 
-**Streamed responses:** event streams, audio, video and bodies larger than the capture
-limit reach the device as they arrive (see
-[Streaming and large responses](web-proxy.md#streaming-and-large-responses)). A Web
-Response script sees a copy after such a response ends and can't change or cancel it.
+**Streamed responses:** event streams, audio and video (while **Automatically stream
+audio, video and event streams** is on), every response with a body (while **Stream all
+responses** is on) and bodies larger than the capture limit reach the device as they
+arrive (see [Streaming and large responses](web-proxy.md#streaming-and-large-responses)).
+A Web Response script sees a copy after such a response ends and can't change or cancel
+it. The copy's body is what the capture kept, so it may be truncated. XMAT logs a warning
+when the script changes the copy or sets **Continue** to `false`.
 
 ## Write and enable a script
 
@@ -75,7 +78,9 @@ request or response. Each invocation has a **60-second deadline**.
 If the deadline expires, XMAT logs an error and drops that transaction without
 sending a response. Stopping capture while a script runs also cancels the wait and
 drops the transaction, but is not logged as a deadline error. A CONNECT request
-does not open its HTTPS tunnel in either case.
+does not open its HTTPS tunnel in either case. A streamed response already reached the
+device, so neither drops it: its capture is still recorded, and stopping capture gives
+its Web Response script up to 10 seconds.
 
 The deadline applies to one invocation, not the total time seen by the client.
 Clients may retry dropped requests, and every retry runs the script again.

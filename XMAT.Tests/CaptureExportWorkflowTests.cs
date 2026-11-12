@@ -263,12 +263,14 @@ namespace XMAT.Tests
             AssertReleased(app, snapshot);
         }
 
-        // The GUI exports a stored session of any size; only xmat export admits its input under analysis limits.
+        // The GUI exports a large stored session: its row holds about 32 MiB of base64. The fixture has a fixed size, so it
+        // stays small whatever the default limits; CaptureExportSnapshotTests reads rows larger than an explicit record
+        // limit.
         [Fact]
-        public async Task FileExport_WritesAStoredSessionLargerThanAnAdmittedRecord()
+        public async Task FileExport_WritesALargeStoredSession()
         {
             using var directory = new CliTestDirectory();
-            byte[] body = new byte[(int)(AnalysisLimits.Default.MaxEntryBytes * 3 / 4) + 65536];
+            byte[] body = new byte[(24 * 1024 * 1024) + 65536];
             var large = new ProxyConnectionModel(
                 1, "200", new DateTime(2026, 11, 4, 0, 0, 0, DateTimeKind.Utc), TimeSpan.FromMilliseconds(25), "https",
                 "large.test:443", "GET", "/large", "GET https://large.test/large HTTP/1.1\r\nHost: large.test\r\n\r\n",

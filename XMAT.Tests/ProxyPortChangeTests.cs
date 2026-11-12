@@ -316,7 +316,7 @@ namespace XMAT.Tests
                 var options = new CaptureOptionsFull { DataContext = preferences };
                 WpfTestHost.Show(window, options);
                 EditPortRange(options, first, last);
-                Assert.Throws<ArgumentException>(options.CommitPortRange);
+                Assert.Throws<ArgumentException>(options.CommitPreferences);
                 Assert.Equal(ProxyPortPool.DefaultFirstPort, preferences.FirstPort);
                 Assert.Equal(ProxyPortPool.DefaultLastPort, preferences.LastPort);
                 preferences.Serialized();
@@ -360,7 +360,7 @@ namespace XMAT.Tests
                 Assert.Equal(ProxyPortPool.DefaultFirstPort, preferences.FirstPort);
                 Assert.Equal(ProxyPortPool.DefaultLastPort, preferences.LastPort);
 
-                options.CommitPortRange();
+                options.CommitPreferences();
 
                 Assert.Equal(9000, preferences.FirstPort);
                 Assert.Equal(9010, preferences.LastPort);
@@ -424,7 +424,12 @@ namespace XMAT.Tests
 
                 ArgumentException error = Assert.Throws<ArgumentException>(options.CommitPreferences);
 
-                Assert.Equal(Localization.GetLocalizedString("PROXY_PREFS_CAPTURE_LIMIT_INVALID"), error.Message);
+                Assert.Equal(
+                    Localization.GetLocalizedString(
+                        "PROXY_PREFS_CAPTURE_LIMIT_INVALID",
+                        ResponseStreamingOptions.MinimumCaptureLimitMegabytes,
+                        ResponseStreamingOptions.MaximumCaptureLimitMegabytes),
+                    error.Message);
                 Assert.DoesNotContain("NO_IMPL_", error.Message, StringComparison.Ordinal);
                 Assert.Equal(
                     (ProxyPortPool.DefaultFirstPort, ProxyPortPool.DefaultLastPort, true, false, 32),

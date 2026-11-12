@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using XMAT.Operations.Analysis;
@@ -54,17 +55,21 @@ namespace XMAT.Cli
             new CliLimitOption(RecordsOption, string.Empty, AnalysisLimits.DefaultRecords, MaximumRecords),
         };
 
-        // Names both options and their defaults, never the values that were given.
+        // Names both options and the defaults, never the values that were given. Only a record limit that was given can
+        // exceed the data limit: the default record limit is never above it.
         internal static string RecordOverDataMessage { get; } =
             RecordOption + " must not exceed " + DataOption + " (" +
-            AnalysisLimits.DefaultRecordMib.ToString(CultureInfo.InvariantCulture) + " and " +
-            AnalysisLimits.DefaultDataMib.ToString(CultureInfo.InvariantCulture) + " by default).";
+            AnalysisLimits.DefaultDataMib.ToString(CultureInfo.InvariantCulture) + " by default). Without " +
+            RecordOption + ", the record limit is " +
+            AnalysisLimits.DefaultRecordMib.ToString(CultureInfo.InvariantCulture) +
+            " or the data limit, whichever is lower.";
 
         internal AnalysisLimits ToAnalysisLimits() =>
             AnalysisLimits.FromMib(MaxInputMib, MaxDataMib, MaxRecordMib, MaxRecords);
 
-        // Reads the limit options that were given; the others keep their defaults. Returns the limits, or null and the
-        // option whose value is invalid.
+        // Reads the limit options that were given; the others keep their defaults, except that the record limit
+        // defaults to the data limit when that is lower, so a lower --max-data-mib alone stays valid. A record limit
+        // that was given is never lowered. Returns the limits, or null and the option whose value is invalid.
         internal static CliLimits Read(IReadOnlyDictionary<string, string> options, out CliLimitOption invalid)
         {
             invalid = null;
@@ -81,6 +86,11 @@ namespace XMAT.Cli
                     invalid = option;
                     return null;
                 }
+            }
+
+            if (!options.ContainsKey(RecordOption))
+            {
+                values[2] = Math.Min(values[2], values[1]);
             }
 
             return new CliLimits(values[0], values[1], values[2], values[3]);

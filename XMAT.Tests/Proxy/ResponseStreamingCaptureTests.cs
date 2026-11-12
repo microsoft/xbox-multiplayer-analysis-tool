@@ -169,7 +169,7 @@ namespace XMAT.Tests.Proxy
                 .ToArray();
             using var source = new MemoryStream(payload, writable: false);
             var reader = new IdleTimeoutReader(source, Timeout.InfiniteTimeSpan, CancellationToken.None);
-            var capture = new CapturedResponseBody(limit);
+            CapturedResponseBody capture = null;
             var progressResponse = new ServerResponse();
             var finalResponse = new ServerResponse();
             long forwarded = 0;
@@ -184,25 +184,26 @@ namespace XMAT.Tests.Proxy
             Task CaptureFilled()
             {
                 progressCount++;
-                capture.CopyTo(progressResponse);
+                capture.CopyProgressTo(progressResponse);
                 return Task.CompletedTask;
             }
 
             long before = GC.GetAllocatedBytesForCurrentThread();
-            (byte[] received, bool complete) = await ProxyResponseStreaming.ReadUpToLimitAsync(
+            BufferedResponseBody buffered = await ProxyResponseStreaming.ReadUpToLimitAsync(
                 reader,
                 limit,
                 declaredLength: null);
+            capture = buffered.Capture;
             await ProxyResponseStreaming.RelayBodyAsync(
                 reader,
-                received,
                 capture,
+                buffered.Overflow,
                 Forward,
                 CaptureFilled);
-            capture.CopyTo(finalResponse);
+            capture.CopyFinalTo(finalResponse);
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-            Assert.False(complete);
+            Assert.False(buffered.Complete);
             Assert.Equal(payload.Length, forwarded);
             Assert.Equal(2, progressCount);
             Assert.Equal(limit, progressResponse.CaptureTruncatedAt);
