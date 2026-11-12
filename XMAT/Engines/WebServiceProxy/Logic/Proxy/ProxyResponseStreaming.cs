@@ -87,31 +87,33 @@ namespace XMAT.WebServiceCapture.Proxy
     }
 
     /// <summary>
-    /// Reads a response body, failing with a TimeoutException when the origin sends nothing for
-    /// the idle timeout. Streams may last forever; only silence ends them.
+    /// Reads a response body, failing with a TimeoutException when one read waits on the origin for the idle
+    /// timeout. Streams may last forever, and writing to a slow device between reads may take long, so only
+    /// the time spent waiting on the origin counts.
     /// </summary>
-    internal sealed class IdleTimeoutReader : IDisposable
+    internal sealed class IdleTimeoutReader
     {
         private readonly Stream _body;
         private readonly TimeSpan _idleTimeout;
         private readonly CancellationToken _cancellationToken;
-        private readonly CancellationTokenSource _idle;
 
         internal IdleTimeoutReader(Stream body, TimeSpan idleTimeout, CancellationToken cancellationToken)
         {
             _body = body;
             _idleTimeout = idleTimeout;
             _cancellationToken = cancellationToken;
-            _idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         }
 
         internal async ValueTask<int> ReadAsync(Memory<byte> buffer)
         {
-            if (_idleTimeout > TimeSpan.Zero && _idleTimeout != Timeout.InfiniteTimeSpan)
-                _idle.CancelAfter(_idleTimeout);
+            if (_idleTimeout <= TimeSpan.Zero)
+                return await _body.ReadAsync(buffer, _cancellationToken).ConfigureAwait(false);
+
+            using var idle = CancellationTokenSource.CreateLinkedTokenSource(_cancellationToken);
+            idle.CancelAfter(_idleTimeout);
             try
             {
-                return await _body.ReadAsync(buffer, _idle.Token).ConfigureAwait(false);
+                return await _body.ReadAsync(buffer, idle.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!_cancellationToken.IsCancellationRequested)
             {
@@ -119,8 +121,6 @@ namespace XMAT.WebServiceCapture.Proxy
                     $"The origin sent no response data for {_idleTimeout.TotalSeconds:0} seconds.");
             }
         }
-
-        public void Dispose() => _idle.Dispose();
     }
 
     /// <summary>

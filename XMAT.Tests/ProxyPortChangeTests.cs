@@ -394,7 +394,7 @@ namespace XMAT.Tests
 
         [Theory]
         [InlineData("0")]
-        [InlineData("769")]
+        [InlineData("641")]
         [InlineData("32.5")]
         [InlineData("")]
         public void Preferences_RejectAnInvalidCaptureLimitBeforeSaving(string limit)
@@ -496,7 +496,7 @@ namespace XMAT.Tests
 
         [Theory]
         [InlineData(0, 1)]
-        [InlineData(5000, 768)]
+        [InlineData(5000, 640)]
         public void Preferences_ClampALoadedCaptureLimit(int saved, int expected)
         {
             ResponseStreamingOptions previous = ResponseStreamingOptions.Current;

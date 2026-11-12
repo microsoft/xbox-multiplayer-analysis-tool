@@ -524,7 +524,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
             ResponseStreamingOptions options = _proxy.EffectiveResponseStreaming;
             Stream body = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var reader = new IdleTimeoutReader(body, _httpClient.Timeout, cancellationToken);
+            var reader = new IdleTimeoutReader(body, _httpClient.Timeout, cancellationToken);
             byte[] received = Array.Empty<byte>();
             if (!ProxyResponseStreaming.StreamsImmediately(upstreamResponse, options))
             {

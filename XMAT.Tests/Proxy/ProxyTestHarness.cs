@@ -168,6 +168,14 @@ namespace XMAT.Tests.Proxy
             ServerCertificateCustomValidationCallback = (_, _, _, _) => true
         });
 
+        // The proxy's upstream timeout: its wait for response headers and for each body read.
+        // Set it before the first request.
+        public TimeSpan UpstreamTimeout
+        {
+            get => _upstream.Timeout;
+            set => _upstream.Timeout = value;
+        }
+
         public async ValueTask DisposeAsync()
         {
             await _forwardHost.StopAsync();

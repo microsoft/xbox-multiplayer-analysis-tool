@@ -253,7 +253,7 @@ then forwards it. These responses stream to the device as they arrive instead:
 - Event streams (`text/event-stream`), audio and video, while **Automatically stream
   audio, video and event streams** is on (the default).
 - Every response, while **Stream all responses** is on (off by default).
-- Any body larger than the **Capture limit** (32 MB by default, 1 to 768 MB), including
+- Any body larger than the **Capture limit** (32 MB by default, 1 to 640 MB), including
   one whose `Content-Length` already says it is larger.
 
 Change these settings in **Edit > Preferences > Web Proxy > Streaming**. New responses
