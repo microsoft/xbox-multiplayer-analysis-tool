@@ -5,6 +5,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Pipelines;
 using System.Net;
@@ -386,7 +387,9 @@ namespace XMAT.WebServiceCapture.Proxy
                 RequestUri = uri
             };
 
-            requestMessage.Content = new ByteArrayContent(clientRequest.BodyBytes ?? Array.Empty<byte>());
+            requestMessage.Content = clientRequest.UnknownLengthBody
+                ? new BufferedRequestContent(clientRequest.BodyBytes ?? Array.Empty<byte>(), knownLength: false)
+                : new ByteArrayContent(clientRequest.BodyBytes ?? Array.Empty<byte>());
             requestMessage.Headers.Clear();
             requestMessage.Content.Headers.Clear();
 
@@ -398,7 +401,10 @@ namespace XMAT.WebServiceCapture.Proxy
             HttpResponseMessage result;
             try
             {
-                result = await _httpClient.SendAsync(requestMessage, ct).ConfigureAwait(false);
+                result = await _httpClient.SendAsync(
+                    requestMessage,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    ct).ConfigureAwait(false);
                 _logger.Log(connectionID, LogLevel.DEBUG, $"Request forwarded to {uri}");
             }
             catch (OperationCanceledException) when (
@@ -412,29 +418,135 @@ namespace XMAT.WebServiceCapture.Proxy
                 return;
             }
 
-            var serverResponse = await ParseServerResponseAsync(connectionID, result).ConfigureAwait(false);
-            if (serverResponse == null)
+            using (result)
             {
-                _logger.Log(connectionID, LogLevel.ERROR, "Could not parse server response");
-                return;
+                await RelayResponseAsync(
+                    connectionID,
+                    clientStream,
+                    clientRequest,
+                    result,
+                    processContext,
+                    ct).ConfigureAwait(false);
             }
+        }
 
+        // Buffers the response so scripts can change it, unless it streams (event streams, audio,
+        // video, Stream all, or a body past the capture limit). The client gets the origin's framing.
+        private async Task RelayResponseAsync(
+            int connectionID,
+            Stream clientStream,
+            ClientRequest clientRequest,
+            HttpResponseMessage result,
+            ClientProcessContext processContext,
+            CancellationToken ct)
+        {
+            bool originChunked = result.Headers.TransferEncodingChunked == true;
+            long? declaredLength = result.Content.Headers.ContentLength;
+            bool http10Client = string.Equals(clientRequest.Version, "HTTP/1.0", StringComparison.OrdinalIgnoreCase);
+            ServerResponse serverResponse = CreateServerResponse(result);
             serverResponse.RequestNumber = clientRequest.RequestNumber;
 
-            if (!await _proxy.RaiseReceivedWebResponseAsync(
-                connectionID,
-                clientRequest,
-                serverResponse,
-                ct,
-                processContext).ConfigureAwait(false))
+            if (!ProxyResponseStreaming.HasMessageBody(clientRequest.Method, result.StatusCode))
             {
-                _logger.Log(connectionID, LogLevel.WARN, "Server response was aborted.");
+                if (await AcceptResponseAsync(connectionID, clientRequest, serverResponse, processContext, ct)
+                        .ConfigureAwait(false))
+                {
+                    await WriteResponseAsync(connectionID, clientStream, serverResponse.ToByteArray(), ct)
+                        .ConfigureAwait(false);
+                }
                 return;
             }
 
+            ResponseStreamingOptions options = _proxy.EffectiveResponseStreaming;
+            Stream body = await result.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var reader = new IdleTimeoutReader(body, _httpClient.Timeout, ct);
+            byte[] received = Array.Empty<byte>();
+            if (!ProxyResponseStreaming.StreamsImmediately(result, options))
+            {
+                bool complete;
+                try
+                {
+                    (received, complete) = await ProxyResponseStreaming.ReadUpToLimitAsync(
+                        reader,
+                        options.CaptureLimitBytes,
+                        declaredLength).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is IOException or HttpRequestException or TimeoutException)
+                {
+                    _logger.Log(connectionID, LogLevel.ERROR, $"Failed reading the server response: {ex.Message}");
+                    return;
+                }
+
+                if (complete)
+                {
+                    serverResponse.BodyBytes = received;
+                    serverResponse.Trailers.CopyFrom(result.TrailingHeaders);
+                    if (!await AcceptResponseAsync(connectionID, clientRequest, serverResponse, processContext, ct)
+                            .ConfigureAwait(false))
+                    {
+                        return;
+                    }
+
+                    // Chunked stays chunked (and carries trailers) for HTTP/1.1 clients, like Fiddler;
+                    // otherwise the possibly script-edited body gets its own Content-Length.
+                    bool chunked = !http10Client && (originChunked || serverResponse.Trailers.Count > 0);
+                    await WriteResponseAsync(
+                        connectionID,
+                        clientStream,
+                        FrameBufferedResponse(serverResponse, chunked),
+                        ct).ConfigureAwait(false);
+                    return;
+                }
+            }
+
+            ResponseFraming framing = declaredLength.HasValue
+                ? ResponseFraming.ContentLength
+                : http10Client ? ResponseFraming.CloseDelimited : ResponseFraming.Chunked;
+            await StreamResponseAsync(
+                connectionID,
+                clientStream,
+                clientRequest,
+                serverResponse,
+                result,
+                reader,
+                received,
+                framing,
+                declaredLength ?? 0,
+                options.CaptureLimitBytes,
+                processContext,
+                ct).ConfigureAwait(false);
+        }
+
+        private async Task<bool> AcceptResponseAsync(
+            int connectionID,
+            ClientRequest clientRequest,
+            ServerResponse serverResponse,
+            ClientProcessContext processContext,
+            CancellationToken ct)
+        {
+            if (await _proxy.RaiseReceivedWebResponseAsync(
+                    connectionID,
+                    clientRequest,
+                    serverResponse,
+                    ct,
+                    processContext).ConfigureAwait(false))
+            {
+                return true;
+            }
+
+            _logger.Log(connectionID, LogLevel.WARN, "Server response was aborted.");
+            return false;
+        }
+
+        private async Task WriteResponseAsync(
+            int connectionID,
+            Stream clientStream,
+            byte[] response,
+            CancellationToken ct)
+        {
             try
             {
-                await clientStream.WriteAsync(serverResponse.ToByteArray(), ct).ConfigureAwait(false);
+                await clientStream.WriteAsync(response, ct).ConfigureAwait(false);
                 await clientStream.FlushAsync(ct).ConfigureAwait(false);
                 _logger.Log(connectionID, LogLevel.DEBUG, "Response sent to client");
             }
@@ -455,6 +567,185 @@ namespace XMAT.WebServiceCapture.Proxy
                     LogLevel.ERROR,
                     $"Failed writing response to client: {ex}");
             }
+        }
+
+        // The headers go out first; the body follows as it arrives, teed into a capture copy that
+        // keeps up to the capture limit. Scripts see that copy only after the body has ended.
+        private async Task StreamResponseAsync(
+            int connectionID,
+            Stream clientStream,
+            ClientRequest clientRequest,
+            ServerResponse serverResponse,
+            HttpResponseMessage result,
+            IdleTimeoutReader reader,
+            byte[] received,
+            ResponseFraming framing,
+            long contentLength,
+            int captureLimit,
+            ClientProcessContext processContext,
+            CancellationToken ct)
+        {
+            var capture = new CapturedResponseBody(captureLimit);
+            try
+            {
+                await clientStream.WriteAsync(BuildHead(serverResponse, framing, contentLength), ct)
+                    .ConfigureAwait(false);
+                await clientStream.FlushAsync(ct).ConfigureAwait(false);
+                await NotifyCaptureAsync().ConfigureAwait(false);
+
+                await ProxyResponseStreaming.RelayBodyAsync(
+                    reader,
+                    received,
+                    capture,
+                    async data =>
+                    {
+                        await clientStream.WriteAsync(
+                            framing == ResponseFraming.Chunked ? Chunk(data.Span) : data,
+                            ct).ConfigureAwait(false);
+                        await clientStream.FlushAsync(ct).ConfigureAwait(false);
+                    },
+                    NotifyCaptureAsync).ConfigureAwait(false);
+
+                serverResponse.Trailers.CopyFrom(result.TrailingHeaders);
+                if (framing == ResponseFraming.Chunked)
+                {
+                    await clientStream.WriteAsync(LastChunk(serverResponse.Trailers), ct).ConfigureAwait(false);
+                }
+                await clientStream.FlushAsync(ct).ConfigureAwait(false);
+                _logger.Log(connectionID, LogLevel.DEBUG, "Streamed response sent to client");
+            }
+            catch (Exception ex) when (
+                !_applicationStopping.IsCancellationRequested &&
+                ex is IOException or
+                SocketException or
+                ObjectDisposedException or
+                HttpRequestException or
+                TimeoutException or
+                OperationCanceledException)
+            {
+                LogConnection(
+                    connectionID,
+                    LogLevel.WARN,
+                    $"Streamed response ended early: {ex.Message}");
+                await NotifyCaptureAsync().ConfigureAwait(false);
+                return;
+            }
+
+            capture.CopyTo(serverResponse);
+            await _proxy.RaiseReceivedWebResponseAsync(
+                connectionID,
+                clientRequest,
+                serverResponse,
+                _applicationStopping,
+                processContext,
+                responseForwarded: true).ConfigureAwait(false);
+
+            // Capture updates use the proxy's stop token, not the connection's: after
+            // "Connection: close" the client may hang up as soon as it has the response.
+            Task NotifyCaptureAsync()
+            {
+                capture.CopyTo(serverResponse);
+                return _proxy.RaiseWebResponseProgressAsync(
+                    connectionID,
+                    clientRequest,
+                    serverResponse,
+                    _applicationStopping,
+                    processContext);
+            }
+        }
+
+        private enum ResponseFraming
+        {
+            ContentLength,
+            Chunked,
+            CloseDelimited,
+        }
+
+        private static byte[] FrameBufferedResponse(ServerResponse response, bool chunked)
+        {
+            byte[] body = response.BodyBytes ?? Array.Empty<byte>();
+            using var framed = new MemoryStream();
+            framed.Write(BuildHead(
+                response,
+                chunked ? ResponseFraming.Chunked : ResponseFraming.ContentLength,
+                body.Length));
+            if (!chunked)
+            {
+                framed.Write(body);
+            }
+            else
+            {
+                if (body.Length != 0)
+                    framed.Write(Chunk(body));
+                framed.Write(LastChunk(response.Trailers));
+            }
+            return framed.ToArray();
+        }
+
+        // The capture keeps the origin's headers; the client gets framing for the decoded body.
+        private static byte[] BuildHead(ServerResponse response, ResponseFraming framing, long contentLength)
+        {
+            var head = new StringBuilder();
+            head.Append(response.Version).Append(' ').Append(response.Status).Append(' ')
+                .Append(response.StatusDescription).Append("\r\n");
+            AppendHeaders(head, response.Headers, framing);
+            AppendHeaders(head, response.ContentHeaders, framing);
+            if (framing == ResponseFraming.ContentLength)
+            {
+                head.Append("Content-Length: ")
+                    .Append(contentLength.ToString(CultureInfo.InvariantCulture))
+                    .Append("\r\n");
+            }
+            else if (framing == ResponseFraming.Chunked)
+            {
+                head.Append("Transfer-Encoding: chunked\r\n");
+            }
+            head.Append("\r\n");
+            return Encoding.ASCII.GetBytes(head.ToString());
+        }
+
+        private static void AppendHeaders(StringBuilder head, HeaderCollection headers, ResponseFraming framing)
+        {
+            foreach (KeyValuePair<string, IEnumerable<string>> header in headers)
+            {
+                // Only a chunked body can carry the trailers that a Trailer header announces.
+                if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) ||
+                    (framing != ResponseFraming.Chunked &&
+                        header.Key.Equals("Trailer", StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+                foreach (string value in header.Value)
+                {
+                    head.Append(header.Key).Append(": ").Append(value).Append("\r\n");
+                }
+            }
+        }
+
+        private static byte[] Chunk(ReadOnlySpan<byte> data)
+        {
+            byte[] size = Encoding.ASCII.GetBytes(data.Length.ToString("X", CultureInfo.InvariantCulture) + "\r\n");
+            byte[] chunk = new byte[size.Length + data.Length + 2];
+            size.CopyTo(chunk, 0);
+            data.CopyTo(chunk.AsSpan(size.Length));
+            chunk[^2] = (byte)'\r';
+            chunk[^1] = (byte)'\n';
+            return chunk;
+        }
+
+        private static byte[] LastChunk(HeaderCollection trailers)
+        {
+            var last = new StringBuilder("0\r\n");
+            foreach (KeyValuePair<string, IEnumerable<string>> trailer in trailers)
+            {
+                foreach (string value in trailer.Value)
+                {
+                    last.Append(trailer.Key).Append(": ").Append(value).Append("\r\n");
+                }
+            }
+            last.Append("\r\n");
+            return Encoding.ASCII.GetBytes(last.ToString());
         }
 
         private async Task HandleWebSocketAsync(
@@ -480,17 +771,13 @@ namespace XMAT.WebServiceCapture.Proxy
                 ct).ConfigureAwait(false);
         }
 
-        private async Task<ServerResponse> ParseServerResponseAsync(int connectionID, HttpResponseMessage response)
+        // Headers only: the body is read by RelayResponseAsync. The capture stores the decoded
+        // body, so it never claims chunked framing (#148); this connection closes after one response.
+        private static ServerResponse CreateServerResponse(HttpResponseMessage response)
         {
-            if (response == null)
-            {
-                _logger.Log(connectionID, LogLevel.ERROR, "Server response is null");
-                return null;
-            }
-
             var serverResponse = new ServerResponse
             {
-                Status = ((int)response.StatusCode).ToString(),
+                Status = ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture),
                 StatusDescription = response.ReasonPhrase,
                 Version = "HTTP/" + response.Version.ToString(),
             };
@@ -499,8 +786,6 @@ namespace XMAT.WebServiceCapture.Proxy
             serverResponse.Headers.CopyFrom(response.Headers);
             serverResponse.ContentHeaders.CopyFrom(response.Content.Headers);
             serverResponse.Headers["Connection"] = "close";
-            serverResponse.BodyBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-
             return serverResponse;
         }
 

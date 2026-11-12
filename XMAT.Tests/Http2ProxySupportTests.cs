@@ -1126,7 +1126,8 @@ namespace XMAT.Tests
                 Assert.Equal(request.Version, response.Version);
                 Assert.Equal($"HTTP/{(originVersion == 1 ? "1.1" : "2")}", observedProtocol);
                 Assert.Equal(editBodies ? "edited-request"u8.ToArray() : originalBody, observedBody);
-                Assert.Equal(observedBody.Length, observedLength);
+                // A body sent without a length is forwarded without one (chunked on HTTP/1.1), like Fiddler.
+                Assert.Equal(knownLength ? observedBody.Length : null, observedLength);
                 Assert.Equal(editBodies ? null : "application/octet-stream", observedContentType);
                 Assert.Equal("", observedHop);
                 Assert.Equal("request-retained", observedEndToEnd);

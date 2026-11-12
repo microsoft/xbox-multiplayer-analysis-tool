@@ -6,6 +6,7 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -87,6 +88,11 @@ namespace XMAT.WebServiceCapture.Proxy
                 policy,
                 bufferBudget,
                 cancellationToken).ConfigureAwait(false);
+
+            // Chunked HTTP/1.1 or HTTP/2 without content-length: forward it without a length too.
+            result.UnknownLengthBody = request.ContentLength == null &&
+                (result.BodyBytes.Length != 0 ||
+                 request.Headers.TransferEncoding.ToString().Contains("chunked", StringComparison.OrdinalIgnoreCase));
 
             return result;
         }
@@ -211,7 +217,9 @@ namespace XMAT.WebServiceCapture.Proxy
                 RequestUri = uri,
                 Version = HttpVersion.Version20,
                 VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
-                Content = new BufferedRequestContent(request.BodyBytes ?? Array.Empty<byte>())
+                Content = new BufferedRequestContent(
+                    request.BodyBytes ?? Array.Empty<byte>(),
+                    knownLength: !request.UnknownLengthBody)
             };
 
             var connectionHeaderNames = ProxyHeaderUtilities.GetConnectionHeaderNames(request.Headers);
@@ -237,26 +245,27 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             return message;
         }
+    }
 
-        // ByteArrayContent disables duplex HTTP/2 sending. An origin that
-        // responds while reading can then exhaust its response window before the
-        // upload finishes. Custom content allows HttpClient to drain both directions,
-        // while XMAT still captures and edits complete buffered bodies.
-        private sealed class BufferedRequestContent(byte[] body) : HttpContent
+    // ByteArrayContent disables duplex HTTP/2 sending. An origin that
+    // responds while reading can then exhaust its response window before the
+    // upload finishes. Custom content allows HttpClient to drain both directions,
+    // while XMAT still captures and edits complete buffered bodies. A body the
+    // client sent without a length is forwarded the same way (chunked on HTTP/1.1).
+    internal sealed class BufferedRequestContent(byte[] body, bool knownLength = true) : HttpContent
+    {
+        protected override bool TryComputeLength(out long length)
         {
-            protected override bool TryComputeLength(out long length)
-            {
-                length = body.Length;
-                return true;
-            }
-
-            protected override Task SerializeToStreamAsync(Stream stream, TransportContext context) =>
-                SerializeToStreamAsync(stream, context, CancellationToken.None);
-
-            protected override Task SerializeToStreamAsync(
-                Stream stream, TransportContext context, CancellationToken cancellationToken) =>
-                stream.WriteAsync(body, cancellationToken).AsTask();
+            length = knownLength ? body.Length : 0;
+            return knownLength;
         }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext context) =>
+            SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+        protected override Task SerializeToStreamAsync(
+            Stream stream, TransportContext context, CancellationToken cancellationToken) =>
+            stream.WriteAsync(body, cancellationToken).AsTask();
     }
 
     /// <summary>
@@ -461,6 +470,7 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 upstreamResponse = await _httpClient.SendAsync(
                     upstreamRequest,
+                    HttpCompletionOption.ResponseHeadersRead,
                     cancellationToken).ConfigureAwait(false);
             }
             catch (HttpRequestException ex)
@@ -478,29 +488,208 @@ namespace XMAT.WebServiceCapture.Proxy
 
             using (upstreamResponse)
             {
-                // Keep the full response mutable until scripts have run, matching
-                // the behavior of the original HTTP/1 proxy implementation.
-                ServerResponse serverResponse =
-                    await CreateServerResponseAsync(
-                        clientRequest,
-                        upstreamResponse,
-                        cancellationToken).ConfigureAwait(false);
-
-                if (!await _proxy.RaiseReceivedWebResponseAsync(
-                    tunnel.ConnectionId,
+                await RelayResponseAsync(
+                    context,
+                    tunnel,
                     clientRequest,
-                    serverResponse,
-                    cancellationToken,
-                    tunnel.ProcessContext).ConfigureAwait(false))
+                    upstreamResponse,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        // Buffers the response so scripts can change it, unless it streams (event streams, audio,
+        // video, Stream all, or a body past the capture limit). Kestrel frames it for the client:
+        // without a Content-Length it is chunked on HTTP/1.1 and plain DATA frames on HTTP/2.
+        private async Task RelayResponseAsync(
+            HttpContext context,
+            InterceptedTunnelContext tunnel,
+            ClientRequest clientRequest,
+            HttpResponseMessage upstreamResponse,
+            CancellationToken cancellationToken)
+        {
+            long? declaredLength = upstreamResponse.Content.Headers.ContentLength;
+            ServerResponse serverResponse = CreateServerResponse(clientRequest, upstreamResponse);
+            if (!ProxyResponseStreaming.HasMessageBody(clientRequest.Method, upstreamResponse.StatusCode))
+            {
+                if (!await AcceptResponseAsync(tunnel, clientRequest, serverResponse, cancellationToken)
+                        .ConfigureAwait(false))
                 {
                     context.Abort();
                     return;
                 }
+                await WriteResponseAsync(context, tunnel.ConnectionId, serverResponse, declaredLength.HasValue, cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
 
-                await WriteResponseAsync(
-                    context,
+            ResponseStreamingOptions options = _proxy.EffectiveResponseStreaming;
+            Stream body = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var reader = new IdleTimeoutReader(body, _httpClient.Timeout, cancellationToken);
+            byte[] received = Array.Empty<byte>();
+            if (!ProxyResponseStreaming.StreamsImmediately(upstreamResponse, options))
+            {
+                bool complete;
+                try
+                {
+                    (received, complete) = await ProxyResponseStreaming.ReadUpToLimitAsync(
+                        reader,
+                        options.CaptureLimitBytes,
+                        declaredLength).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is IOException or HttpRequestException)
+                {
+                    Log(tunnel.ConnectionId, LogLevel.ERROR, $"Upstream HTTP response failed: {ex.Message}");
+                    context.Response.StatusCode = StatusCodes.Status502BadGateway;
+                    return;
+                }
+                catch (TimeoutException ex)
+                {
+                    Log(tunnel.ConnectionId, LogLevel.ERROR, $"Upstream HTTP response timed out: {ex.Message}");
+                    context.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
+                    return;
+                }
+
+                if (complete)
+                {
+                    // Keep the full response mutable until scripts have run, matching
+                    // the behavior of the original HTTP/1 proxy implementation.
+                    serverResponse.BodyBytes = received;
+                    serverResponse.Trailers.CopyFrom(upstreamResponse.TrailingHeaders);
+                    if (!await AcceptResponseAsync(tunnel, clientRequest, serverResponse, cancellationToken)
+                            .ConfigureAwait(false))
+                    {
+                        context.Abort();
+                        return;
+                    }
+                    await WriteResponseAsync(context, tunnel.ConnectionId, serverResponse, declaredLength.HasValue, cancellationToken)
+                        .ConfigureAwait(false);
+                    return;
+                }
+            }
+
+            await StreamResponseAsync(
+                context,
+                tunnel,
+                clientRequest,
+                serverResponse,
+                upstreamResponse,
+                reader,
+                received,
+                declaredLength,
+                options.CaptureLimitBytes,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        private Task<bool> AcceptResponseAsync(
+            InterceptedTunnelContext tunnel,
+            ClientRequest clientRequest,
+            ServerResponse serverResponse,
+            CancellationToken cancellationToken) =>
+            _proxy.RaiseReceivedWebResponseAsync(
+                tunnel.ConnectionId,
+                clientRequest,
+                serverResponse,
+                cancellationToken,
+                tunnel.ProcessContext);
+
+        // The headers go out first; the body follows as it arrives, teed into a capture copy that
+        // keeps up to the capture limit. Scripts see that copy only after the body has ended.
+        private async Task StreamResponseAsync(
+            HttpContext context,
+            InterceptedTunnelContext tunnel,
+            ClientRequest clientRequest,
+            ServerResponse serverResponse,
+            HttpResponseMessage upstreamResponse,
+            IdleTimeoutReader reader,
+            byte[] received,
+            long? declaredLength,
+            int captureLimit,
+            CancellationToken cancellationToken)
+        {
+            HttpResponse response = context.Response;
+            response.StatusCode = int.Parse(serverResponse.Status, CultureInfo.InvariantCulture);
+            CopyResponseHeaders(serverResponse, response);
+            response.ContentLength = declaredLength;
+            if (response.SupportsTrailers())
+            {
+                foreach (string name in upstreamResponse.Headers.Trailer)
+                    response.DeclareTrailer(name);
+            }
+
+            var capture = new CapturedResponseBody(captureLimit);
+            try
+            {
+                await response.StartAsync(cancellationToken).ConfigureAwait(false);
+                await NotifyCaptureAsync().ConfigureAwait(false);
+
+                await ProxyResponseStreaming.RelayBodyAsync(
+                    reader,
+                    received,
+                    capture,
+                    async data =>
+                    {
+                        await response.Body.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+                        await response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    },
+                    NotifyCaptureAsync).ConfigureAwait(false);
+
+                serverResponse.Trailers.CopyFrom(upstreamResponse.TrailingHeaders);
+                AppendTrailers(response, serverResponse.Trailers, tunnel.ConnectionId);
+                await response.CompleteAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                !_stoppingToken.IsCancellationRequested &&
+                ex is IOException or HttpRequestException or TimeoutException or OperationCanceledException)
+            {
+                // The status line is gone, so the client can only see the stream end early.
+                Log(tunnel.ConnectionId, LogLevel.WARN, $"Streamed response ended early: {ex.Message}");
+                context.Abort();
+                await NotifyCaptureAsync().ConfigureAwait(false);
+                return;
+            }
+
+            capture.CopyTo(serverResponse);
+            await _proxy.RaiseReceivedWebResponseAsync(
+                tunnel.ConnectionId,
+                clientRequest,
+                serverResponse,
+                _stoppingToken,
+                tunnel.ProcessContext,
+                responseForwarded: true).ConfigureAwait(false);
+
+            // Capture updates use the proxy's stop token: the client may already have hung up.
+            Task NotifyCaptureAsync()
+            {
+                capture.CopyTo(serverResponse);
+                return _proxy.RaiseWebResponseProgressAsync(
+                    tunnel.ConnectionId,
+                    clientRequest,
                     serverResponse,
-                    cancellationToken).ConfigureAwait(false);
+                    _stoppingToken,
+                    tunnel.ProcessContext);
+            }
+        }
+
+        // Kestrel sends trailers only over HTTP/2; HTTP/1.1 clients get the body without them.
+        private void AppendTrailers(HttpResponse response, HeaderCollection trailers, int connectionId)
+        {
+            if (trailers.Count == 0 || !response.SupportsTrailers())
+                return;
+
+            foreach (KeyValuePair<string, IEnumerable<string>> trailer in trailers)
+            {
+                if (ProxyHeaderUtilities.IsHopByHopHeader(trailer.Key))
+                    continue;
+                try
+                {
+                    response.AppendTrailer(
+                        trailer.Key,
+                        new Microsoft.Extensions.Primitives.StringValues(new List<string>(trailer.Value).ToArray()));
+                }
+                catch (InvalidOperationException ex)
+                {
+                    Log(connectionId, LogLevel.WARN, $"Could not forward trailer {trailer.Key}: {ex.Message}");
+                }
             }
         }
 
@@ -654,38 +843,27 @@ namespace XMAT.WebServiceCapture.Proxy
             _logger?.Log(connectionId, level, message);
         }
 
-        private static async Task<ServerResponse> CreateServerResponseAsync(
+        // Headers only: RelayResponseAsync reads the body.
+        private static ServerResponse CreateServerResponse(
             ClientRequest request,
-            HttpResponseMessage response,
-            CancellationToken cancellationToken)
+            HttpResponseMessage response)
         {
             var result = new ServerResponse
             {
                 RequestNumber = request.RequestNumber,
                 StreamId = request.StreamId,
                 Version = GetProtocol(response.Version),
-                Status = ((int)response.StatusCode).ToString(),
+                Status = ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture),
                 StatusDescription = response.ReasonPhrase,
-                BodyBytes = await response.Content.ReadAsByteArrayAsync(
-                    cancellationToken).ConfigureAwait(false)
             };
 
             // HttpClient de-chunks any body it reads but keeps the header, so drop
             // that coding; bodyless responses keep their headers (nothing decoded).
-            if (HasMessageBody(request.Method, response.StatusCode))
+            if (ProxyResponseStreaming.HasMessageBody(request.Method, response.StatusCode))
                 response.Headers.TransferEncodingChunked = false;
             result.Headers.CopyFrom(response.Headers);
             result.ContentHeaders.CopyFrom(response.Content.Headers);
             return result;
-        }
-
-        // HEAD, 1xx, 204 and 304 responses have no message body to decode.
-        private static bool HasMessageBody(string method, HttpStatusCode statusCode)
-        {
-            return !HttpMethods.IsHead(method) &&
-                (int)statusCode >= 200 &&
-                statusCode != HttpStatusCode.NoContent &&
-                statusCode != HttpStatusCode.NotModified;
         }
 
         private static string GetProtocol(Version version)
@@ -695,17 +873,16 @@ namespace XMAT.WebServiceCapture.Proxy
                 : $"HTTP/{version.Major}.{version.Minor}";
         }
 
-        private static async Task WriteResponseAsync(
+        private async Task WriteResponseAsync(
             HttpContext context,
+            int connectionId,
             ServerResponse response,
+            bool originDeclaredLength,
             CancellationToken cancellationToken)
         {
-            var statusCode = int.Parse(response.Status);
+            var statusCode = int.Parse(response.Status, CultureInfo.InvariantCulture);
             context.Response.StatusCode = statusCode;
-
-            var connectionHeaderNames = ProxyHeaderUtilities.GetConnectionHeaderNames(response.Headers);
-            CopyHeaders(response.Headers, context.Response, connectionHeaderNames);
-            CopyHeaders(response.ContentHeaders, context.Response, connectionHeaderNames);
+            CopyResponseHeaders(response, context.Response);
 
             if (statusCode < 200 || statusCode == StatusCodes.Status204NoContent)
             {
@@ -727,13 +904,28 @@ namespace XMAT.WebServiceCapture.Proxy
                 return;
             }
 
-            context.Response.ContentLength = response.BodyBytes.Length;
+            // Content-Length stays Content-Length, for the possibly script-edited body. A body
+            // the origin sent without one stays that way, so trailers can follow it.
+            context.Response.ContentLength = originDeclaredLength ? response.BodyBytes.Length : null;
+            if (response.Trailers.Count != 0 && context.Response.SupportsTrailers())
+            {
+                foreach (KeyValuePair<string, IEnumerable<string>> trailer in response.Trailers)
+                    context.Response.DeclareTrailer(trailer.Key);
+            }
             if (response.BodyBytes.Length != 0)
             {
                 await context.Response.Body.WriteAsync(
                     response.BodyBytes,
                     cancellationToken).ConfigureAwait(false);
             }
+            AppendTrailers(context.Response, response.Trailers, connectionId);
+        }
+
+        private static void CopyResponseHeaders(ServerResponse source, HttpResponse response)
+        {
+            var connectionHeaderNames = ProxyHeaderUtilities.GetConnectionHeaderNames(source.Headers);
+            CopyHeaders(source.Headers, response, connectionHeaderNames);
+            CopyHeaders(source.ContentHeaders, response, connectionHeaderNames);
         }
 
         private static void CopyHeaders(
