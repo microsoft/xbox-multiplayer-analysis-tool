@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -35,11 +36,22 @@ namespace XMAT.WebServiceCapture.Proxy
         internal static async Task<ClientRequest> CreateAsync(
             HttpContext context,
             int requestNumber,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ProxyRequestReadPolicy policy = null,
+            ProxyRequestBufferBudget bufferBudget = null)
         {
             ArgumentNullException.ThrowIfNull(context);
+            policy ??= ProxyRequestReadPolicy.Default;
+            bufferBudget ??= ProxyRequestBufferBudget.Shared;
+            policy.Validate();
 
             var request = context.Request;
+            if (request.ContentLength > policy.MaxBodyBytes)
+            {
+                throw new ProxyRequestBodyReadException(
+                    ProxyRequestBodyReadFailure.BodyTooLarge);
+            }
+
             var result = new ClientRequest
             {
                 RequestNumber = requestNumber,
@@ -69,13 +81,93 @@ namespace XMAT.WebServiceCapture.Proxy
                 }
             }
 
-            // Scripts operate on complete bodies, so retain the existing
-            // buffering behavior for each independent HTTP/2 stream.
-            using var body = new MemoryStream();
-            await request.Body.CopyToAsync(body, cancellationToken).ConfigureAwait(false);
-            result.BodyBytes = body.ToArray();
+            result.BodyBytes = await ReadBodyAsync(
+                request.Body,
+                result,
+                policy,
+                bufferBudget,
+                cancellationToken).ConfigureAwait(false);
 
             return result;
+        }
+
+        private static async Task<byte[]> ReadBodyAsync(
+            Stream source,
+            ClientRequest request,
+            ProxyRequestReadPolicy policy,
+            ProxyRequestBufferBudget bufferBudget,
+            CancellationToken cancellationToken)
+        {
+            const int BufferSize = 16 * 1024;
+            using ProxyRequestBufferLease lease = bufferBudget.CreateLease();
+            using var totalDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            totalDeadline.CancelAfter(policy.BodyTotalTimeout);
+            using var body = new MemoryStream();
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+            try
+            {
+                long retainedHeaders = InitialProxyRequestReader.EstimateRetainedRequestBytes(request);
+                if (!lease.TryEnsure(checked(retainedHeaders + buffer.Length)))
+                {
+                    throw new ProxyRequestBodyReadException(
+                        ProxyRequestBodyReadFailure.BufferExhausted);
+                }
+
+                while (true)
+                {
+                    using var inactivityDeadline =
+                        CancellationTokenSource.CreateLinkedTokenSource(totalDeadline.Token);
+                    inactivityDeadline.CancelAfter(policy.BodyInactivityTimeout);
+
+                    int read;
+                    try
+                    {
+                        read = await source.ReadAsync(
+                            buffer.AsMemory(0, BufferSize),
+                            inactivityDeadline.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        throw new ProxyRequestBodyReadException(
+                            totalDeadline.IsCancellationRequested
+                                ? ProxyRequestBodyReadFailure.TotalTimeout
+                                : ProxyRequestBodyReadFailure.InactivityTimeout);
+                    }
+
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (totalDeadline.IsCancellationRequested)
+                    {
+                        throw new ProxyRequestBodyReadException(
+                            ProxyRequestBodyReadFailure.TotalTimeout);
+                    }
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    long nextLength = checked(body.Length + read);
+                    if (nextLength > policy.MaxBodyBytes)
+                    {
+                        throw new ProxyRequestBodyReadException(
+                            ProxyRequestBodyReadFailure.BodyTooLarge);
+                    }
+
+                    long reservation = checked(retainedHeaders + buffer.Length + (nextLength * 3));
+                    if (!lease.TryEnsure(reservation))
+                    {
+                        throw new ProxyRequestBodyReadException(
+                            ProxyRequestBodyReadFailure.BufferExhausted);
+                    }
+
+                    body.Write(buffer, 0, read);
+                }
+
+                return body.ToArray();
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
 
         // Kestrel already removed the final chunked coding from request.Body,
@@ -239,12 +331,18 @@ namespace XMAT.WebServiceCapture.Proxy
         private readonly InterceptedTunnelRegistry _tunnels;
         private readonly Logger _logger;
         private readonly CancellationToken _stoppingToken;
+        private readonly ProxyRequestReadPolicy _requestReadPolicy;
+        private readonly ProxyRequestBufferBudget _requestBufferBudget;
+        private readonly Action<int, LogLevel, string> _logObserver;
 
         internal InterceptedProxyApplication(
             WebServiceProxy proxy,
             HttpClient httpClient,
             InterceptedTunnelRegistry tunnels,
             Logger logger = null,
+            ProxyRequestReadPolicy requestReadPolicy = null,
+            ProxyRequestBufferBudget requestBufferBudget = null,
+            Action<int, LogLevel, string> logObserver = null,
             CancellationToken stoppingToken = default)
         {
             _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
@@ -252,6 +350,10 @@ namespace XMAT.WebServiceCapture.Proxy
             _tunnels = tunnels ?? throw new ArgumentNullException(nameof(tunnels));
             _logger = logger;
             _stoppingToken = stoppingToken;
+            _requestReadPolicy = requestReadPolicy ?? ProxyRequestReadPolicy.Default;
+            _requestReadPolicy.Validate();
+            _requestBufferBudget = requestBufferBudget ?? ProxyRequestBufferBudget.Shared;
+            _logObserver = logObserver;
         }
 
         internal async Task InvokeAsync(HttpContext context)
@@ -286,10 +388,43 @@ namespace XMAT.WebServiceCapture.Proxy
                 return;
             }
 
-            ClientRequest clientRequest = await AspNetCoreRequestAdapter.CreateAsync(
-                context,
-                _proxy.GetNextRequestID(),
-                cancellationToken).ConfigureAwait(false);
+            ClientRequest clientRequest;
+            try
+            {
+                clientRequest = await AspNetCoreRequestAdapter.CreateAsync(
+                    context,
+                    _proxy.GetNextRequestID(),
+                    cancellationToken,
+                    _requestReadPolicy,
+                    _requestBufferBudget).ConfigureAwait(false);
+            }
+            catch (ProxyRequestBodyReadException ex)
+            {
+                int statusCode = ex.Failure switch
+                {
+                    ProxyRequestBodyReadFailure.InactivityTimeout or
+                    ProxyRequestBodyReadFailure.TotalTimeout => StatusCodes.Status408RequestTimeout,
+                    ProxyRequestBodyReadFailure.BodyTooLarge => StatusCodes.Status413PayloadTooLarge,
+                    _ => StatusCodes.Status503ServiceUnavailable,
+                };
+                string limit = ex.Failure switch
+                {
+                    ProxyRequestBodyReadFailure.InactivityTimeout =>
+                        $"the {_requestReadPolicy.BodyInactivityTimeout:g} request-body inactivity limit",
+                    ProxyRequestBodyReadFailure.TotalTimeout =>
+                        $"the {_requestReadPolicy.BodyTotalTimeout:g} total request-body time limit",
+                    ProxyRequestBodyReadFailure.BodyTooLarge =>
+                        $"the {_requestReadPolicy.MaxBodyBytes} byte request-body size limit",
+                    _ =>
+                        $"the {_requestBufferBudget.MaximumBytes} byte aggregate request-buffer budget",
+                };
+                Log(tunnel.ConnectionId, LogLevel.WARN, $"Intercepted request body rejected at {limit}.");
+                context.Response.StatusCode = statusCode;
+                context.Response.ContentLength = 0;
+                if (context.Request.Protocol.StartsWith("HTTP/1.", StringComparison.Ordinal))
+                    context.Response.Headers.Connection = "close";
+                return;
+            }
 
             if (!await _proxy.RaiseReceivedWebRequestAsync(
                 tunnel.ConnectionId,
@@ -515,6 +650,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private void Log(int connectionId, LogLevel level, string message)
         {
+            _logObserver?.Invoke(connectionId, level, message);
             _logger?.Log(connectionId, level, message);
         }
 
@@ -648,6 +784,10 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 webBuilder.UseKestrel(options =>
                 {
+                    // The request adapter applies the shared bounded read policy and
+                    // reports 408/413 consistently for HTTP/1.1 and HTTP/2.
+                    options.Limits.MinRequestBodyDataRate = null;
+                    options.Limits.MaxRequestBodySize = null;
                     // Port zero lets the OS choose a collision-free private port.
                     // Only the outer forward proxy connects to this listener.
                     options.Listen(IPAddress.Loopback, 0, listenOptions =>
