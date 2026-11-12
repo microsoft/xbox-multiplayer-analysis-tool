@@ -188,6 +188,8 @@ namespace XMAT.Tests.Operations.Export
                 Publisher = new RecordingExportPublisher(),
                 WriterFactory = (_, _, _, _) => writer,
             };
+            // The batching is under test, not the default record limit: this limit keeps the first row oversized.
+            AnalysisLimits limits = AnalysisLimits.Default with { MaxEntryBytes = 32 * 1024 * 1024 };
 
             OperationResult<ExportCaptureResult> result = await operation.ExecuteAsync(
                 new ExportCaptureRequest(
@@ -198,7 +200,7 @@ namespace XMAT.Tests.Operations.Export
                     CaptureExportFormat.Xmatcap,
                     "oversized.xmatcap",
                     ReplaceExisting: false,
-                    AnalysisLimits.Default,
+                    limits,
                     AllowUnprotectedOutput: false),
                 OperationContext.None,
                 CancellationToken.None);
@@ -209,7 +211,7 @@ namespace XMAT.Tests.Operations.Export
             Assert.All(snapshot.Reads, AssertBoundedPayloadRead);
             Assert.Contains(snapshot.Reads, read =>
                 read.Chunk.Rows.Count == 1 &&
-                ReadBytes(read.Chunk) > AnalysisLimits.Default.MaxEntryBytes);
+                ReadBytes(read.Chunk) > limits.MaxEntryBytes);
             Assert.Contains(snapshot.Reads, read =>
                 read.Chunk.Rows.Count == 64 &&
                 read.Reads.Sum(request => request.Materialized) == 64);

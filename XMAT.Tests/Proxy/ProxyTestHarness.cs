@@ -63,7 +63,8 @@ namespace XMAT.Tests.Proxy
             ProxyRequestReadPolicy requestPolicy = null,
             ProxyRequestBufferBudget requestBufferBudget = null,
             bool registerRequestReader = true,
-            Action<int, LogLevel, string> logObserver = null)
+            Action<int, LogLevel, string> logObserver = null,
+            HttpMessageHandler upstreamHandler = null)
         {
             X509Certificate2 certificate = CreateCertificate();
             proxy ??= new WebServiceProxy();
@@ -88,7 +89,8 @@ namespace XMAT.Tests.Proxy
             }
 
             var tunnels = new InterceptedTunnelRegistry();
-            var upstream = new HttpClient(WebServiceProxy.CreateUpstreamHandler());
+            var upstream = new HttpClient(
+                upstreamHandler ?? WebServiceProxy.CreateUpstreamHandler());
             var logger = new Logger();
             var application = new InterceptedProxyApplication(
                 proxy,

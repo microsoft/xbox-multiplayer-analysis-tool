@@ -8,11 +8,12 @@ namespace XMAT.Tests
 {
     public class ProxyConnectionModelHeaderTests
     {
-        // The capture limit is set in whole megabytes; smaller sizes come from the proxy's own options.
+        // The capture limit is set in whole megabytes; smaller sizes come from the proxy's own options. The notice says only
+        // what the capture kept: a response that ended early may not have reached the client in full.
         [Theory]
         [InlineData(0L, "")]
-        [InlineData(16L, "Capture truncated at 16 bytes. The full response was forwarded.")]
-        [InlineData(32L * 1024 * 1024, "Capture truncated at 32 MB. The full response was forwarded.")]
+        [InlineData(16L, "Capture truncated at 16 bytes; additional bytes are not captured.")]
+        [InlineData(32L * 1024 * 1024, "Capture truncated at 32 MB; additional bytes are not captured.")]
         public void ResponseCaptureNotice_StatesWhereTheCaptureWasTruncated(long truncatedAt, string notice)
         {
             Localization.LoadLanguage("en-us");

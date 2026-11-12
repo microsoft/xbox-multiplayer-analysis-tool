@@ -38,7 +38,7 @@ namespace XMAT.Tests.Cli
         {
             CliLimits limits = Parse("analyze a.saz --out results").Request.Limits;
 
-            Assert.Equal(new CliLimits(512, 256, 32, 100_000), limits);
+            Assert.Equal(new CliLimits(512, 256, 128, 100_000), limits);
             Assert.Equal(AnalysisLimits.Default, limits.ToAnalysisLimits());
         }
 
@@ -59,11 +59,11 @@ namespace XMAT.Tests.Cli
 
         // A limit that is not given keeps its default. Leading zeros are allowed: the value is still decimal.
         [Theory]
-        [InlineData("--max-input-mib 1", 1, 256, 32, 100_000)]
-        [InlineData("--max-data-mib 32", 512, 32, 32, 100_000)]
+        [InlineData("--max-input-mib 1", 1, 256, 128, 100_000)]
+        [InlineData("--max-data-mib 128", 512, 128, 128, 100_000)]
         [InlineData("--max-record-mib 1", 512, 256, 1, 100_000)]
-        [InlineData("--max-records 1", 512, 256, 32, 1)]
-        [InlineData("--max-records 0100", 512, 256, 32, 100)]
+        [InlineData("--max-records 1", 512, 256, 128, 1)]
+        [InlineData("--max-records 0100", 512, 256, 128, 100)]
         [InlineData("--max-data-mib 48 --max-record-mib 48", 512, 48, 48, 100_000)]
         public void Parse_KeepsTheDefaultOfEveryLimitNotGiven(
             string options,
@@ -206,7 +206,7 @@ namespace XMAT.Tests.Cli
             AssertUsageError(
                 result,
                 "cli.usage.invalid-value",
-                "--max-record-mib must not exceed --max-data-mib (32 and 256 by default).");
+                "--max-record-mib must not exceed --max-data-mib (128 and 256 by default).");
         }
 
         // A value is never repeated: it could be a path or a secret.
@@ -248,7 +248,7 @@ namespace XMAT.Tests.Cli
             using JsonDocument summary = JsonDocument.Parse(CliJson.SerializeSummary(given));
             using JsonDocument rejected = JsonDocument.Parse(CliJson.Serialize(usageError));
 
-            Assert.Equal(new[] { 512L, 256L, 32L, 100_000L }, Limits(stdout.RootElement));
+            Assert.Equal(new[] { 512L, 256L, 128L, 100_000L }, Limits(stdout.RootElement));
             Assert.Equal(new[] { 1024L, 512L, 48L, 7L }, Limits(summary.RootElement));
             Assert.Equal(
                 new[] { "schema", "command", "runId", "version", "input", "limits", "devices", "totals", "warnings" },
@@ -340,7 +340,7 @@ namespace XMAT.Tests.Cli
 
             Assert.Equal(CliExitCodes.Internal, analyze.ExitCode);
             Assert.Equal("analyze", document.RootElement.GetProperty("command").GetString());
-            Assert.Equal(new[] { 512L, 256L, 32L, 7L }, Limits(document.RootElement));
+            Assert.Equal(new[] { 512L, 256L, 128L, 7L }, Limits(document.RootElement));
             Assert.Equal("cli.internal", Assert.Single(analyze.Errors).Code);
             Assert.DoesNotContain(
                 "s3cretcanary9",

@@ -367,50 +367,69 @@ namespace XMAT.Tests
             });
         }
 
-        // The streaming check boxes edit the preferences directly, like the other check box; the capture limit, like the
-        // port range, is committed only on Save.
+        // The streaming settings in Preferences are drafts until Save, like the port range and the capture limit: the window
+        // can be closed without saving, and saving the settings for another reason (as the dark-mode toggle does) neither
+        // records nor applies them.
         [Fact]
-        public void Preferences_StreamingEdits_AndTheCaptureLimitIsCommittedOnlyOnSave()
+        public void Preferences_StreamingEditsAreDraftsUntilSave()
         {
-            _application.Run(window =>
+            ResponseStreamingOptions previous = ResponseStreamingOptions.Current;
+            try
             {
-                var preferences = new XMAT.WebServiceCapture.Models.PreferencesModel();
-                var options = new CaptureOptionsFull { DataContext = preferences };
-                WpfTestHost.Show(window, options);
-                Assert.Equal("32", ((TextBox)options.FindName("CaptureLimit")).Text);
+                ResponseStreamingOptions.Current = new ResponseStreamingOptions();
+                _application.Run(window =>
+                {
+                    var preferences = new XMAT.WebServiceCapture.Models.PreferencesModel();
+                    var options = new CaptureOptionsFull { DataContext = preferences };
+                    WpfTestHost.Show(window, options);
+                    Assert.Equal("32", ((TextBox)options.FindName("CaptureLimit")).Text);
+                    EditStreaming(options, autoStream: false, streamAll: true);
+                    EditCaptureLimit(options, "128");
 
-                ((CheckBox)options.FindName("AutoStreamCheckBox")).SetCurrentValue(
-                    System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, false);
-                ((CheckBox)options.FindName("StreamAllCheckBox")).SetCurrentValue(
-                    System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, true);
-                EditCaptureLimit(options, "128");
+                    preferences.Serialized();
 
-                Assert.Equal((false, true, 32), (preferences.AutoStreamMediaAndEvents, preferences.StreamAllResponses,
-                    preferences.CaptureLimitMegabytes));
-                options.CommitCaptureLimit();
-                Assert.Equal(128, preferences.CaptureLimitMegabytes);
-            });
+                    Assert.Equal((true, false, 32), (preferences.AutoStreamMediaAndEvents, preferences.StreamAllResponses,
+                        preferences.CaptureLimitMegabytes));
+                    Assert.Equal(new ResponseStreamingOptions(), ResponseStreamingOptions.Current);
+
+                    options.CommitPreferences();
+
+                    Assert.Equal((false, true, 128), (preferences.AutoStreamMediaAndEvents, preferences.StreamAllResponses,
+                        preferences.CaptureLimitMegabytes));
+                });
+            }
+            finally
+            {
+                ResponseStreamingOptions.Current = previous;
+            }
         }
 
+        // Save validates every field before it commits any: an invalid capture limit leaves a valid new port range and the
+        // streaming drafts uncommitted, too.
         [Theory]
         [InlineData("0")]
         [InlineData("641")]
         [InlineData("32.5")]
         [InlineData("")]
-        public void Preferences_RejectAnInvalidCaptureLimitBeforeSaving(string limit)
+        public void Preferences_AnInvalidCaptureLimitCommitsNothing(string limit)
         {
             _application.Run(window =>
             {
                 var preferences = new XMAT.WebServiceCapture.Models.PreferencesModel();
                 var options = new CaptureOptionsFull { DataContext = preferences };
                 WpfTestHost.Show(window, options);
+                EditPortRange(options, "9000", "9010");
+                EditStreaming(options, autoStream: false, streamAll: true);
                 EditCaptureLimit(options, limit);
 
-                ArgumentException error = Assert.Throws<ArgumentException>(options.CommitCaptureLimit);
+                ArgumentException error = Assert.Throws<ArgumentException>(options.CommitPreferences);
 
                 Assert.Equal(Localization.GetLocalizedString("PROXY_PREFS_CAPTURE_LIMIT_INVALID"), error.Message);
                 Assert.DoesNotContain("NO_IMPL_", error.Message, StringComparison.Ordinal);
-                Assert.Equal(32, preferences.CaptureLimitMegabytes);
+                Assert.Equal(
+                    (ProxyPortPool.DefaultFirstPort, ProxyPortPool.DefaultLastPort, true, false, 32),
+                    (preferences.FirstPort, preferences.LastPort, preferences.AutoStreamMediaAndEvents,
+                        preferences.StreamAllResponses, preferences.CaptureLimitMegabytes));
             });
         }
 
@@ -508,6 +527,31 @@ namespace XMAT.Tests
 
                 Assert.Equal(expected, loaded.CaptureLimitMegabytes);
                 Assert.Equal(expected * 1024 * 1024, ResponseStreamingOptions.Current.CaptureLimitBytes);
+            }
+            finally
+            {
+                ResponseStreamingOptions.Current = previous;
+            }
+        }
+
+        // A hand-edited settings file can hold any JSON value: a Boolean preference of another kind keeps its default.
+        [Theory]
+        [InlineData("PromptToDisableOnClose", "\"no\"")]
+        [InlineData("AutoStreamMediaAndEvents", "null")]
+        [InlineData("StreamAllResponses", "1")]
+        public void Preferences_KeepTheDefaultOfABooleanSettingOfAnotherKind(string name, string value)
+        {
+            ResponseStreamingOptions previous = ResponseStreamingOptions.Current;
+            try
+            {
+                var loaded = new XMAT.WebServiceCapture.Models.PreferencesModel();
+                using JsonDocument settings = JsonDocument.Parse("{\"" + name + "\":" + value + "}");
+
+                loaded.DeserializeFrom(settings.RootElement);
+
+                Assert.Equal((true, true, false), (loaded.PromptToDisableOnClose, loaded.AutoStreamMediaAndEvents,
+                    loaded.StreamAllResponses));
+                Assert.Equal(new ResponseStreamingOptions(), ResponseStreamingOptions.Current);
             }
             finally
             {
@@ -773,6 +817,16 @@ namespace XMAT.Tests
             var limit = (TextBox)options.FindName("CaptureLimit");
             limit.SetCurrentValue(TextBox.TextProperty, megabytes);
             limit.GetBindingExpression(TextBox.TextProperty).UpdateSource();
+            WpfTestHost.Pump();
+        }
+
+        // Ticks or clears the streaming check boxes as a click does.
+        private static void EditStreaming(CaptureOptionsFull options, bool autoStream, bool streamAll)
+        {
+            ((CheckBox)options.FindName("AutoStreamCheckBox")).SetCurrentValue(
+                System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, autoStream);
+            ((CheckBox)options.FindName("StreamAllCheckBox")).SetCurrentValue(
+                System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, streamAll);
             WpfTestHost.Pump();
         }
 

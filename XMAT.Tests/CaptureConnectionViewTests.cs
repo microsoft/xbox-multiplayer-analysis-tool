@@ -12,6 +12,7 @@ using XMAT.NetworkTrace;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
+using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT.Tests
 {
@@ -486,7 +487,8 @@ namespace XMAT.Tests
         }
 
         // The response pane notes a capture that the capture limit truncated and lists the trailers that followed the body.
-        // A complete response without trailers shows neither, and the request pane never does.
+        // A response that is still streaming is shown as pending, in the list and in a notice, until it ends. A complete
+        // response without trailers shows none of this, and the request pane never does.
         [Fact]
         public void ResponsePane_ShowsTheTruncationNoticeAndTheTrailers()
         {
@@ -499,24 +501,35 @@ namespace XMAT.Tests
                     response.Trailers.Add("x-checksum", "abc123");
                     response.CaptureTruncatedAt = 64 * 1024;
                 }));
-                ProxyConnectionModel streamed = tab.Controller.ProxyConnections.Single(row => row.RequestNumber == 1);
+                ProxyConnectionModel truncated = tab.Controller.ProxyConnections.Single(row => row.RequestNumber == 1);
                 ProxyConnectionModel complete = tab.Add(2);
+                ProxyConnectionModel streaming = StartStreaming(tab, 3);
                 var view = new CaptureConnectionView { AutoScroll = false, DataContext = tab };
                 CaptureProcessFilterViewTests.ShowCaptureView(window, view);
                 var grid = (DataGrid)view.FindName("ConnectionList");
                 var request = (RequestResponseView)view.FindName("RequestViewControl");
                 var response = (RequestResponseView)view.FindName("ResponseViewControl");
+                object pending = Application.Current.FindResource("CapturePendingForegroundBrush");
 
-                grid.SelectedItem = streamed;
+                grid.SelectedItem = truncated;
                 WpfTestHost.Pump();
 
                 Assert.Equal(
-                    (Visibility.Visible, "Capture truncated at 64 KB. The full response was forwarded."),
+                    (Visibility.Visible, "Capture truncated at 64 KB; additional bytes are not captured."),
                     Shown<TextBlock>(response, "NoticeText"));
                 Assert.Equal((Visibility.Visible, "x-checksum: abc123\r\n"), Shown<TextBox>(response, "TrailersText"));
                 Assert.Equal((Visibility.Visible, "Trailers"), Shown<TextBlock>(response, "TrailersLabel"));
                 Assert.Equal(Visibility.Collapsed, Shown<TextBlock>(request, "NoticeText").Visibility);
                 Assert.Equal(Visibility.Collapsed, Shown<TextBlock>(request, "TrailersLabel").Visibility);
+
+                grid.SelectedItem = streaming;
+                WpfTestHost.Pump();
+
+                Assert.Equal(
+                    (Visibility.Visible, "Still streaming: the capture is completed when the response ends."),
+                    Shown<TextBlock>(response, "NoticeText"));
+                Assert.Same(pending, CaptureProcessFilterViewTests.Container(grid, streaming).Foreground);
+                Assert.NotSame(pending, CaptureProcessFilterViewTests.Container(grid, complete).Foreground);
 
                 grid.SelectedItem = complete;
                 WpfTestHost.Pump();
@@ -526,6 +539,48 @@ namespace XMAT.Tests
                 Assert.Equal(Visibility.Collapsed, Shown<TextBlock>(response, "TrailersLabel").Visibility);
                 view.DataContext = null;
             });
+        }
+
+        // Request NUMBER, from a connection the capture does not track, whose streamed response has sent only its headers.
+        private static ProxyConnectionModel StartStreaming(LiveCaptureTab tab, int number)
+        {
+            var request = new ClientRequest
+            {
+                RequestNumber = number,
+                Version = "HTTP/1.1",
+                Scheme = "https",
+                Host = "stream.test",
+                Port = 443,
+                Method = "GET",
+                Path = "/events",
+            };
+            Assert.True(WpfTestHost.Complete(
+                tab.Handler<Func<HttpRequestEventArgs, CancellationToken, Task<bool>>>("WebProxy_ReceivedWebRequestAsync")(
+                    new HttpRequestEventArgs { ConnectionID = number, Timestamp = DateTime.Now, Request = request },
+                    CancellationToken.None),
+                TimeSpan.FromSeconds(5)));
+            var headers = new ServerResponse
+            {
+                RequestNumber = number,
+                Version = "HTTP/1.1",
+                Status = "200",
+                StatusDescription = "OK",
+            };
+            headers.ContentHeaders["Content-Type"] = "text/event-stream";
+            WpfTestHost.Complete(
+                tab.Handler<Func<HttpResponseEventArgs, CancellationToken, Task>>("WebProxy_WebResponseProgressAsync")(
+                    new HttpResponseEventArgs
+                    {
+                        ConnectionID = number,
+                        Timestamp = DateTime.Now,
+                        Request = request,
+                        Response = headers,
+                        ResponseForwarded = true,
+                    },
+                    CancellationToken.None),
+                TimeSpan.FromSeconds(5));
+            WpfTestHost.Pump();
+            return tab.Controller.ProxyConnections.Single(row => row.RequestNumber == number);
         }
 
         private static (Visibility Visibility, string Text) Shown<T>(RequestResponseView pane, string name)

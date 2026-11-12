@@ -992,6 +992,7 @@ namespace XMAT.Tests.Operations.Analysis
                 Directory.GetFiles(directory.Path));
         }
 
+        // An explicitly lowered record limit still refuses a stored value that is larger, whatever the default.
         [Fact]
         public async Task SqliteTooBigDuringRowRead_ReturnsInputLimit()
         {
@@ -1006,7 +1007,9 @@ namespace XMAT.Tests.Operations.Analysis
                 await AnalyzeFileExpecting(
                     path,
                     OperationOutcome.InvalidInput,
-                    "analysis.input.limit");
+                    "analysis.input.limit",
+                    new AnalysisOptions(
+                        Limits: AnalysisLimits.Default with { MaxEntryBytes = 32 * 1024 * 1024 }));
 
             Assert.DoesNotContain(
                 result.Diagnostics,

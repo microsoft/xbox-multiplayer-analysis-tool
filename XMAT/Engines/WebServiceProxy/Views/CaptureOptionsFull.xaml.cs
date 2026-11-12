@@ -56,6 +56,13 @@ namespace XMAT.WebServiceCapture
             ((PreferencesModel)DataContext).CaptureLimitMegabytes = megabytes;
         }
 
+        // XMAT-012 Phase A compile-only stub with today's Save behavior; Phase B validates every field before it commits any.
+        internal void CommitPreferences()
+        {
+            CommitPortRange();
+            CommitCaptureLimit();
+        }
+
         // TODO: Do we need these and/or the ICaptureOptions interface?
         public void Initialize(ICaptureMethod captureMethod)
         {

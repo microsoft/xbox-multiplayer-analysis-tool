@@ -63,6 +63,9 @@ namespace XMAT.WebServiceCapture.Models
                 ? Localization.GetLocalizedString("WEBCAP_RESPONSE_TRUNCATED", FormatSize(ResponseBodyTruncatedAt))
                 : string.Empty;
 
+        // XMAT-012 Phase A compile-only stub; Phase B: the response's headers were recorded but it has not ended yet.
+        public bool IsResponseStreaming => false;
+
         private Dictionary<string, string> _requestHeaders;
         private Dictionary<string, string> _responseHeaders;
 

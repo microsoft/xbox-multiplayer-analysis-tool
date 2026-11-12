@@ -158,6 +158,67 @@ namespace XMAT.Tests.Proxy
                     "Trailer"]);
         }
 
+        [Fact]
+        public async Task Expect100Continue_IsSentBeforeWaitingForAChunkedBody_AndIsConsumed()
+        {
+            await using var origin = await LoopbackOrigin.StartAsync();
+            ProxyRequestReadPolicy policy = ProxyRequestReadPolicy.Default with
+            {
+                BodyInactivityTimeout = TimeSpan.FromSeconds(2),
+                BodyTotalTimeout = TimeSpan.FromSeconds(10),
+            };
+            await using var proxy = await ProxyTestHarness.StartAsync(requestPolicy: policy);
+            string authority = $"127.0.0.1:{origin.Port}";
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, proxy.Port);
+            using NetworkStream stream = client.GetStream();
+            await stream.WriteAsync(Ascii.GetBytes(
+                "POST http://" + authority + "/expect HTTP/1.1\r\n" +
+                "Host: " + authority + "\r\n" +
+                "Transfer-Encoding: chunked\r\n" +
+                "Expect: 100-continue\r\n" +
+                "Connection: close\r\n\r\n"));
+            await stream.FlushAsync();
+
+            string interim = await ReadHeaderBytewiseAsync(stream, TimeSpan.FromSeconds(10));
+
+            AssertStatus(interim, 100);
+            await stream.WriteAsync("5\r\nhello\r\n0\r\n\r\n"u8.ToArray());
+            await stream.FlushAsync();
+            string final = await ReadToEndAsync(stream, TimeSpan.FromSeconds(10));
+            AssertStatus(final, 200);
+            ObservedRequest atOrigin = Assert.Single(origin.Requests);
+            Assert.Equal("hello"u8.ToArray(), atOrigin.Body);
+            Assert.False(atOrigin.Headers.ContainsKey("Expect"));
+            Assert.Equal(string.Empty, Assert.Single(proxy.CapturedRequests).Headers["Expect"]);
+        }
+
+        [Fact]
+        public async Task UnsupportedExpectation_Returns417WithoutWaitingForTheBody()
+        {
+            ProxyRequestReadPolicy policy = ProxyRequestReadPolicy.Default with
+            {
+                BodyInactivityTimeout = TimeSpan.FromSeconds(2),
+                BodyTotalTimeout = TimeSpan.FromSeconds(10),
+            };
+            await using var proxy = await ProxyTestHarness.StartAsync(requestPolicy: policy);
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, proxy.Port);
+            using NetworkStream stream = client.GetStream();
+            await stream.WriteAsync(Ascii.GetBytes(
+                "POST http://127.0.0.1:1/unsupported-expectation HTTP/1.1\r\n" +
+                "Host: 127.0.0.1:1\r\n" +
+                "Content-Length: 5\r\n" +
+                "Expect: x-please-wait\r\n" +
+                "Connection: close\r\n\r\n"));
+            await stream.FlushAsync();
+
+            string response = await ReadHeaderBytewiseAsync(stream, TimeSpan.FromSeconds(10));
+
+            AssertStatus(response, 417);
+            Assert.Empty(proxy.CapturedRequests);
+        }
+
         [Theory]
         [InlineData(32 * 1024, true)]
         [InlineData((32 * 1024) + 1, false)]
@@ -1112,8 +1173,8 @@ namespace XMAT.Tests.Proxy
         [InlineData(
             "Content-Length: 5\r\nTransfer-Encoding: chunked\r\n")]
         [InlineData(
-            "Transfer-Encoding: gzip, chunked\r\n")]
-        public async Task AmbiguousOrUnsupportedFraming_FailsClosed(
+            "Expect: 100-continue\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n")]
+        public async Task AmbiguousFraming_FailsClosed(
             string framingHeaders)
         {
             await using var origin =
@@ -1149,6 +1210,26 @@ namespace XMAT.Tests.Proxy
                 0,
                 proxy.RequestBufferBudget
                     .ReservedBytes);
+        }
+
+        [Fact]
+        public async Task UnsupportedTransferCoding_Returns501WithoutReadingTheBody()
+        {
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            byte[] request = Ascii.GetBytes(
+                "POST http://127.0.0.1:1/unsupported-transfer-coding HTTP/1.1\r\n" +
+                "Host: 127.0.0.1:1\r\n" +
+                "Transfer-Encoding: gzip, chunked\r\n" +
+                "Connection: close\r\n\r\n");
+
+            string response = await SendRawAsync(
+                proxy.Port,
+                new[] { request },
+                TimeSpan.Zero);
+
+            AssertStatus(response, 501);
+            Assert.Empty(proxy.CapturedRequests);
+            Assert.Equal(0, proxy.RequestBufferBudget.ReservedBytes);
         }
 
         [Fact]
