@@ -855,7 +855,7 @@ namespace XMAT.Tests.Replay
                 Assert.Equal(new[] { "/item/1", "/item/2" }, Targets(server));
                 ProxyConnectionModel recorded = Assert.Single(ControllerOf(replays).ProxyConnections);
                 Assert.Equal("/item/1", recorded.Path);
-                Assert.True(model.CanModifyCaptureData);
+                Assert.Equal(stop != "shutdown", model.CanModifyCaptureData);
                 Assert.Equal(closed, window.Client.IsDisposed);
                 if (stop == "cancel")
                 {

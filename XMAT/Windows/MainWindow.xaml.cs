@@ -194,6 +194,7 @@ namespace XMAT
                 if (!_closeConfirmed)
                 {
                     _analysisReportExportWorkflow.CancelClosing();
+                    CaptureAppModel.AppModel.CancelClosePreparation();
                 }
                 _isCloseInProgress = false;
                 IsEnabled = wasEnabled;

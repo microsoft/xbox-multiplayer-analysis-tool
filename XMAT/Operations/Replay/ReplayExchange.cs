@@ -48,6 +48,33 @@ namespace XMAT.Operations.Replay
 
         internal byte[] Body { get; }
 
+        internal string DeclaredLength()
+        {
+            foreach (KeyValuePair<string, string> header in ContentHeaders)
+            {
+                if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                {
+                    return long.TryParse(header.Value, NumberStyles.None, CultureInfo.InvariantCulture, out long length)
+                        ? length.ToString(CultureInfo.InvariantCulture)
+                        : UnknownLength;
+                }
+            }
+
+            foreach (KeyValuePair<string, string> header in Headers)
+            {
+                if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                {
+                    return long.TryParse(header.Value, NumberStyles.None, CultureInfo.InvariantCulture, out long length)
+                        ? length.ToString(CultureInfo.InvariantCulture)
+                        : UnknownLength;
+                }
+            }
+
+            return UnknownLength;
+        }
+
+        internal const string UnknownLength = "unknown";
+
         // The message in HTTP/1.1 form: the start line, the header lines, an empty line and the body as it is. Header
         // text is written as Latin-1, the encoding the HTTP stack reads it with. The body is written, never copied.
         internal void WriteTo(Stream stream)

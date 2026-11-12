@@ -133,6 +133,16 @@ namespace XMAT.Models
                 }
             }
         }
+        internal bool IsClosing
+        {
+            get
+            {
+                lock (_analysisStateLock)
+                {
+                    return _isClosing;
+                }
+            }
+        }
         internal bool IsAnyCaptureRunning
         {
             get
@@ -145,17 +155,19 @@ namespace XMAT.Models
         }
         internal bool CanAnalyzeCaptures =>
             SelectedDeviceContext != null &&
+            !IsClosing &&
             !IsAnyCaptureRunning &&
             !IsAnalysisRunning &&
             !IsCaptureDataOperationRunning;
         internal bool CanModifyCaptureData =>
+            !IsClosing &&
             !IsAnalysisRunning &&
             !IsCaptureDataOperationRunning;
         internal bool CanBeginCaptureDataOperation =>
             CanModifyCaptureData &&
             !IsAnyCaptureRunning;
         // Stop waits for a capture-data operation such as an export, which reads the running capture until it publishes.
-        internal bool CanStopCaptures => !IsAnalysisRunning && !IsCaptureDataOperationRunning;
+        internal bool CanStopCaptures => !IsClosing && !IsAnalysisRunning && !IsCaptureDataOperationRunning;
         // File > Export and Export Sanitized: the selected web capture, running or not, when it has sessions.
         internal bool CanExportSelectedCapture =>
             CanModifyCaptureData &&
@@ -173,6 +185,7 @@ namespace XMAT.Models
         private readonly Dispatcher _dispatcher;
         private bool _isAnalysisRunning;
         private bool _isCaptureDataOperationRunning;
+        private bool _isClosing;
 
         // The name of the read-only tab that GUI replays and composer sends are recorded in (GetOrAddReplayContext), which is
         // also the device name of its rows in the shared capture table. No tab that writes to that table can have it, or a
@@ -215,22 +228,71 @@ namespace XMAT.Models
 
         internal async Task<bool> CanCloseAsync()
         {
-            // A replay is cancelled and waited for, so nothing it still adds races the shutdown; other operations, such as
-            // an import, have to finish first.
-            if (IsCaptureDataOperationRunning && !await CancelCaptureDataOperationAsync())
+            lock (_analysisStateLock)
             {
-                return false;
-            }
-            var devices = CaptureDeviceContexts.Where(context => !context.IsReadOnly).ToList();
-            foreach (var device in devices)
-            {
-                if (!await device.CaptureController.CanCloseAsync())
+                if (_isShuttingDown)
+                {
+                    return true;
+                }
+                if (_isClosing)
                 {
                     return false;
                 }
+
+                _isClosing = true;
             }
 
-            return true;
+            RaisePropertyChange(nameof(IsClosing));
+            InvalidateCommands();
+
+            // A replay is cancelled and waited for, so nothing it still adds races the shutdown; other operations, such as
+            // an import, have to finish first.
+            bool canClose = false;
+            try
+            {
+                if (IsCaptureDataOperationRunning && !await CancelCaptureDataOperationAsync())
+                {
+                    return false;
+                }
+
+                var devices = CaptureDeviceContexts.Where(context => !context.IsReadOnly).ToList();
+                foreach (var device in devices)
+                {
+                    if (!await device.CaptureController.CanCloseAsync())
+                    {
+                        return false;
+                    }
+                }
+
+                canClose = true;
+                return true;
+            }
+            finally
+            {
+                if (!canClose)
+                {
+                    CancelClosePreparation();
+                }
+            }
+        }
+
+        internal void CancelClosePreparation()
+        {
+            bool changed = false;
+            lock (_analysisStateLock)
+            {
+                if (!_isShuttingDown && _isClosing)
+                {
+                    _isClosing = false;
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                RaisePropertyChange(nameof(IsClosing));
+                InvalidateCommands();
+            }
         }
 
         // The open capture tab that an analysis read, while it still holds the sessions that the analysis saw; null once
@@ -259,6 +321,8 @@ namespace XMAT.Models
             lock (_analysisStateLock)
             {
                 if (_selectedDeviceContext == null ||
+                    _isClosing ||
+                    _isShuttingDown ||
                     _isAnalysisRunning ||
                     _isCaptureDataOperationRunning ||
                     _runningCaptureControllers.Count != 0)
@@ -282,7 +346,9 @@ namespace XMAT.Models
         {
             lock (_analysisStateLock)
             {
-                if (_isAnalysisRunning ||
+                if (_isClosing ||
+                    _isShuttingDown ||
+                    _isAnalysisRunning ||
                     _isCaptureDataOperationRunning ||
                     (requireAllCapturesStopped && _runningCaptureControllers.Count != 0))
                 {
@@ -385,6 +451,7 @@ namespace XMAT.Models
             lock (_analysisStateLock)
             {
                 _isShuttingDown = true;
+                _isClosing = true;
                 cancellation = _cancellableOperation;
             }
 

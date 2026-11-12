@@ -324,7 +324,7 @@ namespace XMAT.Tests.Replay
                 Assert.Equal(OperationOutcome.Cancelled, run.Result.Outcome);
                 Assert.False(run.CancelledByUser);
                 Assert.False(CaptureConnectionView.IsReissueRunning);
-                Assert.True(model.CanModifyCaptureData);
+                Assert.False(model.CanModifyCaptureData);
                 Assert.Equal(new[] { "/slow" }, server.Requests.Select(request => request.Target));
             }
             finally
@@ -806,7 +806,7 @@ namespace XMAT.Tests.Replay
                 }
 
                 Assert.True(model.IsShuttingDown);
-                Assert.True(model.CanModifyCaptureData);
+                Assert.False(model.CanModifyCaptureData);
                 Assert.False(target.CanBegin);
                 using var cancellation = new CancellationTokenSource();
                 Assert.Null(target.TryBegin(cancellation, _ => null));

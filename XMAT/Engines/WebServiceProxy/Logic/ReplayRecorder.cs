@@ -241,10 +241,17 @@ namespace XMAT.WebServiceCapture
             byte[] responseBody = response?.Body ?? Array.Empty<byte>();
             bool requestOmitted = !keepRequestBody && requestBody.Length != 0;
             bool responseOmitted = !keepResponseBody && responseBody.Length != 0;
+            bool responseTooLarge = exchange.Outcome == ReplayOutcome.TooLarge && response != null;
             string requestHead = Head(
-                request, requestOmitted ? RequestReplayDraft.RequestBodyNotKeptHeader : null, requestBody.LongLength);
+                request,
+                requestOmitted ? RequestReplayDraft.RequestBodyNotKeptHeader : null,
+                requestBody.LongLength.ToString(CultureInfo.InvariantCulture));
             string responseHead = Head(
-                response, responseOmitted ? RequestReplayDraft.ResponseBodyNotKeptHeader : null, responseBody.LongLength);
+                response,
+                responseOmitted || responseTooLarge ? RequestReplayDraft.ResponseBodyNotKeptHeader : null,
+                responseTooLarge
+                    ? response.DeclaredLength()
+                    : responseBody.LongLength.ToString(CultureInfo.InvariantCulture));
             long budgetMiB = bodyBudgetBytes / (1024 * 1024);
             string bodiesNote = (requestOmitted, responseOmitted) switch
             {
@@ -256,7 +263,12 @@ namespace XMAT.WebServiceCapture
                     "REPLAY_NOTE_RESPONSE_BODY", responseBody.LongLength, budgetMiB),
                 _ => null,
             };
+            string tooLargeNote = responseTooLarge
+                ? Localization.GetLocalizedString("REPLAY_NOTE_RESPONSE_TOO_LARGE")
+                : null;
             string transportNote = TransportNote(sent);
+            string[] notes = { bodiesNote, tooLargeNote, transportNote };
+            string replayNote = string.Join("\n", notes.Where(note => note != null));
             return new ProxyConnectionModel(
                 number,
                 exchange.StatusCode == 0 ? string.Empty : exchange.StatusCode.ToString(CultureInfo.InvariantCulture),
@@ -273,9 +285,7 @@ namespace XMAT.WebServiceCapture
                 "0.0.0.0")
             {
                 Replay = provenance,
-                ReplayNote = bodiesNote == null || transportNote == null
-                    ? bodiesNote ?? transportNote
-                    : bodiesNote + "\n" + transportNote,
+                ReplayNote = replayNote.Length == 0 ? null : replayNote,
             };
         }
 
@@ -363,7 +373,7 @@ namespace XMAT.WebServiceCapture
 
         // The start line and header lines, as captures store them, then the empty line that ends the head; notKeptHeader,
         // when a body was not kept, adds that header with the body's size in bytes.
-        private static string Head(ReplayMessage message, string notKeptHeader, long notKeptBytes)
+        private static string Head(ReplayMessage message, string notKeptHeader, string notKeptBytes)
         {
             if (message == null)
             {
@@ -379,7 +389,7 @@ namespace XMAT.WebServiceCapture
             if (notKeptHeader != null)
             {
                 head.Append(notKeptHeader).Append(": ")
-                    .Append(notKeptBytes.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+                    .Append(notKeptBytes).Append("\r\n");
             }
 
             return head.Append("\r\n").ToString();

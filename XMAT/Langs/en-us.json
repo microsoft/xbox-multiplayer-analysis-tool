@@ -172,6 +172,7 @@
 	"REPLAY_SOURCE_COMPOSED": "a request composed from scratch",
 	"REPLAY_NOTE_REQUEST_BODY": "The request body, {0} bytes, was not kept: this tab keeps at most {1} MiB of request and response bodies. XMAT does not resend this request.",
 	"REPLAY_NOTE_RESPONSE_BODY": "The response body, {0} bytes, was not kept: this tab keeps at most {1} MiB of request and response bodies.",
+	"REPLAY_NOTE_RESPONSE_TOO_LARGE": "The response body exceeded the response size limit and was not kept.",
 	"REPLAY_NOTE_BODIES": "The request and response bodies, {0} and {1} bytes, were not kept: this tab keeps at most {2} MiB of request and response bodies. XMAT does not resend this request.",
 	"REPLAY_BODIES_NOT_KEPT": "{0} request or response bodies were not kept: the {1} tab keeps at most {2} MiB of request and response bodies, a limit on the bodies it keeps, not on XMAT's memory use. Their rows still show what was sent and the status and headers that came back, with a header that says how many bytes were not kept. Close the {1} tab to make room for new bodies.",
 	"REPLAY_NOT_RECORDED": "{0} requests were sent but not recorded because the {1} tab was closed, so the replay stopped.",
