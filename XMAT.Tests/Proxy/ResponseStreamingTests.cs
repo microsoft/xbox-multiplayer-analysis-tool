@@ -152,6 +152,40 @@ namespace XMAT.Tests.Proxy
             Assert.StartsWith("data: first\n\n", policy.Result.Body, StringComparison.Ordinal);
         }
 
+        // Only waiting on the origin counts towards the idle timeout, not a device that reads slowly.
+        [Theory]
+        [InlineData("http11")]
+        [InlineData("https11")]
+        [InlineData("https2")]
+        public async Task SlowClient_DoesNotTripTheOriginIdleTimeout(string route)
+        {
+            const int blocks = 64;
+            (Version version, bool tls) = Route(route);
+            byte[] block = Enumerable.Range(0, 1024 * 1024).Select(i => (byte)i).ToArray();
+            await using var origin = await LoopbackOrigin.StartAsync(async context =>
+            {
+                context.Response.ContentType = "audio/mpeg";
+                for (int i = 0; i < blocks; i++)
+                    await context.Response.Body.WriteAsync(block, context.RequestAborted);
+            }, useTls: tls);
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            proxy.UpstreamTimeout = TimeSpan.FromSeconds(1);
+            using HttpClient client = proxy.CreateClient();
+            using var request = NewRequest(HttpMethod.Get, origin.Url("/slow-device"), version);
+
+            using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            Stream body = await response.Content.ReadAsStreamAsync();
+            var buffer = new byte[64 * 1024];
+            long received = await body.ReadAsync(buffer);
+            // The device stops reading for longer than the idle timeout while the origin has more to send.
+            await Task.Delay(TimeSpan.FromSeconds(3));
+            int read;
+            while ((read = await body.ReadAsync(buffer)) > 0)
+                received += read;
+
+            Assert.Equal((long)blocks * block.Length, received);
+        }
+
         [Fact]
         public async Task PlainHttp11Client_ChunkedOriginStaysChunked()
         {

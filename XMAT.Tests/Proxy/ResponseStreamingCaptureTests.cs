@@ -324,7 +324,7 @@ namespace XMAT.Tests.Proxy
         {
             Assert.Equal(1024 * 1024, ResponseStreamingOptions.FromPreferences(true, false, 0).CaptureLimitBytes);
             Assert.Equal(32 * 1024 * 1024, ResponseStreamingOptions.FromPreferences(true, false, 32).CaptureLimitBytes);
-            Assert.Equal(768 * 1024 * 1024, ResponseStreamingOptions.FromPreferences(true, false, 5000).CaptureLimitBytes);
+            Assert.Equal(640 * 1024 * 1024, ResponseStreamingOptions.FromPreferences(true, false, 5000).CaptureLimitBytes);
             Assert.True(ResponseStreamingOptions.IsAutoStreamedType(MediaTypeHeaderValue.Parse("text/event-stream; charset=utf-8")));
             Assert.True(ResponseStreamingOptions.IsAutoStreamedType(MediaTypeHeaderValue.Parse("AUDIO/mpeg")));
             Assert.False(ResponseStreamingOptions.IsAutoStreamedType(MediaTypeHeaderValue.Parse("application/json")));

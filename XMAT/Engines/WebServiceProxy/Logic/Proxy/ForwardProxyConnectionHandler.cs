@@ -462,7 +462,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
             ResponseStreamingOptions options = _proxy.EffectiveResponseStreaming;
             Stream body = await result.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            using var reader = new IdleTimeoutReader(body, _httpClient.Timeout, ct);
+            var reader = new IdleTimeoutReader(body, _httpClient.Timeout, ct);
             byte[] received = Array.Empty<byte>();
             if (!ProxyResponseStreaming.StreamsImmediately(result, options))
             {
