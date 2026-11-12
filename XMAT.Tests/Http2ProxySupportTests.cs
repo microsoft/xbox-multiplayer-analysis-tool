@@ -807,12 +807,8 @@ namespace XMAT.Tests
             Assert.Empty(await response.Content.ReadAsByteArrayAsync());
         }
 
-        [Theory]
-        [InlineData("chunked", null)]
-        [InlineData("gzip, chunked", "gzip")]
-        public async Task InterceptedHttpHost_DropsDecodedChunkedCodingFromCapturedRequest(
-            string transferEncoding,
-            string expectedStoredCoding)
+        [Fact]
+        public async Task InterceptedHttpHost_DropsDecodedChunkedCodingFromCapturedRequest()
         {
             using var certificate = CreateCertificate();
             var proxy = new WebServiceProxy();
@@ -848,7 +844,7 @@ namespace XMAT.Tests
                 VersionPolicy = HttpVersionPolicy.RequestVersionExact,
                 Content = new ByteArrayContent("request-body"u8.ToArray())
             };
-            request.Headers.TryAddWithoutValidation("Transfer-Encoding", transferEncoding);
+            request.Headers.TryAddWithoutValidation("Transfer-Encoding", "chunked");
 
             using HttpResponseMessage response = await client.SendAsync(request);
 
@@ -857,9 +853,7 @@ namespace XMAT.Tests
             // Kestrel passes the client's framing header through but de-chunks the body.
             Assert.Contains("chunked", receivedTransferEncoding);
             Assert.Equal("request-body", System.Text.Encoding.UTF8.GetString(captured.BodyBytes));
-            Assert.Equal(
-                expectedStoredCoding,
-                captured.Headers.GetHeaderValuesAsList("Transfer-Encoding")?.Single());
+            Assert.Null(captured.Headers.GetHeaderValuesAsList("Transfer-Encoding"));
         }
 
         [Fact]

@@ -55,7 +55,7 @@ namespace XMAT.Tests.Proxy
 
             IDataRecord record = capture.RowFor("/events");
             var row = new ProxyConnectionModel(record);
-            Assert.Equal("data: first\n\n", Encoding.ASCII.GetString(row.ResponseBody));
+            Assert.Equal("data: first\n\n", Encoding.ASCII.GetString(row.ResponseBody ?? Array.Empty<byte>()));
             Assert.True(row.HasRecordedResponseTimestamp, $"{route}: the open stream's capture was not completed");
             Assert.InRange(
                 DateTime.Parse(record.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp)),

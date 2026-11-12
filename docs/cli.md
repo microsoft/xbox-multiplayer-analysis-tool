@@ -35,7 +35,7 @@ xmat --version
   code 10 when the rules report findings (the results are still written).
 - xmat treats its input as untrusted. By default it refuses an input (exit code 3) larger than 512 MiB
   (`analysis.input.too-large`), or one with more than 100,000 requests (a Fiddler archive) or rows in its device and
-  connection tables together (an XMAT capture), an archive entry or row over 32 MiB, or more than 256 MiB of data in
+  connection tables together (an XMAT capture), an archive entry or row over 128 MiB, or more than 256 MiB of data in
   total, unzipped or read (`analysis.input.limit`); the options below change these four limits. These other limits
   are fixed or follow the allowed requests (`analysis.input.limit`): for a Fiddler archive, more than 300,064 archive
   entries of any kind by default (three per allowed request plus 64, and never more than 750,064), a central directory
@@ -85,12 +85,13 @@ xmat --version
   analyzed rows come from that one guarded file even if an alias is retargeted.
 - `--max-input-mib`, `--max-data-mib`, `--max-record-mib` and `--max-records` set the four input limits of one run, in
   MiB (1,048,576 bytes) or records: the input's size (512 by default, at most 2,048), the data that xmat holds in total
-  (256 by default, at most 512), one archive entry or row (32 by default, at most 128, and never more than
-  `--max-data-mib`) and the requests or rows (100,000 by default, at most 250,000). Each takes a whole number of ASCII
-  digits from 1 to its maximum, at most once; any other value, or a record limit above the data limit, is a usage
-  error (`cli.usage.invalid-value`, or `cli.usage.duplicate-option` for a repeated option; exit code 2) whose message
-  names the option, with its range for an invalid value or both options for a record limit above the data limit, but
-  never the value. `--max-records` is an upper bound, not a guaranteed capacity: a
+  (256 by default, at most 512), one archive entry or row (128 by default, or the data limit when that is lower; at
+  most 128, and never more than `--max-data-mib`) and the requests or rows (100,000 by default, at most 250,000). Each
+  takes a whole number of ASCII digits from 1 to its maximum, at most once; any other value, or a record limit above
+  the data limit, is a usage error (`cli.usage.invalid-value`, or `cli.usage.duplicate-option` for a repeated option;
+  exit code 2) whose message names the option, with its range for an invalid value or both options for a record limit
+  above the data limit, but never the value. A lower `--max-data-mib` alone also lowers the record limit; a
+  `--max-record-mib` that was given is never lowered. `--max-records` is an upper bound, not a guaranteed capacity: a
   Fiddler archive with fewer requests can still exceed the data limit or the archive limits above. The JSON output and
   `summary.json` report the effective values in `limits`. An XMAT capture's file may be as large as `--max-input-mib`,
   and SQLite may read values as large as `--max-record-mib` plus 1 MiB. Raising the limits lets xmat read larger
@@ -100,6 +101,15 @@ xmat --version
   guaranteed capacity or a bound on memory use, so still run xmat with time and memory limits. The limits do not
   change the rule budget below, so a larger capture can still stop with `analysis.rules.work-limit`, nor the fixed
   limits above.
+- An XMAT capture stores each session's request and response bodies in its row as base64, which takes 4 bytes for every
+  3 (a 32 MiB body takes about 42.7 MiB), so its rows count about a third more than their bodies against the record
+  and data limits. With the default limits, xmat reads any single row that XMAT writes: the proxy reads request bodies
+  of at most 32 MiB, and a capture keeps at most the capture limit of each response body (see
+  [Streaming and large responses](web-proxy.md#streaming-and-large-responses)), so a row stays under 128 MiB. The
+  limits on the whole capture still apply: 512 MiB of file, 256 MiB of data, which three rows with the largest bodies
+  already exceed, and 100,000 rows. Raise them with the options above, up to their maximums, or use the GUI. Reading a
+  capture is not the same as analyzing it: a capture that xmat reads can be exported, but `xmat analyze` can still stop
+  at the rule budget below (`analysis.rules.work-limit`).
 - `--process` and `--exclude-process` choose the sessions to analyze by the client process that sent them, with the
   same rules as the process filter of a capture tab in the GUI. Each takes one selector and may be given again, up to
   64 times each: an image name such as `game.exe` or `game*.exe` (`*` and `?` are wildcards, case does not matter and

@@ -58,13 +58,23 @@ namespace XMAT.WebServiceCapture.Models
         // The response body bytes the capture kept when it passed the capture limit; 0 when it is complete.
         public long ResponseBodyTruncatedAt { get; private set; }
 
-        public string ResponseCaptureNotice =>
-            ResponseBodyTruncatedAt > 0
-                ? Localization.GetLocalizedString("WEBCAP_RESPONSE_TRUNCATED", FormatSize(ResponseBodyTruncatedAt))
-                : string.Empty;
+        // Notes about the captured response: still streaming, and where the capture truncated its body.
+        public string ResponseCaptureNotice
+        {
+            get
+            {
+                string streaming = IsResponseStreaming
+                    ? Localization.GetLocalizedString("WEBCAP_RESPONSE_STREAMING")
+                    : null;
+                string truncated = ResponseBodyTruncatedAt > 0
+                    ? Localization.GetLocalizedString("WEBCAP_RESPONSE_TRUNCATED", FormatSize(ResponseBodyTruncatedAt))
+                    : null;
+                return string.Join(" ", new[] { streaming, truncated }.Where(notice => notice != null));
+            }
+        }
 
-        // XMAT-012 Phase A compile-only stub; Phase B: the response's headers were recorded but it has not ended yet.
-        public bool IsResponseStreaming => false;
+        // The response's status and headers were recorded, but it has not ended yet: a streamed response still arriving.
+        public bool IsResponseStreaming => !string.IsNullOrEmpty(ResponseLineAndHeaders) && !HasRecordedResponseTimestamp;
 
         private Dictionary<string, string> _requestHeaders;
         private Dictionary<string, string> _responseHeaders;

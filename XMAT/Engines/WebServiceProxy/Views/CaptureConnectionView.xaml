@@ -204,6 +204,9 @@
                         <DataTrigger Binding="{Binding Status, Converter={StaticResource proxyStatusIsErrorConverter}}" Value="True">
                             <Setter Property="Foreground" Value="{DynamicResource CaptureErrorForegroundBrush}"/>
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding IsResponseStreaming}" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource CapturePendingForegroundBrush}"/>
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </DataGrid.RowStyle>

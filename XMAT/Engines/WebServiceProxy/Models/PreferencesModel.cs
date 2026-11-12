@@ -38,19 +38,19 @@ namespace XMAT.WebServiceCapture.Models
                 LastPort = prop.GetUInt16();
             }
 
-            if (serializedObject.TryGetProperty(nameof(PromptToDisableOnClose), out prop))
+            if (TryReadBoolean(serializedObject, nameof(PromptToDisableOnClose), out bool prompt))
             {
-                PromptToDisableOnClose = prop.GetBoolean();
+                PromptToDisableOnClose = prompt;
             }
 
-            if (serializedObject.TryGetProperty(nameof(AutoStreamMediaAndEvents), out prop))
+            if (TryReadBoolean(serializedObject, nameof(AutoStreamMediaAndEvents), out bool autoStream))
             {
-                AutoStreamMediaAndEvents = prop.GetBoolean();
+                AutoStreamMediaAndEvents = autoStream;
             }
 
-            if (serializedObject.TryGetProperty(nameof(StreamAllResponses), out prop))
+            if (TryReadBoolean(serializedObject, nameof(StreamAllResponses), out bool streamAll))
             {
-                StreamAllResponses = prop.GetBoolean();
+                StreamAllResponses = streamAll;
             }
 
             if (serializedObject.TryGetProperty(nameof(CaptureLimitMegabytes), out prop) &&
@@ -70,6 +70,19 @@ namespace XMAT.WebServiceCapture.Models
                 AutoStreamMediaAndEvents,
                 StreamAllResponses,
                 CaptureLimitMegabytes);
+
+        // A hand-edited settings file can hold any JSON value; one that is not a Boolean leaves the setting as it is.
+        private static bool TryReadBoolean(JsonElement settings, string name, out bool value)
+        {
+            value = false;
+            if (!settings.TryGetProperty(name, out JsonElement property) ||
+                property.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                return false;
+            }
+            value = property.GetBoolean();
+            return true;
+        }
 
         internal PreferencesModel()
         {
