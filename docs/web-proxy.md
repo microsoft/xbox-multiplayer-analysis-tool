@@ -245,6 +245,40 @@ Windows reports may not shrink even then. Deleting is not a forensic erasure: ot
 copies of the data, and data that Windows or the storage device still hold, are beyond
 XMAT's reach.
 
+## Streaming and large responses
+
+Like Fiddler Classic, XMAT buffers each response so a Web Response script can change it,
+then forwards it. These responses stream to the device as they arrive instead:
+
+- Event streams (`text/event-stream`), audio and video, while **Automatically stream
+  audio, video and event streams** is on (the default).
+- Every response, while **Stream all responses** is on (off by default).
+- Any body larger than the **Capture limit** (32 MB by default, 1 to 768 MB), including
+  one whose `Content-Length` already says it is larger.
+
+Change these settings in **Edit > Preferences > Web Proxy**. New responses use them
+after you click **Save**.
+
+For a streamed response:
+
+- The capture row appears when the headers arrive. Its body is filled in when it
+  reaches the capture limit or the response ends; a stream that never ends keeps
+  flowing to the device.
+- The capture keeps the body only up to the capture limit and says so in the response
+  view. The device still gets the full response.
+- A Web Response script runs after the response ends, on a copy. Its changes and
+  **Continue** = `false` don't reach the device; XMAT logs a warning instead.
+- If the server sends nothing for 100 seconds, XMAT ends the response.
+
+XMAT keeps the server's framing toward the device. A chunked response stays chunked
+for HTTP/1.1 devices, including its trailers; `Content-Length` stays `Content-Length`
+(updated when a script changes the body); HTTP/1.0 devices never get chunked responses.
+HTTP/2 devices get trailers too, but HTTPS devices that use HTTP/1.1 can't (the HTTPS
+engine XMAT uses can't send them), so XMAT also drops the `Trailer` header for them.
+A request body sent chunked, or over HTTP/2 without a length, is forwarded the same way.
+Captures store the decoded body without `Transfer-Encoding` and keep trailers apart from
+the headers (see [Capture files](capture-files.md)).
+
 ## Block or bypass hosts
 
 The **Block List** and **Bypass List** are shared by every capture in the current
