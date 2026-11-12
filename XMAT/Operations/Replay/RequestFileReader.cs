@@ -8,6 +8,7 @@ using System.Buffers.Text;
 using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -323,8 +324,7 @@ namespace XMAT.Operations.Replay
         }
 
         // The UTF-16 length of a JSON string's raw value once its escapes are decoded, without decoding it: one character
-        // for each escape (a \u escape is one UTF-16 unit) and for each UTF-8 sequence, two for a four-byte one. The reader
-        // has already checked the escapes and the UTF-8.
+        // for each escape (a \u escape is one UTF-16 unit) and for each UTF-8 sequence, two for a four-byte one.
         internal static long DecodedCharLength(ReadOnlySpan<byte> raw)
         {
             long length = 0;
@@ -334,13 +334,31 @@ namespace XMAT.Operations.Replay
                 byte value = raw[index];
                 if (value == (byte)'\\')
                 {
-                    index += raw[index + 1] == (byte)'u' ? 6 : 2;
+                    if (index + 1 >= raw.Length)
+                    {
+                        throw new FormatException();
+                    }
+
+                    bool unicodeEscape = raw[index + 1] == (byte)'u';
+                    int escapeLength = unicodeEscape ? 6 : 2;
+                    if (raw.Length - index < escapeLength)
+                    {
+                        throw new FormatException();
+                    }
+
+                    index += escapeLength;
                     length++;
                 }
                 else
                 {
-                    index += value < 0x80 ? 1 : value >= 0xF0 ? 4 : value >= 0xE0 ? 3 : 2;
-                    length += value >= 0xF0 ? 2 : 1;
+                    OperationStatus status = Rune.DecodeFromUtf8(raw[index..], out Rune rune, out int consumed);
+                    if (status != OperationStatus.Done)
+                    {
+                        throw new FormatException();
+                    }
+
+                    index += consumed;
+                    length += rune.Utf16SequenceLength;
                 }
             }
 

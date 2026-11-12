@@ -283,6 +283,23 @@ namespace XMAT.Tests.Replay
             Assert.Equal(3, RequestFileReader.DecodedCharLength("\u00e9\U0001F600"u8));
         }
 
+        [Fact]
+        public void InvalidUtf8FollowedByEscapedBackslashes_IsRejectedWithoutThrowing()
+        {
+            byte[] prefix = Encoding.UTF8.GetBytes(
+                "{\"schema\":\"xmat-request/1\",\"profile\":\"template\",\"method\":\"");
+            byte[] invalidValue = { 0xF0, (byte)'a', (byte)'b', (byte)'\\', (byte)'\\' };
+            byte[] suffix = Encoding.UTF8.GetBytes(
+                "\",\"url\":null,\"httpVersion\":\"auto\",\"headers\":[],\"body\":\"\",\"omitted\":[\"url\"]}");
+            var json = new byte[prefix.Length + invalidValue.Length + suffix.Length];
+            prefix.CopyTo(json, 0);
+            invalidValue.CopyTo(json, prefix.Length);
+            suffix.CopyTo(json, prefix.Length + invalidValue.Length);
+
+            Assert.Throws<FormatException>(() => RequestFileReader.DecodedCharLength(invalidValue));
+            Assert.Equal(RequestFileCodes.Invalid, RequestFileReader.Read(json).Code);
+        }
+
         // Saving checks the header limits in the text itself, before any header is made, and counts the body without
         // decoding it.
         [Fact]
