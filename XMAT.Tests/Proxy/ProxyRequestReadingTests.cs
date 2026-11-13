@@ -194,6 +194,31 @@ namespace XMAT.Tests.Proxy
         }
 
         [Fact]
+        public async Task Http10Expect100Continue_IsIgnoredAndConsumed()
+        {
+            await using var origin = await LoopbackOrigin.StartAsync();
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            string authority = $"127.0.0.1:{origin.Port}";
+            byte[] request = Ascii.GetBytes(
+                "POST http://" + authority + "/http10-expect HTTP/1.0\r\n" +
+                "Host: " + authority + "\r\n" +
+                "Content-Length: 5\r\n" +
+                "Expect: 100-continue,\r\n" +
+                "Connection: close\r\n\r\n" +
+                "hello");
+
+            string response = await SendRawAsync(
+                proxy.Port,
+                new[] { request },
+                TimeSpan.Zero);
+
+            AssertStatus(response, 200);
+            Assert.DoesNotContain(" 100 ", response, StringComparison.Ordinal);
+            Assert.Equal("hello"u8.ToArray(), Assert.Single(origin.Requests).Body);
+            Assert.Equal(string.Empty, Assert.Single(proxy.CapturedRequests).Headers["Expect"]);
+        }
+
+        [Fact]
         public async Task UnsupportedExpectation_Returns417WithoutWaitingForTheBody()
         {
             ProxyRequestReadPolicy policy = ProxyRequestReadPolicy.Default with
@@ -1228,6 +1253,28 @@ namespace XMAT.Tests.Proxy
                 TimeSpan.Zero);
 
             AssertStatus(response, 501);
+            Assert.Empty(proxy.CapturedRequests);
+            Assert.Equal(0, proxy.RequestBufferBudget.ReservedBytes);
+        }
+
+        [Theory]
+        [InlineData("gzip")]
+        [InlineData("identity")]
+        public async Task TransferCodingWithoutFinalChunked_ReturnsBadRequest(string coding)
+        {
+            await using var proxy = await ProxyTestHarness.StartAsync();
+            byte[] request = Ascii.GetBytes(
+                "POST http://127.0.0.1:1/malformed-transfer-coding HTTP/1.1\r\n" +
+                "Host: 127.0.0.1:1\r\n" +
+                "Transfer-Encoding: " + coding + "\r\n" +
+                "Connection: close\r\n\r\n");
+
+            string response = await SendRawAsync(
+                proxy.Port,
+                new[] { request },
+                TimeSpan.Zero);
+
+            AssertStatus(response, 400);
             Assert.Empty(proxy.CapturedRequests);
             Assert.Equal(0, proxy.RequestBufferBudget.ReservedBytes);
         }

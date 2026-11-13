@@ -572,6 +572,9 @@ namespace XMAT.WebServiceCapture
         private readonly Guid _sourceId = Guid.NewGuid();
         private readonly CaptureRowRegistry _captureRows;
         private CancellationTokenSource _captureCallbackCancellationTokenSource;
+        // A start failed while its proxy was still stopping, so the capture callbacks, the UI queue and their
+        // cancellation stay open until a stop finds the proxy stopped.
+        private bool _failedStartCleanupPending;
         private Guid _activeRun;
         private long _retirementEpoch;
         private long _loadedIncarnation;
@@ -1321,6 +1324,12 @@ namespace XMAT.WebServiceCapture
 
         private async Task StartProxyCoreAsync(bool bShowProxyInformation, UInt16 port)
         {
+            if (_failedStartCleanupPending)
+            {
+                // The last start failed while its proxy was still stopping; finish that cleanup first.
+                await StopProxyAsync();
+            }
+
             var options = new WebServiceProxyOptions
             {
                 LogFilePath = $"{DeviceName.Replace(" ", "")}-wspe.log",
@@ -1360,22 +1369,29 @@ namespace XMAT.WebServiceCapture
         }
 
         // Runs while the startup exception is propagating. Every step is attempted and logged on
-        // failure so a secondary cleanup error neither masks the startup error nor leaves the
-        // callback gate or UI queue open (which would block every later start). As in a stop, the
-        // proxy may complete the capture of streams that it already forwarded, so the callbacks stay
-        // open until it has stopped.
+        // failure so a secondary cleanup error never masks the startup error. As in a stop, the proxy
+        // may complete the capture of streams that it already forwarded, so the callbacks stay open
+        // until it has stopped. If it is still stopping after the capture budget, the callbacks, the
+        // UI queue and their cancellation all stay open, and the next stop (also the one that a later
+        // start runs first) finishes the cleanup.
         private async Task CleanUpAfterFailedStartAsync()
         {
-            await TryCleanupStepAsync(StopProxyFinalizingCapturesAsync, "stop the proxy");
-            var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
-            await TryCleanupStepAsync(
-                () => _captureCallbackCancellationTokenSource.CancelAsync(),
-                "cancel capture callbacks");
-            await TryCleanupStepAsync(
-                () => WaitForCaptureCallbacksAsync(callbacksDrained, null, Stopwatch.StartNew()),
-                "drain capture callbacks");
-            await TryCleanupStepAsync(() => _uiUpdateQueue.CompleteAndDrainAsync(), "drain the UI queue");
-            DisposeCaptureCallbackCancellation();
+            if (await TryStopProxyAfterFailedStartAsync())
+            {
+                var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
+                await TryCleanupStepAsync(
+                    () => _captureCallbackCancellationTokenSource.CancelAsync(),
+                    "cancel capture callbacks");
+                await TryCleanupStepAsync(
+                    () => WaitForCaptureCallbacksAsync(callbacksDrained, null, Stopwatch.StartNew()),
+                    "drain capture callbacks");
+                await TryCleanupStepAsync(() => _uiUpdateQueue.CompleteAndDrainAsync(), "drain the UI queue");
+                DisposeCaptureCallbackCancellation();
+            }
+            else
+            {
+                _failedStartCleanupPending = true;
+            }
 
             // The toggle's checked state follows IsRunning one-way, so it must be told to
             // re-read the unchanged value or it keeps the state the click gave it.
@@ -1383,11 +1399,28 @@ namespace XMAT.WebServiceCapture
             CommandManager.InvalidateRequerySuggested();
         }
 
-        private async Task StopProxyFinalizingCapturesAsync()
+        // Whether the proxy stopped, or failed to: either way it has completed the capture of every stream that it
+        // admitted. False while it is still stopping after the capture budget.
+        private async Task<bool> TryStopProxyAfterFailedStartAsync()
         {
-            if (!await WaitForProxyStopAsync(_webProxy.StopProxyAsync()))
+            try
             {
-                throw CaptureBudgetExceeded();
+                if (await WaitForProxyStopAsync(_webProxy.StopProxyAsync()))
+                {
+                    return true;
+                }
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    "Cleanup after a failed proxy start: the proxy is still stopping, so its capture stays open " +
+                    "until the next stop.");
+                return false;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"Cleanup after a failed proxy start could not stop the proxy: {ex}");
+                return true;
             }
         }
 
@@ -1680,6 +1713,7 @@ namespace XMAT.WebServiceCapture
                 $"Capture UI updates drained in {uiDrainStopwatch.Elapsed}.");
 
             DisposeCaptureCallbackCancellation();
+            _failedStartCleanupPending = false;
             IsRunning = false;
             if (resolver != null && runId != Guid.Empty)
             {
@@ -2426,7 +2460,7 @@ namespace XMAT.WebServiceCapture
             HttpResponseEventArgs responseEvent,
             CancellationToken requestCancellation)
         {
-            if (responseEvent.ResponseForwarded)
+            if (responseEvent.ResponseForwarded || responseEvent.ProxyGenerated)
             {
                 return FinalizeForwardedResponseAsync(responseEvent, requestCancellation);
             }
@@ -2462,7 +2496,8 @@ namespace XMAT.WebServiceCapture
 
         // A streamed response has already reached the client, and the proxy reports its end once, also while the capture
         // stops. Its row is completed first, with the body that the capture kept and the time the stream ended, whatever
-        // the cancellation: only the WebResponse script that runs afterwards on a copy can be cut short.
+        // the cancellation: only the WebResponse script that runs afterwards on a copy can be cut short. A response that
+        // XMAT itself sent instead of the server's (a 502 or 504, say) is recorded the same way, but no script runs for it.
         private async Task<bool> FinalizeForwardedResponseAsync(
             HttpResponseEventArgs responseEvent,
             CancellationToken finalizationCancellation)
@@ -2479,7 +2514,11 @@ namespace XMAT.WebServiceCapture
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"Recording a streamed response failed: {ex}");
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Recording a forwarded response failed: {ex}");
+            }
+            if (responseEvent.ProxyGenerated)
+            {
+                return true;
             }
 
             CancellationToken captureCancellation =

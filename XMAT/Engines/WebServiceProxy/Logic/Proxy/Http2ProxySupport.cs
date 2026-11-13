@@ -399,8 +399,14 @@ namespace XMAT.WebServiceCapture.Proxy
                 context.Response.ContentLength = 0;
                 return;
             }
-            if (ProxyHeaderUtilities.HasUnsupportedTransferCoding(
-                    context.Request.Headers.TransferEncoding.ToString()))
+            string transferEncoding = context.Request.Headers.TransferEncoding.ToString();
+            if (ProxyHeaderUtilities.HasMalformedTransferCoding(transferEncoding))
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                context.Response.ContentLength = 0;
+                return;
+            }
+            if (ProxyHeaderUtilities.HasUnsupportedTransferCoding(transferEncoding))
             {
                 context.Response.StatusCode = StatusCodes.Status501NotImplemented;
                 context.Response.ContentLength = 0;
@@ -507,14 +513,35 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             catch (HttpRequestException ex)
             {
-                Log(tunnel.ConnectionId, LogLevel.ERROR, $"Upstream HTTP request failed: {ex.Message}");
-                context.Response.StatusCode = StatusCodes.Status502BadGateway;
+                Log(tunnel.ConnectionId, LogLevel.ERROR, $"Upstream HTTP request to {uri} failed: {ex.Message}");
+                await CommitProxyResponseAsync(
+                    context,
+                    tunnel,
+                    clientRequest,
+                    HttpStatusCode.BadGateway,
+                    "Bad Gateway").ConfigureAwait(false);
                 return;
             }
             catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
-                Log(tunnel.ConnectionId, LogLevel.ERROR, $"Upstream HTTP request timed out: {ex.Message}");
-                context.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
+                Log(tunnel.ConnectionId, LogLevel.ERROR, $"Upstream HTTP request to {uri} timed out: {ex.Message}");
+                await CommitProxyResponseAsync(
+                    context,
+                    tunnel,
+                    clientRequest,
+                    HttpStatusCode.GatewayTimeout,
+                    "Gateway Timeout").ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                Log(tunnel.ConnectionId, LogLevel.ERROR, $"Upstream HTTP request to {uri} timed out: {ex.Message}");
+                await CommitProxyResponseAsync(
+                    context,
+                    tunnel,
+                    clientRequest,
+                    HttpStatusCode.GatewayTimeout,
+                    "Gateway Timeout").ConfigureAwait(false);
                 return;
             }
 
@@ -542,8 +569,17 @@ namespace XMAT.WebServiceCapture.Proxy
             if (ProxyResponseStreaming.HasMessageBody(clientRequest.Method, upstreamResponse.StatusCode) &&
                 ProxyHeaderUtilities.HasUnsupportedTransferCoding(upstreamResponse.Headers))
             {
-                context.Response.StatusCode = StatusCodes.Status502BadGateway;
-                context.Response.ContentLength = 0;
+                Log(
+                    tunnel.ConnectionId,
+                    LogLevel.ERROR,
+                    $"Upstream response for {clientRequest.Method} {clientRequest.Host}{clientRequest.Path} used " +
+                    $"unsupported transfer coding: {upstreamResponse.Headers.TransferEncoding}.");
+                await CommitProxyResponseAsync(
+                    context,
+                    tunnel,
+                    clientRequest,
+                    HttpStatusCode.BadGateway,
+                    "Bad Gateway").ConfigureAwait(false);
                 return;
             }
 
@@ -579,14 +615,32 @@ namespace XMAT.WebServiceCapture.Proxy
                 }
                 catch (Exception ex) when (ex is IOException or HttpRequestException)
                 {
-                    Log(tunnel.ConnectionId, LogLevel.ERROR, $"Upstream HTTP response failed: {ex.Message}");
-                    context.Response.StatusCode = StatusCodes.Status502BadGateway;
+                    Log(
+                        tunnel.ConnectionId,
+                        LogLevel.ERROR,
+                        $"Upstream response for {clientRequest.Method} {clientRequest.Host}{clientRequest.Path} failed: " +
+                        ex.Message);
+                    await CommitProxyResponseAsync(
+                        context,
+                        tunnel,
+                        clientRequest,
+                        HttpStatusCode.BadGateway,
+                        "Bad Gateway").ConfigureAwait(false);
                     return;
                 }
                 catch (TimeoutException ex)
                 {
-                    Log(tunnel.ConnectionId, LogLevel.ERROR, $"Upstream HTTP response timed out: {ex.Message}");
-                    context.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
+                    Log(
+                        tunnel.ConnectionId,
+                        LogLevel.ERROR,
+                        $"Upstream response for {clientRequest.Method} {clientRequest.Host}{clientRequest.Path} timed out: " +
+                        ex.Message);
+                    await CommitProxyResponseAsync(
+                        context,
+                        tunnel,
+                        clientRequest,
+                        HttpStatusCode.GatewayTimeout,
+                        "Gateway Timeout").ConfigureAwait(false);
                     return;
                 }
 
@@ -634,6 +688,67 @@ namespace XMAT.WebServiceCapture.Proxy
                 serverResponse,
                 cancellationToken,
                 tunnel.ProcessContext);
+
+        private async Task CommitProxyResponseAsync(
+            HttpContext context,
+            InterceptedTunnelContext tunnel,
+            ClientRequest request,
+            HttpStatusCode status,
+            string reason)
+        {
+            if (context.Response.HasStarted || context.RequestAborted.IsCancellationRequested)
+                return;
+
+            context.Response.StatusCode = (int)status;
+            context.Response.ContentLength = 0;
+            try
+            {
+                await context.Response.CompleteAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                ex is IOException or
+                OperationCanceledException or
+                ObjectDisposedException)
+            {
+                Log(
+                    tunnel.ConnectionId,
+                    LogLevel.WARN,
+                    $"Client connection ended while writing a proxy-generated response: {ex.Message}");
+                return;
+            }
+            DateTime committedAt = DateTime.Now;
+            var response = new ServerResponse
+            {
+                RequestNumber = request.RequestNumber,
+                StreamId = request.StreamId,
+                Version = context.Request.Protocol,
+                Status = ((int)status).ToString(CultureInfo.InvariantCulture),
+                StatusDescription = reason,
+                BodyBytes = Array.Empty<byte>(),
+            };
+            foreach (KeyValuePair<string, Microsoft.Extensions.Primitives.StringValues> header in
+                context.Response.Headers)
+            {
+                HeaderCollection destination = ProxyHeaderUtilities.IsContentHeader(header.Key)
+                    ? response.ContentHeaders
+                    : response.Headers;
+                foreach (string value in header.Value)
+                    destination.Add(header.Key, value);
+            }
+            if (!response.ContentHeaders.Contains("Content-Length"))
+                response.ContentHeaders["Content-Length"] = "0";
+
+            if (_proxy.TryRegisterStreamedResponseFinalizer(
+                    tunnel.ConnectionId,
+                    request,
+                    response,
+                    tunnel.ProcessContext,
+                    out WebServiceProxy.StreamedResponseFinalizer finalizer,
+                    proxyGenerated: true))
+            {
+                finalizer.Complete(committedAt, prepareResponse: null);
+            }
+        }
 
         // The headers go out first; the body follows as it arrives, teed into a capture copy that
         // keeps up to the capture limit. Scripts see that copy only after the body has ended.
@@ -1166,6 +1281,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 "Authentication-Info",
                 "Authorization",
                 "Cache-Control",
+                "Cookie",
                 "Content-Encoding",
                 "Content-Length",
                 "Content-Range",
@@ -1181,12 +1297,15 @@ namespace XMAT.WebServiceCapture.Proxy
                 "If-Unmodified-Since",
                 "Location",
                 "Max-Forwards",
+                "Pragma",
                 "Proxy-Authenticate",
                 "Proxy-Authentication-Info",
                 "Proxy-Authorization",
                 "Range",
                 "Retry-After",
+                "Set-Cookie",
                 "Vary",
+                "Warning",
                 "WWW-Authenticate",
             };
 
@@ -1210,8 +1329,22 @@ namespace XMAT.WebServiceCapture.Proxy
             if (string.IsNullOrWhiteSpace(value))
                 return false;
             string[] codings = value.Split(',', StringSplitOptions.TrimEntries);
-            return codings.Length != 1 ||
-                !codings[0].Equals("chunked", StringComparison.OrdinalIgnoreCase);
+            return codings.Length > 1 &&
+                codings[^1].Equals("chunked", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool HasMalformedTransferCoding(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+            string[] codings = value.Split(',', StringSplitOptions.TrimEntries);
+            if (codings.Any(string.IsNullOrEmpty) ||
+                !codings[^1].Equals("chunked", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            return codings.Count(
+                coding => coding.Equals("chunked", StringComparison.OrdinalIgnoreCase)) != 1;
         }
 
         internal static bool HasUnsupportedExpectation(string value)
@@ -1221,6 +1354,8 @@ namespace XMAT.WebServiceCapture.Proxy
             foreach (string part in value.Split(','))
             {
                 string expectation = part.Trim();
+                if (expectation.Length == 0)
+                    continue;
                 if (!expectation.Equals("100-continue", StringComparison.OrdinalIgnoreCase))
                     return true;
             }

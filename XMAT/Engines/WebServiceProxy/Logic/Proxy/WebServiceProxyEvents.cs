@@ -59,9 +59,11 @@ namespace XMAT.WebServiceCapture.Proxy
         public bool SendResponse { get; set; }
         internal ClientProcessContext ProcessContext { get; set; }
 
-        // The response was streamed to the client before this event; handlers see a copy
-        // and can neither change nor block what the client received.
+        // The response was committed before this event; handlers can neither change nor block what the client received.
         internal bool ResponseForwarded { get; set; }
+
+        // XMAT generated and already committed this response; capture it without response scripting.
+        internal bool ProxyGenerated { get; set; }
     }
 
     public class ConnectionClosedEventArgs : EventArgs

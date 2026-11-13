@@ -103,13 +103,16 @@ xmat --version
   limits above.
 - An XMAT capture stores each session's request and response bodies in its row as base64, which takes 4 bytes for every
   3 (a 32 MiB body takes about 42.7 MiB), so its rows count about a third more than their bodies against the record
-  and data limits. With the default limits, xmat reads any single row that XMAT writes: the proxy reads request bodies
-  of at most 32 MiB, and a capture keeps at most the capture limit of each response body (see
-  [Streaming and large responses](web-proxy.md#streaming-and-large-responses)), so a row stays under 128 MiB. The
-  limits on the whole capture still apply: 512 MiB of file, 256 MiB of data, which three rows with the largest bodies
-  already exceed, and 100,000 rows. Raise them with the options above, up to their maximums, or use the GUI. Reading a
-  capture is not the same as analyzing it: a capture that xmat reads can be exported, but `xmat analyze` can still stop
-  at the rule budget below (`analysis.rules.work-limit`).
+  and data limits. The default record limit of 128 MiB holds a row with a request body of up to 32 MiB, the most the
+  proxy reads, and a response body at the largest capture limit, 40 MB (see
+  [Streaming and large responses](web-proxy.md#streaming-and-large-responses)), with room for its headers and other
+  values. A row can be larger: a Web Request or Web Response script can give a buffered message a larger body, and
+  captures from other XMAT versions or other tools can hold larger bodies. xmat refuses a row over 128 MiB, the most
+  that `--max-record-mib` allows; the GUI opens it. The limits on the whole capture apply as well (512 MiB
+  of file, 256 MiB of data and 100,000 rows), so xmat can refuse a capture whose rows each fit: three rows with the
+  largest bodies already exceed the 256 MiB data limit. Raise these limits with the options above, up to their
+  maximums, or use the GUI. Reading a capture is not the same as analyzing it: a capture that xmat reads can be
+  exported, but `xmat analyze` can still stop at the rule budget below (`analysis.rules.work-limit`).
 - `--process` and `--exclude-process` choose the sessions to analyze by the client process that sent them, with the
   same rules as the process filter of a capture tab in the GUI. Each takes one selector and may be given again, up to
   64 times each: an image name such as `game.exe` or `game*.exe` (`*` and `?` are wildcards, case does not matter and

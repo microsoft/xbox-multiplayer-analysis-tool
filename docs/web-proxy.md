@@ -255,13 +255,19 @@ then forwards it. These responses stream to the device as they arrive instead:
 - Every response with a body, while **Stream all responses** is on (off by default).
   Responses without a body (to `HEAD` requests, and `204` and `304` responses) are still
   buffered, so scripts can change or block them.
-- Any body larger than the **Capture limit** (32 MB by default, 1 to 640 MB), including
+- Any body larger than the **Capture limit** (32 MB by default, 1 to 40 MB), including
   one whose `Content-Length` already says it is larger.
 
 Change these settings in **Edit > Preferences > Web Proxy > Streaming** and click
 **Save**; new responses use them from then on. Closing the window without saving keeps
 the previous streaming settings, and an invalid capture limit or port range saves
 nothing.
+
+The capture limit bounds how much of each response a capture keeps, not how much memory
+XMAT uses. Capturing a large response currently takes much more memory than the response
+itself: in testing, XMAT's memory use peaked at about 1.5 GB while it captured one 40 MB
+response, and several large streams captured at once can use several GB. Large uploads
+add to that.
 
 For a streamed response:
 
@@ -298,14 +304,27 @@ capture records the trailers as .NET's HTTP client received them: it can drop fi
 that aren't allowed in trailers and normalize the others, so they may differ from the
 server's exact bytes.
 
-XMAT supports only the `chunked` transfer coding: a request that uses another one gets
-`501 Not Implemented` and isn't forwarded, and a server response that uses one is
-replaced with `502 Bad Gateway` before any of it reaches the device. A request body sent
-chunked, or over HTTP/2 without a length, goes to the server chunked. XMAT answers
-`Expect: 100-continue` itself once the request's headers check out, and doesn't forward
-it; a request with any other expectation gets `417 Expectation Failed`. Captures store
-the decoded body without `Transfer-Encoding` and keep trailers apart from the headers
-(see [Capture files](capture-files.md)).
+XMAT decodes only the `chunked` transfer coding. A request whose `Transfer-Encoding`
+doesn't end with `chunked` is malformed and gets `400 Bad Request`; one that applies
+another coding before `chunked` (such as `gzip, chunked`) gets `501 Not Implemented`.
+Neither is forwarded. A server response that uses another coding is replaced with
+`502 Bad Gateway` before any of it reaches the device. A request body without a length
+(sent chunked, or over HTTP/2 without a `Content-Length`) goes to the server without one
+too: with chunked framing when the server uses HTTP/1.1, and in DATA frames when it uses
+HTTP/2. XMAT answers `Expect: 100-continue` itself once the request's headers check out,
+and doesn't forward it; it ignores that expectation in an HTTP/1.0 request, as HTTP
+requires. A request with any other expectation gets `417 Expectation Failed`. Captures
+store the decoded body without `Transfer-Encoding` and keep trailers apart from the
+headers (see [Capture files](capture-files.md)).
+
+When XMAT answers a request itself because it can't pass on the server's response, the
+capture records that answer as the device received it: its status, headers and empty
+body, with the time XMAT sent it. XMAT answers `502 Bad Gateway` when it can't reach the
+server or the server uses a transfer coding that XMAT doesn't decode, and `504 Gateway
+Timeout` when the server doesn't answer in time. No Web Response script runs for such an
+answer, and XMAT logs the reason (see
+[Collect debug logs](troubleshooting.md#collect-debug-logs)). XMAT doesn't capture the
+requests that it refuses outright (`400`, `417` or `501`).
 
 ## Block or bypass hosts
 

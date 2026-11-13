@@ -1654,11 +1654,55 @@ namespace XMAT.Tests
         [Fact]
         public async Task FailedStartCleanup_RecordsAStreamTheProxyFinalizesWhileItStops()
         {
-            // The capture's UI updates are drained on the shared application's dispatcher, as in XMAT.
-            CaptureUiApplicationFixture.RunOnApplication(_ => { });
-            using var database = new SqLtDatabase();
-            database.Initialize();
             var proxy = new FinalizingProxy();
+            using var database = new SqLtDatabase();
+            (WebServiceDeviceCaptureController controller, IDataTable table) = FinalizingCapture(database, proxy);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => controller.StartProxyAsync(false));
+
+            Assert.True(proxy.Finalized);
+            var row = new ProxyConnectionModel(Assert.Single(table.Dataset.DataRecords));
+            Assert.Equal("data: first"u8.ToArray(), row.ResponseBody);
+            Assert.True(row.HasRecordedResponseTimestamp);
+        }
+
+        // A failed start whose proxy is still stopping after the capture budget keeps the capture open instead: a start
+        // in the meantime fails with the timeout and changes nothing, a stream that the proxy finalizes later is still
+        // recorded, and only the stop that finds the proxy stopped closes the capture.
+        [Fact]
+        public async Task FailedStartCleanup_KeepsTheCaptureOpenWhileTheProxyIsStillStopping()
+        {
+            var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var proxy = new FinalizingProxy(stopped.Task);
+            using var database = new SqLtDatabase();
+            (WebServiceDeviceCaptureController controller, IDataTable table) = FinalizingCapture(database, proxy);
+            controller.CaptureCallbackDrainTimeoutOverride = TimeSpan.FromMilliseconds(100);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => controller.StartProxyAsync(false));
+            await Assert.ThrowsAsync<TimeoutException>(() => controller.StartProxyAsync(false));
+            stopped.SetResult();
+            await proxy.Stopping.WaitAsync(TimeSpan.FromSeconds(30));
+
+            Assert.True(proxy.Finalized);
+            var row = new ProxyConnectionModel(Assert.Single(table.Dataset.DataRecords));
+            Assert.Equal("data: first"u8.ToArray(), row.ResponseBody);
+            Assert.True(row.HasRecordedResponseTimestamp);
+            Assert.True(CallbacksOf(controller).TryBegin(out IDisposable callback), "the capture closed before the proxy stopped");
+            callback.Dispose();
+
+            await controller.StopProxyAsync();
+
+            Assert.False(CallbacksOf(controller).TryBegin(out _), "the stop left the capture open");
+        }
+
+        // A capture tab's controller with a database of its own, whose proxy is PROXY. Its UI updates are drained on the
+        // shared application's dispatcher, as in XMAT.
+        private static (WebServiceDeviceCaptureController Controller, IDataTable Table) FinalizingCapture(
+            SqLtDatabase database,
+            FinalizingProxy proxy)
+        {
+            CaptureUiApplicationFixture.RunOnApplication(_ => { });
+            database.Initialize();
             var controller = new WebServiceDeviceCaptureController(
                 "finalizing-test",
                 DeviceType.GenericProxyDevice,
@@ -1671,13 +1715,7 @@ namespace XMAT.Tests
             controller.Initialize(deferPortAllocation: true);
             IDataTable table = CreateConnectionsTable(database);
             SetPrivateField(controller, "_dataTable", table);
-
-            await Assert.ThrowsAsync<InvalidOperationException>(() => controller.StartProxyAsync(false));
-
-            Assert.True(proxy.Finalized);
-            var row = new ProxyConnectionModel(Assert.Single(table.Dataset.DataRecords));
-            Assert.Equal("data: first"u8.ToArray(), row.ResponseBody);
-            Assert.True(row.HasRecordedResponseTimestamp);
+            return (controller, table);
         }
 
         // A buffered response is recorded as its script left it, which is what the client receives, with its trailers.
@@ -1833,8 +1871,9 @@ namespace XMAT.Tests
         }
 
         // Admits one request while it starts, then fails to start. Like WebServiceProxy, it completes the capture of the
-        // stream it forwarded for that request while it stops, after the stop has begun.
-        private sealed class FinalizingProxy : IWebServiceProxy
+        // stream it forwarded for that request while it stops, after the stop has begun or, given STOPPED, once that
+        // completes; a stop requested again joins the one in progress.
+        private sealed class FinalizingProxy(Task stopped = null) : IWebServiceProxy
         {
             private readonly ClientRequest _request = new()
             {
@@ -1848,6 +1887,7 @@ namespace XMAT.Tests
             };
 
             internal bool? Finalized { get; private set; }
+            internal Task Stopping { get; private set; }
 
 #pragma warning disable CS0067
             public event EventHandler<InitialConnectionEventArgs> ReceivedInitialConnection;
@@ -1887,9 +1927,9 @@ namespace XMAT.Tests
             public Task StopProxyAsync(IProgress<WebProxyStopProgress> progress = null)
             {
                 _ = progress;
-                return Task.Run(async () =>
+                return Stopping ??= Task.Run(async () =>
                 {
-                    await Task.Delay(100);
+                    await (stopped ?? Task.Delay(100));
                     Finalized = await WebResponsePolicyAsync(
                         new HttpResponseEventArgs
                         {

@@ -76,6 +76,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal Func<string, X509Certificate2> InterceptedCertificateOverride { get; set; }
 
+        internal Func<HttpMessageHandler> UpstreamHandlerFactory { get; set; }
+
         // Test seam: called during teardown, after the hosts are stopped.
         internal Action ShutdownFaultInjection { get; set; }
 
@@ -122,6 +124,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 ClientRequest request,
                 ServerResponse response,
                 ClientProcessContext processContext,
+                bool proxyGenerated,
                 CancellationToken cancellationToken)
             {
                 _owner = owner;
@@ -130,6 +133,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 Response = response;
                 ProcessContext = processContext;
                 CancellationToken = cancellationToken;
+                ProxyGenerated = proxyGenerated;
             }
 
             internal int ConnectionId { get; }
@@ -137,6 +141,7 @@ namespace XMAT.WebServiceCapture.Proxy
             internal ServerResponse Response { get; }
             internal ClientProcessContext ProcessContext { get; }
             internal CancellationToken CancellationToken { get; }
+            internal bool ProxyGenerated { get; }
             internal Task Completion => Volatile.Read(ref _work) ?? _completion.Task;
 
             internal void Complete(DateTime timestamp, Action prepareResponse)
@@ -229,25 +234,49 @@ namespace XMAT.WebServiceCapture.Proxy
             int connectionId,
             ClientRequest request,
             ServerResponse response,
-            ClientProcessContext processContext)
+            ClientProcessContext processContext,
+            bool proxyGenerated = false)
+        {
+            if (TryRegisterStreamedResponseFinalizer(
+                    connectionId,
+                    request,
+                    response,
+                    processContext,
+                    out StreamedResponseFinalizer finalizer,
+                    proxyGenerated))
+            {
+                return finalizer;
+            }
+            throw new InvalidOperationException("The proxy is not accepting streamed response finalizers.");
+        }
+
+        internal bool TryRegisterStreamedResponseFinalizer(
+            int connectionId,
+            ClientRequest request,
+            ServerResponse response,
+            ClientProcessContext processContext,
+            out StreamedResponseFinalizer finalizer,
+            bool proxyGenerated = false)
         {
             lock (_streamedResponseFinalizersLock)
             {
                 if (!_acceptingStreamedResponseFinalizers ||
                     _streamedResponseFinalizationCancellation == null)
                 {
-                    throw new InvalidOperationException("The proxy is not accepting streamed response finalizers.");
+                    finalizer = null;
+                    return false;
                 }
 
-                var finalizer = new StreamedResponseFinalizer(
+                finalizer = new StreamedResponseFinalizer(
                     this,
                     connectionId,
                     request,
                     response,
                     processContext,
+                    proxyGenerated,
                     _streamedResponseFinalizationCancellation.Token);
                 _streamedResponseFinalizers.Add(finalizer);
-                return finalizer;
+                return true;
             }
         }
 
@@ -279,7 +308,8 @@ namespace XMAT.WebServiceCapture.Proxy
                         finalizer.CancellationToken,
                         finalizer.ProcessContext,
                         responseForwarded: true,
-                        timestamp: timestamp).ConfigureAwait(false);
+                        timestamp: timestamp,
+                        proxyGenerated: finalizer.ProxyGenerated).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
                 {
@@ -472,7 +502,7 @@ namespace XMAT.WebServiceCapture.Proxy
             _port = options.Port;
             _openConnections.Clear();
 
-            _httpClient = new HttpClient(CreateUpstreamHandler());
+            _httpClient = new HttpClient(UpstreamHandlerFactory?.Invoke() ?? CreateUpstreamHandler());
 
             // The public listener handles forward-proxy CONNECT requests. The
             // private listener terminates the tunneled TLS and lets Kestrel
@@ -1092,7 +1122,8 @@ namespace XMAT.WebServiceCapture.Proxy
             CancellationToken cancellationToken,
             ClientProcessContext processContext = null,
             bool responseForwarded = false,
-            DateTime? timestamp = null)
+            DateTime? timestamp = null,
+            bool proxyGenerated = false)
         {
             if ((!responseForwarded && _cts?.IsCancellationRequested == true) ||
                 cancellationToken.IsCancellationRequested)
@@ -1109,6 +1140,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 SendResponse = true,
                 ProcessContext = processContext,
                 ResponseForwarded = responseForwarded,
+                ProxyGenerated = proxyGenerated,
             };
 
             bool observersAccepted = InvokeVetoObservers(
