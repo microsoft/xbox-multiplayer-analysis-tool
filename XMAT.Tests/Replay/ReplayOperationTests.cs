@@ -513,6 +513,70 @@ namespace XMAT.Tests.Replay
             Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == ReplayOperation.VerifySkippedCode);
         }
 
+        // With VerifyDiff, one comparison gives each verified send its verdict and its detail: the detail goes to the sink
+        // with the exchange, set before the sink sees it, and never into the result.
+        [Fact]
+        public async Task VerifyDiff_GivesTheSinkEachVerifiedSendsDetail()
+        {
+            await using var server = new LoopbackHttpServer(request => LoopbackResponse.Ok(request.Target == "/changed" ? "two\n" : "one\n"));
+            const string Head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n";
+            ProxyConnectionModel[] captures =
+            {
+                Captured(server.Origin + "/same", "200", Head, "one\n"u8.ToArray()),
+                Captured(server.Origin + "/changed", "200", Head, "one\n"u8.ToArray()),
+                Captured(server.Origin + "/unanswered", string.Empty, string.Empty, []),
+            };
+            var sink = new DetailSink();
+
+            OperationResult<ReplayResult> result = await Execute(new ReplayRequest(
+                ReplaySource.FromCaptures(captures), new ReplayOptions(Verify: true, VerifyDiff: true), Sink: sink));
+
+            Assert.True(result.Succeeded, Describe(result));
+            Assert.Equal(3, sink.Details.Count);
+            Assert.Same(sink.Details[0].Verification, result.Value.Items[0].Verification);
+            Assert.Same(sink.Details[1].Verification, result.Value.Items[1].Verification);
+            Assert.True(sink.Details[0].Body.Equal);
+            Assert.Equal(VerifyEquivalence.Different, sink.Details[1].Body.Text.Equivalence);
+            Assert.Null(sink.Details[2]);
+            Assert.Null(result.Value.Items[2].Verification);
+            Assert.Equal((1, 1), (result.Value.Matched, result.Value.Mismatched));
+        }
+
+        [Fact]
+        public async Task VerifyDiff_NeedsVerify()
+        {
+            OperationResult<ReplayResult> result = await Execute(new ReplayRequest(
+                ReplaySource.FromCaptures(new[] { Row(1, "http://127.0.0.1:1/") }), new ReplayOptions(VerifyDiff: true)));
+
+            AssertFailure(result, OperationOutcome.InvalidInput, "replay.options.invalid");
+        }
+
+        // A captured response with no status was never captured: it is not verified, never taken for a status that differs.
+        // A body-not-kept marker counts only on an empty body, so a forged one never hides a kept body from verify.
+        [Fact]
+        public async Task Verify_OnlyARealBaselineIsVerified()
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok("one\n"));
+            string marker = RequestReplayDraft.ResponseBodyNotKeptHeader + ": 4\r\n";
+            ProxyConnectionModel[] captures =
+            {
+                Captured(server.Origin + "/forged", "200", "HTTP/1.1 200 OK\r\n" + marker, "one\n"u8.ToArray()),
+                Captured(server.Origin + "/omitted", "200", "HTTP/1.1 200 OK\r\n" + marker, []),
+                Captured(server.Origin + "/unanswered", string.Empty, string.Empty, []),
+            };
+
+            OperationResult<ReplayResult> result = await Execute(new ReplayRequest(
+                ReplaySource.FromCaptures(captures), new ReplayOptions(Verify: true)));
+
+            Assert.True(result.Succeeded, Describe(result));
+            Assert.True(result.Value.Items[0].Verification.Matches);
+            Assert.Null(result.Value.Items[1].Verification);
+            Assert.Null(result.Value.Items[2].Verification);
+            Assert.Equal((1, 0), (result.Value.Matched, result.Value.Mismatched));
+            OperationDiagnostic skipped = Assert.Single(result.Diagnostics);
+            Assert.Equal(ReplayOperation.VerifySkippedCode, skipped.Code);
+        }
+
         [Fact]
         public async Task Parallelism_SendsConcurrentlyAndStillReportsInPlanOrder()
         {
@@ -916,6 +980,23 @@ namespace XMAT.Tests.Replay
             return new ProxyConnectionModel(
                 number, "200", DateTime.UtcNow, TimeSpan.Zero, uri.Scheme, uri.Authority, "GET", uri.PathAndQuery,
                 $"GET {uri.PathAndQuery} HTTP/1.1\r\nHost: {uri.Authority}\r\n", [], "HTTP/1.1 200 OK\r\n", [], "127.0.0.1");
+        }
+
+        // A captured GET with the response that the capture holds for it: its status and head, which may be empty.
+        private static ProxyConnectionModel Captured(string url, string status, string responseHead, byte[] responseBody)
+        {
+            var uri = new Uri(url);
+            return new ProxyConnectionModel(
+                1, status, DateTime.UtcNow, TimeSpan.Zero, uri.Scheme, uri.Authority, "GET", uri.PathAndQuery,
+                $"GET {uri.PathAndQuery} HTTP/1.1\r\nHost: {uri.Authority}\r\n", [], responseHead, responseBody, "127.0.0.1");
+        }
+
+        // The detail that each exchange carried when the sink saw it, in plan order.
+        private sealed class DetailSink : IReplayExchangeSink
+        {
+            internal List<VerifyDiff> Details { get; } = new();
+
+            public void Add(ReplayItemResult result, ReplayExchange exchange) => Details.Add(exchange.VerifyDiff);
         }
 
         // Throws something unexpected for /boom and answers everything else, without any network.

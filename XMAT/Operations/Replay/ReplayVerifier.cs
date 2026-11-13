@@ -33,52 +33,87 @@ namespace XMAT.Operations.Replay
             ProxyConnectionModel original,
             ReplayExchange replay,
             long maxDecodedBytes,
+            CancellationToken cancellationToken = default) =>
+            CompareSides(original, replay, maxDecodedBytes, cancellationToken).Verification;
+
+        // Compare's verdict, and what it compared on each side and how it got it (ReplayComparison), for
+        // VerifyDiffOperation to explain. The comparison borrows the stored bodies and is not kept.
+        internal static ReplayComparison CompareSides(
+            ProxyConnectionModel original,
+            ReplayExchange replay,
+            long maxDecodedBytes,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(original);
             ArgumentNullException.ThrowIfNull(replay);
             var differences = new List<string>();
-            if (!int.TryParse(original.Status, NumberStyles.None, CultureInfo.InvariantCulture, out int status) ||
-                status != replay.StatusCode)
+            int? originalStatus =
+                int.TryParse(original.Status, NumberStyles.None, CultureInfo.InvariantCulture, out int status) ? status : null;
+            if (originalStatus != replay.StatusCode)
             {
                 differences.Add(StatusDifference);
             }
 
             original.ResponseHeaders.TryGetValue("Transfer-Encoding", out string transferEncoding);
             original.ResponseHeaders.TryGetValue("Content-Encoding", out string originalEncoding);
-            byte[] originalBody = original.ResponseBody ?? Array.Empty<byte>();
+            original.ResponseHeaders.TryGetValue("Content-Type", out string originalType);
+            byte[] stored = original.ResponseBody ?? Array.Empty<byte>();
+            byte[] originalBody = stored;
+            VerifyFraming framing;
             try
             {
                 originalBody = ChunkedBodyDecoder.DecodeIfFramed(
-                    transferEncoding, originalBody, (int)Math.Min(maxDecodedBytes, int.MaxValue));
+                    transferEncoding, stored, (int)Math.Min(maxDecodedBytes, int.MaxValue));
+                framing = ReferenceEquals(originalBody, stored) ? VerifyFraming.None : VerifyFraming.Removed;
             }
             catch (InvalidDataException)
             {
-                // Malformed framing is compared as stored.
+                // Malformed framing, or framed data over the limit, is compared as stored.
+                framing = VerifyFraming.NotRemoved;
             }
 
-            string replayEncoding = replay.Response?.ContentHeaders
-                .Where(header => header.Key.Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase))
-                .Select(header => header.Value)
-                .LastOrDefault();
+            string replayEncoding = ContentHeader(replay.Response, "Content-Encoding");
             byte[] replayBody = replay.Response?.Body ?? Array.Empty<byte>();
-            if (!Decode(originalEncoding, originalBody, maxDecodedBytes, cancellationToken).AsSpan().SequenceEqual(
-                Decode(replayEncoding, replayBody, maxDecodedBytes, cancellationToken)))
+            (byte[] originalCompared, VerifyBodyBasis originalBasis) =
+                Decode(originalEncoding, originalBody, maxDecodedBytes, cancellationToken);
+            (byte[] actualCompared, VerifyBodyBasis actualBasis) =
+                Decode(replayEncoding, replayBody, maxDecodedBytes, cancellationToken);
+            if (!originalCompared.AsSpan().SequenceEqual(actualCompared))
             {
                 differences.Add(BodyDifference);
             }
 
-            return new ReplayVerification(differences);
+            return new ReplayComparison(
+                new ReplayVerification(differences.AsReadOnly()),
+                originalStatus,
+                replay.StatusCode,
+                new VerifyBody(
+                    originalCompared, originalBasis, framing, stored, originalType, originalEncoding, transferEncoding),
+                new VerifyBody(
+                    actualCompared,
+                    actualBasis,
+                    VerifyFraming.None,
+                    replayBody,
+                    ContentHeader(replay.Response, "Content-Type"),
+                    replayEncoding,
+                    null));
         }
 
+        private static string ContentHeader(ReplayMessage response, string name) =>
+            response?.ContentHeaders
+                .Where(header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase))
+                .Select(header => header.Value)
+                .LastOrDefault();
+
         // The body without its content coding, or the body as it is when the coding is not one replay decodes or the
-        // decoded content is malformed or larger than maxBytes.
-        private static byte[] Decode(string contentEncoding, byte[] body, long maxBytes, CancellationToken cancellationToken)
+        // decoded content is malformed or larger than maxBytes; and which of these it is.
+        private static (byte[] Bytes, VerifyBodyBasis Basis) Decode(
+            string contentEncoding, byte[] body, long maxBytes, CancellationToken cancellationToken)
         {
             string coding = contentEncoding?.Trim().ToLowerInvariant();
             if (string.IsNullOrEmpty(coding) || coding == "identity" || body.Length == 0)
             {
-                return body;
+                return (body, VerifyBodyBasis.Plain);
             }
 
             Func<Stream, Stream> decoder = coding switch
@@ -90,7 +125,7 @@ namespace XMAT.Operations.Replay
             };
             if (decoder == null)
             {
-                return body;
+                return (body, VerifyBodyBasis.UnsupportedCoding);
             }
 
             try
@@ -104,18 +139,18 @@ namespace XMAT.Operations.Replay
                     cancellationToken.ThrowIfCancellationRequested();
                     if (output.Length + read > maxBytes)
                     {
-                        return body;
+                        return (body, VerifyBodyBasis.DecodedLimit);
                     }
 
                     output.Write(buffer, 0, read);
                 }
 
-                return output.ToArray();
+                return (output.ToArray(), VerifyBodyBasis.Decoded);
             }
             catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or IOException)
             {
                 // Content that does not decode is compared as it is.
-                return body;
+                return (body, VerifyBodyBasis.MalformedCoding);
             }
         }
     }

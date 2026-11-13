@@ -1,0 +1,921 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
+
+using System;
+using System.Buffers;
+using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace XMAT.Operations.Inspection
+{
+    // Previews a message body for the GUI's views without ever holding more of it than BodyPreviewLimits allow: it decodes the
+    // transfer framing and the content coding, decodes the text and formats JSON or builds its tree, each bounded before
+    // anything is allocated or appended. It never changes or keeps the body, never logs it and does no I/O. At most
+    // MaxConcurrentPreviews previews run at a time, always on the thread pool.
+    internal sealed class BodyPreviewOperation : IOperation<BodyPreviewRequest, BodyPreview>
+    {
+        internal const int MaxConcurrentPreviews = 2;
+
+        private const int InitialOutputBytes = 64 * 1024;
+
+        // Decoders are asked for at most this much at a time, so work is checked before each step.
+        private const int ReadChunkBytes = 64 * 1024;
+
+        private static readonly SemaphoreSlim Workers = new(MaxConcurrentPreviews, MaxConcurrentPreviews);
+
+        // The preview, or Cancelled; never part of a preview.
+        public async Task<OperationResult<BodyPreview>> ExecuteAsync(
+            BodyPreviewRequest request, OperationContext context, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            try
+            {
+                await Workers.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    // Task.Run: the work leaves the caller's thread even when the wait completed synchronously on it.
+                    BodyPreview preview = await Task.Run(() => Build(request, cancellationToken), cancellationToken)
+                        .ConfigureAwait(false);
+                    return OperationResult<BodyPreview>.Success(preview);
+                }
+                finally
+                {
+                    Workers.Release();
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return OperationResult<BodyPreview>.Failure(
+                    OperationOutcome.Cancelled,
+                    new OperationDiagnostic(
+                        BodyPreviewNotice.Cancelled, OperationDiagnosticSeverity.Info, "The preview was cancelled."));
+            }
+        }
+
+        // The preview, on the calling thread; throws OperationCanceledException when cancelled.
+        internal static BodyPreview Build(BodyPreviewRequest request, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new Builder(request, null, cancellationToken).Build();
+        }
+
+        // How the body's content decodes, as Build decodes it but without reading it as text or JSON: whether its end is
+        // proven, how many bytes decoded and the notices that say why. Its work is spent from work, a caller's budget that the
+        // caller's other stages share, and running out of it leaves the end unproven; the request's other limits apply as in
+        // Build. On the calling thread; throws OperationCanceledException when work's cancellation is requested.
+        internal static BodyDecodeInspection InspectDecode(BodyPreviewRequest request, BodyPreviewWork work)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentNullException.ThrowIfNull(work);
+            work.CheckCancellation();
+            return new Builder(request, work, CancellationToken.None).Inspect();
+        }
+
+        // The decoded body: the bytes the preview works from, whether they are all of the body, or invalid compressed data.
+        private readonly record struct DecodedBody(ReadOnlyMemory<byte> Bytes, bool Complete, bool Malformed);
+
+        private enum TextEnd
+        {
+            Complete,
+            Cut,
+            Binary,
+            Malformed,
+            WorkLimit,
+        }
+
+        private sealed class Builder
+        {
+            private const int DecodeChunkBytes = 64 * 1024;
+            private const int GzipTrailerBytes = 8;
+            private const int DumpBytesPerLine = 16;
+
+            // "XX" per byte, a space between bytes and CRLF between lines.
+            private const int DumpCharsPerLine = (DumpBytesPerLine * 3) - 1 + 2;
+            private const int MaxSizeLineBytes = 8192;
+
+            private static readonly SearchValues<byte> HexDigits = SearchValues.Create("0123456789abcdefABCDEF"u8);
+
+            private readonly BodyPreviewRequest _request;
+            private readonly BodyPreviewLimits _limits;
+            private readonly BodyPreviewWork _work;
+            private readonly List<string> _notices = new();
+
+            // work is a caller's budget that the preview shares with the caller's other stages, or null for one of its own
+            // (MaxWork).
+            internal Builder(BodyPreviewRequest request, BodyPreviewWork work, CancellationToken cancellationToken)
+            {
+                _request = request;
+                _limits = (request.Limits ?? BodyPreviewLimits.Default).Clamped();
+                _work = work ?? new BodyPreviewWork(_limits.MaxWork, cancellationToken);
+            }
+
+            // The stages that come before the content is read: the input limit, the header limits, the codings and the
+            // framing, then decoding.
+            private enum Stage
+            {
+                Decoded,
+                UnsupportedCoding,
+                MalformedCoding,
+            }
+
+            internal BodyPreview Build()
+            {
+                ReadOnlyMemory<byte> stored = _request.Body;
+                string hex = Wants(BodyPreviewParts.Hex) ? HexPart(stored.Span) : null;
+
+                // Stored bytes are always shown: whatever a caller or a forged marker says, only an empty body was not kept.
+                if (_request.NotRetained && stored.IsEmpty)
+                {
+                    return Result(BodyPreviewState.NotRetained, BodyPreviewTextKind.None, string.Empty, hex);
+                }
+
+                if (_request.StoredPrefix)
+                {
+                    Notice(BodyPreviewNotice.StoredPrefix);
+                }
+
+                if (stored.IsEmpty)
+                {
+                    BodyPreviewState empty = _request.StoredPrefix ? BodyPreviewState.Truncated : BodyPreviewState.Empty;
+                    return Result(empty, BodyPreviewTextKind.None, string.Empty, hex);
+                }
+
+                if (!Wants(BodyPreviewParts.Text) && !Wants(BodyPreviewParts.Json))
+                {
+                    BodyPreviewState shown = _request.StoredPrefix ? BodyPreviewState.Truncated : BodyPreviewState.Complete;
+                    return Result(shown, BodyPreviewTextKind.None, null, hex);
+                }
+
+                switch (DecodeStored(stored, out ReadOnlyMemory<byte> input, out string contentType, out DecodedBody decoded))
+                {
+                    case Stage.UnsupportedCoding:
+                        return Bytes(BodyPreviewState.Unsupported, input.Span, complete: false, hex, 0, null, stored: true);
+
+                    case Stage.MalformedCoding:
+                        return Bytes(BodyPreviewState.Malformed, input.Span, complete: false, hex, 0, null, stored: true);
+                }
+
+                return Present(decoded, contentType, hex);
+            }
+
+            // The decode stages of Build alone: whether the decoded content's end is proven, without reading it as text.
+            internal BodyDecodeInspection Inspect()
+            {
+                ReadOnlyMemory<byte> stored = _request.Body;
+                if (_request.NotRetained && stored.IsEmpty)
+                {
+                    return Inspection(BodyDecodeEnd.Unproven, 0);
+                }
+
+                if (_request.StoredPrefix)
+                {
+                    Notice(BodyPreviewNotice.StoredPrefix);
+                }
+
+                if (stored.IsEmpty)
+                {
+                    return Inspection(_request.StoredPrefix ? BodyDecodeEnd.Unproven : BodyDecodeEnd.Complete, 0);
+                }
+
+                switch (DecodeStored(stored, out _, out _, out DecodedBody decoded))
+                {
+                    case Stage.UnsupportedCoding:
+                        return Inspection(BodyDecodeEnd.Unsupported, 0);
+
+                    case Stage.MalformedCoding:
+                        return Inspection(BodyDecodeEnd.Malformed, 0);
+                }
+
+                BodyDecodeEnd end = decoded.Complete
+                    ? BodyDecodeEnd.Complete
+                    : _notices.Contains(BodyPreviewNotice.Incomplete) ? BodyDecodeEnd.Incomplete : BodyDecodeEnd.Unproven;
+                return Inspection(end, decoded.Bytes.Length);
+            }
+
+            private BodyDecodeInspection Inspection(BodyDecodeEnd end, long decodedBytes) =>
+                new(end, decodedBytes, _notices.AsReadOnly());
+
+            private Stage DecodeStored(
+                ReadOnlyMemory<byte> stored, out ReadOnlyMemory<byte> input, out string contentType, out DecodedBody decoded)
+            {
+                decoded = default;
+                input = stored;
+                if (input.Length > _limits.MaxInputBytes)
+                {
+                    input = input[.._limits.MaxInputBytes];
+                    Notice(BodyPreviewNotice.InputLimit);
+                }
+
+                bool prefix = _request.StoredPrefix || input.Length < stored.Length;
+                if (!TryHeader(_request.ContentType, out contentType))
+                {
+                    contentType = null;
+                }
+
+                if (!TryHeader(_request.ContentEncoding, out string contentEncoding) ||
+                    !TryContentCoding(contentEncoding, out string coding))
+                {
+                    Notice(BodyPreviewNotice.UnsupportedCoding);
+                    return Stage.UnsupportedCoding;
+                }
+
+                bool framed = false;
+                if (_request.Framing == BodyFraming.Advisory)
+                {
+                    if (!TryHeader(_request.TransferEncoding, out string transferEncoding) ||
+                        !TryTransferCoding(transferEncoding, out bool chunked))
+                    {
+                        Notice(BodyPreviewNotice.UnsupportedCoding);
+                        return Stage.UnsupportedCoding;
+                    }
+
+                    framed = chunked && LooksFramed(input.Span);
+                }
+
+                decoded = Decode(input, framed, coding, prefix);
+                if (decoded.Malformed)
+                {
+                    Notice(BodyPreviewNotice.MalformedCoding);
+                    return Stage.MalformedCoding;
+                }
+
+                return Stage.Decoded;
+            }
+
+            private bool Wants(BodyPreviewParts part) => (_request.Parts & part) != 0;
+
+            private void Notice(string code)
+            {
+                if (!_notices.Contains(code))
+                {
+                    _notices.Add(code);
+                }
+            }
+
+            // A header value as it is, or false (and HeaderLimit) when it is too long to be used.
+            private bool TryHeader(string value, out string usable)
+            {
+                usable = value;
+                if (value != null && value.Length > _limits.MaxHeaderChars)
+                {
+                    Notice(BodyPreviewNotice.HeaderLimit);
+                    return false;
+                }
+
+                return true;
+            }
+
+            // At most one content coding that the preview decodes: gzip, x-gzip, deflate or br; null for none or identity.
+            private static bool TryContentCoding(string value, out string coding)
+            {
+                coding = null;
+                foreach (string part in (value ?? string.Empty).Split(','))
+                {
+                    string name = part.Trim();
+                    if (name.Length == 0 || name.Equals("identity", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    string known =
+                        name.Equals("gzip", StringComparison.OrdinalIgnoreCase) || name.Equals("x-gzip", StringComparison.OrdinalIgnoreCase)
+                            ? "gzip"
+                            : name.Equals("deflate", StringComparison.OrdinalIgnoreCase)
+                                ? "deflate"
+                                : name.Equals("br", StringComparison.OrdinalIgnoreCase) ? "br" : null;
+                    if (known == null || coding != null)
+                    {
+                        coding = null;
+                        return false;
+                    }
+
+                    coding = known;
+                }
+
+                return true;
+            }
+
+            // Only chunked and identity are transfer codings that a stored body can still carry.
+            private static bool TryTransferCoding(string value, out bool chunked)
+            {
+                chunked = false;
+                foreach (string part in (value ?? string.Empty).Split(','))
+                {
+                    string name = part.Trim();
+                    if (name.Equals("chunked", StringComparison.OrdinalIgnoreCase))
+                    {
+                        chunked = true;
+                    }
+                    else if (name.Length != 0 && !name.Equals("identity", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            // Chunk framing is recognized as ChunkedBodyDecoder.DecodeIfFramed recognizes it, the first line read from at
+            // most MaxSizeLineBytes bytes: a first line that is a chunk size, or the body ends with the last chunk.
+            private static bool LooksFramed(ReadOnlySpan<byte> body)
+            {
+                int newline = body[..Math.Min(body.Length, MaxSizeLineBytes + 1)].IndexOf((byte)'\n');
+                if (newline >= 0)
+                {
+                    ReadOnlySpan<byte> line = body[..newline].TrimEnd((byte)'\r');
+                    int extension = line.IndexOf((byte)';');
+                    ReadOnlySpan<byte> size = (extension < 0 ? line : line[..extension]).Trim(" \t"u8);
+                    if (!size.IsEmpty && size.IndexOfAnyExcept(HexDigits) < 0)
+                    {
+                        return true;
+                    }
+                }
+
+                return body.EndsWith("\r\n0\r\n\r\n"u8);
+            }
+
+            // Framing that does not parse is advisory: the body is then decoded as it is stored.
+            private DecodedBody Decode(ReadOnlyMemory<byte> input, bool framed, string coding, bool prefix)
+            {
+                if (framed)
+                {
+                    try
+                    {
+                        return Inflate(input, framed: true, coding, prefix);
+                    }
+                    catch (BodyPreviewFramingException)
+                    {
+                        Notice(BodyPreviewNotice.FramingIgnored);
+                    }
+                }
+
+                return Inflate(input, framed: false, coding, prefix);
+            }
+
+            private DecodedBody Inflate(ReadOnlyMemory<byte> input, bool framed, string coding, bool prefix)
+            {
+                if (!framed && coding == null)
+                {
+                    // The stored bytes themselves, never copied.
+                    int byWork = (int)Math.Clamp(_work.Remaining, 0, int.MaxValue);
+                    int length = Math.Min(input.Length, Math.Min(_limits.MaxDecodedBytes, byWork));
+                    _work.Spend(length);
+                    _work.Reach(length);
+                    if (length < input.Length)
+                    {
+                        Notice(length == byWork && byWork < _limits.MaxDecodedBytes
+                            ? BodyPreviewNotice.WorkLimit
+                            : BodyPreviewNotice.DecodedLimit);
+                    }
+
+                    return new DecodedBody(input[..length], !prefix && length == input.Length, false);
+                }
+
+                bool rawDeflate = false;
+                if (coding == "gzip")
+                {
+                    return InflateGzip(input, framed, prefix);
+                }
+
+                while (true)
+                {
+                    var output = new Output(_limits.MaxDecodedBytes);
+                    BodyPreviewChunkedStream chunks = framed ? new BodyPreviewChunkedStream(input, prefix, _work) : null;
+                    var source = new BodyPreviewSourceStream(chunks ?? (Stream)new BodyPreviewInputStream(input, _work));
+                    try
+                    {
+                        using Stream decoder = Open(source, rawDeflate ? null : coding, rawDeflate);
+                        bool more = output.Fill(decoder, _work);
+                        bool complete = !prefix && !more;
+                        if (more)
+                        {
+                            Notice(BodyPreviewNotice.DecodedLimit);
+                        }
+                        else if (coding != null && source.EndRequested)
+                        {
+                            // A deflate, zlib or Brotli decoder asks for more after its data ended only when the data stops
+                            // before its end: the start that decoded is shown, and a stored prefix already says why.
+                            return Ended(output, prefix);
+                        }
+                        else if (chunks != null)
+                        {
+                            // The framing after the compressed data must parse to its last chunk too.
+                            Drain(chunks);
+                        }
+
+                        if (rawDeflate)
+                        {
+                            Notice(BodyPreviewNotice.RawDeflate);
+                        }
+
+                        return new DecodedBody(output.Memory, complete, false);
+                    }
+                    catch (BodyPreviewWorkLimitException)
+                    {
+                        Notice(BodyPreviewNotice.WorkLimit);
+                        return new DecodedBody(output.Memory, false, false);
+                    }
+                    catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException)
+                    {
+                        // Invalid compressed data (BrotliStream reports it as InvalidOperationException). Once, and only
+                        // when nothing decoded: "deflate" sent as raw deflate instead of zlib.
+                        if (coding == "deflate" && !rawDeflate && output.Length == 0)
+                        {
+                            rawDeflate = true;
+                            continue;
+                        }
+
+                        // The decoders end quietly where their data ends (EndRequested tells that apart), so an error is
+                        // invalid data.
+                        return new DecodedBody(default, false, true);
+                    }
+                }
+            }
+
+            // gzip, decoded as zlib decodes it but with proof of where it ends: the member header is read here, the deflate
+            // data inflated raw, its last bytes handed over one at a time (BodyPreviewTailStream) so that its end is known
+            // exactly, and the trailer that must follow it checked: CRC-32 and ISIZE. One member that ends with its whole
+            // trailer is complete; deflate data or a trailer that stops early is incomplete; anything after the trailer is
+            // decoded with GZipStream, as more members, which the preview does not prove complete.
+            private DecodedBody InflateGzip(ReadOnlyMemory<byte> input, bool framed, bool prefix)
+            {
+                var output = new Output(_limits.MaxDecodedBytes);
+                try
+                {
+                    long length = framed ? new BodyPreviewChunkedStream(input, prefix, _work).Measure() : input.Length;
+                    using Stream source = framed
+                        ? new BodyPreviewChunkedStream(input, prefix, _work)
+                        : new BodyPreviewInputStream(input, _work);
+                    int header = BodyPreviewGzip.ReadHeader(source);
+                    if (header < 0)
+                    {
+                        return Ended(output, prefix);
+                    }
+
+                    var tail = new BodyPreviewTailStream(source, length - header);
+                    bool more;
+                    using (var deflate = new DeflateStream(tail, CompressionMode.Decompress, leaveOpen: true))
+                    {
+                        more = output.Fill(deflate, _work);
+                    }
+
+                    if (more)
+                    {
+                        Notice(BodyPreviewNotice.DecodedLimit);
+                        return new DecodedBody(output.Memory, false, false);
+                    }
+
+                    long after = length - header - tail.Handed;
+                    if (tail.EndRequested || after < GzipTrailerBytes)
+                    {
+                        return Ended(output, prefix);
+                    }
+
+                    if (after > GzipTrailerBytes)
+                    {
+                        return InflateMembers(input, framed, prefix);
+                    }
+
+                    Span<byte> trailer = stackalloc byte[GzipTrailerBytes];
+                    if (!BodyPreviewGzip.TryRead(source, trailer))
+                    {
+                        return Ended(output, prefix);
+                    }
+
+                    _work.Spend(output.Length);
+                    if (BinaryPrimitives.ReadUInt32LittleEndian(trailer) != BodyPreviewGzip.Crc32(output.Memory.Span) ||
+                        BinaryPrimitives.ReadUInt32LittleEndian(trailer[4..]) != (uint)output.Length)
+                    {
+                        return new DecodedBody(default, false, true);
+                    }
+
+                    return new DecodedBody(output.Memory, !prefix, false);
+                }
+                catch (BodyPreviewWorkLimitException)
+                {
+                    Notice(BodyPreviewNotice.WorkLimit);
+                    return new DecodedBody(output.Memory, false, false);
+                }
+                catch (InvalidDataException)
+                {
+                    return new DecodedBody(default, false, true);
+                }
+            }
+
+            // More than one gzip member: GZipStream decodes them all, but where the last one ends is not proven.
+            private DecodedBody InflateMembers(ReadOnlyMemory<byte> input, bool framed, bool prefix)
+            {
+                var output = new Output(_limits.MaxDecodedBytes);
+                try
+                {
+                    using Stream source = framed
+                        ? new BodyPreviewChunkedStream(input, prefix, _work)
+                        : new BodyPreviewInputStream(input, _work);
+                    using var gzip = new GZipStream(source, CompressionMode.Decompress);
+                    Notice(output.Fill(gzip, _work) ? BodyPreviewNotice.DecodedLimit : BodyPreviewNotice.UnverifiedEnd);
+                    return new DecodedBody(output.Memory, false, false);
+                }
+                catch (BodyPreviewWorkLimitException)
+                {
+                    Notice(BodyPreviewNotice.WorkLimit);
+                    return new DecodedBody(output.Memory, false, false);
+                }
+                catch (InvalidDataException)
+                {
+                    return new DecodedBody(default, false, true);
+                }
+            }
+
+            // Compressed data that stops before its end: the start that decoded is shown, and a stored prefix already says
+            // why.
+            private DecodedBody Ended(Output output, bool prefix)
+            {
+                if (!prefix)
+                {
+                    Notice(BodyPreviewNotice.Incomplete);
+                }
+
+                return new DecodedBody(output.Memory, false, false);
+            }
+
+            // Reads the framing to its end, which validates it: a missing last chunk or trailing bytes throw
+            // BodyPreviewFramingException.
+            private static void Drain(BodyPreviewChunkedStream chunks)
+            {
+                Span<byte> scratch = stackalloc byte[4096];
+                while (chunks.Read(scratch) > 0)
+                {
+                    // Data after the end of the compressed data is not shown.
+                }
+            }
+
+            private static Stream Open(Stream source, string coding, bool rawDeflate)
+            {
+                if (rawDeflate)
+                {
+                    return new DeflateStream(source, CompressionMode.Decompress);
+                }
+
+                return coding switch
+                {
+                    "gzip" => new GZipStream(source, CompressionMode.Decompress),
+                    "deflate" => new ZLibStream(source, CompressionMode.Decompress),
+                    "br" => new BrotliStream(source, CompressionMode.Decompress),
+                    _ => source,
+                };
+            }
+
+            private BodyPreview Present(DecodedBody decoded, string contentType, string hex)
+            {
+                ReadOnlySpan<byte> bytes = decoded.Bytes.Span;
+                long decodedBytes = bytes.Length;
+                BodyTextFormat format = BodyTextRules.Read(contentType, _limits.MaxHeaderChars, bytes);
+                if (!format.Supported)
+                {
+                    Notice(BodyPreviewNotice.UnsupportedCharset);
+                    return Bytes(BodyPreviewState.Unsupported, bytes, decoded.Complete, hex, decodedBytes, null);
+                }
+
+                Encoding encoding = format.Encoding;
+                string charset = format.Charset;
+                bool declaredText = format.DeclaredText;
+
+                ReadOnlySpan<byte> body = bytes[format.Preamble..];
+                var text = new BodyPreviewText(_limits.MaxTextChars, _limits.MaxTextLines);
+                switch (DecodeText(body, decoded.Complete, encoding, text))
+                {
+                    // Bytes that are not valid text: malformed when the message says it is text, otherwise binary.
+                    case TextEnd.Malformed when declaredText:
+                        Notice(BodyPreviewNotice.MalformedText);
+                        return Bytes(BodyPreviewState.Malformed, bytes, decoded.Complete, hex, decodedBytes, charset);
+
+                    case TextEnd.Malformed:
+                    case TextEnd.Binary:
+                        Notice(BodyPreviewNotice.Binary);
+                        return Bytes(BodyPreviewState.Complete, bytes, decoded.Complete, hex, decodedBytes, null);
+
+                    case TextEnd.WorkLimit:
+                        Notice(BodyPreviewNotice.WorkLimit);
+                        return Text(BodyPreviewState.Truncated, BodyPreviewTextKind.Text, text, null, hex, decodedBytes, charset);
+                }
+
+                bool jsonType = format.JsonType;
+                bool jsonCharset = format.JsonCharset;
+                if (!decoded.Complete || !jsonCharset)
+                {
+                    // A prefix is never parsed as if it were the whole document.
+                    if (!decoded.Complete && (jsonType || BodyPreviewJson.LooksLikeJson(body)))
+                    {
+                        Notice(BodyPreviewNotice.JsonIncomplete);
+                    }
+
+                    BodyPreviewState shown = decoded.Complete ? BodyPreviewState.Complete : BodyPreviewState.Truncated;
+                    return Text(shown, BodyPreviewTextKind.Text, text, null, hex, decodedBytes, charset);
+                }
+
+                IReadOnlyList<BodyPreviewNode> documents = null;
+                BodyPreviewText shownText = text;
+                BodyPreviewTextKind kind = BodyPreviewTextKind.Text;
+                bool limited = false;
+
+                // JSON by its media type or because it starts with an object or array; plain text that only starts with a
+                // number or a word such as true is not JSON.
+                bool meantAsJson = jsonType || BodyPreviewJson.LooksLikeJson(body);
+                try
+                {
+                    if (Wants(BodyPreviewParts.Json))
+                    {
+                        // Each pass reads the body once at most, and is charged for all of it before it starts.
+                        _work.Spend(body.Length);
+                        documents = BodyPreviewJson.BuildTree(body, _limits, _work, out BodyPreviewJson.TreeEnd treeEnd);
+                        if (treeEnd == BodyPreviewJson.TreeEnd.Limit)
+                        {
+                            Notice(BodyPreviewNotice.JsonLimit);
+                            limited = true;
+                        }
+                        else if (treeEnd is BodyPreviewJson.TreeEnd.Malformed or BodyPreviewJson.TreeEnd.NotJson)
+                        {
+                            if (meantAsJson)
+                            {
+                                Notice(BodyPreviewNotice.JsonMalformed);
+                            }
+                            else
+                            {
+                                documents = null;
+                            }
+                        }
+                    }
+
+                    if (Wants(BodyPreviewParts.Text) && jsonType)
+                    {
+                        _work.Spend(body.Length);
+                        var formatted = new BodyPreviewText(_limits.MaxTextChars, _limits.MaxTextLines);
+                        switch (BodyPreviewJson.Format(body, _limits, _work, formatted))
+                        {
+                            case BodyPreviewJson.FormatEnd.Complete:
+                            case BodyPreviewJson.FormatEnd.TextLimit:
+                                shownText = formatted;
+                                kind = BodyPreviewTextKind.Json;
+                                break;
+
+                            case BodyPreviewJson.FormatEnd.DepthLimit:
+                                Notice(BodyPreviewNotice.JsonLimit);
+                                limited = true;
+                                break;
+
+                            case BodyPreviewJson.FormatEnd.Malformed:
+                                // Shown as it is, never rewritten into valid JSON.
+                                Notice(BodyPreviewNotice.JsonMalformed);
+                                break;
+                        }
+                    }
+                }
+                catch (BodyPreviewWorkLimitException)
+                {
+                    // A pass is charged before it starts, so the tree of a finished pass is complete; the text is shown as
+                    // it is.
+                    Notice(BodyPreviewNotice.WorkLimit);
+                    return Text(BodyPreviewState.Truncated, BodyPreviewTextKind.Text, text, documents, hex, decodedBytes, charset);
+                }
+
+                BodyPreviewState state = limited ? BodyPreviewState.Truncated : BodyPreviewState.Complete;
+                return Text(state, kind, shownText, documents, hex, decodedBytes, charset);
+            }
+
+            // Decodes the text into text until it is full; a body that is only a prefix may end inside a character, which
+            // is then left out rather than taken for invalid text.
+            private TextEnd DecodeText(ReadOnlySpan<byte> body, bool complete, Encoding encoding, BodyPreviewText text)
+            {
+                Decoder decoder = encoding.GetDecoder();
+                char[] chars = ArrayPool<char>.Shared.Rent(encoding.GetMaxCharCount(DecodeChunkBytes));
+                try
+                {
+                    int position = 0;
+                    while (position < body.Length)
+                    {
+                        int take = Math.Min(DecodeChunkBytes, body.Length - position);
+                        bool last = position + take == body.Length;
+                        _work.Spend(take);
+                        decoder.Convert(body.Slice(position, take), chars, last && complete, out int used, out int produced, out _);
+                        position += used;
+                        _work.Spend(produced);
+                        ReadOnlySpan<char> decoded = chars.AsSpan(0, produced);
+                        int shown = Math.Min(decoded.Length, text.Remaining + 1);
+                        if (BodyTextRules.HasNotText(decoded[..shown]))
+                        {
+                            return TextEnd.Binary;
+                        }
+
+                        if (!text.Append(decoded))
+                        {
+                            return TextEnd.Cut;
+                        }
+
+                        if (used == 0)
+                        {
+                            break;
+                        }
+                    }
+
+                    return TextEnd.Complete;
+                }
+                catch (DecoderFallbackException)
+                {
+                    return TextEnd.Malformed;
+                }
+                catch (BodyPreviewWorkLimitException)
+                {
+                    return TextEnd.WorkLimit;
+                }
+                finally
+                {
+                    ArrayPool<char>.Shared.Return(chars);
+                }
+            }
+
+            private BodyPreview Text(
+                BodyPreviewState state,
+                BodyPreviewTextKind kind,
+                BodyPreviewText text,
+                IReadOnlyList<BodyPreviewNode> documents,
+                string hex,
+                long decodedBytes,
+                string charset)
+            {
+                if (text.Cut)
+                {
+                    Notice(BodyPreviewNotice.TextLimit);
+                    state = state == BodyPreviewState.Complete ? BodyPreviewState.Truncated : state;
+                }
+
+                bool wantsText = Wants(BodyPreviewParts.Text);
+                return Result(
+                    state,
+                    wantsText ? kind : BodyPreviewTextKind.None,
+                    wantsText ? text.ToString() : null,
+                    hex,
+                    documents,
+                    decodedBytes,
+                    charset);
+            }
+
+            // A byte dump of at most MaxByteDumpBytes bytes in place of the text, of the stored body (stored) or of the decoded
+            // bytes. A complete state becomes Truncated when the dump or the bytes are only part of the body.
+            private BodyPreview Bytes(
+                BodyPreviewState state,
+                ReadOnlySpan<byte> bytes,
+                bool complete,
+                string hex,
+                long decodedBytes,
+                string charset,
+                bool stored = false)
+            {
+                int max = (int)Math.Min(_limits.MaxByteDumpBytes, (long)DumpLines() * DumpBytesPerLine);
+                int wanted = Math.Min(bytes.Length, max);
+                int shown = Afford(wanted);
+                if (shown < wanted)
+                {
+                    Notice(BodyPreviewNotice.WorkLimit);
+                }
+
+                if (bytes.Length > max)
+                {
+                    Notice(BodyPreviewNotice.TextLimit);
+                }
+
+                if (stored)
+                {
+                    _work.Reach(shown);
+                }
+
+                if (state == BodyPreviewState.Complete && (shown < bytes.Length || !complete))
+                {
+                    state = BodyPreviewState.Truncated;
+                }
+
+                bool wantsText = Wants(BodyPreviewParts.Text);
+                return Result(
+                    state,
+                    wantsText ? BodyPreviewTextKind.Bytes : BodyPreviewTextKind.None,
+                    wantsText ? Dump(bytes[..shown]) : null,
+                    hex,
+                    null,
+                    decodedBytes,
+                    charset);
+            }
+
+            // The Hex part: the start of the stored body, at most MaxTextLines lines that fit in MaxTextChars and the work
+            // left.
+            private string HexPart(ReadOnlySpan<byte> stored)
+            {
+                int shown = Afford((int)Math.Min(stored.Length, (long)DumpLines() * DumpBytesPerLine));
+                if (shown < stored.Length)
+                {
+                    Notice(BodyPreviewNotice.HexLimit);
+                }
+
+                _work.Reach(shown);
+                return Dump(stored[..shown]);
+            }
+
+            // At most count units of the work left, spent before the caller does them.
+            private int Afford(int count)
+            {
+                int allowed = (int)Math.Clamp(_work.Remaining, 0, count);
+                _work.Spend(allowed);
+                return allowed;
+            }
+
+            private int DumpLines() => Math.Min(_limits.MaxTextLines, (_limits.MaxTextChars + 2) / DumpCharsPerLine);
+
+            // "XX XX ...", 16 bytes a line, lines joined by CRLF.
+            private static string Dump(ReadOnlySpan<byte> bytes)
+            {
+                var text = new StringBuilder(bytes.Length * 3);
+                for (int index = 0; index < bytes.Length; index++)
+                {
+                    if (index > 0)
+                    {
+                        text.Append(index % DumpBytesPerLine == 0 ? "\r\n" : " ");
+                    }
+
+                    text.Append("0123456789ABCDEF"[bytes[index] >> 4]).Append("0123456789ABCDEF"[bytes[index] & 0xF]);
+                }
+
+                return text.ToString();
+            }
+
+            private BodyPreview Result(
+                BodyPreviewState state,
+                BodyPreviewTextKind kind,
+                string text,
+                string hex,
+                IReadOnlyList<BodyPreviewNode> documents = null,
+                long decodedBytes = 0,
+                string charset = null) =>
+                new(
+                    state,
+                    kind,
+                    text,
+                    documents ?? Array.Empty<BodyPreviewNode>(),
+                    hex,
+                    _notices.ToArray(),
+                    _request.Body.Length,
+                    _work.Inspected,
+                    decodedBytes,
+                    charset);
+        }
+
+        // The decoded bytes, at most max of them, in a buffer that grows only as far as the decoder fills it.
+        private sealed class Output
+        {
+            private readonly int _max;
+            private byte[] _buffer = Array.Empty<byte>();
+
+            internal Output(int max)
+            {
+                _max = max;
+            }
+
+            internal int Length { get; private set; }
+
+            internal ReadOnlyMemory<byte> Memory => _buffer.AsMemory(0, Length);
+
+            // Reads the decoder to its end or to max bytes; true when it stopped at max with more to read.
+            internal bool Fill(Stream decoder, BodyPreviewWork work)
+            {
+                Span<byte> probe = stackalloc byte[1];
+                while (true)
+                {
+                    if (Length == _buffer.Length)
+                    {
+                        if (Length == _max)
+                        {
+                            return decoder.Read(probe) > 0;
+                        }
+
+                        Array.Resize(
+                            ref _buffer, (int)Math.Min(_max, Math.Max(InitialOutputBytes, (long)_buffer.Length * 2)));
+                    }
+
+                    int wanted = work.Allow(Math.Min(ReadChunkBytes, _buffer.Length - Length));
+                    int read = decoder.Read(_buffer, Length, wanted);
+                    if (read == 0)
+                    {
+                        return false;
+                    }
+
+                    work.Spend(read);
+                    Length += read;
+                }
+            }
+        }
+    }
+}
