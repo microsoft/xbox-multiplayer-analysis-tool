@@ -13,8 +13,10 @@ using XMAT.WebServiceCapture.Models;
 namespace XMAT.Tests.Replay
 {
     // One captured exchange for a replay test. Url points at a loopback test server; for CONNECT only its host and port
-    // count. Headers holds complete header lines besides Host ("Name: value\r\n"). Number replaces the request number
-    // that an XMAT capture would give it (its position from 1).
+    // count. Headers holds complete header lines ("Name: value\r\n"); a Host line replaces the default Host, which is
+    // Uri.Host and therefore has no IPv6 zone. Number replaces the request number that an XMAT capture would give it
+    // (its position from 1). WriteXmatcap refuses a zoned URL, and both writers refuse a zoned CONNECT, because Uri.Host
+    // would erase the zone; a test of a scoped stored row must write RequestHost explicitly.
     internal sealed record CapturedExchange(
         string Method,
         string Url,
@@ -28,6 +30,19 @@ namespace XMAT.Tests.Replay
     internal static class ReplayCaptures
     {
         private static readonly DateTime Start = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        // A DNS host name of exactly this many characters, of 'a' labels no longer than 63 characters, which Uri accepts
+        // whatever its length.
+        internal static string LongDnsName(int length)
+        {
+            char[] name = new char[length];
+            for (int index = 0; index < length; index++)
+            {
+                name[index] = index % 63 == 62 && index < length - 1 ? '.' : 'a';
+            }
+
+            return new string(name);
+        }
 
         // A Fiddler archive whose frames are numbered from 1, in order.
         internal static string WriteSaz(string directory, string fileName, params CapturedExchange[] exchanges)
@@ -86,6 +101,14 @@ namespace XMAT.Tests.Replay
                 {
                     CapturedExchange exchange = exchanges[index];
                     var uri = new Uri(exchange.Url);
+                    if (uri.HostNameType == UriHostNameType.IPv6 &&
+                        uri.DnsSafeHost.Contains('%'))
+                    {
+                        throw new ArgumentException(
+                            "Uri.Host drops an IPv6 zone; write the scoped host into the stored row explicitly.",
+                            nameof(devices));
+                    }
+
                     DateTime started = Start.AddSeconds(index + 1);
                     long number = exchange.Number ?? index + 1;
                     captures.AddRow(
@@ -115,9 +138,38 @@ namespace XMAT.Tests.Replay
         private static string RequestHead(CapturedExchange exchange)
         {
             var uri = new Uri(exchange.Url);
+            if (exchange.Method == "CONNECT" &&
+                uri.HostNameType == UriHostNameType.IPv6 &&
+                uri.DnsSafeHost.Contains('%'))
+            {
+                throw new ArgumentException(
+                    "A scoped CONNECT fixture must provide its lexical authority without passing through Uri.Host.",
+                    nameof(exchange));
+            }
+
+            // The default Host models what an RFC 6874 client sends: Uri.Host's bracketed IPv6 address without its local
+            // zone. An explicitly supplied Host replaces it, so absolute-target precedence tests write exactly one Host.
             string authority = $"{uri.Host}:{uri.Port.ToString(CultureInfo.InvariantCulture)}";
             string target = exchange.Method == "CONNECT" ? authority : exchange.Url;
-            return $"{exchange.Method} {target} HTTP/1.1\r\nHost: {authority}\r\n{exchange.Headers}";
+            string headers = HasHeader(exchange.Headers, "Host")
+                ? exchange.Headers
+                : $"Host: {authority}\r\n{exchange.Headers}";
+            return $"{exchange.Method} {target} HTTP/1.1\r\n{headers}";
+        }
+
+        private static bool HasHeader(string headers, string expected)
+        {
+            foreach (string line in (headers ?? string.Empty).Split("\r\n", StringSplitOptions.RemoveEmptyEntries))
+            {
+                int colon = line.IndexOf(':');
+                if (colon > 0 &&
+                    line.AsSpan(0, colon).Trim().Equals(expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static byte[] Join(string head, byte[] body)

@@ -52,6 +52,72 @@ namespace XMAT.Tests.Cli
         }
 
         [Theory]
+        [InlineData("replay", "replay.capture-text.ambiguous")]
+        [InlineData("save-request", "capture.text.ambiguous-export")]
+        [InlineData("curl", "capture.text.ambiguous-export")]
+        public async Task StoredTextRefusal_PrecedesAnExistingOutput(string form, string code)
+        {
+            using var directory = new CliTestDirectory();
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string input = Unmarked(directory.Root, server.Origin);
+            string sha256 = CliAssert.Sha256(input);
+            string output = Path.Join(directory.Root, "results");
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Join(output, "kept.txt"), "kept");
+
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root,
+                Arguments(form, input, server.Origin, accept: false));
+
+            CliAssert.ExitCode(3, run);
+            JsonElement json = run.Json();
+            Assert.Equal(new[] { code }, run.ErrorCodes());
+            Assert.Equal("notNeeded", json.GetProperty("cleanup").GetProperty("state").GetString());
+            Assert.Empty(json.GetProperty("artifacts").EnumerateArray());
+            Assert.Equal("kept", File.ReadAllText(Path.Join(output, "kept.txt")));
+            CliAssert.NoStagingFolders(directory.Root);
+            Assert.Equal(0, server.Connections);
+            Assert.Equal(sha256, CliAssert.Sha256(input));
+        }
+
+        [Theory]
+        [InlineData("replay")]
+        [InlineData("save-request")]
+        [InlineData("curl")]
+        public async Task AdmittedCapture_IsReportedWhenExistingOutputPreventsReservation(string form)
+        {
+            using var directory = new CliTestDirectory();
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            string input = Unmarked(directory.Root, server.Origin);
+            string sha256 = CliAssert.Sha256(input);
+            string output = Path.Join(directory.Root, "results");
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Join(output, "kept.txt"), "kept");
+
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root,
+                Arguments(form, input, server.Origin, accept: true));
+
+            CliAssert.ExitCode(5, run);
+            JsonElement json = run.Json();
+            Assert.Equal(new[] { "cli.output.exists" }, run.ErrorCodes());
+            Assert.Equal(
+                ("xmatcap", sha256),
+                (
+                    json.GetProperty("input").GetProperty("kind").GetString(),
+                    json.GetProperty("input").GetProperty("sha256").GetString()));
+            Assert.Equal(
+                new[] { "capture.text.ambiguous" },
+                json.GetProperty("warnings").EnumerateArray().Select(warning => warning.GetProperty("code").GetString()));
+            Assert.False(json.TryGetProperty("storedText", out _));
+            Assert.Empty(json.GetProperty("artifacts").EnumerateArray());
+            Assert.Equal("notNeeded", json.GetProperty("cleanup").GetProperty("state").GetString());
+            Assert.Equal("kept", File.ReadAllText(Path.Join(output, "kept.txt")));
+            CliAssert.NoStagingFolders(directory.Root);
+            Assert.Equal(0, server.Connections);
+        }
+
+        [Theory]
         [InlineData("replay")]
         [InlineData("replay-url")]
         [InlineData("save-request")]

@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using XMAT.Operations.Replay;
+using XMAT.Tests.Cli;
 using XMAT.Tests.HeadlessParity;
 using XMAT.WebServiceCapture;
 
@@ -28,6 +29,77 @@ namespace XMAT.Tests.Replay
             "--anyauth", "--digest", "--basic", "-E", "--cert", "--key", "-x", "--proxy", "-L", "--location", "-b", "-c",
             "--cookie", "--cookie-jar", "-K", "--config", "-o", "-O", "--output", "--compressed",
         };
+
+        [Theory]
+        [InlineData("http://[fe80::1%12]/")]
+        [InlineData("http://[fe80::1%Ethernet]/")]
+        [InlineData("http://[fe80::1%2518]/")]
+        [InlineData("http://[fe80::1%0]/")]
+        public void ScopedIpv6Destination_IsRefusedBeforeProducingArguments(string url)
+        {
+            var draft = new RequestReplayDraft { Url = url };
+
+            CurlExportException exception = Assert.Throws<CurlExportException>(() => Prepare(draft));
+
+            Assert.Equal(ReplayDestination.ScopedIpv6Code, exception.Code);
+            Assert.Equal(ReplayDestination.ScopedIpv6Message, exception.Message);
+        }
+
+        [Theory]
+        [InlineData("incomplete")]
+        [InlineData("invalid-header")]
+        [InlineData("transport")]
+        public void OmissionsPrecedeScopedDestination_AndOtherScopedRefusalsProduceNothing(string problem)
+        {
+            const string Url = "http://[fe80::1%12]/";
+            RequestReplayDraft draft;
+            ReplayTransportOptions transport = null;
+            if (problem == "incomplete")
+            {
+                draft = RequestReplayDraft.FromRequestFile(new RequestFileContent(
+                    RequestFileProfile.Content,
+                    "GET",
+                    Url,
+                    ReplayHttpVersion.Auto,
+                    null,
+                    Array.Empty<byte>(),
+                    new RequestOmissions(false, false, true, false)));
+            }
+            else
+            {
+                draft = new RequestReplayDraft
+                {
+                    Url = Url,
+                    HeadersText = problem == "invalid-header" ? "X-Bad: \u0001" : "",
+                };
+                if (problem == "transport")
+                {
+                    transport = new ReplayTransportOptions(ReplayHttpVersion.Http2);
+                }
+            }
+
+            using var directory = new CliTestDirectory();
+            string scriptPath = Path.Join(directory.Root, "request.ps1");
+            CurlRequest prepared = null;
+            Exception exception = Record.Exception(() =>
+            {
+                prepared = Prepare(draft, transport);
+                using FileStream script = File.Create(scriptPath);
+                RequestCurlExporter.Write(prepared, CurlScriptForm.Pasteable, null, script, CancellationToken.None);
+            });
+
+            if (problem == "incomplete")
+            {
+                Assert.IsType<RequestIncompleteException>(exception);
+            }
+            else
+            {
+                Assert.Equal(ReplayDestination.ScopedIpv6Code, Assert.IsType<CurlExportException>(exception).Code);
+            }
+
+            Assert.Null(prepared);
+            Assert.False(File.Exists(scriptPath));
+        }
 
         [Fact]
         public void Arguments_AreExact_ForAGetWithHeaders()

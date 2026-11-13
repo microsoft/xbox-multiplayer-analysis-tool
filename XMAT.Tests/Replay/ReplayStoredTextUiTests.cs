@@ -409,6 +409,204 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // Raw mode refuses a send of an unmarked capture's request itself, by the source of the copy that it froze, before
+        // anything is counted, prepared, asked or sent, in Edit and resend's words; the mode, the raw editors and the
+        // request's source stay as they were, so the next send is refused the same way. For any other source the send is
+        // counted, prepared and asked about as before, and No sends nothing. Neither adds a Replays tab.
+        [Theory]
+        [InlineData("live")]
+        [InlineData("saz")]
+        [InlineData("marked")]
+        [InlineData("unmarked")]
+        public Task RawSend_OfAnUnmarkedCaptureRequest_IsRefusedByTheWindowFirst(string kind) => _application.RunAsync(async () =>
+        {
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok());
+            using var client = new RequestReplayClient();
+            ProxyConnectionModel row = Assert.Single(Rows(kind, new CapturedExchange("GET", server.Origin + "/raw")));
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            var questions = new List<string>();
+            bool answer = true;
+            var window = new RequestComposerWindow(
+                row,
+                client,
+                message =>
+                {
+                    questions.Add(message);
+                    return answer;
+                },
+                Recording(model));
+            int ui = Environment.CurrentManagedThreadId;
+            int counted = 0;
+            int prepared = 0;
+            try
+            {
+                await window.SwitchModeAsync();
+                Assert.Equal(RequestComposerWindow.ComposerMode.Raw, window.Mode);
+                window.CountBody = (draft, token) =>
+                {
+                    // The counts line counts on the UI thread; only the send's check counts off it.
+                    if (Environment.CurrentManagedThreadId != ui)
+                    {
+                        Interlocked.Increment(ref counted);
+                    }
+
+                    return draft.TryCountBody(token);
+                };
+                window.PrepareRaw = (head, body, target, token, limits) =>
+                {
+                    Interlocked.Increment(ref prepared);
+                    return RawRequest.Prepare(head, body, target, token, limits);
+                };
+                questions.Clear();
+                answer = false;
+                string rawTarget = Find<TextBox>(window, "RawTargetBox").Text;
+                string rawHead = Find<TextBox>(window, "RawHeadBox").Text;
+
+                await window.SendAsync();
+
+                if (kind == "unmarked")
+                {
+                    AssertRefusal("REPLAY_CAPTURE_TEXT_AMBIGUOUS", Status(window));
+                    Find<TextBlock>(window, "StatusText").Text = "-";
+
+                    await window.SendAsync();
+
+                    AssertRefusal("REPLAY_CAPTURE_TEXT_AMBIGUOUS", Status(window));
+                    Assert.Empty(questions);
+                    Assert.Equal((0, 0), (Volatile.Read(ref counted), Volatile.Read(ref prepared)));
+                }
+                else
+                {
+                    Assert.Single(questions);
+                    Assert.True(Volatile.Read(ref counted) > 0);
+                    Assert.Equal(1, Volatile.Read(ref prepared));
+                }
+
+                Assert.Equal(RequestComposerWindow.ComposerMode.Raw, window.Mode);
+                Assert.Equal(
+                    (rawTarget, rawHead),
+                    (Find<TextBox>(window, "RawTargetBox").Text, Find<TextBox>(window, "RawHeadBox").Text));
+                Assert.Equal(0, server.Connections);
+                Assert.Null(window.LastResult);
+                Assert.Empty(model.CaptureDeviceContexts);
+            }
+            finally
+            {
+                window.Close();
+                await RemoveAllAsync(model);
+            }
+        });
+
+        // The window's raw check gives the source of its frozen copy's stored text to the operation, which refuses an
+        // unmarked capture's request in Edit and resend's words, never with the command line's flag, even where the
+        // window's own refusal is not in the way; a marked capture's request is previewed, and its plan keeps the source.
+        [Theory]
+        [InlineData("marked")]
+        [InlineData("unmarked")]
+        public void RawCheck_GivesItsCopysSourceToTheOperation(string kind)
+        {
+            using var client = new RequestReplayClient();
+            ProxyConnectionModel row = Assert.Single(Rows(kind, new CapturedExchange("GET", "http://127.0.0.1:9/raw")));
+            var send = new RequestComposerWindow.FrozenRawSend(
+                "http://127.0.0.1:9",
+                "GET /raw HTTP/1.1\r\nHost: 127.0.0.1:9",
+                RequestReplayDraft.FromCapture(row),
+                null,
+                false,
+                "");
+
+            RequestComposerWindow.SendCheck check = RequestComposerWindow.CheckRawSend(send, client, CancellationToken.None);
+
+            if (kind == "unmarked")
+            {
+                Assert.Null(check.Plan);
+                Assert.Equal(
+                    Localization.GetLocalizedString(
+                        "COMPOSER_ERROR", Localization.GetLocalizedString("REPLAY_CAPTURE_TEXT_AMBIGUOUS")),
+                    check.Refusal);
+                Assert.DoesNotContain("--accept-stored-text", check.Refusal, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Null(check.Refusal);
+                Assert.True(check.Plan.UsesRaw);
+                Assert.Equal(CaptureTextSemantics.Literal, check.Plan.RawTextSource.Semantics);
+            }
+        }
+
+        // A round trip through Raw mode keeps the request's source: back in Parsed mode, Save request and both cURL
+        // exports of an unmarked capture's request are each refused as before, without any question or work, and for any
+        // other source they work as before.
+        [Theory]
+        [InlineData("live")]
+        [InlineData("saz")]
+        [InlineData("marked")]
+        [InlineData("unmarked")]
+        public Task RawRoundTrip_KeepsTheExportRefusalOfAnUnmarkedCapture(string kind) => _application.RunAsync(async () =>
+        {
+            ProxyConnectionModel row = Assert.Single(
+                Rows(kind, new CapturedExchange("GET", "http://127.0.0.1:9/round")));
+            var calls = new List<string>();
+            var window = new RequestComposerWindow(row, confirm: _ => true);
+            window.InspectRequest = (draft, token) =>
+            {
+                calls.Add("inspect");
+                return RequestComposerWindow.InspectForSaving(draft, token);
+            };
+            window.ChooseSavePath = () =>
+            {
+                calls.Add("path");
+                return null;
+            };
+            window.ChooseSaveContent = _ => throw new Xunit.Sdk.XunitException("Nothing is asked about content here.");
+            window.PublishRequestFile = (_, _, _) => throw new Xunit.Sdk.XunitException("Nothing is written here.");
+            window.PrepareCurl = (draft, transport, redirects, token) =>
+            {
+                calls.Add("prepare");
+                return RequestCurlExporter.Prepare(draft, transport, redirects, token);
+            };
+            window.CopyText = _ => calls.Add("copy");
+            window.ChooseCurlScriptPath = () =>
+            {
+                calls.Add("script path");
+                return null;
+            };
+            window.PublishCurlScript = (_, _, _) => throw new Xunit.Sdk.XunitException("Nothing is written here.");
+            try
+            {
+                await window.SwitchModeAsync();
+                Assert.Equal(RequestComposerWindow.ComposerMode.Raw, window.Mode);
+                await window.SwitchModeAsync();
+                Assert.Equal(RequestComposerWindow.ComposerMode.Parsed, window.Mode);
+
+                Find<TextBlock>(window, "StatusText").Text = "-";
+                await window.SaveRequestAsync();
+                string saved = Status(window);
+                Find<TextBlock>(window, "StatusText").Text = "-";
+                await window.CopyAsCurlAsync();
+                string copied = Status(window);
+                Find<TextBlock>(window, "StatusText").Text = "-";
+                await window.SaveCurlScriptAsync();
+                string scripted = Status(window);
+
+                if (kind == "unmarked")
+                {
+                    Assert.Empty(calls);
+                    AssertRefusal("COMPOSER_EXPORT_TEXT_AMBIGUOUS", saved);
+                    AssertRefusal("COMPOSER_EXPORT_TEXT_AMBIGUOUS", copied);
+                    AssertRefusal("COMPOSER_EXPORT_TEXT_AMBIGUOUS", scripted);
+                }
+                else
+                {
+                    Assert.Equal(new[] { "inspect", "path", "prepare", "copy", "prepare", "script path" }, calls);
+                }
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
         // The requests of these exchanges as a tab holds them: from a live capture, as the proxy makes its rows; or
         // read from a Fiddler archive, a marked XMAT capture or an unmarked one, as XMAT reads a capture file. Only an
         // unmarked capture's requests are AmbiguousUnmarked.

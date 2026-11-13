@@ -64,8 +64,14 @@ namespace XMAT.XboxLiveCaptureAnalysis
             }
 
             var requestHeaders = GetRequestHeadersForString(requestLineAndHeaders);
+            // PlayFab's pre-existing substring allow-list is matched against the normalized host identity, never text
+            // carried only in an IPv6 zone.
+            string allowListHost =
+                HostAuthority.TryNormalizeHost(requestHost, out string hostIdentity)
+                    ? hostIdentity
+                    : requestHost ?? string.Empty;
             if (!Utils.IsAnalyzedService(requestHeaders, null) &&
-                !AllowedNonAnalyzedHosts.Any(host => requestHost.Contains(host)))
+                !AllowedNonAnalyzedHosts.Any(host => allowListHost.Contains(host)))
             {
                 return null;
             }

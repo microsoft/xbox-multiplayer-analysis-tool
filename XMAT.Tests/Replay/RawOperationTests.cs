@@ -6,6 +6,7 @@ using System.IO;
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture;
@@ -112,7 +113,7 @@ namespace XMAT.Tests.Replay
             var sink = new RecordingSink();
 
             OperationResult<ReplayResult> result = await operation.ExecuteAsync(
-                new ReplayRequest(ReplaySource.FromRaw(scenario.Image, scenario.Provenance), options, scenario.Edits, sink),
+                new ReplayRequest(ReplaySource.FromRaw(scenario.Image, CaptureTextSource.Literal, scenario.Provenance), options, scenario.Edits, sink),
                 OperationContext.None,
                 CancellationToken.None);
 
@@ -153,7 +154,7 @@ namespace XMAT.Tests.Replay
             var captured = new Uri("https://captured.example/x");
 
             OperationResult<ReplayPlanPreview> preview = operation.Preview(
-                ReplaySource.FromRaw(image, captured), new ReplayOptions(Repeat: 3, Transport: Http11));
+                ReplaySource.FromRaw(image, CaptureTextSource.Literal, captured), new ReplayOptions(Repeat: 3, Transport: Http11));
 
             Assert.True(preview.Succeeded, string.Join(", ", preview.Diagnostics.Select(diagnostic => diagnostic.Code)));
             ReplayPlanPreview plan = preview.Value;
@@ -165,14 +166,95 @@ namespace XMAT.Tests.Replay
             Assert.Equal((image, captured), (again.Raw, again.ProvenanceOrigin));
 
             Assert.False(operation.Preview(
-                ReplaySource.FromRaw(image, new Uri("http://127.0.0.1:9/elsewhere")), new ReplayOptions(Transport: Http11)).Value.ChangesOrigin);
-            Assert.False(operation.Preview(ReplaySource.FromRaw(image), new ReplayOptions(Transport: Http11)).Value.ChangesOrigin);
-            OperationResult<ReplayPlanPreview> refused = operation.Preview(ReplaySource.FromRaw(image), new ReplayOptions());
+                ReplaySource.FromRaw(image, CaptureTextSource.Literal, new Uri("http://127.0.0.1:9/elsewhere")), new ReplayOptions(Transport: Http11)).Value.ChangesOrigin);
+            Assert.False(operation.Preview(ReplaySource.FromRaw(image, CaptureTextSource.Literal), new ReplayOptions(Transport: Http11)).Value.ChangesOrigin);
+            OperationResult<ReplayPlanPreview> refused = operation.Preview(ReplaySource.FromRaw(image, CaptureTextSource.Literal), new ReplayOptions());
             Assert.Equal((OperationOutcome.InvalidInput, RawCodes.HttpVersion), (refused.Outcome, Assert.Single(refused.Diagnostics).Code));
             Assert.Equal((0, 0, 0), (seams.Factories, seams.Lookups, seams.Connects));
-            Assert.Throws<ArgumentException>(() => ReplaySource.FromRaw(image, new Uri("/relative", UriKind.Relative)));
+            Assert.Throws<ArgumentException>(() => ReplaySource.FromRaw(image, CaptureTextSource.Literal, new Uri("/relative", UriKind.Relative)));
             Assert.Throws<ArgumentException>(
-                () => operation.PrepareForExport(new ReplayRequest(ReplaySource.FromRaw(image)), CancellationToken.None));
+                () => operation.PrepareForExport(new ReplayRequest(ReplaySource.FromRaw(image, CaptureTextSource.Literal)), CancellationToken.None));
+        }
+
+        // A raw request keeps the source of the text that it was made from: one that is not Literal is refused
+        // with the stored-text code by Preview and by a run, before any raw check, sender or sink, even with the raw
+        // consent for its image and the run's acceptance of a capture file's stored text. The same request with a Literal
+        // source is admitted and reaches the sender.
+        [Theory]
+        [InlineData("unknown")]
+        [InlineData("unmarked-file")]
+        public async Task ARawRequestFromUnmarkedText_IsRefusedBeforeAnyCheckOrSend(string kind)
+        {
+            CaptureTextSource unmarked = kind == "unknown" ? CaptureTextSource.Unknown : UnmarkedFile();
+            RawRequestImage image = Image(Target("http://127.0.0.1:9"), "GET / HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n");
+            var seams = new CountingSeams();
+            ReplayOperation operation = seams.Apply(new ReplayOperation());
+            var options = new ReplayOptions(Transport: Http11, AllowRaw: Consent(image), AcceptStoredText: true);
+            var sink = new RecordingSink();
+
+            OperationResult<ReplayPlanPreview> preview = operation.Preview(ReplaySource.FromRaw(image, unmarked), options);
+            OperationResult<ReplayResult> run = await Execute(
+                operation, new ReplayRequest(ReplaySource.FromRaw(image, unmarked), options, Sink: sink));
+
+            Assert.Equal(
+                (OperationOutcome.InvalidInput, ReplayOperation.StoredTextAmbiguousCode),
+                (preview.Outcome, Assert.Single(preview.Diagnostics).Code));
+            Assert.Equal(
+                (OperationOutcome.InvalidInput, ReplayOperation.StoredTextAmbiguousCode),
+                (run.Outcome, Assert.Single(run.Diagnostics).Code));
+            Assert.Equal((0, 0, 0), (seams.Factories, seams.Lookups, seams.Connects));
+            Assert.Empty(sink.Results);
+
+            Assert.True(operation.Preview(ReplaySource.FromRaw(image, CaptureTextSource.Literal), options).Succeeded);
+            await Execute(operation, new ReplayRequest(ReplaySource.FromRaw(image, CaptureTextSource.Literal), options, Sink: sink));
+            Assert.Equal(1, seams.Factories);
+        }
+
+        // The stored-text refusal comes before the raw checks: a raw request that they would refuse for its HTTP version
+        // still reports its unmarked text, in Preview and in a run; with a Literal source, the version is refused.
+        [Fact]
+        public async Task TheStoredTextRefusal_ComesBeforeTheRawChecks()
+        {
+            RawRequestImage image = Image(Target("http://127.0.0.1:9"), "GET / HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n");
+            var operation = new ReplayOperation();
+            var automatic = new ReplayOptions();
+
+            foreach ((CaptureTextSource source, string code) in new[]
+            {
+                (CaptureTextSource.Unknown, ReplayOperation.StoredTextAmbiguousCode),
+                (CaptureTextSource.Literal, RawCodes.HttpVersion),
+            })
+            {
+                Assert.Equal(code, Assert.Single(operation.Preview(ReplaySource.FromRaw(image, source), automatic).Diagnostics).Code);
+                OperationResult<ReplayResult> run = await Execute(
+                    operation, new ReplayRequest(ReplaySource.FromRaw(image, source), automatic));
+                Assert.Equal(code, Assert.Single(run.Diagnostics).Code);
+            }
+        }
+
+        // A raw plan carries its source to the run that sends it (ReplayPlanPreview.ToSource), whatever that source is; a
+        // raw plan without one runs as Unknown, and is refused before any sender, never sent as Literal.
+        [Fact]
+        public async Task ARawPlan_CarriesItsSource_AndOneWithoutASourceIsRefused()
+        {
+            RawRequestImage image = Image(Target("http://127.0.0.1:9"), "GET / HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n");
+            ReplayPlanPreview plan = new ReplayOperation().Preview(
+                ReplaySource.FromRaw(image, CaptureTextSource.Literal), new ReplayOptions(Transport: Http11)).Value;
+            CaptureTextSource unmarked = UnmarkedFile();
+            ReplayPlanPreview sourceless = plan with { RawTextSource = null };
+            var seams = new CountingSeams();
+
+            OperationResult<ReplayResult> run = await Execute(
+                seams.Apply(new ReplayOperation()),
+                new ReplayRequest(sourceless.ToSource(), new ReplayOptions(Transport: Http11, AllowRaw: ReplayRawConsent.For(plan))));
+
+            Assert.Same(CaptureTextSource.Literal, plan.RawTextSource);
+            Assert.Same(CaptureTextSource.Literal, plan.ToSource().RawTextSource);
+            Assert.Same(unmarked, (plan with { RawTextSource = unmarked }).ToSource().RawTextSource);
+            Assert.Same(CaptureTextSource.Unknown, sourceless.ToSource().RawTextSource);
+            Assert.Equal(ReplayOperation.StoredTextAmbiguousCode, Assert.Single(run.Diagnostics).Code);
+            Assert.Equal(0, seams.Factories);
+            Assert.Throws<ArgumentNullException>(() => ReplaySource.FromRaw(image, null));
         }
 
         // A sink that fails ends the run with its exception, and takes no later send, not even one that began and is still
@@ -213,7 +295,7 @@ namespace XMAT.Tests.Replay
 
             Task<OperationResult<ReplayResult>> run = operation.ExecuteAsync(
                 new ReplayRequest(
-                    ReplaySource.FromRaw(image),
+                    ReplaySource.FromRaw(image, CaptureTextSource.Literal),
                     new ReplayOptions(Repeat: 3, Parallelism: 3, Transport: Http11, AllowRaw: Consent(image)),
                     Sink: sink),
                 OperationContext.None,
@@ -270,7 +352,7 @@ namespace XMAT.Tests.Replay
 
             Task<OperationResult<ReplayResult>> run = operation.ExecuteAsync(
                 new ReplayRequest(
-                    ReplaySource.FromRaw(image),
+                    ReplaySource.FromRaw(image, CaptureTextSource.Literal),
                     new ReplayOptions(
                         Repeat: failFirst ? 3 : 2, Parallelism: failFirst ? 2 : 1, Transport: Http11, AllowRaw: Consent(image)),
                     Sink: sink),
@@ -313,7 +395,7 @@ namespace XMAT.Tests.Replay
 
             OperationResult<ReplayResult> result = await operation.ExecuteAsync(
                 new ReplayRequest(
-                    ReplaySource.FromRaw(image),
+                    ReplaySource.FromRaw(image, CaptureTextSource.Literal),
                     new ReplayOptions(Repeat: 3, Parallelism: 2, Transport: Http11, AllowRaw: Consent(image)),
                     Sink: sink),
                 OperationContext.None,
@@ -336,7 +418,7 @@ namespace XMAT.Tests.Replay
 
             OperationResult<ReplayResult> result = await new ReplayOperation().ExecuteAsync(
                 new ReplayRequest(
-                    ReplaySource.FromRaw(image),
+                    ReplaySource.FromRaw(image, CaptureTextSource.Literal),
                     new ReplayOptions(Repeat: 2, Parallelism: 2, AllowUnsafeMethods: true, Transport: Http11, AllowRaw: Consent(image)),
                     Sink: sink),
                 OperationContext.None,
@@ -409,11 +491,11 @@ namespace XMAT.Tests.Replay
             RawRequestImage image = Image(Target(d.Origin), $"GET /r HTTP/1.1\r\nHost: 127.0.0.1:{d.Port}\r\n\r\n");
             var inherited = new Uri("https://captured.example/r");
             AssertOriginChangeRefused(await Execute(operation, new ReplayRequest(
-                ReplaySource.FromRaw(image, inherited), new ReplayOptions(Transport: Http11, AllowRaw: Consent(image)))));
+                ReplaySource.FromRaw(image, CaptureTextSource.Literal, inherited), new ReplayOptions(Transport: Http11, AllowRaw: Consent(image)))));
             ReplayExchange raw = await SendOneAsync(
                 operation,
                 new ReplayRequest(
-                    ReplaySource.FromRaw(image, inherited),
+                    ReplaySource.FromRaw(image, CaptureTextSource.Literal, inherited),
                     new ReplayOptions(AllowOriginChange: true, Transport: Http11, AllowRaw: Consent(image))));
             Assert.Same(inherited, raw.ProvenanceOrigin);
             Assert.Equal(new[] { "/a", "/item" }, b.Requests.Select(request => request.Target));
@@ -480,7 +562,7 @@ namespace XMAT.Tests.Replay
             var sink = new RecordingSink();
 
             OperationResult<ReplayResult> result = await operation.ExecuteAsync(
-                new ReplayRequest(ReplaySource.FromRaw(image), new ReplayOptions(Transport: Http11, AllowRaw: Consent(image)), Sink: sink),
+                new ReplayRequest(ReplaySource.FromRaw(image, CaptureTextSource.Literal), new ReplayOptions(Transport: Http11, AllowRaw: Consent(image)), Sink: sink),
                 OperationContext.None,
                 cancel.Token).WaitAsync(Wait);
 
@@ -537,7 +619,7 @@ namespace XMAT.Tests.Replay
 
             Task<OperationResult<ReplayResult>> run = operation.ExecuteAsync(
                 new ReplayRequest(
-                    ReplaySource.FromRaw(image),
+                    ReplaySource.FromRaw(image, CaptureTextSource.Literal),
                     new ReplayOptions(Repeat: 4, Parallelism: 3, Transport: Http11, AllowRaw: Consent(image)),
                     Sink: sink),
                 OperationContext.None,
@@ -590,7 +672,7 @@ namespace XMAT.Tests.Replay
                 ReplaySource.FromDraft(new RequestReplayDraft { Url = server.Origin + "/windows-auth" }),
                 new ReplayOptions(Transport: new ReplayTransportOptions(WindowsAuth: true), AllowWindowsAuth: origin)));
             Task<ReplayItemResult> Raw() => RunOneAsync(operation, new ReplayRequest(
-                ReplaySource.FromRaw(image), new ReplayOptions(Transport: Http11, AllowRaw: Consent(image))));
+                ReplaySource.FromRaw(image, CaptureTextSource.Literal), new ReplayOptions(Transport: Http11, AllowRaw: Consent(image))));
 
             var raws = new List<ReplayItemResult> { await Raw() };
             Assert.Equal(401, (await Cert()).StatusCode);
@@ -628,11 +710,15 @@ namespace XMAT.Tests.Replay
             return result.Image;
         }
 
+        // A capture file's source without XMAT's text-format marker, a different object from CaptureTextSource.Unknown.
+        private static CaptureTextSource UnmarkedFile() =>
+            CaptureTextSource.CreateFile(CaptureTextSemantics.AmbiguousUnmarked, default, _ => new byte[32], () => true);
+
         // The consent that the GUI and the command line give: for the plan that Preview checked.
         private static ReplayRawConsent Consent(RawRequestImage image)
         {
             OperationResult<ReplayPlanPreview> plan = new ReplayOperation().Preview(
-                ReplaySource.FromRaw(image), new ReplayOptions(Transport: Http11));
+                ReplaySource.FromRaw(image, CaptureTextSource.Literal), new ReplayOptions(Transport: Http11));
             Assert.True(plan.Succeeded, string.Join(", ", plan.Diagnostics.Select(diagnostic => diagnostic.Code)));
             return ReplayRawConsent.For(plan.Value);
         }
