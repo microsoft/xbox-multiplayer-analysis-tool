@@ -172,13 +172,17 @@ namespace XMAT.Tests.Proxy
             CapturedResponseBody capture = null;
             var progressResponse = new ServerResponse();
             var finalResponse = new ServerResponse();
+            using var wire = new CountingWriteStream();
             long forwarded = 0;
             var progressCount = 0;
 
-            Task Forward(ReadOnlyMemory<byte> data)
+            async Task Forward(ReadOnlyMemory<byte> data)
             {
                 forwarded += data.Length;
-                return Task.CompletedTask;
+                await ForwardProxyConnectionHandler.WriteChunkAsync(
+                    wire,
+                    data,
+                    CancellationToken.None);
             }
 
             Task CaptureFilled()
@@ -205,6 +209,10 @@ namespace XMAT.Tests.Proxy
 
             Assert.False(buffered.Complete);
             Assert.Equal(payload.Length, forwarded);
+            Assert.True(wire.BytesWritten > forwarded, "plain HTTP/1.1 chunk framing was not written");
+            Assert.True(
+                wire.MaximumWriteLength <= ProxyResponseStreaming.ReadBufferSize,
+                $"one framed chunk wrote {wire.MaximumWriteLength:N0} bytes");
             Assert.Equal(2, progressCount);
             Assert.Equal(limit, progressResponse.CaptureTruncatedAt);
             Assert.Same(progressResponse.BodyBytes, finalResponse.BodyBytes);
@@ -437,6 +445,51 @@ namespace XMAT.Tests.Proxy
             Assert.Equal(
                 expected,
                 ResponseStreamingOptions.IsAutoStreamedType(MediaTypeHeaderValue.Parse(contentType)));
+        }
+
+        private sealed class CountingWriteStream : Stream
+        {
+            internal long BytesWritten { get; private set; }
+            internal int MaximumWriteLength { get; private set; }
+
+            public override bool CanRead => false;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => throw new NotSupportedException();
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override ValueTask WriteAsync(
+                ReadOnlyMemory<byte> buffer,
+                CancellationToken cancellationToken = default)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                BytesWritten += buffer.Length;
+                MaximumWriteLength = Math.Max(MaximumWriteLength, buffer.Length);
+                return ValueTask.CompletedTask;
+            }
+
+            public override void Flush()
+            {
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) =>
+                throw new NotSupportedException();
+
+            public override long Seek(long offset, SeekOrigin origin) =>
+                throw new NotSupportedException();
+
+            public override void SetLength(long value) =>
+                throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                BytesWritten += count;
+                MaximumWriteLength = Math.Max(MaximumWriteLength, count);
+            }
         }
     }
 }
