@@ -10,6 +10,7 @@ using System.Linq;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Export;
+using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Processes;
 using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture;
@@ -25,12 +26,14 @@ namespace XMAT.Cli
         internal const string Doctor = "doctor";
         internal const string Export = "export";
         internal const string Help = "help";
+        internal const string MarkCaptureText = "mark-capture-text";
         internal const string Replay = "replay";
         internal const string SaveRequest = "save-request";
         internal const string Version = "version";
 
         // The commands xmat.exe runs. Each one needs a Supported capability in the registry (XMAT.Tests/Cli checks it).
-        internal static IReadOnlyList<string> Implemented { get; } = new[] { Analyze, Compose, Curl, Doctor, Export, Replay, SaveRequest };
+        internal static IReadOnlyList<string> Implemented { get; } =
+            new[] { Analyze, Compose, Curl, Doctor, Export, MarkCaptureText, Replay, SaveRequest };
     }
 
     internal sealed record CliRequest(
@@ -45,7 +48,9 @@ namespace XMAT.Cli
         CliReplay Replay = null,
         ProcessFilterSpec ProcessFilter = null,
         CaptureExportFormat? Format = null,
-        CaptureSelectionSpec Selection = null);
+        CaptureSelectionSpec Selection = null,
+        CaptureTextInterpretation? Interpretation = null,
+        int MaxInputMib = 0);
 
     // What xmat replay, compose and save-request send or save, as their command lines give it. Headers and RemoveHeaders
     // keep the order they were given in; BodyFile and RequestFile are read when the run starts. Selection is the --request
@@ -60,7 +65,9 @@ namespace XMAT.Cli
     // --windows-auth, which only AllowWindowsAuth (--allow-windows-auth), naming the run's one origin, lets the run use; an
     // allowance without its option is still checked and grants nothing. RawFile is compose --raw's file, read when the run
     // starts and sent as its exact bytes to RawTarget (--target) once AllowRaw (--allow-raw) consents; FixContentLength
-    // (--fix-content-length) makes its one Content-Length equal to its body first.
+    // (--fix-content-length) makes its one Content-Length equal to its body first. AcceptStoredText (--accept-stored-text,
+    // replay, save-request and curl) accepts the stored text of an INPUT capture without XMAT's text-format marker as
+    // stored, for this run; it changes nothing for any other input.
     internal sealed record CliReplay(
         string Selection = null,
         int Repeat = 1,
@@ -99,7 +106,8 @@ namespace XMAT.Cli
         string RawFile = null,
         ReplayRawTarget RawTarget = null,
         bool AllowRaw = false,
-        bool FixContentLength = false)
+        bool FixContentLength = false,
+        bool AcceptStoredText = false)
     {
         internal static CliReplay Default { get; } = new();
     }
@@ -143,8 +151,11 @@ namespace XMAT.Cli
         internal const string StatusOption = "--status";
         internal const string MethodOption = "--method";
         internal const string MatchNoneSwitch = "--match-none";
+        internal const string InterpretOption = "--interpret";
         internal const string VersionSwitch = "--version";
         internal const string FindingsValue = "findings";
+        internal const string AsStoredValue = "as-stored";
+        internal const string LegacyOneLayerValue = "legacy-one-layer";
 
         internal const string RequestOption = "--request";
         internal const string UrlOption = "--url";
@@ -179,6 +190,7 @@ namespace XMAT.Cli
         internal const string TargetOption = "--target";
         internal const string AllowRawSwitch = "--allow-raw";
         internal const string FixContentLengthSwitch = "--fix-content-length";
+        internal const string AcceptStoredTextSwitch = "--accept-stored-text";
 
         internal const string HttpVersionMessage = "--http-version takes auto, 1.1 or 2.";
 
@@ -423,8 +435,13 @@ namespace XMAT.Cli
             AllowOriginChangeSwitch,
         };
 
+        // replay also takes --accept-stored-text, which save-request and curl take too: the acceptance of an unmarked XMAT
+        // capture's stored text as stored, which compose, with no capture to read, never takes.
         private static readonly HashSet<string> ReplaySwitches = new(
-            ComposeSwitches.Concat(new[] { AllowOriginChangeSwitch, UnconditionalSwitch, VerifySwitch, VerifyDiffSwitch }),
+            ComposeSwitches.Concat(new[]
+            {
+                AllowOriginChangeSwitch, UnconditionalSwitch, VerifySwitch, VerifyDiffSwitch, AcceptStoredTextSwitch,
+            }),
             StringComparer.Ordinal);
 
         // save-request never sends: it takes edits, completions, --http-version and the content and consent switches, and
@@ -452,7 +469,12 @@ namespace XMAT.Cli
 
         private static readonly HashSet<string> SaveRequestSwitches = new(StringComparer.Ordinal)
         {
-            UnconditionalSwitch, ClearHeadersSwitch, EmptyBodySwitch, IncludeSensitiveSwitch, AllowOriginChangeSwitch,
+            UnconditionalSwitch,
+            ClearHeadersSwitch,
+            EmptyBodySwitch,
+            IncludeSensitiveSwitch,
+            AllowOriginChangeSwitch,
+            AcceptStoredTextSwitch,
         };
 
         // curl takes what save-request takes. It reads the options that only a send uses so that it can refuse them with
@@ -492,6 +514,13 @@ namespace XMAT.Cli
 
         internal const string CurlHttpVersionMessage =
             "xmat curl takes --http-version auto or 1.1: curl's HTTP/2-only mode is not known to send the same request.";
+        private static readonly HashSet<string> MarkCaptureTextOptions =
+            new(StringComparer.Ordinal)
+            {
+                OutOption,
+                InterpretOption,
+                CliLimits.InputOption,
+            };
 
         // The options that analyze accepts; its command line in the capability registry names exactly these.
         internal static IReadOnlySet<string> AnalyzeOptionNames => AnalyzeOptions;
@@ -509,6 +538,8 @@ namespace XMAT.Cli
 
         // curl accepts exactly what save-request accepts; the options that only a send uses are refused (CurlSendOnlyMessage).
         internal static IReadOnlySet<string> CurlOptionNames => SaveRequestOptionNames;
+        internal static IReadOnlySet<string> MarkCaptureTextOptionNames =>
+            MarkCaptureTextOptions;
 
         internal static string FormatName(CaptureExportFormat format) => FormatNames[(int)format];
 
@@ -545,6 +576,11 @@ namespace XMAT.Cli
             if (first == CliCommands.Export)
             {
                 return ParseExport(args);
+            }
+
+            if (first == CliCommands.MarkCaptureText)
+            {
+                return ParseMarkCaptureText(args);
             }
 
             if (first == CliCommands.Replay)
@@ -832,6 +868,110 @@ namespace XMAT.Cli
                     UnknownTargetMessage);
         }
 
+        private static CliParseResult ParseMarkCaptureText(
+            IReadOnlyList<string> args)
+        {
+            const string command =
+                CliCommands.MarkCaptureText;
+            var arguments = new CliArguments();
+            CliParseResult error =
+                arguments.Read(
+                    args,
+                    command,
+                    MarkCaptureTextOptions);
+            if (error != null)
+            {
+                return error;
+            }
+
+            if (arguments.HelpRequested)
+            {
+                return HelpFor(command);
+            }
+
+            if (arguments.Positionals.Count == 0)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-argument",
+                    "mark-capture-text needs the INPUT capture file.");
+            }
+
+            if (arguments.Positionals.Count > 1)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.unexpected-argument",
+                    "mark-capture-text takes a single INPUT capture file.");
+            }
+
+            if (!arguments.Options.TryGetValue(
+                    OutOption,
+                    out string output))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-option",
+                    "mark-capture-text needs --out DIR.");
+            }
+
+            if (!arguments.Options.TryGetValue(
+                    InterpretOption,
+                    out string interpretation))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-option",
+                    "mark-capture-text needs --interpret as-stored or legacy-one-layer.");
+            }
+
+            CaptureTextInterpretation parsedInterpretation;
+            if (interpretation == AsStoredValue)
+            {
+                parsedInterpretation =
+                    CaptureTextInterpretation.AsStored;
+            }
+            else if (interpretation ==
+                LegacyOneLayerValue)
+            {
+                parsedInterpretation =
+                    CaptureTextInterpretation.LegacyOneLayer;
+            }
+            else
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    "--interpret takes as-stored or legacy-one-layer.");
+            }
+
+            int maxInputMib =
+                AnalysisLimits.DefaultInputMib;
+            if (arguments.Options.TryGetValue(
+                    CliLimits.InputOption,
+                    out string maxInput) &&
+                (!int.TryParse(
+                    maxInput,
+                    System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out maxInputMib) ||
+                 maxInputMib is < 1 or > 2048))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    "--max-input-mib takes a whole number from 1 through 2048.");
+            }
+
+            return CliParseResult.Success(
+                new CliRequest(
+                    command,
+                    Input: arguments.Positionals[0],
+                    Output: output,
+                    Interpretation: parsedInterpretation,
+                    MaxInputMib: maxInputMib));
+        }
+
         private static CliParseResult ParseReplay(IReadOnlyList<string> args)
         {
             const string command = CliCommands.Replay;
@@ -943,6 +1083,7 @@ namespace XMAT.Cli
                     // --verify-diff verifies too, and also writes how each verified response differs.
                     Verify = arguments.Options.ContainsKey(VerifySwitch) || arguments.Options.ContainsKey(VerifyDiffSwitch),
                     VerifyDiff = arguments.Options.ContainsKey(VerifyDiffSwitch),
+                    AcceptStoredText = arguments.Options.ContainsKey(AcceptStoredTextSwitch),
                 }));
         }
 
@@ -1281,7 +1422,8 @@ namespace XMAT.Cli
                     EmptyBody: Has(arguments, EmptyBodySwitch),
                     HttpVersionSet: arguments.Options.ContainsKey(HttpVersionOption),
                     IncludeSensitive: Has(arguments, IncludeSensitiveSwitch),
-                    Form: form)));
+                    Form: form,
+                    AcceptStoredText: Has(arguments, AcceptStoredTextSwitch))));
         }
 
         // Whether the command line gave an option, a repeated option or a switch.

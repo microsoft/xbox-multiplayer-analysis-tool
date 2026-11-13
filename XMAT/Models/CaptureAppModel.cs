@@ -29,6 +29,10 @@ namespace XMAT.Models
         NetTrace = 1
     }
 
+    internal sealed record CaptureLoadResult(
+        CaptureTextSource Source,
+        bool AddedOrReplaced);
+
     internal class CaptureAppModel : ICaptureAppModel, INotifyPropertyChanged
     {
         public IDatabase ActiveDatabase { get; internal set; }
@@ -727,7 +731,8 @@ namespace XMAT.Models
             }
         }
 
-        internal void LoadDataCaptures(string fromFilePath) =>
+        internal CaptureLoadResult LoadDataCaptures(
+            string fromFilePath) =>
             LoadDataCaptures(
                 fromFilePath,
                 path =>
@@ -737,12 +742,15 @@ namespace XMAT.Models
                     throw new InvalidOperationException(
                         "The loaded capture database has an unsupported implementation."));
 
-        internal void LoadDataCaptures(
+        internal CaptureLoadResult LoadDataCaptures(
             string fromFilePath,
             Func<string, SqLtReadonlyDatabase> openDatabase)
         {
             SqLtReadonlyDatabase opened =
                 openDatabase(fromFilePath);
+            CaptureTextSource source =
+                opened.CaptureTextSource;
+            bool addedOrReplaced = false;
             var staged = new List<ICaptureDeviceContext>();
             try
             {
@@ -844,6 +852,9 @@ namespace XMAT.Models
                     transfer();
                 }
                 RefreshAnalysisSources();
+                addedOrReplaced =
+                    added.Count != 0 ||
+                    transfers.Count != 0;
                 IDeviceCaptureController[] distinctOwners =
                     owners.Where(owner =>
                             _captureDeviceContexts.Any(
@@ -904,6 +915,9 @@ namespace XMAT.Models
                     opened?.Dispose();
                 }
             }
+            return new CaptureLoadResult(
+                source,
+                addedOrReplaced);
         }
 
         private static Action CreateLoadedCaptureTransfer(

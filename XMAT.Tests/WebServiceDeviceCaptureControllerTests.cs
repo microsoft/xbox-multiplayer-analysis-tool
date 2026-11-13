@@ -1233,6 +1233,40 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void ExportTextSource_ComesFromTheDatasetThatRecordsUse()
+        {
+            const string deviceName = "Saved Capture";
+            var source =
+                CaptureTextSource.CreateFile(
+                    CaptureTextSemantics.AmbiguousUnmarked,
+                    new SqLtFileIdentity(
+                        1,
+                        2),
+                    _ => new byte[32],
+                    () => true);
+            var controller =
+                new WebServiceDeviceCaptureController(
+                    deviceName,
+                    DeviceType.Unknown,
+                    true);
+            controller.LoadCaptureDataset(
+                new TestDataset(
+                    CreateAnalyzableRecord(deviceName),
+                    source));
+
+            Assert.Same(
+                source,
+                controller.ExportTextSource);
+
+            controller.LoadCaptureDataset(
+                new TestDataset(
+                    CreateAnalyzableRecord(deviceName)));
+            Assert.Same(
+                CaptureTextSource.Unknown,
+                controller.ExportTextSource);
+        }
+
+        [Fact]
         public void BeginTransition_TracksAndReleasesTransitionState()
         {
             var controller = new WebServiceDeviceCaptureController(
@@ -1555,7 +1589,10 @@ namespace XMAT.Tests
                 BindingFlags.NonPublic).SetValue(target, value);
         }
 
-        private sealed class TestDataset : IDataset, IRawCaptureDataset
+        private sealed class TestDataset :
+            IDataset,
+            IRawCaptureDataset,
+            ICaptureTextSourceProvider
         {
             private readonly IDataRecord _record;
 
@@ -1564,10 +1601,16 @@ namespace XMAT.Tests
             public IReadOnlyList<SqLtSchemaColumn> Columns => Array.Empty<SqLtSchemaColumn>();
             public int FilteredReadCount { get; private set; }
             internal bool RejectFilteredReads { get; set; }
+            public CaptureTextSource CaptureTextSource { get; }
 
-            internal TestDataset(IDataRecord record)
+            internal TestDataset(
+                IDataRecord record,
+                CaptureTextSource captureTextSource = null)
             {
                 _record = record;
+                CaptureTextSource =
+                    captureTextSource ??
+                    global::XMAT.DataAbstractionLayer.CaptureTextSource.Unknown;
             }
 
             public IEnumerable<IDataRecord> DataRecordsFrom(long firstRowId)

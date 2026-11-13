@@ -36,7 +36,8 @@ namespace XMAT.Operations.Export
                             path,
                             snapshot.CaptureFields,
                             snapshot.DeviceFields,
-                            snapshot.DeviceDescriptors),
+                            snapshot.DeviceDescriptors,
+                            markLiteral: snapshot.TextSource?.Semantics == CaptureTextSemantics.Literal),
                         CaptureExportFormat.Saz => FiddlerSazHandler.CreateExportWriter(
                             path,
                             sanitized: false,
@@ -130,6 +131,17 @@ namespace XMAT.Operations.Export
                     InputKind = snapshot.InputKind,
                     InputSha256 = snapshot.InputSha256,
                 };
+                if (request.Format == CaptureExportFormat.SanitizedSaz &&
+                    snapshot.TextSource?.Semantics != CaptureTextSemantics.Literal)
+                {
+                    return Failure(
+                        OperationOutcome.InvalidInput,
+                        result,
+                        diagnostics,
+                        CaptureExportErrorCodes.TextAmbiguous,
+                        "The capture has no XMAT text-format marker, so a sanitized archive could miss secrets. " +
+                        "Mark a copy with mark-capture-text and export that copy.");
+                }
                 context.Progress.Report(new OperationProgress(SelectPhase, 0));
                 OperationResult<CaptureSessionSelection> selection = CaptureSessionSelector.SelectValidated(
                     snapshot.Sessions,

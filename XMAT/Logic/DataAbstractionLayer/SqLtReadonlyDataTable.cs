@@ -10,13 +10,18 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal class SqLtReadonlyDataTable : IReadonlyDataTable, IDisposable
+    internal class SqLtReadonlyDataTable :
+        IReadonlyDataTable,
+        IDisposable,
+        ICaptureTextSourceProvider
     {
         public string Name { get { return _name; } }
 
         public IDataset Dataset { get { return GetDataset(); } }
 
         internal IReadOnlyList<SqLtSchemaColumn> Columns { get; }
+
+        public CaptureTextSource CaptureTextSource { get; }
 
         public IDataset Subset(params string[] fieldNames)
         {
@@ -33,7 +38,8 @@ namespace XMAT.DataAbstractionLayer
                     _connection,
                     Name,
                     _fieldDefinitions,
-                    Columns);
+                    Columns,
+                    CaptureTextSource);
             _datasets.Add(dataset);
             return dataset;
         }
@@ -49,7 +55,8 @@ namespace XMAT.DataAbstractionLayer
                 _connection,
                 Name,
                 fields,
-                Columns.Where(column => fields.ContainsKey(column.Name)).ToList());
+                Columns.Where(column => fields.ContainsKey(column.Name)).ToList(),
+                CaptureTextSource);
             _datasets.Add(dataset);
             return dataset;
         }
@@ -58,10 +65,13 @@ namespace XMAT.DataAbstractionLayer
             SqliteConnection connection,
             string name,
             IEnumerable<IFieldDefinition> fieldDefinitions,
-            IReadOnlyList<SqLtSchemaColumn> columns)
+            IReadOnlyList<SqLtSchemaColumn> columns,
+            CaptureTextSource captureTextSource)
         {
+            ArgumentNullException.ThrowIfNull(captureTextSource);
             _name = name;
             Columns = columns;
+            CaptureTextSource = captureTextSource;
 
             var columnIndex = 0;
             foreach (var fieldDef in fieldDefinitions)

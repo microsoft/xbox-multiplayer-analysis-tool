@@ -54,7 +54,7 @@ namespace XMAT.Cli
 
         // Reads --out without touching the file system: a path on a drive (C:\...), or a verbatim one on a drive or volume
         // (\\?\C:\..., \\?\Volume{...}\...). Network paths, mapped through UNC or not, and device paths are refused before
-        // anything could reach them; whether --out and its parent exist is TryReserve's to find out.
+        // anything could reach them; ProbeTarget checks existence without creating, and TryReserve repeats it.
         internal static CliFailure CheckTarget(string output, out CliOutputTarget target)
         {
             target = null;
@@ -66,6 +66,73 @@ namespace XMAT.Cli
 
             target = new CliOutputTarget(parsed.Volume, parsed.Folders, parsed.Name);
             return null;
+        }
+
+        // Checks the parsed target without creating anything. The held walk refuses links and unsupported devices; the
+        // parent itself must be on local NTFS, and the target must not exist. TryReserve repeats every check authoritatively.
+        internal static CliFailure ProbeTarget(
+            CliOutputTarget target,
+            Func<SafeFileHandle, (string FileSystemName, string DevicePath)> probeStorageFacts = null)
+        {
+            ArgumentNullException.ThrowIfNull(target);
+            var parsed =
+                new StorageTarget(
+                    target.Volume,
+                    target.Folders,
+                    target.Name);
+            try
+            {
+                StorageAdmissionFailure? admission =
+                    StorageAdmission.HoldParent(
+                        parsed,
+                        out StorageAnchor anchor,
+                        cancellationToken:
+                            CancellationToken.None);
+                if (admission != null)
+                {
+                    return AdmissionFailure(
+                        admission.Value);
+                }
+
+                using (anchor)
+                {
+                    if (AnchoredHandles.Exists(
+                            anchor.Parent,
+                            target.Name))
+                    {
+                        return new CliFailure(
+                            CliExitCodes.Conflict,
+                            "cli.output.exists",
+                            "The --out folder already exists; xmat never overwrites output.");
+                    }
+
+                    // probeStorageFacts is a test seam; production reads both facts from the held parent handle.
+                    (string FileSystemName, string DevicePath) storageFacts =
+                        probeStorageFacts != null
+                            ? probeStorageFacts(
+                                anchor.Parent)
+                            : (
+                                FileSystemName:
+                                    AnchoredHandles.FileSystemName(
+                                        anchor.Parent),
+                                DevicePath:
+                                    AnchoredHandles.DevicePath(
+                                        anchor.Parent));
+                    if (!StorageAdmission.IsSupportedStorage(
+                            storageFacts.FileSystemName,
+                            storageFacts.DevicePath))
+                    {
+                        return Unprotected();
+                    }
+
+                    return null;
+                }
+            }
+            catch (Exception ex) when (
+                IsFileSystemFailure(ex))
+            {
+                return Unprotected();
+            }
         }
 
         // Creates the private staging folder next to --out and holds it open, with every folder above it, as the class
@@ -95,6 +162,15 @@ namespace XMAT.Cli
                 {
                     return new CliFailure(
                         CliExitCodes.Conflict, "cli.output.exists", "The --out folder already exists; xmat never overwrites output.");
+                }
+
+                if (!StorageAdmission.IsSupportedStorage(
+                        AnchoredHandles.FileSystemName(
+                            anchor.Parent),
+                        AnchoredHandles.DevicePath(
+                            anchor.Parent)))
+                {
+                    return Unprotected();
                 }
 
                 checkpoint?.Invoke(StagingPrefix + runId);
@@ -173,6 +249,11 @@ namespace XMAT.Cli
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             return new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         }
+
+        // A reduced-rights duplicate of the already-held staging folder for an operation that opens one existing root file.
+        internal SafeFileHandle DuplicateStagingHandle() =>
+            AnchoredHandles.DuplicateDirectoryHandle(
+                Handle);
 
         // Removes the folder where legacy statics kept files during the run; it is never published. A link in it is removed
         // itself and never followed. Cancellation ends the retries (OperationCanceledException), and the run is then
@@ -287,7 +368,7 @@ namespace XMAT.Cli
         private static CliFailure ParentMissing() =>
             new(CliExitCodes.Usage, "cli.output.parent-missing", "The folder that should contain the --out folder does not exist.");
 
-        private static CliFailure Unprotected() =>
+        internal static CliFailure Unprotected() =>
             new(
                 CliExitCodes.Failed,
                 "cli.output.unprotected",

@@ -5,15 +5,16 @@
 using System.Text;
 using System.Text.Json;
 using XMAT.Cli;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
+using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Capabilities;
 using XMAT.Operations.Replay;
 
 namespace XMAT.Tests.Cli
 {
-    // The parser, the registry-driven command catalog, help and the JSON documents, in process. analyze runs in its own
-    // process (XmatAnalyzeTests): it must configure HeadlessStorage before anything uses PublicUtilities, which this test
-    // host already does.
+    // The parser, the registry-driven command catalog, help and the JSON documents, in process. Commands that configure
+    // HeadlessStorage run in child-process tests because this test host already used PublicUtilities.
     public class CliCommandLineTests
     {
         [Theory]
@@ -36,6 +37,14 @@ namespace XMAT.Tests.Cli
         [InlineData("doctor", "cli.usage.missing-option")]
         [InlineData("doctor analyze", "cli.usage.unexpected-argument")]
         [InlineData("doctor --for frobnicate", "cli.usage.unknown-target")]
+        [InlineData("mark-capture-text", "cli.usage.missing-argument")]
+        [InlineData("mark-capture-text a.xmatcap b.xmatcap --out results --interpret as-stored", "cli.usage.unexpected-argument")]
+        [InlineData("mark-capture-text a.xmatcap --interpret as-stored", "cli.usage.missing-option")]
+        [InlineData("mark-capture-text a.xmatcap --out results", "cli.usage.missing-option")]
+        [InlineData("mark-capture-text a.xmatcap --out results --interpret repair", "cli.usage.invalid-value")]
+        [InlineData("mark-capture-text a.xmatcap --out results --interpret as-stored --max-input-mib 0", "cli.usage.invalid-value")]
+        [InlineData("mark-capture-text a.xmatcap --out results --interpret as-stored --max-input-mib 2049", "cli.usage.invalid-value")]
+        [InlineData("mark-capture-text a.xmatcap --out results --interpret as-stored --accept-stored-text", "cli.usage.unknown-option")]
         [InlineData("--proxy-guard 42", "cli.usage.unknown-option")]
         [InlineData("analyze a.saz --out results --telemetry-sample", "cli.usage.unknown-option")]
         // Commands, options, values and doctor targets planned for later releases are usage errors until they ship.
@@ -114,6 +123,13 @@ namespace XMAT.Tests.Cli
         [InlineData("compose --url http://a.test/# --out results --sequence 1234567890123456-1234567890123457", "cli.usage.invalid-value")]
         [InlineData("compose --url http://a.test/# --out results", "cli.usage.invalid-value")]
         [InlineData("replay a.saz --request 1 --out results --sequence 1-2", "cli.usage.unknown-option")]
+        // --accept-stored-text is replay's, save-request's and curl's alone (Q's parity gates); a switch takes no value.
+        [InlineData("compose --url http://a.test/ --out results --accept-stored-text", "cli.usage.unknown-option")]
+        [InlineData("compose --request-file r.json --out results --accept-stored-text", "cli.usage.unknown-option")]
+        [InlineData("analyze a.saz --out results --accept-stored-text", "cli.usage.unknown-option")]
+        [InlineData("doctor --for analyze --accept-stored-text", "cli.usage.unknown-option")]
+        [InlineData("replay a.saz --request 1 --out results --accept-stored-text=yes", "cli.usage.invalid-value")]
+        [InlineData("replay a.saz --request 1 --out results --accept-stored-text --accept-stored-text", "cli.usage.duplicate-option")]
         public void Parse_RejectsInvalidCommandLinesWithExitCode2(string commandLine, string code)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));
@@ -153,6 +169,26 @@ namespace XMAT.Tests.Cli
             Assert.StartsWith(message, error.Message, StringComparison.Ordinal);
         }
 
+        // replay, save-request and curl read --accept-stored-text from any of their inputs: only an unmarked capture INPUT
+        // needs it, which the operation decides, not the parser.
+        [Theory]
+        [InlineData("replay a.saz --request 1 --out results --accept-stored-text")]
+        [InlineData("replay a.saz --request 1 --url http://a.test/ --out results --accept-stored-text")]
+        [InlineData("save-request a.saz --request 1 --out results --accept-stored-text")]
+        [InlineData("save-request --url http://a.test/ --out results --accept-stored-text")]
+        [InlineData("curl a.saz --request 1 --out results --accept-stored-text")]
+        [InlineData("curl --request-file r.json --out results --accept-stored-text")]
+        public void Parse_ReadsAcceptStoredText_ForReplaySaveRequestAndCurl(string commandLine)
+        {
+            CliParseResult accepted = CliCommandLine.Parse(Split(commandLine));
+            CliParseResult without = CliCommandLine.Parse(Split(commandLine.Replace(" --accept-stored-text", string.Empty)));
+
+            Assert.True(accepted.Succeeded);
+            Assert.True(without.Succeeded);
+            Assert.True(accepted.Request.Replay.AcceptStoredText);
+            Assert.False(without.Request.Replay.AcceptStoredText);
+        }
+
         [Fact]
         public void Parse_ReadsAnalyzeOptionsInEitherForm()
         {
@@ -174,6 +210,63 @@ namespace XMAT.Tests.Cli
         }
 
         [Theory]
+        [InlineData("as-stored", (int)CaptureTextInterpretation.AsStored)]
+        [InlineData("legacy-one-layer", (int)CaptureTextInterpretation.LegacyOneLayer)]
+        public void Parse_ReadsMarkCaptureTextOptions(
+            string value,
+            int expected)
+        {
+            CliParseResult result =
+                CliCommandLine.Parse(
+                    new[]
+                    {
+                        "mark-capture-text",
+                        "capture.xmatcap",
+                        "--out",
+                        "results",
+                        "--interpret",
+                        value,
+                        "--max-input-mib",
+                        "2048",
+                    });
+
+            Assert.Equal(
+                new CliRequest(
+                    CliCommands.MarkCaptureText,
+                    Input: "capture.xmatcap",
+                    Output: "results",
+                    Interpretation:
+                        (CaptureTextInterpretation)expected,
+                    MaxInputMib: 2048),
+                result.Request);
+        }
+
+        [Fact]
+        public void MarkCaptureTextParseErrorHasNoCommandReportObject()
+        {
+            CliParseResult parsed =
+                CliCommandLine.Parse(
+                    new[]
+                    {
+                        "mark-capture-text",
+                        "capture.xmatcap",
+                    });
+            CliReport report =
+                CliReport.ForParseError(
+                    "run",
+                    parsed);
+            using JsonDocument document =
+                JsonDocument.Parse(
+                    CliJson.Serialize(
+                        report));
+
+            Assert.False(
+                document.RootElement.TryGetProperty(
+                    "markCaptureText",
+                    out _));
+        }
+
+        [Theory]
         [InlineData("help", null)]
         [InlineData("--help", null)]
         [InlineData("-h", null)]
@@ -185,6 +278,8 @@ namespace XMAT.Tests.Cli
         [InlineData("export --help --device 1", "export")]
         [InlineData("help replay", "replay")]
         [InlineData("compose --help", "compose")]
+        [InlineData("help mark-capture-text", "mark-capture-text")]
+        [InlineData("mark-capture-text --help", "mark-capture-text")]
         public void Parse_RecognizesHelp(string commandLine, string topic)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));
@@ -516,7 +611,7 @@ namespace XMAT.Tests.Cli
                 new[]
                 {
                     CliCommands.Analyze, CliCommands.Compose, CliCommands.Curl, CliCommands.Doctor, CliCommands.Export,
-                    CliCommands.Replay, CliCommands.SaveRequest,
+                    CliCommands.MarkCaptureText, CliCommands.Replay, CliCommands.SaveRequest,
                 },
                 report.Commands.Select(command => command.Name));
             foreach (string route in CapabilityRegistry.All
@@ -801,6 +896,368 @@ namespace XMAT.Tests.Cli
             JsonElement warning = Assert.Single(summary.RootElement.GetProperty("warnings").EnumerateArray());
             Assert.Equal("analysis.device.skipped", warning.GetProperty("code").GetString());
             Assert.Equal("A non-web-proxy device was skipped.", warning.GetProperty("message").GetString());
+        }
+
+        [Fact]
+        public void MarkSummaryAndStandardOutputHaveTheFrozenSchemas()
+        {
+            var report =
+                new CliReport(
+                    CliCommands.MarkCaptureText,
+                    "0123456789abcdef0123456789abcdef")
+                {
+                    MarkCaptureText =
+                        new CliMarkCaptureTextReport
+                        {
+                            Interpretation =
+                                CaptureTextInterpretation.LegacyOneLayer,
+                            MaxInputMib = 512,
+                            InputKind = "xmatcap",
+                            InputSha256 = new string('a', 64),
+                            OutputSha256 = new string('b', 64),
+                            Counts =
+                                new MarkCaptureTextCounts(
+                                    2,
+                                    3,
+                                    4,
+                                    5),
+                        },
+                };
+            report.SetExitCode(
+                CliExitCodes.Success);
+            report.Artifacts.Add(
+                new CliArtifact(
+                    "capture",
+                    "capture.xmatcap"));
+            report.Artifacts.Add(
+                new CliArtifact(
+                    "summary",
+                    "summary.json"));
+
+            using JsonDocument output =
+                JsonDocument.Parse(
+                    CliJson.Serialize(
+                        report));
+            using JsonDocument summary =
+                JsonDocument.Parse(
+                    CliJson.SerializeMarkCaptureTextSummary(
+                        report));
+
+            JsonElement mark =
+                output.RootElement.GetProperty(
+                    "markCaptureText");
+            Assert.Equal(
+                "legacyOneLayer",
+                mark.GetProperty(
+                    "interpretation")
+                    .GetString());
+            Assert.Equal(
+                5,
+                mark.GetProperty(
+                    "counts")
+                    .GetProperty(
+                        "valuesChanged")
+                    .GetInt64());
+            Assert.Equal(
+                new[]
+                {
+                    "input",
+                    "limits",
+                    "interpretation",
+                    "source",
+                    "output",
+                    "counts",
+                },
+                mark.EnumerateObject()
+                    .Select(
+                        property =>
+                            property.Name));
+            Assert.Equal(
+                JsonValueKind.String,
+                mark.GetProperty("input")
+                    .GetProperty("kind")
+                    .ValueKind);
+            Assert.Equal(
+                JsonValueKind.String,
+                mark.GetProperty("input")
+                    .GetProperty("sha256")
+                    .ValueKind);
+            Assert.Equal(
+                new[]
+                {
+                    "kind",
+                    "sha256",
+                },
+                mark.GetProperty("input")
+                    .EnumerateObject()
+                    .Select(property => property.Name));
+            Assert.Equal(
+                "xmatcap",
+                mark.GetProperty("input")
+                    .GetProperty("kind")
+                    .GetString());
+            Assert.Equal(
+                new string('a', 64),
+                mark.GetProperty("input")
+                    .GetProperty("sha256")
+                    .GetString());
+            Assert.Equal(
+                JsonValueKind.Number,
+                mark.GetProperty("limits")
+                    .GetProperty("maxInputMib")
+                    .ValueKind);
+            Assert.Equal(
+                new[]
+                {
+                    "maxInputMib",
+                },
+                mark.GetProperty("limits")
+                    .EnumerateObject()
+                    .Select(property => property.Name));
+            Assert.Equal(
+                512,
+                mark.GetProperty("limits")
+                    .GetProperty("maxInputMib")
+                    .GetInt32());
+            Assert.Equal(
+                JsonValueKind.Number,
+                mark.GetProperty("source")
+                    .GetProperty("userVersion")
+                    .ValueKind);
+            Assert.Equal(
+                JsonValueKind.String,
+                mark.GetProperty("source")
+                    .GetProperty("semantics")
+                    .ValueKind);
+            Assert.Equal(
+                new[]
+                {
+                    "userVersion",
+                    "semantics",
+                },
+                mark.GetProperty("source")
+                    .EnumerateObject()
+                    .Select(property => property.Name));
+            Assert.Equal(
+                CaptureTextFormat.AmbiguousUserVersion,
+                mark.GetProperty("source")
+                    .GetProperty("userVersion")
+                    .GetInt32());
+            Assert.Equal(
+                "ambiguousUnmarked",
+                mark.GetProperty("source")
+                    .GetProperty("semantics")
+                    .GetString());
+            Assert.Equal(
+                new[]
+                {
+                    "file",
+                    "sha256",
+                    "userVersion",
+                },
+                mark.GetProperty("output")
+                    .EnumerateObject()
+                    .Select(property => property.Name));
+            Assert.Equal(
+                "capture.xmatcap",
+                mark.GetProperty("output")
+                    .GetProperty("file")
+                    .GetString());
+            Assert.Equal(
+                new string('b', 64),
+                mark.GetProperty("output")
+                    .GetProperty("sha256")
+                    .GetString());
+            Assert.Equal(
+                CaptureTextFormat.LiteralUserVersion,
+                mark.GetProperty("output")
+                    .GetProperty("userVersion")
+                    .GetInt32());
+            Assert.Equal(
+                new[]
+                {
+                    "tables",
+                    "rows",
+                    "valuesExamined",
+                    "valuesChanged",
+                },
+                mark.GetProperty("counts")
+                    .EnumerateObject()
+                    .Select(property => property.Name));
+            Assert.All(
+                mark.GetProperty("counts")
+                    .EnumerateObject(),
+                property =>
+                    Assert.Equal(
+                        JsonValueKind.Number,
+                        property.Value.ValueKind));
+            Assert.Equal(
+                new long[]
+                {
+                    2,
+                    3,
+                    4,
+                    5,
+                },
+                mark.GetProperty("counts")
+                    .EnumerateObject()
+                    .Select(property => property.Value.GetInt64()));
+            Assert.Equal(
+                "xmat-mark-capture-text/1",
+                summary.RootElement.GetProperty(
+                    "schema")
+                    .GetString());
+            Assert.Equal(
+                CliReport.ToolVersion,
+                summary.RootElement.GetProperty(
+                    "version")
+                    .GetString());
+            Assert.Equal(
+                new[]
+                {
+                    "schema",
+                    "command",
+                    "runId",
+                    "version",
+                    "input",
+                    "limits",
+                    "interpretation",
+                    "source",
+                    "output",
+                    "counts",
+                    "warnings",
+                },
+                summary.RootElement.EnumerateObject()
+                    .Select(
+                        property =>
+                            property.Name));
+            foreach (string property in new[]
+            {
+                "input",
+                "limits",
+                "interpretation",
+                "source",
+                "output",
+                "counts",
+            })
+            {
+                Assert.True(
+                    JsonElement.DeepEquals(
+                        mark.GetProperty(
+                            property),
+                        summary.RootElement.GetProperty(
+                            property)),
+                    property);
+            }
+        }
+
+        // QP: a replay, save-request or curl report holds storedText once its requests were prepared, but only a run that
+        // published says so: each command's guard is checked on its own, unpublished and then published.
+        [Theory]
+        [InlineData(CliCommands.Replay)]
+        [InlineData(CliCommands.SaveRequest)]
+        [InlineData(CliCommands.Curl)]
+        public void UnpublishedRuns_NeverReportStoredText(string command)
+        {
+            var storedText = new XMAT.Operations.Analysis.StoredTextSummary("ambiguousUnmarked", "acceptedAsStored");
+            CliReplay options = CliReplay.Default with { AcceptStoredText = true };
+            var report = new CliReport(command, "run");
+            switch (command)
+            {
+                case CliCommands.Replay:
+                    report.Replay = new CliReplayReport(options, CliLimits.Default) { StoredText = storedText };
+                    break;
+                case CliCommands.SaveRequest:
+                    report.SaveRequest = new CliSaveRequestReport(options, CliLimits.Default) { StoredText = storedText };
+                    break;
+                default:
+                    report.Curl = new CliCurlReport(options, CliLimits.Default) { StoredText = storedText };
+                    break;
+            }
+
+            report.Fail(CliExitCodes.Conflict, "cli.output.exists", "Nothing was published.");
+            using (JsonDocument unpublished = JsonDocument.Parse(CliJson.Serialize(report)))
+            {
+                Assert.False(unpublished.RootElement.TryGetProperty("storedText", out _));
+                Assert.True(unpublished.RootElement.GetProperty("options").GetProperty("acceptStoredText").GetBoolean());
+            }
+
+            report.Artifacts.Add(new CliArtifact("summary", "summary.json"));
+            using JsonDocument published = JsonDocument.Parse(CliJson.Serialize(report));
+            JsonElement reported = published.RootElement.GetProperty("storedText");
+            Assert.Equal(
+                ("ambiguousUnmarked", "acceptedAsStored"),
+                (reported.GetProperty("semantics").GetString(), reported.GetProperty("policy").GetString()));
+        }
+
+        [Fact]
+        public void FailedMarkOutput_NeverPublishesSourceOutputOrCounts()
+        {
+            var report =
+                new CliReport(
+                    CliCommands.MarkCaptureText,
+                    "run")
+                {
+                    MarkCaptureText =
+                        new CliMarkCaptureTextReport
+                        {
+                            Interpretation =
+                                CaptureTextInterpretation.AsStored,
+                            MaxInputMib = 512,
+                            InputKind = "xmatcap",
+                            InputSha256 = new string('a', 64),
+                            OutputSha256 = new string('b', 64),
+                            Counts =
+                                new MarkCaptureTextCounts(
+                                    1,
+                                    2,
+                                    3,
+                                    4),
+                        },
+                };
+            report.Fail(
+                CliExitCodes.Conflict,
+                "cli.output.exists",
+                "Nothing was published.");
+
+            using JsonDocument output =
+                JsonDocument.Parse(
+                    CliJson.Serialize(
+                        report));
+            JsonElement mark =
+                output.RootElement.GetProperty(
+                    "markCaptureText");
+
+            Assert.False(
+                mark.TryGetProperty(
+                    "source",
+                    out _));
+            Assert.False(
+                mark.TryGetProperty(
+                    "output",
+                    out _));
+            Assert.False(
+                mark.TryGetProperty(
+                    "counts",
+                    out _));
+            Assert.Equal(
+                "xmatcap",
+                mark.GetProperty(
+                        "input")
+                    .GetProperty(
+                        "kind")
+                    .GetString());
+            Assert.Equal(
+                new[]
+                {
+                    "input",
+                    "limits",
+                    "interpretation",
+                },
+                mark.EnumerateObject()
+                    .Select(
+                        property =>
+                            property.Name));
         }
 
         [Fact]

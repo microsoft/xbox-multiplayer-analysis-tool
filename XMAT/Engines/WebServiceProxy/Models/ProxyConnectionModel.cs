@@ -65,6 +65,8 @@ namespace XMAT.WebServiceCapture.Models
         // View verification differences applies to the row (WebServiceProxyCommands.ViewVerifyDiff).
         public bool IsVerified => Verification != null;
 
+        internal CaptureTextSource CaptureTextSource { get; private set; }
+
         private Dictionary<string, string> _requestHeaders;
         private Dictionary<string, string> _responseHeaders;
 
@@ -113,6 +115,8 @@ namespace XMAT.WebServiceCapture.Models
 
         internal ProxyConnectionModel(Int64 rowId, int requestNumber, int id)
         {
+            CaptureTextSource =
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal;
             RecordRowId = rowId;
             RequestNumber = Convert.ToInt64(requestNumber);
             Id = Convert.ToInt64(id);
@@ -149,6 +153,8 @@ namespace XMAT.WebServiceCapture.Models
             byte[] responseBody,
             string clientIP)
         {
+            CaptureTextSource =
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal;
             RecordRowId = UnknownRowId;
             RequestNumber = id;
             Id = id;
@@ -186,6 +192,8 @@ namespace XMAT.WebServiceCapture.Models
 
         internal ProxyConnectionModel(ProxyConnectionModel model)
         {
+            ArgumentNullException.ThrowIfNull(model);
+            CaptureTextSource = model.CaptureTextSource;
             RecordRowId = model.RecordRowId;
             RowKey = model.RowKey;
             RequestNumber = model.RequestNumber;
@@ -367,6 +375,13 @@ namespace XMAT.WebServiceCapture.Models
 
         internal void AddToDataTable(string deviceName, IDataTable dataTable)
         {
+            if (CaptureTextSource.Semantics !=
+                CaptureTextSemantics.Literal)
+            {
+                throw new InvalidOperationException(
+                    "Ambiguous capture text cannot be copied into a marked capture.");
+            }
+
             RecordRowId = dataTable.AddRow(ToDataTableValues(deviceName, dataTable));
         }
 
@@ -462,6 +477,10 @@ namespace XMAT.WebServiceCapture.Models
 
         internal void UpdateFromDataRecord(IDataRecord dataRecord)
         {
+            ArgumentNullException.ThrowIfNull(dataRecord);
+            CaptureTextSource =
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Of(
+                    dataRecord);
             RecordRowId = dataRecord.RowId;
 
             var requestNumber = dataRecord.Int(WebServiceCaptureMethod.FieldKey_RequestNumber);

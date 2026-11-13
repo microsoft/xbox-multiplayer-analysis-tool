@@ -17,8 +17,8 @@ namespace XMAT.Tests
 {
     // The SAZ readers' corrections (FiddlerSazHandler.FromFiddlerFrame, which the GUI's import and the command line's reader
     // share): heads read as Latin-1, a head ended only by a line of ASCII whitespace, a header name with an apostrophe kept,
-    // fields collected as WebHeaderCollection did, and timers read as instants whatever the machine's culture, which every
-    // writer of the pair of timers keeps as instants.
+    // every field line kept in order and looked up as WebHeaderCollection did, and timers read as instants whatever the
+    // machine's culture, which every writer of the pair of timers keeps as instants.
     public class FiddlerSazReaderCorrectionTests
     {
         private readonly ITestOutputHelper _output;
@@ -102,7 +102,7 @@ namespace XMAT.Tests
 
             Assert.Equal(0, skipped);
             Assert.Equal("GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\nX'Name: request\r\n\r\n", record.RequestLineAndHeaders);
-            Assert.Equal("HTTP/1.1 200 OK\r\nX'Name: response,again\r\n\r\n", record.ResponseLineAndHeaders);
+            Assert.Equal("HTTP/1.1 200 OK\r\nX'Name: response\r\nx'name: again\r\n\r\n", record.ResponseLineAndHeaders);
             Assert.True(FiddlerSazHandler.IsValidHeaderLine("X'Name: v"));
             Assert.False(FiddlerSazHandler.IsValidHeaderLine("X(Name: v"));
         }
@@ -121,13 +121,15 @@ namespace XMAT.Tests
 
                 var fields = new SazHeaderFields();
                 fields.Add(line);
-                AssertSame(expected, fields, line);
+                Assert.Equal(expected.ToString(), fields.ToString());
+                AssertSameLookup(expected, fields, line);
             }
         }
 
-        // Heads of several lines: repeated names in different cases, empty values, an empty name and Latin-1 values.
+        // Heads of several lines: repeated names in different cases, empty values, an empty name and Latin-1 values. A name
+        // looks up as in WebHeaderCollection, and the text keeps every line in order, under its own name.
         [Fact]
-        public void HeaderFields_MatchWebHeaderCollection_ForWholeHeads()
+        public void HeaderFields_LookUpAsWebHeaderCollection_AndKeepEveryLine_ForWholeHeads()
         {
             string[] alphabet =
             {
@@ -146,7 +148,8 @@ namespace XMAT.Tests
                     fields.Add(line);
                 }
 
-                AssertSame(expected, fields, string.Join(" | ", accepted));
+                Assert.Equal(EveryLine(accepted), fields.ToString());
+                AssertSameLookup(expected, fields, string.Join(" | ", accepted));
             }
         }
 
@@ -654,6 +657,175 @@ namespace XMAT.Tests
             }
         }
 
+        // Host names at the DNS length limits, and one character over: a 63-character label and a 253-character name are
+        // host names, while a 64-character label or a 254-character name is none, though Uri accepts both.
+        private const string Label56 = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcd";
+        private const string Label63 = Label56 + "efghijk";
+        private const string Label64 = Label63 + "l";
+        private const string Name253 = Label63 + "." + Label63 + "." + Label63 + "." + Label56 + ".test";
+        private const string Name254 = Label63 + "." + Label63 + "." + Label63 + "." + Label56 + "e.test";
+
+        // A request target that is no absolute http, https or ftp URL gives no scheme: a path, *, an authority (a CONNECT's or
+        // another method's), what Uri reads as a file or UNC path, another scheme, and a URL that Uri or the authority rules
+        // refuse, such as one with port 0, a host name over the DNS limits or a name that has no IDN form. The target is kept
+        // as written, the host is the Host header's, and the request can't be replayed. The method was once taken as the
+        // scheme, a CONNECT's was http, and the others were whatever Uri made of the target.
+        [Theory]
+        [InlineData("GET", "/v1/items?q=1")]
+        [InlineData("OPTIONS", "*")]
+        [InlineData("GET", "api.example.test:443")]
+        [InlineData("GET", "C:\\x")]
+        [InlineData("GET", "C:/x")]
+        [InlineData("GET", "x:/y")]
+        [InlineData("GET", "//server/share/x")]
+        [InlineData("GET", "\\\\server\\share\\x")]
+        [InlineData("GET", "mailto:a@b.test")]
+        [InlineData("GET", "urn:x:y")]
+        [InlineData("GET", "ws://api.example.test/s")]
+        [InlineData("GET", "http:x")]
+        [InlineData("GET", "https:/x")]
+        [InlineData("GET", "https://[")]
+        [InlineData("GET", "http://api.example.test:0/x")]
+        [InlineData("GET", "http://bad!host/x")]
+        [InlineData("GET", "http://" + Label64 + ".example.test/x")]
+        [InlineData("GET", "http://" + Name254 + "/x")]
+        [InlineData("GET", "http://" + Fixtures.SyntheticCaptures.IdnTooLongHost + "/x")]
+        [InlineData("GET_X", "/v1/items")]
+        [InlineData("CONNECT", "api.example.test:443")]
+        [InlineData("CONNECT", "https://api.example.test/")]
+        public void ATargetWithoutAUrl_HasAnUnknownScheme_AndIsKeptAsWritten(string method, string target)
+        {
+            ProxyConnectionModel record = Parse(
+                $"{method} {target} HTTP/1.1\r\nHost: host.example.test:8443\r\nUser-Agent: XboxServicesAPI\r\n\r\n",
+                "HTTP/1.1 200 OK\r\n\r\n",
+                Metadata("2026-01-01T00:00:00.0000000Z", "2026-01-01T00:00:01.0000000Z"),
+                out _);
+
+            Assert.Equal((string.Empty, target, method), (record.Scheme, record.Path, record.Method));
+            Assert.Equal(("host.example.test", "8443"), (record.Host, record.Port));
+            Assert.StartsWith($"{method} {target} HTTP/1.1\r\n", record.RequestLineAndHeaders, StringComparison.Ordinal);
+            Assert.False(RequestReplayDraft.CanReplay(record));
+        }
+
+        // The URL above that has no IDN form is one: Uri parses it, as a DNS name, but reading its IDN host throws, which
+        // once failed the whole archive.
+        [Fact]
+        public void AUrlWhoseHostHasNoIdnForm_ParsesButHasNoIdnHost()
+        {
+            Assert.True(Uri.TryCreate(
+                "http://" + Fixtures.SyntheticCaptures.IdnTooLongHost + "/x", UriKind.Absolute, out Uri uri));
+            Assert.Equal(UriHostNameType.Dns, uri.HostNameType);
+            Assert.Throws<UriFormatException>(() => uri.IdnHost);
+        }
+
+        // An absolute http, https or ftp URL gives the scheme, the path and query, and the host and port, whatever the Host
+        // header says and whether there is one (RFC 9112 3.2.2): the host as Uri reads it, without user information, an IPv6
+        // address with its zone, and the port only when it is not the scheme's default. The request line and the headers stay
+        // as captured.
+        [Theory]
+        [InlineData("http://api.example.test/a?b=1", "Host: api.example.test\r\n", "http", "api.example.test", "", "/a?b=1")]
+        [InlineData("HTTPS://API.Example.Test:8443/a", "Host: other.example.invalid\r\n", "https", "api.example.test", "8443", "/a")]
+        [InlineData("https://user:pw@api.example.test:443/a", "", "https", "api.example.test", "", "/a")]
+        [InlineData("http://api.example.test:080/a", "Host x: api.example.test\r\n", "http", "api.example.test", "", "/a")]
+        [InlineData("http://api.example.test:65535/a", "Host: :8080\r\n", "http", "api.example.test", "65535", "/a")]
+        [InlineData("ftp://files.example.test/f", "Host: other.example.invalid\r\n", "ftp", "files.example.test", "", "/f")]
+        [InlineData("http://[::1]:8080/a", "Host: localhost\r\n", "http", "::1", "8080", "/a")]
+        [InlineData("http://[fe80::1%12]/a", "", "http", "fe80::1%12", "", "/a")]
+        [InlineData("http://[::FFFF:10.0.0.1]:81/a", "", "http", "::ffff:10.0.0.1", "81", "/a")]
+        [InlineData("http://127.1/a", "", "http", "127.0.0.1", "", "/a")]
+        [InlineData("http://b\u00fccher.example/a", "", "http", "xn--bcher-kva.example", "", "/a")]
+        [InlineData("http://" + Label63 + ".example.test/a", "", "http", Label63 + ".example.test", "", "/a")]
+        [InlineData("http://" + Name253 + "/a", "", "http", Name253, "", "/a")]
+        public void AnAbsoluteUrl_NamesTheSchemeHostAndPort_WhateverTheHostHeaderSays(
+            string target, string hostLine, string scheme, string host, string port, string path)
+        {
+            ProxyConnectionModel record = Parse(
+                $"GET {target} HTTP/1.1\r\n{hostLine}User-Agent: XboxServicesAPI\r\n\r\n",
+                "HTTP/1.1 200 OK\r\n\r\n",
+                Metadata("2026-01-01T00:00:00.0000000Z", "2026-01-01T00:00:01.0000000Z"),
+                out int skipped);
+
+            Assert.Equal((scheme, host, port, path), (record.Scheme, record.Host, record.Port, record.Path));
+            Assert.Equal(hostLine.StartsWith("Host x:", StringComparison.Ordinal) ? 1 : 0, skipped);
+            Assert.StartsWith($"GET {target} HTTP/1.1\r\n", record.RequestLineAndHeaders, StringComparison.Ordinal);
+            if (hostLine.StartsWith("Host: ", StringComparison.Ordinal))
+            {
+                Assert.Contains("\r\n" + hostLine, record.RequestLineAndHeaders, StringComparison.Ordinal);
+            }
+
+            Assert.Equal(scheme != "ftp", RequestReplayDraft.CanReplay(record));
+        }
+
+        // A replay of a request with an absolute URL goes to that URL's authority, not to the Host header's, which the draft
+        // still shows as captured but never sends; and analysis takes the call's physical host from the URL while its label
+        // stays the Host header's.
+        [Fact]
+        public void AnAbsoluteUrlsAuthority_IsWhereTheReplayGoes_AndTheCallsPhysicalHost()
+        {
+            const string Url = "https://api.example.test:8443/v1/items?q=1";
+            ProxyConnectionModel record = Parse(
+                $"POST {Url} HTTP/1.1\r\nHost: other.example.invalid\r\nUser-Agent: XboxServicesAPI\r\n" +
+                "Content-Length: 2\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\n\r\n",
+                Metadata("2026-01-01T00:00:00.0000000Z", "2026-01-01T00:00:01.0000000Z"),
+                out _);
+
+            RequestReplayDraft draft = RequestReplayDraft.FromCapture(record);
+            using HttpRequestMessage message = draft.CreateRequest();
+            ServiceCallItem call = WebServiceCaptureRecordConverter.Convert(
+                AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(1, record));
+
+            Assert.Equal(Url, draft.Url);
+            Assert.Contains("Host: other.example.invalid", draft.HeadersText, StringComparison.Ordinal);
+            Assert.Equal(new Uri(Url), message.RequestUri);
+            Assert.Null(message.Headers.Host);
+            Assert.Equal(("other.example.invalid", "api.example.test", Url), (call.Host, call.PhysicalHost, call.Uri));
+            Assert.Contains("\r\nHost: other.example.invalid\r\n", record.RequestLineAndHeaders, StringComparison.Ordinal);
+        }
+
+        // A client address is kept as written, except that an IPv4 address in its IPv6 form is kept as IPv4, which the next
+        // import reads the same; an IPv6 address, with or without a zone, was once cut to what followed its last colon.
+        [Theory]
+        [InlineData("::ffff:192.168.1.10", "192.168.1.10")]
+        [InlineData("::FFFF:10.0.0.1", "10.0.0.1")]
+        [InlineData("10.0.0.1", "10.0.0.1")]
+        [InlineData("2001:db8::5", "2001:db8::5")]
+        [InlineData("::1", "::1")]
+        [InlineData("fe80::1%12", "fe80::1%12")]
+        [InlineData("not an address", "not an address")]
+        [InlineData("", "")]
+        public void TheClientAddress_IsKeptAsWritten_ButAnIPv4AddressInItsIPv6FormAsIPv4(string written, string read)
+        {
+            ProxyConnectionModel record = Parse(
+                "GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\n\r\n",
+                "HTTP/1.1 200 OK\r\n\r\n",
+                Metadata(
+                    "2026-01-01T00:00:00.0000000Z",
+                    "2026-01-01T00:00:01.0000000Z",
+                    $"<SessionFlag N=\"x-clientip\" V=\"{written}\" />"),
+                out _);
+
+            Assert.Equal(read, record.ClientIP);
+            Assert.Equal(read, SaveAndRead(record, sanitized: false).ClientIP);
+        }
+
+        // A client address flag without a value is malformed, unlike one whose value is empty, and a session without the flag
+        // has the address 0.0.0.0.
+        [Fact]
+        public void AClientAddressFlagWithoutAValue_IsMalformed()
+        {
+            const string Request = "GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\n\r\n";
+            const string Response = "HTTP/1.1 200 OK\r\n\r\n";
+            const string Begin = "2026-01-01T00:00:00.0000000Z";
+            const string Done = "2026-01-01T00:00:01.0000000Z";
+
+            FormatException refused = Assert.Throws<FormatException>(
+                () => Parse(Request, Response, Metadata(Begin, Done, "<SessionFlag N=\"x-clientip\" />"), out _));
+
+            Assert.Equal("x-clientip has no value", refused.Message);
+            Assert.Equal("0.0.0.0", Parse(Request, Response, Metadata(Begin, Done, string.Empty), out _).ClientIP);
+        }
+
         private static bool TryWebHeaderCollection(IEnumerable<string> lines, out WebHeaderCollection headers)
         {
             headers = new WebHeaderCollection();
@@ -672,9 +844,9 @@ namespace XMAT.Tests
             }
         }
 
-        private static void AssertSame(WebHeaderCollection expected, SazHeaderFields fields, string context)
+        private static void AssertSameLookup(WebHeaderCollection expected, SazHeaderFields fields, string context)
         {
-            if (expected.ToString() != fields.ToString() || expected.Count != fields.Count)
+            if (expected.Count != fields.Count)
             {
                 Assert.Fail("Head UTF-16: " + Convert.ToHexString(Encoding.Unicode.GetBytes(context ?? "")));
             }
@@ -686,6 +858,20 @@ namespace XMAT.Tests
             }
 
             Assert.Null(fields["X-Absent-Name"]);
+        }
+
+        // Each line as WebHeaderCollection writes a head of that line alone, in order, then the empty line.
+        private static string EveryLine(IEnumerable<string> lines)
+        {
+            var text = new StringBuilder();
+            foreach (string line in lines)
+            {
+                Assert.True(TryWebHeaderCollection(new[] { line }, out WebHeaderCollection single), line);
+                string head = single.ToString();
+                text.Append(head, 0, head.Length - 2);
+            }
+
+            return text.Append("\r\n").ToString();
         }
 
         // The first instant after start at which this machine's zone changes its offset, to the minute; null when it does
@@ -780,10 +966,11 @@ namespace XMAT.Tests
             public string Str(string fieldName) => values.GetValueOrDefault(fieldName, string.Empty);
         }
 
-        private static string Metadata(string begin, string done) =>
+        private static string Metadata(
+            string begin, string done, string flags = "<SessionFlag N=\"x-clientip\" V=\"0.0.0.0\" />") =>
             "<?xml version=\"1.0\" encoding=\"utf-8\"?><Session SID=\"1\" BitFlags=\"0\">" +
             $"<SessionTimers ClientBeginRequest=\"{begin}\" ClientDoneResponse=\"{done}\" />" +
-            "<SessionFlags><SessionFlag N=\"x-clientip\" V=\"0.0.0.0\" /></SessionFlags></Session>";
+            $"<SessionFlags>{flags}</SessionFlags></Session>";
 
         private static ProxyConnectionModel Parse(string request, string response, string metadata, out int skipped)
         {

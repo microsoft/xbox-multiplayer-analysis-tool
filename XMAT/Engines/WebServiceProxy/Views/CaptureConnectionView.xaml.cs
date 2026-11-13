@@ -17,6 +17,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.Operations;
 using XMAT.Operations.Captures;
@@ -206,6 +207,12 @@ namespace XMAT.WebServiceCapture
         {
             if (!RequestReplayDraft.CanReplay(e.Parameter as ProxyConnectionModel))
                 return;
+            if (RefusesStoredText(Window.GetWindow(this), new[] { (ProxyConnectionModel)e.Parameter }))
+            {
+                e.Handled = true;
+                return;
+            }
+
             try
             {
                 var composer = new RequestComposerWindow(
@@ -370,8 +377,8 @@ namespace XMAT.WebServiceCapture
             set => _replayTarget = value;
         }
 
-        // Asks the user to confirm a run (the message) and tells the user how a run went (the message and its image), with
-        // message boxes unless tests replace them.
+        // Asks the user to confirm a run (the message) and tells the user how a run went, or why a request is not
+        // replayed (the message and its image), with message boxes unless tests replace them.
         internal Func<string, bool> ConfirmReplay { get; set; }
 
         internal Action<string, MessageBoxImage> ShowReplayMessage { get; set; }
@@ -446,6 +453,11 @@ namespace XMAT.WebServiceCapture
             }
 
             Window owner = Window.GetWindow(this);
+            if (RefusesStoredText(owner, snapshot.Captures))
+            {
+                return null;
+            }
+
             if (snapshot.UnsafeSends > 0 && !Confirm(owner, ConfirmationMessage(snapshot)))
             {
                 return null;
@@ -550,7 +562,24 @@ namespace XMAT.WebServiceCapture
             ShowMessageBox(owner, message, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) ==
                 MessageBoxResult.Yes;
 
-        private void Tell(Window owner, string message, MessageBoxImage image)
+        // Until the GUI asks for a decision bound to a capture's own file, the requests of an XMAT
+        // capture without the text-format marker are neither opened in a composer nor reissued: the user is told, in
+        // words that name only a marked copy (replay.capture-text.ambiguous), and nothing is opened, asked or sent. A
+        // capture whose source is unknown counts as unmarked. True when refused.
+        private bool RefusesStoredText(Window owner, IEnumerable<ProxyConnectionModel> captures)
+        {
+            if (captures.All(capture => capture.CaptureTextSource?.Semantics == CaptureTextSemantics.Literal))
+            {
+                return false;
+            }
+
+            Tell(
+                owner, RequestComposerWindow.StoredTextRefusalText(ReplayOperation.StoredTextAmbiguousCode),
+                MessageBoxImage.Warning, Localization.GetLocalizedString("CAPTURE_TEXT_AMBIGUOUS_TITLE"));
+            return true;
+        }
+
+        private void Tell(Window owner, string message, MessageBoxImage image, string title = null)
         {
             if (ShowReplayMessage != null)
             {
@@ -558,14 +587,15 @@ namespace XMAT.WebServiceCapture
             }
             else
             {
-                ShowMessageBox(owner, message, MessageBoxButton.OK, image, MessageBoxResult.OK);
+                ShowMessageBox(owner, message, MessageBoxButton.OK, image, MessageBoxResult.OK, title);
             }
         }
 
         private static MessageBoxResult ShowMessageBox(
-            Window owner, string message, MessageBoxButton buttons, MessageBoxImage image, MessageBoxResult defaultResult)
+            Window owner, string message, MessageBoxButton buttons, MessageBoxImage image, MessageBoxResult defaultResult,
+            string title = null)
         {
-            string title = Localization.GetLocalizedString("REPLAY_TITLE");
+            title ??= Localization.GetLocalizedString("REPLAY_TITLE");
             return owner == null
                 ? MessageBox.Show(message, title, buttons, image, defaultResult)
                 : MessageBox.Show(owner, message, title, buttons, image, defaultResult);

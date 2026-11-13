@@ -8,6 +8,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
@@ -641,8 +642,13 @@ namespace XMAT.Tests
             };
         }
 
-        private sealed class Dataset(params IDataRecord[] records) : IDataset
+        private sealed class Dataset(params IDataRecord[] records) :
+            IDataset,
+            ICaptureTextSourceProvider
         {
+            public CaptureTextSource CaptureTextSource =>
+                global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal;
+
             public IEnumerable<IFieldDefinition> FieldDefs => Array.Empty<IFieldDefinition>();
             public IEnumerable<IDataRecord> DataRecords => records;
             public IEnumerable<IDataRecord> DataRecordsFrom(long first) => records.Where(record => record.RowId >= first);

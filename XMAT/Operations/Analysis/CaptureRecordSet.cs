@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Collections.Generic;
+using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.Operations.Analysis
@@ -11,6 +12,13 @@ namespace XMAT.Operations.Analysis
     internal sealed record CaptureDeviceRecords(string Id, IReadOnlyList<IDataRecord> Records);
 
     // A capture file read with the analysis input rules (AnalyzeCaptureOperation.ReadCapture), for operations that need
-    // its requests rather than findings.
-    internal sealed record CaptureRecordSet(string InputKind, string InputSha256, IReadOnlyList<CaptureDeviceRecords> Devices);
+    // its requests rather than findings. TextSource is the source of every record's stored text: an XMAT capture's own,
+    // whose semantics its text-format marker gives, and Literal for a SAZ archive, whose parser text is literal; every
+    // record carries it too. StoredText is how a summary reports that text, with the policy notNeeded.
+    internal sealed record CaptureRecordSet(
+        string InputKind,
+        string InputSha256,
+        IReadOnlyList<CaptureDeviceRecords> Devices,
+        CaptureTextSource TextSource,
+        StoredTextSummary StoredText);
 }

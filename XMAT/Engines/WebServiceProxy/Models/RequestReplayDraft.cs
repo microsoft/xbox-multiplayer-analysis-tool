@@ -57,6 +57,13 @@ namespace XMAT.WebServiceCapture
         // does, so a placeholder is never sent or exported as if it had been supplied.
         internal RequestOmissions Omissions { get; private set; } = RequestOmissions.None;
 
+        // The source of the stored text that the draft was made from (FromCapture): its capture's, AmbiguousUnmarked for a
+        // capture without XMAT's text-format marker; Literal for every other draft, such as a new request, a request
+        // file's or a raw request's. Every copy keeps it and no edit changes it, so the operation can refuse to send or
+        // export unmarked text without a decision (ReplayOperation.StoredTextAmbiguousCode).
+        internal global::XMAT.DataAbstractionLayer.CaptureTextSource CaptureTextSource { get; private set; } =
+            global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal;
+
         // Only exactly GET, HEAD and OPTIONS are safe; any other method, in any case, can change server state. Shared by
         // the operation's policy and the GUI's confirmation, so both count the same requests.
         internal static bool IsUnsafeMethod(string method) => method is not ("GET" or "HEAD" or "OPTIONS");
@@ -116,6 +123,7 @@ namespace XMAT.WebServiceCapture
                 Url = url,
                 _origin = new Uri(url),
                 HeadersText = firstLineEnd < 0 ? "" : rawHeaders[(firstLineEnd + 1)..].TrimEnd('\r', '\n'),
+                CaptureTextSource = capture.CaptureTextSource ?? global::XMAT.DataAbstractionLayer.CaptureTextSource.Unknown,
             };
             if (body.LongLength > maxShownBodyBytes)
             {
@@ -360,6 +368,7 @@ namespace XMAT.WebServiceCapture
                 _sharedBody = _sharedBody,
                 _origin = _origin,
                 Omissions = Omissions,
+                CaptureTextSource = CaptureTextSource,
             };
 
         // A copy whose captured origin is origin, sharing this draft's header text and body: how a recorded send's origin
