@@ -729,7 +729,7 @@ An abridged result:
   "exitCode": 0,
   "input": { "kind": "saz", "sha256": "..." },
   "storedText": { "semantics": "notApplicable", "policy": "notNeeded" },
-  "limits": { "maxInputMib": 512, "maxDataMib": 256, "maxRecordMib": 32, "maxRecords": 100000 },
+  "limits": { "maxInputMib": 512, "maxDataMib": 256, "maxRecordMib": 128, "maxRecords": 100000 },
   "processFilter": { "applied": true, "include": [], "exclude": [],
     "counts": { "total": 4, "included": 4, "hidden": 0, "unknown": 4 },
     "devices": [ { "id": "d1", "total": 4, "included": 4, "hidden": 0, "unknown": 4 } ] },

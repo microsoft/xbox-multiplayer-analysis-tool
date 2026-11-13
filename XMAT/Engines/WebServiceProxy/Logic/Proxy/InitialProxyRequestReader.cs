@@ -1230,11 +1230,13 @@ namespace XMAT.WebServiceCapture.Proxy
                     }
                 }
 
-                if (chunkedCount != 0 &&
-                    (!lastWasChunked || chunkedCount != 1))
+                if (chunkedCount != 0 && !lastWasChunked)
                 {
-                    throw Malformed();
+                    throw new ProxyRequestReadException(
+                        ProxyRequestReadFailure.MalformedTransferCoding);
                 }
+                if (chunkedCount > 1)
+                    throw Malformed();
                 if (codingCount == 1 && chunkedCount == 1)
                     return BodyFraming.Chunked;
                 if (chunkedCount == 0)
