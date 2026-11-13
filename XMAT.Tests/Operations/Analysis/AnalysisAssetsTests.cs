@@ -314,13 +314,7 @@ namespace XMAT.Tests.Operations.Analysis
 
             internal string Path { get; }
 
-            public void Dispose()
-            {
-                if (Directory.Exists(Path))
-                {
-                    Directory.Delete(Path, true);
-                }
-            }
+            public void Dispose() => TestFolderCleanup.Delete(Path);
         }
     }
 }

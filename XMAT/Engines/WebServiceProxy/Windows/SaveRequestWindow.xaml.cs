@@ -12,7 +12,8 @@ namespace XMAT.WebServiceCapture
 {
     // What saving a request asks about: Pending, the parts that its request file left out and that are not supplied yet,
     // which only a template can keep; Recognized, what XMAT recognizes as sensitive in the content, by name only; and
-    // ChangedOrigin, the URL's origin when it is not the one that the request was captured or loaded for, else null.
+    // ChangedOrigin, the URL's origin when it is not the one that the request was captured or loaded for, else null, as
+    // the composer shows origins, bounded and escaped: for display only, never the URL that is saved.
     internal sealed record RequestSaveQuestion(
         RequestOmissions Pending, RequestFileRecognized Recognized, string ChangedOrigin = null);
 

@@ -244,6 +244,75 @@ namespace XMAT.Tests.Cli
             Assert.Equal((verify, verifyDiff), (replay.Verify, replay.VerifyDiff));
         }
 
+        // compose and replay take --proxy, kept in its canonical form, and --allow-proxy, the permission that it needs; a
+        // proxy URL that cannot be used is a usage error with one fixed message.
+        [Theory]
+        [InlineData("compose --url https://a.test/ --out r")]
+        [InlineData("replay a.saz --request 1 --out r")]
+        public void Parse_ReadsTheProxyAndItsPermission(string commandLine)
+        {
+            CliReplay allowed = CliCommandLine.Parse(Split(commandLine + " --proxy http://Proxy.Test:3128 --allow-proxy")).Request.Replay;
+            CliReplay notAllowed = CliCommandLine.Parse(Split(commandLine + " --proxy http://127.0.0.1")).Request.Replay;
+            CliReplay none = CliCommandLine.Parse(Split(commandLine)).Request.Replay;
+            CliParseResult invalid = CliCommandLine.Parse(Split(commandLine + " --proxy https://a.test"));
+
+            Assert.Equal(("http://proxy.test:3128", true), (allowed.Proxy.ToString(), allowed.AllowProxy));
+            Assert.Equal(("http://127.0.0.1:80", false), (notAllowed.Proxy.ToString(), notAllowed.AllowProxy));
+            Assert.Equal(((ReplayProxy)null, false), (none.Proxy, none.AllowProxy));
+            Assert.Equal(("cli.usage.invalid-value", CliCommandLine.ProxyMessage), (invalid.Error.Code, invalid.Error.Message));
+        }
+
+        // compose and replay take --client-cert, a thumbprint kept in upper case, and --allow-client-cert, the one origin
+        // that may receive the certificate, kept in canonical form; each is read even without the other. A value that cannot
+        // be used is a usage error with one fixed message per option.
+        [Theory]
+        [InlineData("compose --url https://a.test/ --out r")]
+        [InlineData("replay a.saz --request 1 --out r")]
+        public void Parse_ReadsTheClientCertificateAndTheOriginThatMayReceiveIt(string commandLine)
+        {
+            const string Thumbprint = "0123456789abcdef0123456789abcdef01234567";
+            CliReplay both = CliCommandLine.Parse(Split(
+                commandLine + " --client-cert " + Thumbprint + " --allow-client-cert https://A.Test:8443/")).Request.Replay;
+            CliReplay certificateOnly = CliCommandLine.Parse(Split(commandLine + " --client-cert " + Thumbprint)).Request.Replay;
+            CliReplay consentOnly = CliCommandLine.Parse(Split(commandLine + " --allow-client-cert https://a.test")).Request.Replay;
+            CliReplay none = CliCommandLine.Parse(Split(commandLine)).Request.Replay;
+            CliParseResult badThumbprint = CliCommandLine.Parse(Split(commandLine + " --client-cert 0123"));
+            CliParseResult badOrigin = CliCommandLine.Parse(Split(commandLine + " --allow-client-cert http://a.test"));
+
+            Assert.Equal(
+                (Thumbprint.ToUpperInvariant(), "https://a.test:8443"),
+                (both.ClientCertificate.Thumbprint, both.AllowClientCertificate.ToString()));
+            Assert.Equal((Thumbprint.ToUpperInvariant(), (ReplayCredentialOrigin)null), (certificateOnly.ClientCertificate.Thumbprint, certificateOnly.AllowClientCertificate));
+            Assert.Equal(((ReplayClientCertificate)null, "https://a.test:443"), (consentOnly.ClientCertificate, consentOnly.AllowClientCertificate.ToString()));
+            Assert.Equal(((ReplayClientCertificate)null, (ReplayCredentialOrigin)null), (none.ClientCertificate, none.AllowClientCertificate));
+            Assert.Equal(("cli.usage.invalid-value", CliCommandLine.ClientCertMessage), (badThumbprint.Error.Code, badThumbprint.Error.Message));
+            Assert.Equal(("cli.usage.invalid-value", CliCommandLine.AllowClientCertMessage), (badOrigin.Error.Code, badOrigin.Error.Message));
+        }
+
+        // compose and replay take --windows-auth, and --allow-windows-auth, the one origin whose challenges it may answer,
+        // kept in canonical form; each is read even without the other, and an origin that cannot be used is a usage error
+        // with one fixed message.
+        [Theory]
+        [InlineData("compose --url https://a.test/ --out r")]
+        [InlineData("replay a.saz --request 1 --out r")]
+        public void Parse_ReadsWindowsAuthAndTheOriginItMayAnswer(string commandLine)
+        {
+            CliReplay both = CliCommandLine.Parse(Split(commandLine + " --windows-auth --allow-windows-auth https://A.Test:8443/")).Request.Replay;
+            CliReplay windowsOnly = CliCommandLine.Parse(Split(commandLine + " --windows-auth")).Request.Replay;
+            CliReplay consentOnly = CliCommandLine.Parse(Split(commandLine + " --allow-windows-auth https://a.test")).Request.Replay;
+            CliReplay none = CliCommandLine.Parse(Split(commandLine)).Request.Replay;
+
+            Assert.Equal((true, "https://a.test:8443"), (both.WindowsAuth, both.AllowWindowsAuth.ToString()));
+            Assert.Equal((true, (ReplayCredentialOrigin)null), (windowsOnly.WindowsAuth, windowsOnly.AllowWindowsAuth));
+            Assert.Equal((false, "https://a.test:443"), (consentOnly.WindowsAuth, consentOnly.AllowWindowsAuth.ToString()));
+            Assert.Equal((false, (ReplayCredentialOrigin)null), (none.WindowsAuth, none.AllowWindowsAuth));
+            foreach (string origin in new[] { "http://a.test", "https://a.test/x", "https://[fe80::1%253]", "https://127\u30021", "a.test" })
+            {
+                CliParseResult bad = CliCommandLine.Parse(new List<string>(Split(commandLine)) { "--windows-auth", "--allow-windows-auth", origin }.ToArray());
+                Assert.Equal(("cli.usage.invalid-value", CliCommandLine.AllowWindowsAuthMessage), (bad.Error.Code, bad.Error.Message));
+            }
+        }
+
         [Fact]
         public void Parse_ReadsComposeOptionsAndTheDefaults()
         {
@@ -319,8 +388,10 @@ namespace XMAT.Tests.Cli
             foreach (string sendOnly in new[]
             {
                 "--repeat 2", "--parallel 2", "--timeout 5", "--max-response-mib 16", "--follow-redirects 1",
-                "--connect-to 127.0.0.1:9", "--allow-connect-to", "--sequence 1-2", "--allow-unsafe-methods", "--verify",
-                "--verify-diff", "--origin http://a.test",
+                "--connect-to 127.0.0.1:9", "--allow-connect-to", "--proxy http://127.0.0.1:9", "--allow-proxy",
+                "--client-cert 0123456789ABCDEF0123456789ABCDEF01234567", "--allow-client-cert https://a.test",
+                "--windows-auth", "--allow-windows-auth https://a.test",
+                "--sequence 1-2", "--allow-unsafe-methods", "--verify", "--verify-diff", "--origin http://a.test",
             })
             {
                 CliParseResult refused = CliCommandLine.Parse(Split("curl --url http://a.test/ --out o --include-sensitive " + sendOnly));
@@ -368,6 +439,18 @@ namespace XMAT.Tests.Cli
         [InlineData(@"curl C:\secret\a.saz --request C:\secret --out C:\secret\results --include-sensitive")]
         [InlineData(@"curl --url http://secret.test/ --out results --repeat secret")]
         [InlineData(@"curl --url http://secret.test/ --out results --http-version secret")]
+        [InlineData(@"compose --url http://a.test/ --out results --proxy http://user:secret@proxy.test:8080")]
+        [InlineData(@"compose --url http://a.test/ --out results --proxy http://proxy.test/secret")]
+        [InlineData(@"replay a.saz --request 1 --out results --proxy secret")]
+        [InlineData(@"curl --url http://a.test/ --out results --include-sensitive --proxy http://secret.test")]
+        [InlineData(@"compose --url https://a.test/ --out results --client-cert secret0123456789ABCDEF0123456789ABCDEF")]
+        [InlineData(@"compose --url https://a.test/ --out results --allow-client-cert https://user:secret@a.test")]
+        [InlineData(@"replay a.saz --request 1 --out results --allow-client-cert https://a.test/secret")]
+        [InlineData(@"curl --url https://a.test/ --out results --include-sensitive --client-cert secret")]
+        [InlineData(@"compose --url https://a.test/ --out results --windows-auth --allow-windows-auth https://user:secret@a.test")]
+        [InlineData(@"replay a.saz --request 1 --out results --allow-windows-auth https://a.test/secret")]
+        [InlineData(@"compose --url https://a.test/ --out results --allow-windows-auth secret")]
+        [InlineData(@"curl --url https://a.test/ --out results --include-sensitive --allow-windows-auth https://secret.test")]
         public void Parse_ErrorsNeverRepeatValues(string commandLine)
         {
             CliParseResult result = CliCommandLine.Parse(Split(commandLine));
@@ -502,11 +585,16 @@ namespace XMAT.Tests.Cli
         }
 
         // The JSON of a replay holds numbers, ids, outcomes, codes and artifact paths only, and lists the files of each
-        // send only once they were published. It says that a run connected to another endpoint, never which one.
+        // send only once they were published. It says that a run connected to another endpoint, went through a proxy, could
+        // offer a client certificate or answer with Windows authentication, and with whose consent, never which endpoint,
+        // proxy, certificate or origin; of each send, only the Authorization label that Windows authentication observed.
         [Fact]
         public void ReplayJson_HoldsOnlyAllowListedFields()
         {
             Assert.True(ReplayConnectTo.TryParse("198.51.100.77:8443", out ReplayConnectTo endpoint));
+            Assert.True(ReplayProxy.TryParse("http://secretproxy.test:3128", out ReplayProxy proxy));
+            Assert.True(ReplayClientCertificate.TryParse("ABCDEF0123456789ABCDEF0123456789ABCDEF01", out ReplayClientCertificate certificate));
+            Assert.True(ReplayCredentialOrigin.TryParse("https://secret-origin.test:9443", out ReplayCredentialOrigin origin));
             var report = new CliReport(CliCommands.Replay, "run")
             {
                 Replay = new CliReplayReport(
@@ -517,7 +605,13 @@ namespace XMAT.Tests.Cli
                         BodyFile: @"C:\secret",
                         HttpVersion: ReplayHttpVersion.Http2,
                         ConnectTo: endpoint,
-                        AllowConnectTo: true),
+                        AllowConnectTo: true,
+                        Proxy: proxy,
+                        AllowProxy: true,
+                        ClientCertificate: certificate,
+                        AllowClientCertificate: origin,
+                        WindowsAuth: true,
+                        AllowWindowsAuth: origin),
                     CliLimits.Default)
                 {
                     InputKind = "saz",
@@ -529,7 +623,9 @@ namespace XMAT.Tests.Cli
                             new ReplayVerification(new[] { ReplayVerifier.BodyDifference }),
                             Transport: ReplayTransportOptions.ConnectToName,
                             HttpVersion: "2",
-                            ResponseVersion: "2"),
+                            ResponseVersion: "2",
+                            WindowsAuthConfigured: true,
+                            AuthHeaderSchemeObserved: "NTLM"),
                         new ReplayItemResult(
                             2, "d1", 7, 2, ReplayOutcome.Failed, 0, TimeSpan.Zero, 0, 0, "replay.send.failed", null),
                     },
@@ -547,32 +643,39 @@ namespace XMAT.Tests.Cli
                 Assert.DoesNotContain("secret", text, StringComparison.OrdinalIgnoreCase);
                 Assert.DoesNotContain("198.51.100.77", text, StringComparison.Ordinal);
                 Assert.DoesNotContain("8443", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("3128", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("9443", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("ABCDEF0123", text, StringComparison.OrdinalIgnoreCase);
             }
 
             Assert.Equal(
-                new[] { "schema", "command", "runId", "version", "input", "limits", "options", "replays", "totals", "warnings" },
+                new[] { "schema", "command", "runId", "version", "status", "input", "limits", "options", "replays", "totals", "warnings", "errors" },
                 summary.RootElement.EnumerateObject().Select(property => property.Name));
             JsonElement options = published.RootElement.GetProperty("options");
             Assert.Equal(
-                ("2", true, true),
+                ("2", true, true, true, true, true, true, true, true),
                 (options.GetProperty("httpVersion").GetString(), options.GetProperty("connectTo").GetBoolean(),
-                    options.GetProperty("allowConnectTo").GetBoolean()));
+                    options.GetProperty("allowConnectTo").GetBoolean(), options.GetProperty("proxy").GetBoolean(),
+                    options.GetProperty("allowProxy").GetBoolean(), options.GetProperty("clientCertificate").GetBoolean(),
+                    options.GetProperty("allowClientCertificate").GetBoolean(), options.GetProperty("windowsAuth").GetBoolean(),
+                    options.GetProperty("allowWindowsAuth").GetBoolean()));
             JsonElement[] replays = published.RootElement.GetProperty("replays").EnumerateArray().ToArray();
             Assert.Equal(
                 new[]
                 {
                     "id", "device", "request", "sequence", "iteration", "outcome", "status", "durationMs", "responseBytes",
-                    "redirects", "transport", "httpVersion", "responseVersion", "code", "verify", "files",
+                    "redirects", "transport", "httpVersion", "responseVersion", "authHeaderSchemeObserved", "raw",
+                    "requestWrite", "requestBytesWritten", "responseFraming", "code", "verify", "files",
                 },
                 replays[0].EnumerateObject().Select(property => property.Name));
             Assert.Equal(
-                ("connect-to", "2", "2"),
+                ("connect-to", "2", "2", "NTLM"),
                 (replays[0].GetProperty("transport").GetString(), replays[0].GetProperty("httpVersion").GetString(),
-                    replays[0].GetProperty("responseVersion").GetString()));
+                    replays[0].GetProperty("responseVersion").GetString(), replays[0].GetProperty("authHeaderSchemeObserved").GetString()));
             Assert.Equal(
-                ("direct", "auto", JsonValueKind.Null),
+                ("direct", "auto", JsonValueKind.Null, JsonValueKind.Null),
                 (replays[1].GetProperty("transport").GetString(), replays[1].GetProperty("httpVersion").GetString(),
-                    replays[1].GetProperty("responseVersion").ValueKind));
+                    replays[1].GetProperty("responseVersion").ValueKind, replays[1].GetProperty("authHeaderSchemeObserved").ValueKind));
             Assert.Equal(("completed", 200, 12L), (replays[0].GetProperty("outcome").GetString(), replays[0].GetProperty("status").GetInt32(), replays[0].GetProperty("durationMs").GetInt64()));
             Assert.Equal("mismatch", replays[0].GetProperty("verify").GetProperty("result").GetString());
             Assert.Equal("replays/00001/response.http", replays[0].GetProperty("files").GetProperty("response").GetString());
@@ -582,6 +685,46 @@ namespace XMAT.Tests.Cli
             Assert.False(unpublished.RootElement.GetProperty("replays")[0].TryGetProperty("files", out _));
             JsonElement totals = published.RootElement.GetProperty("totals");
             Assert.Equal((2, 1, 1, 0, 1), (totals.GetProperty("replays").GetInt32(), totals.GetProperty("completed").GetInt32(), totals.GetProperty("failed").GetInt32(), totals.GetProperty("matched").GetInt32(), totals.GetProperty("mismatched").GetInt32()));
+        }
+
+        // The options report the version that the run asks for: --http-version, or else the request file's, which a run with
+        // Windows authentication makes exactly HTTP/1.1 when it is Automatic; HTTP/2 only stays "2", which the run refuses
+        // with Windows authentication. Without Windows authentication, Automatic stays "auto".
+        [Theory]
+        [InlineData(true, "Auto", false, null, "1.1")]
+        [InlineData(false, "Auto", false, null, "auto")]
+        [InlineData(true, "Http11", true, null, "1.1")]
+        [InlineData(true, "Http2", true, null, "2")]
+        [InlineData(true, "Auto", false, "Http2", "2")]
+        [InlineData(true, "Auto", true, "Http2", "1.1")]
+        [InlineData(true, "Auto", false, "Auto", "1.1")]
+        [InlineData(false, "Auto", false, "Http11", "1.1")]
+        [InlineData(false, "Http2", true, "Http11", "2")]
+        public void ReplayJson_ReportsTheVersionThatTheRunAsksFor(
+            bool windowsAuth, string version, bool versionSet, string fileVersion, string reported)
+        {
+            var replay = new CliReplay(
+                Url: "https://a.test/",
+                HttpVersion: Enum.Parse<ReplayHttpVersion>(version),
+                HttpVersionSet: versionSet,
+                WindowsAuth: windowsAuth);
+            var report = new CliReport(CliCommands.Compose, "run") { Replay = new CliReplayReport(replay, limits: null) };
+            if (fileVersion != null)
+            {
+                report.Replay.HttpVersion = CliReplayCommand.RequestedHttpVersion(
+                    replay,
+                    new RequestFileContent(
+                        RequestFileProfile.Content, "GET", "https://a.test/", Enum.Parse<ReplayHttpVersion>(fileVersion),
+                        Array.Empty<KeyValuePair<string, string>>(), Array.Empty<byte>(), RequestOmissions.None));
+            }
+
+            using JsonDocument json = JsonDocument.Parse(CliJson.Serialize(report));
+
+            JsonElement options = json.RootElement.GetProperty("options");
+            Assert.Equal(
+                (reported, windowsAuth, false),
+                (options.GetProperty("httpVersion").GetString(), options.GetProperty("windowsAuth").GetBoolean(),
+                    options.GetProperty("allowWindowsAuth").GetBoolean()));
         }
 
         // With --verify-diff, a verified send names the state of its diff.json, and its path only once published; without

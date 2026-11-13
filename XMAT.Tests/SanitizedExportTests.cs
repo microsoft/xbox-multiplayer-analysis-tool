@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Xml.Linq;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -661,6 +662,6 @@ namespace XMAT.Tests
             public IDeviceCaptureController CaptureController => controller;
         }
 
-        public void Dispose() => Directory.Delete(_directory, true);
+        public void Dispose() => TestFolderCleanup.Delete(_directory);
     }
 }

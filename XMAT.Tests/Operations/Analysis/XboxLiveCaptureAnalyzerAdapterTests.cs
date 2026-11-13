@@ -104,10 +104,7 @@ namespace XMAT.Tests.Operations.Analysis
             finally
             {
                 analysis.Dispose();
-                if (Directory.Exists(outputDirectory))
-                {
-                    Directory.Delete(outputDirectory, true);
-                }
+                TestFolderCleanup.Delete(outputDirectory);
             }
         }
 
@@ -192,12 +189,7 @@ namespace XMAT.Tests.Operations.Analysis
             finally
             {
                 analyzer?.Shutdown();
-                if (Directory.Exists(outputRoot))
-                {
-                    Directory.Delete(
-                        outputRoot,
-                        true);
-                }
+                TestFolderCleanup.Delete(outputRoot);
             }
         }
 
@@ -247,10 +239,7 @@ namespace XMAT.Tests.Operations.Analysis
                 var output = System.IO.Path.Combine(
                     outputRoot,
                     $"xlca_{runId}");
-                if (Directory.Exists(output))
-                {
-                    Directory.Delete(output, true);
-                }
+                TestFolderCleanup.Delete(output);
             }
         }
 
@@ -340,12 +329,7 @@ namespace XMAT.Tests.Operations.Analysis
             finally
             {
                 analyzer?.Shutdown();
-                if (Directory.Exists(outputRoot))
-                {
-                    Directory.Delete(
-                        outputRoot,
-                        true);
-                }
+                TestFolderCleanup.Delete(outputRoot);
             }
         }
 
@@ -399,10 +383,7 @@ namespace XMAT.Tests.Operations.Analysis
                 finally
                 {
                     analysis.Dispose();
-                    if (Directory.Exists(output))
-                    {
-                        Directory.Delete(output, true);
-                    }
+                    TestFolderCleanup.Delete(output);
                 }
             }
 
@@ -477,10 +458,7 @@ namespace XMAT.Tests.Operations.Analysis
                 finally
                 {
                     analysis.Dispose();
-                    if (Directory.Exists(output))
-                    {
-                        Directory.Delete(output, true);
-                    }
+                    TestFolderCleanup.Delete(output);
                 }
             }
 
@@ -850,13 +828,7 @@ namespace XMAT.Tests.Operations.Analysis
 
             internal string Path { get; }
 
-            public void Dispose()
-            {
-                if (Directory.Exists(Path))
-                {
-                    Directory.Delete(Path, true);
-                }
-            }
+            public void Dispose() => TestFolderCleanup.Delete(Path);
         }
     }
 }

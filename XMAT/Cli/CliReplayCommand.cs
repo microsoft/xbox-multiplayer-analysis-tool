@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Security;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.Operations;
@@ -36,6 +38,18 @@ namespace XMAT.Cli
         // replays/00001, replays/00002, ...: one folder per send, in plan order.
         internal static string FolderOf(int id) => ReplaysPath + "/" + id.ToString("D5", CultureInfo.InvariantCulture);
 
+        // The HTTP version that a run asks for, as the operation takes it (ReplayOptions.EffectiveTransport): --http-version,
+        // or else a request file's, which Windows authentication makes exactly HTTP/1.1 when it is Automatic; HTTP/2 only
+        // stays as asked, and the operation then refuses it. The output reports this version, never another.
+        internal static ReplayHttpVersion RequestedHttpVersion(CliReplay replay, RequestFileContent file) =>
+            new ReplayOptions(Transport: new ReplayTransportOptions(HttpVersionOf(replay, file), WindowsAuth: replay.WindowsAuth))
+                .EffectiveTransport.HttpVersion;
+
+        // A request file's HTTP version is the run's unless --http-version says otherwise; nothing else in the file is
+        // transport or consent.
+        private static ReplayHttpVersion HttpVersionOf(CliReplay replay, RequestFileContent file) =>
+            file != null && !replay.HttpVersionSet ? file.HttpVersion : replay.HttpVersion;
+
         internal static Task<CliReport> RunAsync(CliRequest request, string runId, CancellationToken cancellationToken) =>
             RunAsync(request, runId, configureStorage: true, cancellationToken);
 
@@ -49,6 +63,13 @@ namespace XMAT.Cli
             {
                 Replay = new CliReplayReport(request.Replay, fromCapture ? request.Limits ?? CliLimits.Default : null),
             };
+
+            if (request.Replay.RawFile != null)
+            {
+                await RunRawAsync(request, report, runId, configureStorage, cancellationToken).ConfigureAwait(false);
+                ReportPublished(request, report);
+                return report;
+            }
 
             // The body is made before anything is reserved or sent: the --body-file, or the --form files, are read, and their
             // paths and contents never reach the output. A larger file than ReplayBodyFile.MaxBytes (64 MiB), or a form
@@ -94,37 +115,12 @@ namespace XMAT.Cli
                 }
 
                 report.Replay.InputSha256 = file.Sha256;
+                report.Replay.HttpVersion = RequestedHttpVersion(request.Replay, file.Content);
             }
 
-            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
-            if (targetFailure != null)
+            CliOutputFolder output = Reserve(request, report, runId, cancellationToken);
+            if (output == null)
             {
-                report.Fail(targetFailure.ExitCode, targetFailure.Code, targetFailure.Message);
-                return report;
-            }
-
-            if (cancellationToken.IsCancellationRequested)
-            {
-                report.Cancel();
-                return report;
-            }
-
-            CliOutputFolder output;
-            try
-            {
-                CliFailure refused = CliOutputFolder.TryReserve(target, runId, out output);
-                if (refused != null)
-                {
-                    report.Fail(refused.ExitCode, refused.Code, refused.Message);
-                    return report;
-                }
-            }
-            catch (Exception ex) when (CliOutputFolder.IsFileSystemFailure(ex))
-            {
-                report.Fail(
-                    CliExitCodes.Failed,
-                    "cli.output.unavailable",
-                    "xmat could not create its private staging folder next to the --out folder.");
                 return report;
             }
 
@@ -138,6 +134,51 @@ namespace XMAT.Cli
                     cancellationToken).ConfigureAwait(false);
             }
 
+            ReportPublished(request, report);
+            return report;
+        }
+
+        // Checks --out and reserves the private staging folder next to it; null when it cannot, and the report says why.
+        private static CliOutputFolder Reserve(
+            CliRequest request, CliReport report, string runId, CancellationToken cancellationToken)
+        {
+            CliFailure targetFailure = CliOutputFolder.CheckTarget(request.Output, out CliOutputTarget target);
+            if (targetFailure != null)
+            {
+                report.Fail(targetFailure.ExitCode, targetFailure.Code, targetFailure.Message);
+                return null;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                report.Cancel();
+                return null;
+            }
+
+            try
+            {
+                CliFailure refused = CliOutputFolder.TryReserve(target, runId, out CliOutputFolder output);
+                if (refused != null)
+                {
+                    report.Fail(refused.ExitCode, refused.Code, refused.Message);
+                    return null;
+                }
+
+                return output;
+            }
+            catch (Exception ex) when (CliOutputFolder.IsFileSystemFailure(ex))
+            {
+                report.Fail(
+                    CliExitCodes.Failed,
+                    "cli.output.unavailable",
+                    "xmat could not create its private staging folder next to the --out folder.");
+                return null;
+            }
+        }
+
+        // What a published run says on standard error: how many sends it made and answered, and why its exit code is not 0.
+        private static void ReportPublished(CliRequest request, CliReport report)
+        {
             if (report.Artifacts.Count != 0)
             {
                 int sent = report.Replay.Items.Count;
@@ -155,7 +196,13 @@ namespace XMAT.Cli
                         + "request; they can hold captured content.");
                 }
 
-                if (report.ExitCode == CliExitCodes.RequestsFailed)
+                if (report.ExitCode == CliExitCodes.Cancelled)
+                {
+                    report.HumanLines.Add(
+                        "xmat: the run was cancelled after a raw send began: the sends that began were published, and no "
+                        + "further send was started (exit code 130).");
+                }
+                else if (report.ExitCode == CliExitCodes.RequestsFailed)
                 {
                     report.HumanLines.Add("xmat: some requests got no complete response (exit code 12).");
                 }
@@ -164,8 +211,198 @@ namespace XMAT.Cli
                     report.HumanLines.Add("xmat: --verify: some responses differ from the capture (exit code 11).");
                 }
             }
+        }
 
-            return report;
+        // compose --raw: the file is read once and admitted as a raw request (RawRequest.FromBytes, with
+        // --fix-content-length) before anything is reserved or sent; only its kind and SHA-256 reach the output, never its
+        // path or bytes. Once a send began, the run's sends are published even if it is cancelled (CompleteAfterSendsAsync).
+        private static async Task RunRawAsync(
+            CliRequest request, CliReport report, string runId, bool configureStorage, CancellationToken cancellationToken)
+        {
+            CliReplay replay = request.Replay;
+            report.Replay.InputKind = RawFileInputKind;
+            RawImageResult admitted;
+            try
+            {
+                (ReadOnlyMemory<byte> bytes, string sha256, string code) =
+                    await ReadRawFileAsync(replay.RawFile, cancellationToken).ConfigureAwait(false);
+                if (code != null)
+                {
+                    report.Fail(CliExitCodes.InvalidInput, code, RawRequest.Message(code));
+                    return;
+                }
+
+                report.Replay.InputSha256 = sha256;
+                admitted = RawRequest.FromBytes(replay.RawTarget, bytes, replay.FixContentLength, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                report.Cancel();
+                return;
+            }
+
+            if (admitted.Code != null)
+            {
+                report.Fail(CliExitCodes.InvalidInput, admitted.Code, RawRequest.Message(admitted.Code));
+                if (admitted.Line is int line)
+                {
+                    report.HumanLines.Add(
+                        "xmat: --raw: the request was refused at its line " + line.ToString(CultureInfo.InvariantCulture) + ".");
+                }
+
+                return;
+            }
+
+            CliOutputFolder output = Reserve(request, report, runId, cancellationToken);
+            if (output == null)
+            {
+                return;
+            }
+
+            using (output)
+            {
+                await CliStagedRun.CompleteAfterSendsAsync(
+                    report,
+                    output,
+                    (token, finalization) => SendRawAsync(request, admitted.Image, output, report, configureStorage, token, finalization),
+                    null,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        // The --raw file, read once through a stream whose reads never go past RawRequest.MaxFileBytes (64 KiB + 65 MiB):
+        // a larger file, or one that grows past it while it is read, is refused (replay.raw.input-too-large), and only the
+        // bytes read are used. Its SHA-256 is computed as they are read.
+        internal static async Task<(ReadOnlyMemory<byte> Bytes, string Sha256, string Code)> ReadRawFileAsync(
+            string path, CancellationToken cancellationToken)
+        {
+            try
+            {
+                await using var file = new FileStream(
+                    path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                if (file.Length > RawRequest.MaxFileBytes)
+                {
+                    return (default, null, RawCodes.InputTooLarge);
+                }
+
+                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                using var bytes = new MemoryStream((int)file.Length);
+                var chunk = new byte[81_920];
+                while (true)
+                {
+                    int allowed = (int)Math.Min(chunk.Length, RawRequest.MaxFileBytes + 1 - bytes.Length);
+                    int count = await file.ReadAsync(chunk.AsMemory(0, allowed), cancellationToken).ConfigureAwait(false);
+                    if (count == 0)
+                    {
+                        break;
+                    }
+
+                    if (bytes.Length + count > RawRequest.MaxFileBytes)
+                    {
+                        return (default, null, RawCodes.InputTooLarge);
+                    }
+
+                    bytes.Write(chunk, 0, count);
+                    hash.AppendData(chunk, 0, count);
+                }
+
+                return (bytes.GetBuffer().AsMemory(0, (int)bytes.Length), Convert.ToHexStringLower(hash.GetHashAndReset()), null);
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or SecurityException or ArgumentException or
+                    NotSupportedException)
+            {
+                return (default, null, RawCodes.FileUnreadable);
+            }
+        }
+
+        // The raw run's sends on the run's token, then its files on finalization, a token that the run's cancellation does
+        // not cancel (CliStagedRun.CompleteAfterSendsAsync): the SAZ sessions too, so a send that began is in every output.
+        // --allow-raw consents to this image and target only, through the plan that Preview checked. Without it the
+        // operation refuses the send (replay.policy.raw).
+        private static async Task<IReadOnlyList<CliStagedFile>> SendRawAsync(
+            CliRequest request,
+            RawRequestImage image,
+            CliOutputFolder output,
+            CliReport report,
+            bool configureStorage,
+            CancellationToken cancellationToken,
+            CancellationToken finalization)
+        {
+            if (configureStorage)
+            {
+                HeadlessStorage.Configure(output.WorkPath);
+            }
+
+            CliReplay replay = request.Replay;
+            using SazSink saz = replay.SaveSaz ? SazSink.Create(output, finalization) : null;
+            var sink = new FileSink(output, report.Replay, saz, image);
+            var operation = new ReplayOperation();
+            RawOperationSeam.Value?.Invoke(operation);
+            ReplaySource source = ReplaySource.FromRaw(image);
+            var options = new ReplayOptions(
+                Repeat: replay.Repeat,
+                Parallelism: replay.Parallel,
+                Timeout: TimeSpan.FromSeconds(replay.TimeoutSeconds),
+                MaxResponseBytes: replay.MaxResponseMib * AnalysisLimits.BytesPerMib,
+                AllowUnsafeMethods: replay.AllowUnsafeMethods,
+                AllowConnectTo: replay.AllowConnectTo,
+                Transport: new ReplayTransportOptions(ReplayHttpVersion.Http11, replay.ConnectTo));
+            if (replay.AllowRaw)
+            {
+                OperationResult<ReplayPlanPreview> plan = operation.Preview(source, options, cancellationToken);
+                if (!plan.Succeeded)
+                {
+                    report.SetExitCode(CliExitCodes.FromOutcome(plan.Outcome));
+                    report.Errors.AddRange(plan.Diagnostics);
+                    return null;
+                }
+
+                options = options with { AllowRaw = ReplayRawConsent.For(plan.Value) };
+            }
+
+            OperationResult<ReplayResult> result = await operation.ExecuteAsync(
+                new ReplayRequest(source, options, Sink: sink), OperationContext.None, cancellationToken).ConfigureAwait(false);
+            string inputSha256 = report.Replay.InputSha256;
+            Apply(report, result);
+
+            // The run's input is the raw file, whatever the operation reports for its source.
+            report.Replay.InputKind = RawFileInputKind;
+            report.Replay.InputSha256 = inputSha256;
+            if (result.Outcome == OperationOutcome.Cancelled)
+            {
+                // Only a run whose every send that began is in its outputs publishes them. With none, or
+                // with one whose writing did not complete, such as an archive session that the finalization's bound
+                // stopped, the run is discarded as cancelled, and its archive is never completed. A write that failed is
+                // the operation's to report, cancelled or not, and ends the run with exit code 6.
+                if (sink.Items.Count == 0 || sink.Incomplete)
+                {
+                    report.Cancel();
+                    return null;
+                }
+
+                // Every send that began is in the sink once the operation has returned.
+                report.Replay.Items = sink.Items.OrderBy(item => item.Id).ToArray();
+                report.Errors.Add(new OperationDiagnostic(
+                    CancelledAfterSendCode, OperationDiagnosticSeverity.Error, CancelledAfterSendMessage));
+            }
+            else if (!CliExitCodes.IsPublished(report.ExitCode))
+            {
+                return null;
+            }
+
+            var files = new List<CliStagedFile>
+            {
+                new CliStagedFile("summary", SummaryPath, CliJson.SerializeReplaySummary(report)),
+                new CliStagedFile("replays", ReplaysPath, null),
+            };
+            if (saz != null)
+            {
+                saz.Finish(finalization);
+                files.Add(new CliStagedFile("saz", SazPath, null));
+            }
+
+            return files;
         }
 
         internal static string BodyFileMessage(string code) =>
@@ -178,6 +415,16 @@ namespace XMAT.Cli
 
         // The input kind that a run from a request file reports.
         internal const string RequestFileInputKind = "request-file";
+
+        // The input kind that compose --raw reports, with the SHA-256 of its file, never of the prepared request.
+        internal const string RawFileInputKind = "raw-file";
+
+        // A raw run cancelled after a send began: it published the sends that began (exit code 130).
+        internal const string CancelledAfterSendCode = "cli.cancelled-after-send";
+
+        internal const string CancelledAfterSendMessage =
+            "The run was cancelled after a raw send began; the sends that began were published, and no further send was " +
+                "started.";
 
         // What each request file failure says, never what the file holds.
         internal static string RequestFileMessage(string code) =>
@@ -246,11 +493,6 @@ namespace XMAT.Cli
             CliRequest request, CliRequestBody prepared, RequestFileContent file, IReplayExchangeSink sink)
         {
             CliReplay replay = request.Replay;
-
-            // A request file's HTTP version is the run's unless --http-version says otherwise; nothing else in the file
-            // is transport or consent.
-            ReplayHttpVersion httpVersion =
-                file != null && !replay.HttpVersionSet ? file.HttpVersion : replay.HttpVersion;
             var options = new ReplayOptions(
                 Repeat: replay.Repeat,
                 Parallelism: replay.Parallel,
@@ -261,8 +503,12 @@ namespace XMAT.Cli
                 AllowUnsafeMethods: replay.AllowUnsafeMethods,
                 AllowOriginChange: replay.AllowOriginChange,
                 AllowConnectTo: replay.AllowConnectTo,
-                Transport: new ReplayTransportOptions(httpVersion, replay.ConnectTo),
-                VerifyDiff: replay.VerifyDiff);
+                Transport: new ReplayTransportOptions(
+                    HttpVersionOf(replay, file), replay.ConnectTo, replay.Proxy, replay.ClientCertificate, replay.WindowsAuth),
+                VerifyDiff: replay.VerifyDiff,
+                AllowProxy: replay.AllowProxy,
+                AllowClientCertificate: replay.AllowClientCertificate,
+                AllowWindowsAuth: replay.AllowWindowsAuth);
             if (request.Command == CliCommands.Compose)
             {
                 // The operation applies and checks the method, headers and body of a composed request like any edit; with
@@ -353,24 +599,40 @@ namespace XMAT.Cli
 
         // Writes the messages of each send into the staging folder as it completes, so the run holds one at a time, with
         // --verify-diff each verified send's detail (diff.json), whose state alone the report keeps, and with --save-saz the
-        // send's session (SazSink).
+        // send's session (SazSink). A raw send's request.http is its image, the attempted request, whatever its write state
+        // may be. Items keeps every send that reached the sink, which a raw run cancelled after a send began reports.
         private sealed class FileSink : IReplayExchangeSink
         {
             private readonly CliOutputFolder _output;
             private readonly CliReplayReport _report;
             private readonly SazSink _saz;
+            private readonly RawRequestImage _raw;
+            private readonly List<ReplayItemResult> _items = new();
+            private int _begun;
 
-            internal FileSink(CliOutputFolder output, CliReplayReport report, SazSink saz)
+            internal FileSink(CliOutputFolder output, CliReplayReport report, SazSink saz, RawRequestImage raw = null)
             {
                 _output = output;
                 _report = report;
                 _saz = saz;
+                _raw = raw;
             }
+
+            internal IReadOnlyList<ReplayItemResult> Items => _items;
+
+            // Whether a send was given and its writing did not complete, its files or its archive session: the outputs then
+            // lack that send for good. The operation gives the sends one at a time.
+            internal bool Incomplete => _begun != _items.Count;
 
             public void Add(ReplayItemResult result, ReplayExchange exchange)
             {
+                _begun++;
                 string folder = FolderOf(result.Id);
-                if (exchange.Request != null)
+                if (exchange.Raw && _raw != null)
+                {
+                    _output.WriteFile(folder + "/" + RequestFile, _raw.WriteTo);
+                }
+                else if (exchange.Request != null)
                 {
                     _output.WriteFile(folder + "/" + RequestFile, exchange.Request.WriteTo);
                 }
@@ -387,14 +649,16 @@ namespace XMAT.Cli
                 }
 
                 _saz?.Add(result, exchange);
+                _items.Add(result);
             }
         }
 
         // replays.saz, written as the sends complete: each is a session as ReplaySaz makes it, added as it completes, in
         // completion order with its plan id, so the run holds only the send at hand (SazArchiveWriter). Finish completes the
         // archive and closes it, once the run has results to publish; disposing it first abandons the archive, which the
-        // discard of the staging folder then removes. The run's token stops the writing (OperationCanceledException), and
-        // a failure to write is the run's (cli.output.write-failed).
+        // discard of the staging folder then removes. Its token stops the writing (OperationCanceledException): the run's,
+        // or a raw run's finalization token, which the run's cancellation does not cancel. A failure to write is the run's
+        // (cli.output.write-failed).
         private sealed class SazSink : IDisposable
         {
             private readonly FileStream _file;
@@ -453,5 +717,9 @@ namespace XMAT.Cli
         // Test seam, null in production: wraps the stream that replays.saz is written through, so a test can fail or cancel
         // a run at a point of its writing. AsyncLocal, so it reaches only the run of the test that sets it.
         internal static readonly AsyncLocal<Func<Stream, Stream>> SazStreamSeam = new();
+
+        // Test seam, null in production: given compose --raw's operation before it runs, so a test can order its sends'
+        // events (ReplayOperation.RawSenderFactory and RawSendEnded). AsyncLocal, as SazStreamSeam.
+        internal static readonly AsyncLocal<Action<ReplayOperation>> RawOperationSeam = new();
     }
 }

@@ -98,6 +98,7 @@ be running and the capture service can keep failing if not restarted.
 | WebSocket capture has retention and persistence limits | Only recent messages are retained, and messages are not saved to or loaded from `.XMATCAP`; see [WebSockets](web-proxy.md#view-websocket-messages) |
 | Script editor has no highlighting or completion, and not all .NET objects are available | See [Scripting](scripting.md) for supported workflow and execution limits |
 | `pktmon` traces cannot be imported | Use `netsh trace`; see [Capture files](capture-files.md#import-network-traces-from-another-pc) |
+| A replay to an HTTPS server can fail once after the server stops accepting TLS 1.2 and accepts only TLS 1.3 | Observed with .NET 10.0.14 on Windows when XMAT, still open, had already sent to that server over TLS 1.2: Windows tries to resume that TLS 1.2 session, the server refuses it, and the send fails during the TLS handshake. The next send succeeds. |
 
 ## Collect debug logs
 

@@ -485,9 +485,7 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -537,9 +535,7 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -610,9 +606,7 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -677,9 +671,7 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -761,7 +753,7 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(directory, true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -793,9 +785,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -932,7 +922,7 @@ namespace XMAT.Tests
                     Assert.Single(RowsForDevice(table, deviceName)).RowId;
 
                 model.SelectedDeviceContext = originalContext;
-                DeleteFileWithRetry(path);
+                TestFolderCleanup.DeleteFile(path);
                 await File.WriteAllTextAsync(path, "not a ZIP archive");
 
                 await Assert.ThrowsAsync<InvalidDataException>(
@@ -975,8 +965,8 @@ namespace XMAT.Tests
                 {
                     await model.RemoveDeviceContextAsync(importedContext);
                 }
-                DeleteFileWithRetry(path);
-                DeleteFileWithRetry(alias);
+                TestFolderCleanup.DeleteFile(path);
+                TestFolderCleanup.DeleteFile(alias);
             }
         }
 
@@ -1010,7 +1000,7 @@ namespace XMAT.Tests
                 var changedProperties = new List<string>();
                 controller.PropertyChanged += (_, args) =>
                     changedProperties.Add(args.PropertyName);
-                DeleteFileWithRetry(path);
+                TestFolderCleanup.DeleteFile(path);
                 WriteSaz(path, "replacement.example", "/replacement", "replacement body");
 
                 await model.ImportDataCapturesAsync(
@@ -1052,8 +1042,8 @@ namespace XMAT.Tests
             finally
             {
                 await RemoveReadOnlyContextsAsync(model);
-                DeleteFileWithRetry(path);
-                DeleteFileWithRetry(oldAlias);
+                TestFolderCleanup.DeleteFile(path);
+                TestFolderCleanup.DeleteFile(oldAlias);
             }
         }
 
@@ -1097,8 +1087,8 @@ namespace XMAT.Tests
             finally
             {
                 await RemoveReadOnlyContextsAsync(model);
-                DeleteFileWithRetry(path);
-                DeleteFileWithRetry(alias);
+                TestFolderCleanup.DeleteFile(path);
+                TestFolderCleanup.DeleteFile(alias);
             }
         }
 
@@ -1169,7 +1159,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1238,7 +1228,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1293,7 +1283,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1361,7 +1351,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1427,7 +1417,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1502,7 +1492,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1639,9 +1629,7 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -1847,8 +1835,10 @@ namespace XMAT.Tests
                     Assert.True(
                         exclusive.Length > 0);
                 }
-                DeleteDirectoryWithRetry(
-                    directory);
+
+                // The exclusive open above already proves that XMAT released its handles; the cleanup tolerates only
+                // a scanner that touches the new fixture for a moment.
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -1890,7 +1880,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1940,7 +1930,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -2127,7 +2117,7 @@ namespace XMAT.Tests
                 }
                 finally
                 {
-                    File.Delete(path);
+                    TestFolderCleanup.DeleteFile(path);
                 }
             });
         }
@@ -2157,7 +2147,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -2249,49 +2239,6 @@ namespace XMAT.Tests
                 "CaptureAppModelFixtures");
             Directory.CreateDirectory(directory);
             return Path.Combine(directory, $"{Guid.NewGuid():N}.saz");
-        }
-
-        private static void DeleteFileWithRetry(string path)
-        {
-            const int Attempts = 6;
-            for (var attempt = 1; attempt <= Attempts; attempt++)
-            {
-                try
-                {
-                    File.Delete(path);
-                    return;
-                }
-                catch (IOException) when (attempt < Attempts)
-                {
-                    // Allow a bounded delay only for transient external scanners touching a newly created fixture.
-                    Thread.Sleep(25);
-                }
-            }
-        }
-
-        private static void DeleteDirectoryWithRetry(
-            string path)
-        {
-            const int Attempts = 6;
-            for (var attempt = 1;
-                attempt <= Attempts;
-                attempt++)
-            {
-                try
-                {
-                    Directory.Delete(
-                        path,
-                        true);
-                    return;
-                }
-                catch (IOException) when (
-                    attempt < Attempts)
-                {
-                    // The exclusive-open assertion already proves XMAT released its handles; allow a bounded delay
-                    // only for transient external scanners touching a newly created fixture.
-                    Thread.Sleep(25);
-                }
-            }
         }
 
         internal static void CreateHardLink(

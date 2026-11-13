@@ -34,20 +34,7 @@ namespace XMAT.Tests.Cli
         internal string[] Entries() =>
             Directory.GetFileSystemEntries(Root).Select(Path.GetFileName).OrderBy(name => name, StringComparer.Ordinal).ToArray();
 
-        public void Dispose()
-        {
-            for (int attempt = 1; Directory.Exists(Root); attempt++)
-            {
-                try
-                {
-                    Directory.Delete(Root, recursive: true);
-                }
-                catch (Exception ex) when ((ex is IOException || ex is UnauthorizedAccessException) && attempt < 20)
-                {
-                    Thread.Sleep(100);
-                }
-            }
-        }
+        public void Dispose() => TestFolderCleanup.Delete(Root);
     }
 
     // Reserving --out in process as xmat does (CliOutputFolder.CheckTarget, then TryReserve).

@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -18,13 +19,7 @@ namespace XMAT.Tests.Replay
         private readonly string _directory = Path.Join(
             AppContext.BaseDirectory, "HeadlessTestArtifacts", "Replay", Guid.NewGuid().ToString("N"));
 
-        public void Dispose()
-        {
-            if (Directory.Exists(_directory))
-            {
-                Directory.Delete(_directory, recursive: true);
-            }
-        }
+        public void Dispose() => TestFolderCleanup.Delete(_directory);
 
         [Fact]
         public async Task CaptureFile_ReplaysTheSelectionInPlanOrderAndLeavesTheCaptureUnchanged()

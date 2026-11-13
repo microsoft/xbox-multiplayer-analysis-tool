@@ -332,7 +332,7 @@ namespace XMAT.Tests.Replay
         internal bool HasPendingConnection => _listener.Pending();
 
         // Accepts one connection and reads one request from it; with closeAtOnce, closes it without reading or answering.
-        internal async Task<RawRequest> AcceptAsync(bool closeAtOnce = false, int timeoutSeconds = 60)
+        internal async Task<ReceivedRequest> AcceptAsync(bool closeAtOnce = false, int timeoutSeconds = 60)
         {
             using TcpClient client = await _listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(timeoutSeconds));
             if (closeAtOnce)
@@ -370,14 +370,14 @@ namespace XMAT.Tests.Replay
 
             await stream.WriteAsync(_ok);
             byte[] bytes = buffer.ToArray();
-            return new RawRequest(Encoding.UTF8.GetString(bytes, 0, Math.Max(0, headEnd)), bytes[Math.Max(0, headEnd)..]);
+            return new ReceivedRequest(Encoding.UTF8.GetString(bytes, 0, Math.Max(0, headEnd)), bytes[Math.Max(0, headEnd)..]);
         }
 
         public void Dispose() => _listener.Stop();
     }
 
     // A request as it reached the listener: its head, as text, and its body.
-    internal sealed record RawRequest(string Head, byte[] Body)
+    internal sealed record ReceivedRequest(string Head, byte[] Body)
     {
         // The request line, then each field line as name, colon and value without SP or HTAB around the value.
         internal IReadOnlyList<string> Lines =>

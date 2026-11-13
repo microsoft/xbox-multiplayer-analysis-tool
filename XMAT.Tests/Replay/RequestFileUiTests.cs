@@ -1371,6 +1371,65 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // The origin that saving the content needs a permission for is named as the composer shows origins, bounded and
+        // escaped, by the check of the save, in the question and in the status that refuses the content without it: a long
+        // host is cut short, and a zero-width character that the host keeps is shown as \uXXXX. The file saved with the
+        // permission keeps the whole URL, exactly as typed, a bidirectional control in its query included.
+        [Theory]
+        [InlineData("long")]
+        [InlineData("unseen")]
+        public Task AnotherOrigin_IsNamedBoundedAndEscaped_AndTheFileKeepsTheUrlWhole(
+            string kind) => _application.RunAsync(async () =>
+        {
+            string host = kind == "long" ? string.Join(".", Enumerable.Repeat(new string('a', 60), 6)) + ".test" : "x\u200By.test";
+            string origin = "https://" + host;
+            string url = origin + "/data?q=\u202Ez";
+            string shown = UntrustedText.Show(origin, 300);
+            using var client = new RequestReplayClient();
+            var capture = new ProxyConnectionModel(7, "200", DateTime.UtcNow, TimeSpan.Zero, "http", "127.0.0.1:9", "GET", "/data",
+                "GET /data HTTP/1.1\r\nHost: 127.0.0.1:9\r\n", [], "HTTP/1.1 200 OK\r\n", [], "127.0.0.1");
+            var window = new RequestComposerWindow(capture, client, NoQuestion);
+            var questions = new List<RequestSaveQuestion>();
+            var answers = new Queue<RequestSaveChoice>(new[]
+            {
+                new RequestSaveChoice(RequestFileProfile.Content),
+                new RequestSaveChoice(RequestFileProfile.Content, OriginChangeAllowed: true),
+            });
+            var written = new List<RequestFileContent>();
+            window.ChooseSavePath = () => Path.Join(AppContext.BaseDirectory, "moved.xmat-request.json");
+            window.ChooseSaveContent = question =>
+            {
+                questions.Add(question);
+                return answers.Dequeue();
+            };
+            window.PublishRequestFile = (_, write, _) =>
+            {
+                using var stream = new MemoryStream();
+                write(stream);
+                written.Add(RequestFileReader.Read(stream.ToArray()).Content);
+                return PrivateFilePublication.Published;
+            };
+            try
+            {
+                Find<TextBox>(window, "UrlBox").Text = url;
+
+                await window.SaveRequestAsync();
+
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_SAVE_ORIGIN_REFUSED", shown), Status(window));
+                Assert.DoesNotContain(origin, Status(window), StringComparison.Ordinal);
+                Assert.Empty(written);
+
+                await window.SaveRequestAsync();
+
+                Assert.Equal(new[] { shown, shown }, questions.Select(question => question.ChangedOrigin));
+                Assert.Equal((RequestFileProfile.Content, url), (Assert.Single(written).Profile, written[0].Url));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
         // Every outcome of a save is worded, by the file's name only, and none changes the request in the editors.
         [Theory]
         [InlineData("Exists", "COMPOSER_SAVE_EXISTS")]
