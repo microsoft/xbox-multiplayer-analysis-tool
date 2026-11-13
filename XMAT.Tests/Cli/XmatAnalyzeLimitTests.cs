@@ -62,7 +62,8 @@ namespace XMAT.Tests.Cli
         // An .xmatcap row whose base64 request and response bodies (about 43 MiB) exceed the former 32 MiB record default:
         // the defaults admit it, and xmat export keeps both bodies exactly. A lowered record limit still refuses it (the
         // reader sets SQLITE_LIMIT_LENGTH to the record limit plus 1 MiB), and a 32 MiB input limit refuses the file before
-        // anything is read.
+        // anything is read. The export's name is short because the staged copy and its SQLite journal must stay under 260
+        // characters in CI's deeper test folder (xmat.exe isn't long-path aware).
         [Fact]
         public async Task Analyze_LargeXmatcapBodies_AreAdmittedByDefault_AndFollowLoweredLimits()
         {
@@ -72,7 +73,7 @@ namespace XMAT.Tests.Cli
             (string Request, string Response) stored = AddLargeBodies(input);
 
             XmatRun byDefault = await XmatProcess.RunAsync(directory.Root, "analyze", input, "--out", "default");
-            XmatRun exported = await XmatProcess.RunAsync(directory.Root, "export", input, "--out", "copy.xmatcap");
+            XmatRun exported = await XmatProcess.RunAsync(directory.Root, "export", input, "--out", "x.xmatcap");
             XmatRun lowered = await XmatProcess.RunAsync(
                 directory.Root, "analyze", input, "--out", "lowered", "--max-record-mib", "32");
             XmatRun smallInput = await XmatProcess.RunAsync(
@@ -82,7 +83,7 @@ namespace XMAT.Tests.Cli
             Assert.Equal(2, byDefault.Json().GetProperty("totals").GetProperty("calls").GetInt32());
             Assert.Equal(new[] { 512L, 256L, 128L, 100_000L }, Limits(Summary(directory, "default")));
             CliAssert.ExitCode(0, exported);
-            Assert.Equal(stored, StoredBodies(Path.Combine(directory.Root, "copy.xmatcap")));
+            Assert.Equal(stored, StoredBodies(Path.Combine(directory.Root, "x.xmatcap")));
             CliAssert.ExitCode(3, lowered);
             Assert.Equal(new[] { "analysis.input.limit" }, lowered.ErrorCodes());
             Assert.Equal(new[] { 512L, 256L, 32L, 100_000L }, Limits(lowered.Json()));
