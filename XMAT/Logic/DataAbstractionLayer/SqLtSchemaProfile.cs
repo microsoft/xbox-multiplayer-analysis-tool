@@ -199,6 +199,9 @@ namespace XMAT.DataAbstractionLayer
                         Text(
                             WebProxyCaptureSchema
                                 .ClientProcessStatus),
+                    [WebProxyCaptureSchema.ResponseTrailers] = Text(WebProxyCaptureSchema.ResponseTrailers),
+                    [WebProxyCaptureSchema.ResponseBodyTruncatedAt] =
+                        Integer(WebProxyCaptureSchema.ResponseBodyTruncatedAt),
                 };
 
         // The profile of a capture opened in XMAT: it needs only CaptureDevices, reads every known table, and has

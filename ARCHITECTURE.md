@@ -145,7 +145,9 @@ Captures HTTP/HTTPS traffic by acting as a forward proxy. Supports Xbox developm
 - **FiddlerSazHandler** — Import/export support for Fiddler SAZ archive format
 - **ScriptHost** — Roslyn-based C# script execution for on-the-fly traffic modification
 
-**Data storage:** `WebProxyConnections` table with request/response metadata (timestamps, headers, bodies, status codes, client IP) and, for traffic from a PC, the client process (image name, PID, start time and status).
+**Data storage:** `WebProxyConnections` table with request/response metadata (timestamps, headers, bodies, status codes, client IP), for traffic from a PC the client process (image name, PID, start time and status), and response trailers and where a capture truncated a long response body.
+
+**Streaming:** `WebServiceProxy` buffers a response for its Web Response script, or streams it as it arrives (`ResponseStreamingOptions`, set from Preferences). For a streamed response it publishes the captured body prefix, an array it never changes, when the headers arrive (`WebResponseProgressAsync`), when the prefix fills the capture limit and when the body passes it, then reports the end once with the time the stream ended (`ResponseForwarded`), after the client has the end of the response. The controller updates the row at each step, stores an unchanged prefix once, and records the end before it runs the script on a copy. A response that the proxy sends itself instead of the server's (502 or 504) is reported the same way, marked `ProxyGenerated`, and recorded without a script. A proxy stop completes only after it has reported the end of every stream it admitted, so `WebServiceDeviceCaptureController` keeps its capture callbacks open until the proxy has stopped, also after a failed start, and until a later stop when the proxy is still stopping after the capture budget.
 
 **Process filter:** each capture tab can hide sessions by client process (`ProcessFilterSpec`). The filter only changes what the grid and timeline show; the proxy still forwards and records every session. The GUI, opt-in filtered analysis, exports and the `--process`/`--exclude-process` options of `xmat analyze` and `xmat export` share one matcher (`ProcessFilter`) and `FilterCaptureSessionsOperation`, which also counts the included, hidden and unknown sessions.
 
@@ -243,7 +245,7 @@ The data abstraction layer wraps SQLite via `Microsoft.Data.Sqlite`:
 | Table | Created By | Fields |
 |---|---|---|
 | `CaptureDevices` | App startup | DeviceType, DeviceName, CaptureType |
-| `WebProxyConnections` | WebServiceCaptureMethod | Request/response metadata, timestamps, headers, bodies; optional client process columns (`ClientProcessName`, `ClientProcessId`, `ClientProcessStartTime`, `ClientProcessStatus`) |
+| `WebProxyConnections` | WebServiceCaptureMethod | Request/response metadata, timestamps, headers, bodies; optional client process columns (`ClientProcessName`, `ClientProcessId`, `ClientProcessStartTime`, `ClientProcessStatus`) and response columns (`ResponseTrailers`, `ResponseBodyTruncatedAt`) |
 | `NetworkTracePackets` | NetworkTraceCaptureMethod | PID, TID, timestamp, flags, payload |
 
 ## Design Patterns

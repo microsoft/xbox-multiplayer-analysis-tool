@@ -38,7 +38,7 @@ namespace XMAT.Tests.Cli
         {
             CliLimits limits = Parse("analyze a.saz --out results").Request.Limits;
 
-            Assert.Equal(new CliLimits(512, 256, 32, 100_000), limits);
+            Assert.Equal(new CliLimits(512, 256, 128, 100_000), limits);
             Assert.Equal(AnalysisLimits.Default, limits.ToAnalysisLimits());
         }
 
@@ -57,13 +57,15 @@ namespace XMAT.Tests.Cli
             Assert.Equal(new AnalysisLimits(1024 * Mib, 64 * Mib, 512 * Mib, 250_000), spaced.ToAnalysisLimits());
         }
 
-        // A limit that is not given keeps its default. Leading zeros are allowed: the value is still decimal.
+        // A limit that is not given keeps its default, except that the record limit is the data limit when that is lower.
+        // Leading zeros are allowed: the value is still decimal.
         [Theory]
-        [InlineData("--max-input-mib 1", 1, 256, 32, 100_000)]
-        [InlineData("--max-data-mib 32", 512, 32, 32, 100_000)]
+        [InlineData("--max-input-mib 1", 1, 256, 128, 100_000)]
+        [InlineData("--max-data-mib 64", 512, 64, 64, 100_000)]
+        [InlineData("--max-data-mib 512", 512, 512, 128, 100_000)]
         [InlineData("--max-record-mib 1", 512, 256, 1, 100_000)]
-        [InlineData("--max-records 1", 512, 256, 32, 1)]
-        [InlineData("--max-records 0100", 512, 256, 32, 100)]
+        [InlineData("--max-records 1", 512, 256, 128, 1)]
+        [InlineData("--max-records 0100", 512, 256, 128, 100)]
         [InlineData("--max-data-mib 48 --max-record-mib 48", 512, 48, 48, 100_000)]
         public void Parse_KeepsTheDefaultOfEveryLimitNotGiven(
             string options,
@@ -194,10 +196,9 @@ namespace XMAT.Tests.Cli
                 $"The {name} option needs a value.");
         }
 
-        // The record limit never exceeds the data limit, the default of an option that was not given included.
+        // A record limit that was given never exceeds the data limit: it is rejected, never lowered.
         [Theory]
         [InlineData("--max-data-mib 40 --max-record-mib 48")]
-        [InlineData("--max-data-mib 16")]
         [InlineData("--max-record-mib 120 --max-data-mib 100")]
         public void Parse_RejectsARecordLimitAboveTheDataLimit(string options)
         {
@@ -206,7 +207,8 @@ namespace XMAT.Tests.Cli
             AssertUsageError(
                 result,
                 "cli.usage.invalid-value",
-                "--max-record-mib must not exceed --max-data-mib (32 and 256 by default).");
+                "--max-record-mib must not exceed --max-data-mib (256 by default). Without --max-record-mib, the " +
+                "record limit is 128 or the data limit, whichever is lower.");
         }
 
         // A value is never repeated: it could be a path or a secret.
@@ -248,7 +250,7 @@ namespace XMAT.Tests.Cli
             using JsonDocument summary = JsonDocument.Parse(CliJson.SerializeSummary(given));
             using JsonDocument rejected = JsonDocument.Parse(CliJson.Serialize(usageError));
 
-            Assert.Equal(new[] { 512L, 256L, 32L, 100_000L }, Limits(stdout.RootElement));
+            Assert.Equal(new[] { 512L, 256L, 128L, 100_000L }, Limits(stdout.RootElement));
             Assert.Equal(new[] { 1024L, 512L, 48L, 7L }, Limits(summary.RootElement));
             Assert.Equal(
                 new[] { "schema", "command", "runId", "version", "input", "limits", "devices", "totals", "warnings" },
@@ -340,7 +342,7 @@ namespace XMAT.Tests.Cli
 
             Assert.Equal(CliExitCodes.Internal, analyze.ExitCode);
             Assert.Equal("analyze", document.RootElement.GetProperty("command").GetString());
-            Assert.Equal(new[] { 512L, 256L, 32L, 7L }, Limits(document.RootElement));
+            Assert.Equal(new[] { 512L, 256L, 128L, 7L }, Limits(document.RootElement));
             Assert.Equal("cli.internal", Assert.Single(analyze.Errors).Code);
             Assert.DoesNotContain(
                 "s3cretcanary9",

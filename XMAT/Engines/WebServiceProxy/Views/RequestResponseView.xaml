@@ -10,13 +10,39 @@
     <UserControl.Resources>
         <local:BodyConverter x:Key="BodyConverter"/>
         <local:JsonConverter x:Key="JsonConverter"/>
+        <!-- Hidden when there is nothing to show, such as for a complete response without trailers. -->
+        <Style x:Key="CollapsedWhenEmptyTextBlock" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Style.Triggers>
+                <Trigger Property="Text" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="CollapsedWhenEmptyTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Style.Triggers>
+                <Trigger Property="Text" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </UserControl.Resources>
     <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
         <TextBlock DockPanel.Dock="Top" Height="24" FontWeight="Bold" Margin="10,0,0,0" VerticalAlignment="Center" Text="{Binding Title, FallbackValue=Request}"/>
+        <TextBlock x:Name="NoticeText" DockPanel.Dock="Top" Margin="10,0,10,4" TextWrapping="Wrap"
+                   Style="{StaticResource CollapsedWhenEmptyTextBlock}"
+                   Foreground="{DynamicResource CapturePendingForegroundBrush}"
+                   Text="{Binding Notice, Mode=OneWay, TargetNullValue=''}"/>
         <TabControl x:Name="RequestTabs">
             <TabItem x:Name="HeadersTab" Header="Headers">
                 <ScrollViewer>
-                    <TextBox IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True" Text="{Binding FirstLineAndHeaders, Mode=OneWay}"/>
+                    <DockPanel>
+                        <TextBox x:Name="TrailersText" DockPanel.Dock="Bottom" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas"
+                                 Style="{StaticResource CollapsedWhenEmptyTextBox}"
+                                 Text="{Binding Trailers, Mode=OneWay, TargetNullValue=''}"/>
+                        <TextBlock x:Name="TrailersLabel" DockPanel.Dock="Bottom" Margin="0,8,0,2" FontWeight="Bold" Text="Trailers"
+                                   Visibility="{Binding Visibility, ElementName=TrailersText}"/>
+                        <TextBox IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True" Text="{Binding FirstLineAndHeaders, Mode=OneWay}"/>
+                    </DockPanel>
                 </ScrollViewer>
             </TabItem>
             <TabItem x:Name="BodyTab" Header="Body">

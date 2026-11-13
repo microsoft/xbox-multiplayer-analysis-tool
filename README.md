@@ -21,19 +21,22 @@ The captured request version describes the client leg; the captured response ver
 origin leg. Request and response records share a request number and, for HTTP/2 clients, the client
 stream ID. Stream IDs are scoped to a connection, not globally unique.
 
-Requests and responses are buffered completely before their respective script callbacks run.
-Body edits are forwarded with a recalculated Content-Length, while received capture metadata remains
-available to scripts. Connection-specific headers, including fields named by a Connection header,
-are removed when forwarding regular intercepted requests and responses, without deleting them from
-the capture model.
+Requests and responses are buffered completely before their respective script callbacks run, except
+responses that XMAT streams (see [Streaming and large responses](docs/web-proxy.md#streaming-and-large-responses)),
+whose scripts run on a copy after they end. Body edits keep the message's framing (a recalculated
+Content-Length when it had one, chunked or HTTP/2 DATA framing when it had none), while received
+capture metadata remains available to scripts. Connection-specific headers, including fields named
+by a Connection header, are removed when forwarding regular intercepted requests and responses,
+without deleting them from the capture model.
 
 The origin can start responding before the buffered upload finishes: the upstream transport
-reads and writes concurrently to avoid an HTTP/2 flow-control stall. XMAT still waits for
-the complete response before running response scripts or sending it to the device.
+reads and writes concurrently to avoid an HTTP/2 flow-control stall. XMAT still waits for a
+buffered response to complete before running response scripts or sending it to the device; a
+streamed response goes to the device as it arrives.
 
-This is buffered HTTP capture, not a claim of complete HTTP/2 feature coverage. Trailers are not
-preserved or forwarded, so gRPC correctness is not guaranteed, including unary calls that depend
-on status trailers. Long-lived streaming requires additional work. Cleartext
+This is not a claim of complete HTTP/2 feature coverage. Trailers reach HTTP/2 devices, and HTTP/1.1
+devices on plain HTTP when the response is chunked, but not HTTPS devices that use HTTP/1.1; gRPC
+isn't validated. Cleartext
 HTTP/2 (h2c) and HTTP/3/QUIC are not supported. HTTP/2 WebSocket extended CONNECT is not validated
 by the HTTP request/response test matrix.
 The plain-HTTP forwarding path is separate from the intercepted HTTPS path.
@@ -69,7 +72,7 @@ client and origin protocols, workload, duration, and results:
    Record failures rather than marking an unrun or unsuccessful check complete.
 
 Passing the automated suite alone does not establish live-device, GUI, or long-session
-acceptance. Streaming, trailers/gRPC, h2c, HTTP/2 extended CONNECT, and HTTP/3 are separate
+acceptance. gRPC, h2c, HTTP/2 extended CONNECT, and HTTP/3 are separate
 follow-ups, not capabilities certified by this checklist.
 
 ## Requirements

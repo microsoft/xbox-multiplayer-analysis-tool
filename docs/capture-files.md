@@ -59,6 +59,24 @@ connection id, exact request and response times, scheme, request path (with its
 query) and client IP address. XMAT's import restores each value whose flag is
 present and valid, and otherwise reads the archive as Fiddler wrote it.
 
+### Streamed responses
+
+A response body that passes the capture limit (see
+[Streaming and large responses](web-proxy.md#streaming-and-large-responses)) is captured
+only up to the limit, and the response pane says where it was truncated: "Capture
+truncated at 32 MB; additional bytes are not captured." XMAT keeps forwarding the rest of
+the body to the device. The stored headers stay as the server sent them, so a
+truncated body can be shorter than its `Content-Length`. Trailer fields that followed a
+response body are listed under its headers. `.XMATCAP` files keep both in two optional
+columns of the `WebProxyConnections` table: `ResponseTrailers` (the trailer lines) and
+`ResponseBodyTruncatedAt` (the body bytes kept; 0 when the body is complete). Captures
+saved without these columns load with complete bodies and no trailers. A `.SAZ` export
+writes them as the `x-xmat-response-trailers` and `x-xmat-response-body-truncated-at`
+flags, which an import restores when they are valid. A sanitized `.SAZ` keeps the
+truncation but never writes the trailers (see below). Exports of a running capture
+skip a response that is still streaming, as they skip any response that is not
+complete yet.
+
 ### Process information
 
 Web proxy captures on a PC record the program that opened each connection (see
@@ -122,7 +140,7 @@ Sanitization is per export, not a preference. Ordinary exports and native
 **Save Captures** remain unsanitized. Only the chosen sessions are exported;
 the original capture is not sanitized in place. A sanitized archive keeps XMAT's
 request numbers, connection ids, times and schemes, but not the client IP address,
-the raw request path or the client process.
+the raw request path, the client process or response trailers.
 
 ### What is inspected
 
@@ -142,7 +160,9 @@ collision-safe names. Xbox profile IDs/display names, recognized structured-body
 credential echoes across a request/response pair, and client-IP metadata are masked.
 Client process metadata (`x-ProcessInfo` and XMAT's process flags) is never written;
 each session for which an ordinary export would write any of it counts as one
-redaction.
+redaction. Response trailers (`x-xmat-response-trailers`) are never written either,
+because their values can hold secrets; each trailer left out counts as an omitted
+header.
 JWT recognition does not depend on a particular encoded-header prefix. Standalone
 Xbox credentials and PGP private-key armor are recognized.
 

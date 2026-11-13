@@ -22,13 +22,16 @@ namespace XMAT
             Cancel.Content = Localization.GetLocalizedString("PREFS_BUTTON_CLOSE");
             Save.Content = Localization.GetLocalizedString("PREFS_BUTTON_SAVE");
             PreferencesWindowTitle.Title = Localization.GetLocalizedString("PREFS_WINDOW_TITLE");
+
+            // The window opens on its tallest tab, Web Proxy, and keeps that height when another tab is selected.
+            Loaded += (_, _) => SizeToContent = SizeToContent.Manual;
         }
 
         private void Save_Executed(object sender, RoutedEventArgs e)
         {
             try
             {
-                ProxyOptions.CommitPortRange();
+                ProxyOptions.CommitPreferences();
             }
             catch (ArgumentException ex)
             {

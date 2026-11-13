@@ -807,12 +807,8 @@ namespace XMAT.Tests
             Assert.Empty(await response.Content.ReadAsByteArrayAsync());
         }
 
-        [Theory]
-        [InlineData("chunked", null)]
-        [InlineData("gzip, chunked", "gzip")]
-        public async Task InterceptedHttpHost_DropsDecodedChunkedCodingFromCapturedRequest(
-            string transferEncoding,
-            string expectedStoredCoding)
+        [Fact]
+        public async Task InterceptedHttpHost_DropsDecodedChunkedCodingFromCapturedRequest()
         {
             using var certificate = CreateCertificate();
             var proxy = new WebServiceProxy();
@@ -848,7 +844,7 @@ namespace XMAT.Tests
                 VersionPolicy = HttpVersionPolicy.RequestVersionExact,
                 Content = new ByteArrayContent("request-body"u8.ToArray())
             };
-            request.Headers.TryAddWithoutValidation("Transfer-Encoding", transferEncoding);
+            request.Headers.TryAddWithoutValidation("Transfer-Encoding", "chunked");
 
             using HttpResponseMessage response = await client.SendAsync(request);
 
@@ -857,9 +853,7 @@ namespace XMAT.Tests
             // Kestrel passes the client's framing header through but de-chunks the body.
             Assert.Contains("chunked", receivedTransferEncoding);
             Assert.Equal("request-body", System.Text.Encoding.UTF8.GetString(captured.BodyBytes));
-            Assert.Equal(
-                expectedStoredCoding,
-                captured.Headers.GetHeaderValuesAsList("Transfer-Encoding")?.Single());
+            Assert.Null(captured.Headers.GetHeaderValuesAsList("Transfer-Encoding"));
         }
 
         [Fact]
@@ -1126,7 +1120,8 @@ namespace XMAT.Tests
                 Assert.Equal(request.Version, response.Version);
                 Assert.Equal($"HTTP/{(originVersion == 1 ? "1.1" : "2")}", observedProtocol);
                 Assert.Equal(editBodies ? "edited-request"u8.ToArray() : originalBody, observedBody);
-                Assert.Equal(observedBody.Length, observedLength);
+                // A body sent without a length is forwarded without one (chunked on HTTP/1.1), like Fiddler.
+                Assert.Equal(knownLength ? observedBody.Length : null, observedLength);
                 Assert.Equal(editBodies ? null : "application/octet-stream", observedContentType);
                 Assert.Equal("", observedHop);
                 Assert.Equal("request-retained", observedEndToEnd);

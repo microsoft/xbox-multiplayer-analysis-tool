@@ -8,6 +8,7 @@ using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.Tests
 {
@@ -27,6 +28,69 @@ namespace XMAT.Tests
                 database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
 
             Assert.Equal(ClientProcessInfo.NotRecorded, ClientProcessRecordCodec.Read(record));
+        }
+
+        // A capture saved before the optional response columns existed loads its responses as complete, without trailers.
+        [Fact]
+        public void ReadonlyDatabase_OldShapeHasCompleteResponsesWithoutTrailers()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteXmatcap(
+                directory.Path,
+                "old-shape.xmatcap",
+                new SyntheticXmatcapOptions(RequestsPerDevice: 1));
+
+            using var database = new SqLtReadonlyDatabase(path);
+            var model = new ProxyConnectionModel(Assert.Single(
+                database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords));
+
+            Assert.Equal((string.Empty, 0L), (model.ResponseTrailers, model.ResponseBodyTruncatedAt));
+            Assert.NotEmpty(model.ResponseBody);
+        }
+
+        // A saved capture keeps a streamed response's trailers and where its captured body was truncated.
+        [Fact]
+        public void SaveToFile_RoundTripsResponseTrailersAndTruncation()
+        {
+            using var directory = new TestDirectory();
+            string path = Path.Join(directory.Path, "streamed.xmatcap");
+            const string trailers = "x-checksum: abc123\r\nx-request-cost: 7\r\n";
+            using (var database = new SqLtDatabase())
+            {
+                database.Initialize();
+                database.CreateTable(
+                    "CaptureDevices",
+                    new Field<long>("DeviceType"),
+                    new Field<string>("DeviceName"),
+                    new Field<long>("CaptureType"))
+                    .AddRow((long)DeviceType.LocalPC, "Streaming PC", (long)CaptureType.WebProxy);
+                IDataTable table = database.CreateTable(
+                    WebServiceCaptureMethod.TableName,
+                    WebProxyCaptureSchema.CreateFields());
+                table.AddRow(WebProxyCaptureSchema.Project(
+                    new Dictionary<string, object>(StringComparer.Ordinal)
+                    {
+                        [WebServiceCaptureMethod.FieldKey_DeviceName] = "Streaming PC",
+                        [WebServiceCaptureMethod.FieldKey_RequestNumber] = 1L,
+                        [WebServiceCaptureMethod.FieldKey_RequestTimestamp] = "2026-11-12T10:00:00.0000000Z",
+                        [WebServiceCaptureMethod.FieldKey_ResponseTimestamp] = "2026-11-12T10:00:01.0000000Z",
+                        [WebServiceCaptureMethod.FieldKey_RequestStatus] = "200",
+                        [WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders] =
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n",
+                        [WebServiceCaptureMethod.FieldKey_ResponseBody] = Convert.ToBase64String("data: a first ev"u8),
+                        [WebProxyCaptureSchema.ResponseTrailers] = trailers,
+                        [WebProxyCaptureSchema.ResponseBodyTruncatedAt] = 16L,
+                    },
+                    ClientProcessInfo.NotRecorded));
+                database.SaveToFile(path);
+            }
+
+            using var loaded = new SqLtReadonlyDatabase(path);
+            var model = new ProxyConnectionModel(Assert.Single(
+                loaded.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords));
+
+            Assert.Equal((trailers, 16L), (model.ResponseTrailers, model.ResponseBodyTruncatedAt));
+            Assert.Equal("data: a first ev"u8.ToArray(), model.ResponseBody);
         }
 
         [Fact]

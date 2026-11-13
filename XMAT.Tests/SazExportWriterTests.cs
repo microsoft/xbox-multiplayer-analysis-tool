@@ -27,6 +27,8 @@ namespace XMAT.Tests
         private const string SchemeFlag = "x-xmat-scheme";
         private const string PathFlag = "x-xmat-request-path";
         private const string ClientIpFlag = "x-xmat-clientip";
+        private const string TrailersFlag = "x-xmat-response-trailers";
+        private const string TruncatedAtFlag = "x-xmat-response-body-truncated-at";
         private const string Requested = "2026-02-01T00:00:01.1234567Z";
         private const string Responded = "2026-02-01T00:00:01.2345678Z";
         private const string Secret = "q7f3a-secret";
@@ -90,6 +92,41 @@ namespace XMAT.Tests
             Assert.True(summary.Sanitization.RedactedValues >= 2, "The client address and the process are redactions.");
         }
 
+        // A streamed response keeps its trailers and the size of its truncated capture, and an import restores both. A
+        // sanitized archive keeps the truncation but never the trailers, whose values can hold secrets; each trailer it
+        // leaves out counts as an omitted header. A complete response without trailers gets neither flag.
+        [Fact]
+        public void Write_RecordsResponseTrailersAndTruncation_AndSanitizingDropsTheTrailers()
+        {
+            const string trailers = "x-checksum: abc123\r\nx-session-token: " + Secret + "\r\n";
+            RawExportRow plain = Row(7, 7, ProcessCaptures.Device);
+            RawExportRow streamed = Row(7, 7, ProcessCaptures.Device, change: values =>
+            {
+                values[WebProxyCaptureSchema.ResponseTrailers] = trailers;
+                values[WebProxyCaptureSchema.ResponseBodyTruncatedAt] = 16L;
+            });
+
+            string ordinaryPath = Write(false, streamed).Path;
+            Dictionary<string, string> ordinary = Flags(ordinaryPath);
+            (string sanitizedPath, ExportWriteSummary summary) = Write(true, streamed);
+            Dictionary<string, string> sanitized = Flags(sanitizedPath);
+            ExportWriteSummary baseline = Write(true, plain).Summary;
+
+            Assert.Equal(trailers, ordinary.GetValueOrDefault(TrailersFlag));
+            Assert.Equal("16", ordinary.GetValueOrDefault(TruncatedAtFlag));
+            ProxyConnectionModel imported = Assert.Single(
+                FiddlerSazHandler.ImportSazFile(ordinaryPath, CancellationToken.None));
+            Assert.Equal((trailers, 16L), (imported.ResponseTrailers, imported.ResponseBodyTruncatedAt));
+            Assert.False(sanitized.ContainsKey(TrailersFlag));
+            Assert.Equal("16", sanitized.GetValueOrDefault(TruncatedAtFlag));
+            Assert.DoesNotContain(
+                Secret,
+                string.Join("\n", ProcessCaptures.Entries(sanitizedPath).Values.Select(Encoding.UTF8.GetString)),
+                StringComparison.Ordinal);
+            Assert.Equal(baseline.Sanitization.OmittedHeaders + 2, summary.Sanitization.OmittedHeaders);
+            Assert.DoesNotContain(Flags(Write(false, plain).Path).Keys, flag => flag is TrailersFlag or TruncatedAtFlag);
+        }
+
         // The flags come from an untrusted file: a malformed one leaves its field as a Fiddler import reads it.
         [Theory]
         [InlineData(RequestNumberFlag, "-4")]
@@ -98,6 +135,10 @@ namespace XMAT.Tests
         [InlineData(SchemeFlag, "1http")]
         [InlineData(PathFlag, "")]
         [InlineData(ClientIpFlag, "")]
+        [InlineData(TruncatedAtFlag, "-16")]
+        [InlineData(TruncatedAtFlag, "16 bytes")]
+        [InlineData(TrailersFlag, "not a header line")]
+        [InlineData(TrailersFlag, "x-checksum: abc123\r\nbad line\r\n")]
         public void Import_IgnoresAMalformedXmatFlag(string flag, string value)
         {
             var baseline = new Dictionary<string, string> { ["x-clientip"] = ProcessCaptures.SazClientIp };
@@ -109,6 +150,9 @@ namespace XMAT.Tests
             Assert.Equal(
                 (legacy.RequestNumber, legacy.Id, legacy.RequestTime, legacy.Duration, legacy.Scheme, legacy.Path, legacy.ClientIP),
                 (model.RequestNumber, model.Id, model.RequestTime, model.Duration, model.Scheme, model.Path, model.ClientIP));
+            Assert.Equal(
+                (legacy.ResponseTrailers, legacy.ResponseBodyTruncatedAt),
+                (model.ResponseTrailers, model.ResponseBodyTruncatedAt));
         }
 
         [Theory]

@@ -120,7 +120,9 @@ namespace XMAT.Tests.Operations.Analysis
                     session.ProcessName ?? string.Empty,
                     session.ProcessId,
                     session.StartTimeUtc ?? string.Empty,
-                    session.Status ?? string.Empty);
+                    session.Status ?? string.Empty,
+                    string.Empty,
+                    0L);
             }
 
             database.SaveToFile(path);

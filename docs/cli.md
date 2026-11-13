@@ -35,7 +35,7 @@ xmat --version
   code 10 when the rules report findings (the results are still written).
 - xmat treats its input as untrusted. By default it refuses an input (exit code 3) larger than 512 MiB
   (`analysis.input.too-large`), or one with more than 100,000 requests (a Fiddler archive) or rows in its device and
-  connection tables together (an XMAT capture), an archive entry or row over 32 MiB, or more than 256 MiB of data in
+  connection tables together (an XMAT capture), an archive entry or row over 128 MiB, or more than 256 MiB of data in
   total, unzipped or read (`analysis.input.limit`); the options below change these four limits. These other limits
   are fixed or follow the allowed requests (`analysis.input.limit`): for a Fiddler archive, more than 300,064 archive
   entries of any kind by default (three per allowed request plus 64, and never more than 750,064), a central directory
@@ -56,9 +56,11 @@ xmat --version
   column may be NULL, which counts nothing; a NULL in a known column is rejected (`analysis.input.malformed`).
   WebProxyConnections may also hold, among its extra columns, the optional client process columns that XMAT writes
   (`ClientProcessName` TEXT, `ClientProcessId` INTEGER, `ClientProcessStartTime` TEXT and `ClientProcessStatus` TEXT;
-  see [Capture files](capture-files.md#process-information)). One of them spelled or typed otherwise is rejected
-  (`analysis.input.schema`), but a NULL or unreadable value in them is read as missing, never rejected: a session
-  without usable process information counts as unknown, as in a capture saved without these columns. A Fiddler
+  see [Capture files](capture-files.md#process-information)) and its optional response columns (`ResponseTrailers`
+  TEXT and `ResponseBodyTruncatedAt` INTEGER; see [Capture files](capture-files.md#streamed-responses)). One of them
+  spelled or typed otherwise is rejected (`analysis.input.schema`), but a NULL or unreadable value in them is read as
+  missing, never rejected: a session without usable process information counts as unknown, as in a capture saved
+  without these columns, and one without response columns has no trailers and a complete body. A Fiddler
   archive whose directory records are missing, inconsistent or span several disks is rejected too
   (`analysis.input.malformed`); single-disk ZIP64 archives are supported. These limits bound the capture data that
   xmat reads, not its exact memory use, and how many calls fit depends on the data: typical Xbox Live traffic stores
@@ -83,12 +85,13 @@ xmat --version
   analyzed rows come from that one guarded file even if an alias is retargeted.
 - `--max-input-mib`, `--max-data-mib`, `--max-record-mib` and `--max-records` set the four input limits of one run, in
   MiB (1,048,576 bytes) or records: the input's size (512 by default, at most 2,048), the data that xmat holds in total
-  (256 by default, at most 512), one archive entry or row (32 by default, at most 128, and never more than
-  `--max-data-mib`) and the requests or rows (100,000 by default, at most 250,000). Each takes a whole number of ASCII
-  digits from 1 to its maximum, at most once; any other value, or a record limit above the data limit, is a usage
-  error (`cli.usage.invalid-value`, or `cli.usage.duplicate-option` for a repeated option; exit code 2) whose message
-  names the option, with its range for an invalid value or both options for a record limit above the data limit, but
-  never the value. `--max-records` is an upper bound, not a guaranteed capacity: a
+  (256 by default, at most 512), one archive entry or row (128 by default, or the data limit when that is lower; at
+  most 128, and never more than `--max-data-mib`) and the requests or rows (100,000 by default, at most 250,000). Each
+  takes a whole number of ASCII digits from 1 to its maximum, at most once; any other value, or a record limit above
+  the data limit, is a usage error (`cli.usage.invalid-value`, or `cli.usage.duplicate-option` for a repeated option;
+  exit code 2) whose message names the option, with its range for an invalid value or both options for a record limit
+  above the data limit, but never the value. A lower `--max-data-mib` alone also lowers the record limit; a
+  `--max-record-mib` that was given is never lowered. `--max-records` is an upper bound, not a guaranteed capacity: a
   Fiddler archive with fewer requests can still exceed the data limit or the archive limits above. The JSON output and
   `summary.json` report the effective values in `limits`. An XMAT capture's file may be as large as `--max-input-mib`,
   and SQLite may read values as large as `--max-record-mib` plus 1 MiB. Raising the limits lets xmat read larger
@@ -98,6 +101,18 @@ xmat --version
   guaranteed capacity or a bound on memory use, so still run xmat with time and memory limits. The limits do not
   change the rule budget below, so a larger capture can still stop with `analysis.rules.work-limit`, nor the fixed
   limits above.
+- An XMAT capture stores each session's request and response bodies in its row as base64, which takes 4 bytes for every
+  3 (a 32 MiB body takes about 42.7 MiB), so its rows count about a third more than their bodies against the record
+  and data limits. The default record limit of 128 MiB holds a row with a request body of up to 32 MiB, the most the
+  proxy reads, and a response body at the largest capture limit, 40 MB (see
+  [Streaming and large responses](web-proxy.md#streaming-and-large-responses)), with room for its headers and other
+  values. A row can be larger: a Web Request or Web Response script can give a buffered message a larger body, and
+  captures from other XMAT versions or other tools can hold larger bodies. xmat refuses a row over 128 MiB, the most
+  that `--max-record-mib` allows; the GUI opens it. The limits on the whole capture apply as well (512 MiB
+  of file, 256 MiB of data and 100,000 rows), so xmat can refuse a capture whose rows each fit: three rows with the
+  largest bodies already exceed the 256 MiB data limit. Raise these limits with the options above, up to their
+  maximums, or use the GUI. Reading a capture is not the same as analyzing it: a capture that xmat reads can be
+  exported, but `xmat analyze` can still stop at the rule budget below (`analysis.rules.work-limit`).
 - `--process` and `--exclude-process` choose the sessions to analyze by the client process that sent them, with the
   same rules as the process filter of a capture tab in the GUI. Each takes one selector and may be given again, up to
   64 times each: an image name such as `game.exe` or `game*.exe` (`*` and `?` are wildcards, case does not matter and
@@ -195,7 +210,7 @@ An abridged result:
   "status": "succeeded",
   "exitCode": 0,
   "input": { "kind": "saz", "sha256": "..." },
-  "limits": { "maxInputMib": 512, "maxDataMib": 256, "maxRecordMib": 32, "maxRecords": 100000 },
+  "limits": { "maxInputMib": 512, "maxDataMib": 256, "maxRecordMib": 128, "maxRecords": 100000 },
   "processFilter": { "applied": true, "include": [], "exclude": [],
     "counts": { "total": 4, "included": 4, "hidden": 0, "unknown": 4 },
     "devices": [ { "id": "d1", "total": 4, "included": 4, "hidden": 0, "unknown": 4 } ] },
@@ -301,6 +316,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Capture this PC (`capture.local-pc`) | (not available yet) | Planned (S6, XMAT-021) |
 | Capture low-level network traces (`capture.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Filter captured sessions by client process (`capture.process-filter`) | `xmat analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...`<br>`xmat export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S9) |
+| Stream responses and limit how much of each response body a capture keeps (`capture.response-streaming`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Run capture scripts (`capture.scripts`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Stop a running capture (`capture.stop`) | (not available yet) | Planned (S5, XMAT-021) |
 | Record WebSocket handshakes and report observed frames without their payloads (`capture.websocket-handshakes`) | (not available yet) | Planned (S4, XMAT-021) |

@@ -245,6 +245,88 @@ Windows reports may not shrink even then. Deleting is not a forensic erasure: ot
 copies of the data, and data that Windows or the storage device still hold, are beyond
 XMAT's reach.
 
+## Streaming and large responses
+
+Like Fiddler Classic, XMAT buffers each response so a Web Response script can change it,
+then forwards it. These responses stream to the device as they arrive instead:
+
+- Event streams (`text/event-stream`), audio and video, while **Automatically stream
+  audio, video and event streams** is on (the default).
+- Every response with a body, while **Stream all responses** is on (off by default).
+  Responses without a body (to `HEAD` requests, and `204` and `304` responses) are still
+  buffered, so scripts can change or block them.
+- Any body larger than the **Capture limit** (32 MB by default, 1 to 40 MB), including
+  one whose `Content-Length` already says it is larger.
+
+Change these settings in **Edit > Preferences > Web Proxy > Streaming** and click
+**Save**; new responses use them from then on. Closing the window without saving keeps
+the previous streaming settings, and an invalid capture limit or port range saves
+nothing.
+
+The capture limit bounds how much of each response a capture keeps, not how much memory
+XMAT uses. Capturing a large response currently takes much more memory than the response
+itself: in testing, XMAT's memory use peaked at about 1.5 GB while it captured one 40 MB
+response, and several large streams captured at once can use several GB. Large uploads
+add to that (see [Request body limits](#request-body-limits)).
+
+For a streamed response:
+
+- The capture row shows the status and headers as soon as they arrive, in the color of
+  a request that is still waiting for its response, and the response view says that the
+  response is still streaming. The body appears when it reaches the capture limit or the
+  response ends, and the duration when the response ends, also when the device or the
+  server closes it early. A stream that never ends keeps flowing to the device.
+- The capture keeps the body only up to the capture limit, and the response view says
+  where it was truncated, for example "Capture truncated at 32 MB; additional bytes are
+  not captured." XMAT keeps forwarding the rest of the body to the device. A body exactly
+  as long as the capture limit is kept whole and isn't marked truncated.
+- A Web Response script runs after the response ends, on a copy whose body is what the
+  capture kept, so it may be truncated. The copy's changes and **Continue** = `false`
+  don't reach the device; XMAT logs a warning when the script made either.
+- The device gets the end of the response, and its connection can carry the next
+  request, before XMAT records that end and runs the script.
+- **Stop Capture** ends a response that is still streaming. Its row keeps the body that
+  arrived, up to the capture limit, and the time the stream ended, and its Web Response
+  script still runs; XMAT cancels scripts that are still running after 10 seconds.
+
+XMAT ends any response when the server sends nothing for 100 seconds.
+
+XMAT keeps the server's framing toward the device. A chunked response stays chunked
+for HTTP/1.1 devices, including its trailers; `Content-Length` stays `Content-Length`
+(updated when a script changes the body). HTTP/1.0 devices never get chunked responses:
+a response that the server sent without a `Content-Length`, buffered or streamed, ends
+when XMAT closes the connection. HTTP/2 devices get trailers too, but HTTPS devices that
+use HTTP/1.1 can't (the HTTPS engine XMAT uses can't send them), so XMAT also drops the
+`Trailer` header for them. XMAT forwards and announces only the trailer fields that HTTP
+allows after a body (RFC 9110), such as checksums, and leaves out fields such as
+`Content-Length`, `Content-Type`, `Host`, `Authorization` and `Cache-Control`. The
+capture records the trailers as .NET's HTTP client received them: it can drop fields
+that aren't allowed in trailers and normalize the others, so they may differ from the
+server's exact bytes.
+
+XMAT decodes only the `chunked` transfer coding. A request whose `Transfer-Encoding`
+doesn't end with `chunked` is malformed and gets `400 Bad Request`; one that applies
+another coding before `chunked` (such as `gzip, chunked`) gets `501 Not Implemented`.
+Neither is forwarded. A server response that uses another coding is replaced with
+`502 Bad Gateway` before any of it reaches the device. A request body without a length
+(sent chunked, or over HTTP/2 without a `Content-Length`) goes to the server without one
+too: with chunked framing when the server uses HTTP/1.1, and in DATA frames when it uses
+HTTP/2. XMAT answers `Expect: 100-continue` itself once the request's headers check out,
+and doesn't forward it; it ignores that expectation in an HTTP/1.0 request, as HTTP
+requires. A request with any other expectation gets `417 Expectation Failed`. Captures
+store the decoded body without `Transfer-Encoding` and keep trailers apart from the
+headers (see [Capture files](capture-files.md)).
+
+When XMAT answers a request itself because it can't pass on the server's response, the
+capture records that answer as the device received it: its status, headers and empty
+body, with the time XMAT sent it. XMAT answers `502 Bad Gateway` when it can't reach the
+server or the server uses a transfer coding that XMAT doesn't decode, and `504 Gateway
+Timeout` when the server doesn't answer in time. No Web Response script runs for such an
+answer, and XMAT logs the reason (see
+[Collect debug logs](troubleshooting.md#collect-debug-logs)). XMAT doesn't capture the
+requests that it refuses outright: those it answers with `400`, `417` or `501`, or with
+the `413`, `408` or `503` of the [request body limits](#request-body-limits).
+
 ## Block or bypass hosts
 
 The **Block List** and **Bypass List** are shared by every capture in the current
@@ -333,7 +415,9 @@ captured up to **1 MB**. WebSocket messages are **not saved to or loaded from
 
 1. Use **Stop Capture** to stop the local listener. Active proxy connections are
    canceled and new requests are no longer forwarded; captured data is retained
-   when stopping and restarting.
+   when stopping and restarting. A response that is still streaming is recorded with
+   the part of it that arrived (see
+   [Streaming and large responses](#streaming-and-large-responses)).
 2. To restore normal console routing, use **Disable Xbox Proxy**. This reboots the kit.
 
 If stopping takes more than half a second, a progress dialog shows the shutdown

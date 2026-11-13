@@ -165,6 +165,9 @@ namespace XMAT.WebServiceCapture
         internal ClientProcessResolver ProcessResolverOverride { get; set; }
         internal TimeSpan? CaptureCallbackDrainTimeoutOverride { get; set; }
 
+        // Also receives the warnings and script timeouts that this controller writes to the application log.
+        internal Action<LogLevel, string> LogObserver { get; set; }
+
         internal CaptureDeleteResult DeleteSessions(
             IReadOnlyList<CaptureDeleteTarget> targets,
             IReadOnlySet<CaptureRowKey> currentlyVisible)
@@ -563,10 +566,15 @@ namespace XMAT.WebServiceCapture
         private CaptureDataSource _captureDataSource = CaptureDataSource.ActiveTable;
         private readonly object _lockObj = new object();
         private readonly AsyncOperationTracker _captureCallbacks = new();
+        // The body array that each response's row holds, so an unchanged streamed prefix is stored once.
+        private readonly ConditionalWeakTable<ServerResponse, byte[]> _storedResponseBodies = new();
         private readonly BatchedDispatcherQueue _uiUpdateQueue;
         private readonly Guid _sourceId = Guid.NewGuid();
         private readonly CaptureRowRegistry _captureRows;
         private CancellationTokenSource _captureCallbackCancellationTokenSource;
+        // A start failed while its proxy was still stopping, so the capture callbacks, the UI queue and their
+        // cancellation stay open until a stop finds the proxy stopped.
+        private bool _failedStartCleanupPending;
         private Guid _activeRun;
         private long _retirementEpoch;
         private long _loadedIncarnation;
@@ -699,6 +707,10 @@ namespace XMAT.WebServiceCapture
                 _webProxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
                 _webProxy.WebRequestPolicyAsync = WebProxy_ReceivedWebRequestAsync;
                 _webProxy.WebResponsePolicyAsync = WebProxy_ReceivedWebResponseAsync;
+                if (_webProxy is WebServiceProxy streamingProxy)
+                {
+                    streamingProxy.WebResponseProgressAsync = WebProxy_WebResponseProgressAsync;
+                }
                 _webProxy.WebSocketMessage += WebProxy_WebSocketMessage;
                 _webProxy.WebSocketClosed += WebProxy_WebSocketClosed;
                 _webProxy.ConnectionClosed += WebProxy_ConnectionClosed;
@@ -1312,6 +1324,12 @@ namespace XMAT.WebServiceCapture
 
         private async Task StartProxyCoreAsync(bool bShowProxyInformation, UInt16 port)
         {
+            if (_failedStartCleanupPending)
+            {
+                // The last start failed while its proxy was still stopping; finish that cleanup first.
+                await StopProxyAsync();
+            }
+
             var options = new WebServiceProxyOptions
             {
                 LogFilePath = $"{DeviceName.Replace(" ", "")}-wspe.log",
@@ -1351,25 +1369,59 @@ namespace XMAT.WebServiceCapture
         }
 
         // Runs while the startup exception is propagating. Every step is attempted and logged on
-        // failure so a secondary cleanup error neither masks the startup error nor leaves the
-        // callback gate or UI queue open (which would block every later start).
+        // failure so a secondary cleanup error never masks the startup error. As in a stop, the proxy
+        // may complete the capture of streams that it already forwarded, so the callbacks stay open
+        // until it has stopped. If it is still stopping after the capture budget, the callbacks, the
+        // UI queue and their cancellation all stay open, and the next stop (also the one that a later
+        // start runs first) finishes the cleanup.
         private async Task CleanUpAfterFailedStartAsync()
         {
-            var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
-            await TryCleanupStepAsync(
-                () => _captureCallbackCancellationTokenSource.CancelAsync(),
-                "cancel capture callbacks");
-            await TryCleanupStepAsync(() => _webProxy.StopProxyAsync(), "stop the proxy");
-            await TryCleanupStepAsync(
-                () => WaitForCaptureCallbacksAsync(callbacksDrained, null, Stopwatch.StartNew()),
-                "drain capture callbacks");
-            await TryCleanupStepAsync(() => _uiUpdateQueue.CompleteAndDrainAsync(), "drain the UI queue");
-            DisposeCaptureCallbackCancellation();
+            if (await TryStopProxyAfterFailedStartAsync())
+            {
+                var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
+                await TryCleanupStepAsync(
+                    () => _captureCallbackCancellationTokenSource.CancelAsync(),
+                    "cancel capture callbacks");
+                await TryCleanupStepAsync(
+                    () => WaitForCaptureCallbacksAsync(callbacksDrained, null, Stopwatch.StartNew()),
+                    "drain capture callbacks");
+                await TryCleanupStepAsync(() => _uiUpdateQueue.CompleteAndDrainAsync(), "drain the UI queue");
+                DisposeCaptureCallbackCancellation();
+            }
+            else
+            {
+                _failedStartCleanupPending = true;
+            }
 
             // The toggle's checked state follows IsRunning one-way, so it must be told to
             // re-read the unchanged value or it keeps the state the click gave it.
             RaisePropertyChange(nameof(IsRunning));
             CommandManager.InvalidateRequerySuggested();
+        }
+
+        // Whether the proxy stopped, or failed to: either way it has completed the capture of every stream that it
+        // admitted. False while it is still stopping after the capture budget.
+        private async Task<bool> TryStopProxyAfterFailedStartAsync()
+        {
+            try
+            {
+                if (await WaitForProxyStopAsync(_webProxy.StopProxyAsync()))
+                {
+                    return true;
+                }
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    "Cleanup after a failed proxy start: the proxy is still stopping, so its capture stays open " +
+                    "until the next stop.");
+                return false;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(
+                    LogLevel.ERROR,
+                    $"Cleanup after a failed proxy start could not stop the proxy: {ex}");
+                return true;
+            }
         }
 
         private static async Task TryCleanupStepAsync(Func<Task> step, string description)
@@ -1579,21 +1631,34 @@ namespace XMAT.WebServiceCapture
                 }
                 throw;
             }
+            // The proxy completes the capture of every stream that it already forwarded before its stop ends, so the
+            // capture callbacks stay open until then.
+            Exception proxyStopException = null;
+            var listenerStopped = false;
+            bool proxyFinished;
+            try
+            {
+                proxyFinished = await WaitForProxyStopAsync(proxyStopped);
+                listenerStopped = proxyFinished;
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                proxyFinished = true;
+                proxyStopException = ex;
+            }
+            if (!proxyFinished)
+            {
+                // Still finalizing: the callbacks stay open, so a retried stop still records those streams.
+                if (resolver != null && runId != Guid.Empty)
+                {
+                    resolver.UnsealRun(runId);
+                }
+                throw CaptureBudgetExceeded();
+            }
             var callbacksDrained = _captureCallbacks.StopAcceptingAndWaitAsync();
             if (_captureCallbackCancellationTokenSource != null)
             {
                 await _captureCallbackCancellationTokenSource.CancelAsync();
-            }
-            Exception proxyStopException = null;
-            var listenerStopped = false;
-            try
-            {
-                await proxyStopped;
-                listenerStopped = true;
-            }
-            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
-            {
-                proxyStopException = ex;
             }
 
             try
@@ -1648,6 +1713,7 @@ namespace XMAT.WebServiceCapture
                 $"Capture UI updates drained in {uiDrainStopwatch.Elapsed}.");
 
             DisposeCaptureCallbackCancellation();
+            _failedStartCleanupPending = false;
             IsRunning = false;
             if (resolver != null && runId != Guid.Empty)
             {
@@ -1706,6 +1772,32 @@ namespace XMAT.WebServiceCapture
                     ex);
             }
         }
+
+        // Waits for a proxy stop, which ends only after the proxy has completed the capture of every stream it forwarded.
+        // Their WebResponse scripts get the capture budget; then they are cut short (each row is saved before its script
+        // runs). Returns false if the proxy still has not stopped after another budget, and rethrows its failure.
+        private async Task<bool> WaitForProxyStopAsync(Task proxyStopped)
+        {
+            TimeSpan budget = CaptureCallbackDrainTimeoutOverride ?? CaptureCallbackDrainTimeout;
+            if (await Task.WhenAny(proxyStopped, Task.Delay(budget)) != proxyStopped)
+            {
+                if (_captureCallbackCancellationTokenSource != null)
+                {
+                    await _captureCallbackCancellationTokenSource.CancelAsync();
+                }
+                if (await Task.WhenAny(proxyStopped, Task.Delay(budget)) != proxyStopped)
+                {
+                    return false;
+                }
+            }
+            await proxyStopped;
+            return true;
+        }
+
+        private TimeoutException CaptureBudgetExceeded() =>
+            new(Localization.GetLocalizedString(
+                "PROXY_CAPTURE_CALLBACK_TIMEOUT",
+                (int)(CaptureCallbackDrainTimeoutOverride ?? CaptureCallbackDrainTimeout).TotalSeconds));
 
         private async Task WaitForUiUpdatesAsync(
             Task uiUpdatesDrained,
@@ -1784,6 +1876,12 @@ namespace XMAT.WebServiceCapture
             ClientRequest request,
             out CaptureRowKey key)
         {
+            return TryFindCaptureRow(processContext, request, out key) ? DataRecordFromRow(key.RowId) : null;
+        }
+
+        // Whether REQUEST's row is current, without reading it.
+        private bool TryFindCaptureRow(ClientProcessContext processContext, ClientRequest request, out CaptureRowKey key)
+        {
             key = request?.RowKey ?? default;
             CaptureRowLookup lookup =
                 key.SourceId != Guid.Empty
@@ -1791,11 +1889,7 @@ namespace XMAT.WebServiceCapture
                     : processContext == null || request == null
                         ? CaptureRowLookup.Missing
                         : _captureRows.Lookup(processContext, request.RequestNumber, out key);
-            if (lookup == CaptureRowLookup.Current)
-            {
-                return DataRecordFromRow(key.RowId);
-            }
-            return null;
+            return lookup == CaptureRowLookup.Current;
         }
 
         private bool TryUpdateCaptureRecord(ClientProcessContext processContext, CaptureRowKey key, Action update)
@@ -2180,9 +2274,7 @@ namespace XMAT.WebServiceCapture
                 ObserveAbandonedTask(scriptTask);
                 if (!cancellationToken.IsCancellationRequested)
                 {
-                    PublicUtilities.AppLog(
-                        LogLevel.ERROR,
-                        $"{scriptName} script exceeded the {_scriptExecutionDeadline.TotalSeconds:g} second deadline.");
+                    LogError($"{scriptName} script exceeded the {_scriptExecutionDeadline.TotalSeconds:g} second deadline.");
                 }
                 return ScriptPolicyResult.Aborted;
             }
@@ -2368,6 +2460,11 @@ namespace XMAT.WebServiceCapture
             HttpResponseEventArgs responseEvent,
             CancellationToken requestCancellation)
         {
+            if (responseEvent.ResponseForwarded || responseEvent.ProxyGenerated)
+            {
+                return FinalizeForwardedResponseAsync(responseEvent, requestCancellation);
+            }
+
             return ExecuteCapturePolicyAsync(
                 "Web response",
                 async cancellationToken =>
@@ -2391,44 +2488,199 @@ namespace XMAT.WebServiceCapture
                         scriptResult == ScriptPolicyResult.FailedOpen ||
                         scriptParameters.Continue;
                     cancellationToken.ThrowIfCancellationRequested();
-
-                    IDataRecord record = FindCaptureRecord(
-                        responseEvent.ProcessContext,
-                        responseEvent.Request,
-                        out CaptureRowKey key);
-
-                    if (record != null)
-                    {
-                        var base64Body = Convert.ToBase64String(responseEvent.Response.BodyBytes);
-
-                        void Update()
-                        {
-                            _dataTable.UpdateRow(
-                                record.RowId,
-                                new FieldValue<string>(
-                                    WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
-                                    ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)),
-                                new FieldValue<string>(
-                                    WebServiceCaptureMethod.FieldKey_RequestStatus,
-                                    responseEvent.Response.Status),
-                                new FieldValue<string>(
-                                    WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders,
-                                    responseEvent.Response.FirstLineAndHeaders),
-                                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_ResponseBody, base64Body));
-                        }
-                        if (TryUpdateCaptureRecord(responseEvent.ProcessContext, key, Update))
-                        {
-                            IDataRecord updatedRecord = DataRecordFromRow(record.RowId);
-                            if (updatedRecord != null)
-                            {
-                                _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord, key));
-                            }
-                        }
-                    }
-
+                    UpdateResponseRow(responseEvent, ended: true);
                     return sendResponse;
                 },
                 requestCancellation);
+        }
+
+        // A streamed response has already reached the client, and the proxy reports its end once, also while the capture
+        // stops. Its row is completed first, with the body that the capture kept and the time the stream ended, whatever
+        // the cancellation: only the WebResponse script that runs afterwards on a copy can be cut short. A response that
+        // XMAT itself sent instead of the server's (a 502 or 504, say) is recorded the same way, but no script runs for it.
+        private async Task<bool> FinalizeForwardedResponseAsync(
+            HttpResponseEventArgs responseEvent,
+            CancellationToken finalizationCancellation)
+        {
+            if (!_captureCallbacks.TryBegin(out var callbackLease))
+            {
+                return false;
+            }
+
+            using var callbackLeaseScope = callbackLease;
+            try
+            {
+                UpdateResponseRow(responseEvent, ended: true);
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Recording a forwarded response failed: {ex}");
+            }
+            if (responseEvent.ProxyGenerated)
+            {
+                return true;
+            }
+
+            CancellationToken captureCancellation =
+                _captureCallbackCancellationTokenSource?.Token ??
+                CancellationToken.None;
+            using var scriptCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                finalizationCancellation,
+                captureCancellation);
+            try
+            {
+                await RunForwardedResponseScriptAsync(responseEvent, scriptCancellation.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"WebResponse script for a streamed response failed: {ex}");
+            }
+            return true;
+        }
+
+        // A streamed response's row shows its status and headers once they were forwarded, then the body that the capture
+        // kept when it reached the capture limit. Its script runs, and its response time is recorded, only when the body
+        // ends: until then a live export skips the row as incomplete instead of failing when the row changes again.
+        private Task WebProxy_WebResponseProgressAsync(
+            HttpResponseEventArgs responseEvent,
+            CancellationToken requestCancellation)
+        {
+            return ExecuteCapturePolicyAsync(
+                "Web response progress",
+                cancellationToken =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    UpdateResponseRow(responseEvent, ended: false);
+                    return Task.FromResult(true);
+                },
+                requestCancellation);
+        }
+
+        // The client already has a streamed response, so its script runs on a copy (as in Fiddler) that holds the body the
+        // capture kept. A change that the script made, or Continue = false, is logged as ignored; a timeout is logged by
+        // RunScriptPolicyAsync.
+        private async Task RunForwardedResponseScriptAsync(
+            HttpResponseEventArgs responseEvent,
+            CancellationToken cancellationToken)
+        {
+            if (!Scripts[WebServiceCaptureScriptableEventType.WebResponse].IsEnabled)
+            {
+                return;
+            }
+
+            ServerResponse forwarded = responseEvent.Response;
+            ServerResponse copy = CopyResponse(forwarded);
+            var scriptParameters = new WebServiceCaptureScriptParams
+            {
+                Request = responseEvent.Request,
+                Response = copy
+            };
+            await RunScriptPolicyAsync(
+                WebServiceCaptureScriptableEventType.WebResponse,
+                scriptParameters,
+                "WebResponse",
+                cancellationToken).ConfigureAwait(false);
+            if (!scriptParameters.Continue ||
+                !ReferenceEquals(scriptParameters.Response, copy) ||
+                copy.FirstLineAndHeaders != forwarded.FirstLineAndHeaders ||
+                copy.BodyBytes == null ||
+                !copy.BodyBytes.AsSpan().SequenceEqual(forwarded.BodyBytes))
+            {
+                ClientRequest request = responseEvent.Request;
+                LogWarning(
+                    "WebResponse script changes do not apply to streamed responses: the response to " +
+                    $"{request?.Method} {request?.Host}{request?.Path} was already forwarded to the client.");
+            }
+        }
+
+        private static ServerResponse CopyResponse(ServerResponse response)
+        {
+            var copy = new ServerResponse
+            {
+                RequestNumber = response.RequestNumber,
+                Version = response.Version,
+                StreamId = response.StreamId,
+                Status = response.Status,
+                StatusDescription = response.StatusDescription,
+                BodyBytes = (byte[])response.BodyBytes?.Clone() ?? Array.Empty<byte>(),
+                CaptureTruncatedAt = response.CaptureTruncatedAt,
+            };
+            CopyHeaders(response.Headers, copy.Headers);
+            CopyHeaders(response.ContentHeaders, copy.ContentHeaders);
+            CopyHeaders(response.Trailers, copy.Trailers);
+            return copy;
+        }
+
+        private static void CopyHeaders(HeaderCollection source, HeaderCollection target)
+        {
+            foreach (KeyValuePair<string, IEnumerable<string>> header in
+                (IEnumerable<KeyValuePair<string, IEnumerable<string>>>)source)
+            {
+                foreach (string value in header.Value)
+                {
+                    target.Add(header.Key, value);
+                }
+            }
+        }
+
+        // Records the response as the client received it in its request's row; ENDED records its response time too. A body
+        // array that the row already holds is not stored (or encoded) again: the proxy publishes a streamed response's
+        // captured prefix once and never changes it. The row is not read before it is updated, since it may hold that
+        // prefix already.
+        private void UpdateResponseRow(HttpResponseEventArgs responseEvent, bool ended)
+        {
+            ServerResponse response = responseEvent.Response;
+            if (!TryFindCaptureRow(responseEvent.ProcessContext, responseEvent.Request, out CaptureRowKey key))
+            {
+                return;
+            }
+
+            byte[] body = response.BodyBytes ?? Array.Empty<byte>();
+            var fields = new List<IFieldValue>
+            {
+                new FieldValue<string>(WebServiceCaptureMethod.FieldKey_RequestStatus, response.Status),
+                new FieldValue<string>(
+                    WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders,
+                    response.FirstLineAndHeaders),
+                new FieldValue<string>(WebProxyCaptureSchema.ResponseTrailers, response.Trailers.ToString()),
+                new FieldValue<long>(WebProxyCaptureSchema.ResponseBodyTruncatedAt, response.CaptureTruncatedAt),
+            };
+            if (!_storedResponseBodies.TryGetValue(response, out byte[] stored) || !ReferenceEquals(stored, body))
+            {
+                fields.Add(new FieldValue<string>(
+                    WebServiceCaptureMethod.FieldKey_ResponseBody,
+                    Convert.ToBase64String(body)));
+            }
+            if (ended)
+            {
+                fields.Add(new FieldValue<string>(
+                    WebServiceCaptureMethod.FieldKey_ResponseTimestamp,
+                    ProxyConnectionModel.ToDateTimeString(responseEvent.Timestamp)));
+            }
+            if (TryUpdateCaptureRecord(
+                    responseEvent.ProcessContext,
+                    key,
+                    () => _dataTable.UpdateRow(key.RowId, fields.ToArray())))
+            {
+                _storedResponseBodies.AddOrUpdate(response, body);
+                IDataRecord updatedRecord = DataRecordFromRow(key.RowId);
+                if (updatedRecord != null)
+                {
+                    _uiUpdateQueue.TryEnqueue(() => HandleRowUpdated(updatedRecord, key));
+                }
+            }
+        }
+
+        private void LogWarning(string message)
+        {
+            PublicUtilities.AppLog(LogLevel.WARN, message);
+            LogObserver?.Invoke(LogLevel.WARN, message);
+        }
+
+        private void LogError(string message)
+        {
+            PublicUtilities.AppLog(LogLevel.ERROR, message);
+            LogObserver?.Invoke(LogLevel.ERROR, message);
         }
 
         private void WebProxy_WebSocketMessage(object sender, WebSocketMessageEventArgs messageEvent)
