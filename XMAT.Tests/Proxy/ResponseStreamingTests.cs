@@ -776,6 +776,11 @@ namespace XMAT.Tests.Proxy
             {
                 _ = request;
                 cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult(CreateResponse());
+            }
+
+            private HttpResponseMessage CreateResponse()
+            {
                 var response = new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Version = HttpVersion.Version11,
@@ -785,7 +790,7 @@ namespace XMAT.Tests.Proxy
                 response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
                 response.Headers.TransferEncoding.Add(new TransferCodingHeaderValue("gzip"));
                 response.Headers.TransferEncodingChunked = true;
-                return Task.FromResult(response);
+                return response;
             }
         }
 
@@ -797,6 +802,11 @@ namespace XMAT.Tests.Proxy
             {
                 _ = request;
                 cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult(CreateResponse());
+            }
+
+            private HttpResponseMessage CreateResponse()
+            {
                 var response = new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Version = HttpVersion.Version11,
@@ -814,7 +824,7 @@ namespace XMAT.Tests.Proxy
                     "Authentication-Info",
                     "nextnonce=\"digest-next\"");
                 response.TrailingHeaders.TryAddWithoutValidation("x-checksum", "abc123");
-                return Task.FromResult(response);
+                return response;
             }
         }
 

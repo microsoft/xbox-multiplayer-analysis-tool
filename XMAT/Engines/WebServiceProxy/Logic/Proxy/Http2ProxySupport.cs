@@ -778,16 +778,8 @@ namespace XMAT.WebServiceCapture.Proxy
                 response.ContentLength = declaredLength;
                 if (response.SupportsTrailers())
                 {
-                    var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (string declaration in upstreamResponse.Headers.Trailer)
-                    {
-                        foreach (string name in declaration.Split(',', StringSplitOptions.RemoveEmptyEntries |
-                            StringSplitOptions.TrimEntries))
-                        {
-                            if (ProxyHeaderUtilities.IsAllowedTrailerField(name) && declared.Add(name))
-                                response.DeclareTrailer(name);
-                        }
-                    }
+                    foreach (string name in ProxyHeaderUtilities.AllowedTrailerNames(upstreamResponse.Headers))
+                        response.DeclareTrailer(name);
                 }
 
                 await response.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -1091,11 +1083,9 @@ namespace XMAT.WebServiceCapture.Proxy
             context.Response.ContentLength = originDeclaredLength ? response.BodyBytes.Length : null;
             if (response.Trailers.Count != 0 && context.Response.SupportsTrailers())
             {
-                foreach (KeyValuePair<string, IEnumerable<string>> trailer in response.Trailers)
-                {
-                    if (ProxyHeaderUtilities.IsAllowedTrailerField(trailer.Key))
-                        context.Response.DeclareTrailer(trailer.Key);
-                }
+                foreach (KeyValuePair<string, IEnumerable<string>> trailer in response.Trailers.Where(
+                    trailer => ProxyHeaderUtilities.IsAllowedTrailerField(trailer.Key)))
+                    context.Response.DeclareTrailer(trailer.Key);
             }
             for (var offset = 0;
                 offset < response.BodyBytes.Length;
@@ -1353,15 +1343,29 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             if (string.IsNullOrWhiteSpace(value))
                 return false;
-            foreach (string part in value.Split(','))
-            {
-                string expectation = part.Trim();
-                if (expectation.Length == 0)
-                    continue;
-                if (!expectation.Equals("100-continue", StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-            return false;
+            return value.Split(
+                    ',',
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Any(expectation => !expectation.Equals(
+                    "100-continue",
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static IEnumerable<string> AllowedTrailerNames(
+            HttpResponseHeaders headers,
+            HeaderCollection trailers = null)
+        {
+            IEnumerable<string> declared = headers.Trailer.SelectMany(
+                declaration => declaration.Split(
+                    ',',
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            IEnumerable<string> actual = trailers == null
+                ? Enumerable.Empty<string>()
+                : trailers.Select(trailer => trailer.Key);
+            return declared
+                .Concat(actual)
+                .Where(IsAllowedTrailerField)
+                .Distinct(StringComparer.OrdinalIgnoreCase);
         }
 
         internal static bool IsAllowedTrailerField(string name)

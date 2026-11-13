@@ -108,7 +108,7 @@ namespace XMAT.Tests.Proxy
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 HttpResponseMessage response = null;
                 int firstRead = 0;
-                var received = new MemoryStream();
+                using var received = new MemoryStream();
                 try
                 {
                     response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
@@ -124,6 +124,7 @@ namespace XMAT.Tests.Proxy
                 {
                     Assert.True(firstRead > 0,
                         $"{route} knownLength={knownLength}: a body over the capture limit was not streamed while the origin held it");
+                    Assert.NotNull(response);
                     release.TrySetResult();
                     Stream body = await response.Content.ReadAsStreamAsync();
                     await body.CopyToAsync(received);

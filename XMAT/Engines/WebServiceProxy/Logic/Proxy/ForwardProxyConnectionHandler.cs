@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.IO.Pipelines;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -978,10 +979,9 @@ namespace XMAT.WebServiceCapture.Proxy
             CancellationToken cancellationToken)
         {
             await stream.WriteAsync("0\r\n"u8.ToArray(), cancellationToken).ConfigureAwait(false);
-            foreach (KeyValuePair<string, IEnumerable<string>> trailer in trailers)
+            foreach (KeyValuePair<string, IEnumerable<string>> trailer in trailers.Where(
+                trailer => ProxyHeaderUtilities.IsAllowedTrailerField(trailer.Key)))
             {
-                if (!ProxyHeaderUtilities.IsAllowedTrailerField(trailer.Key))
-                    continue;
                 foreach (string value in trailer.Value)
                 {
                     byte[] line = Encoding.ASCII.GetBytes($"{trailer.Key}: {value}\r\n");
@@ -993,29 +993,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private static string[] AllowedTrailerNames(
             HttpResponseMessage response,
-            HeaderCollection trailers)
-        {
-            var names = new List<string>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string declaration in response.Headers.Trailer)
-            {
-                foreach (string name in declaration.Split(',', StringSplitOptions.RemoveEmptyEntries |
-                    StringSplitOptions.TrimEntries))
-                {
-                    if (ProxyHeaderUtilities.IsAllowedTrailerField(name) && seen.Add(name))
-                        names.Add(name);
-                }
-            }
-            if (trailers != null)
-            {
-                foreach (KeyValuePair<string, IEnumerable<string>> trailer in trailers)
-                {
-                    if (ProxyHeaderUtilities.IsAllowedTrailerField(trailer.Key) && seen.Add(trailer.Key))
-                        names.Add(trailer.Key);
-                }
-            }
-            return names.ToArray();
-        }
+            HeaderCollection trailers) =>
+            ProxyHeaderUtilities.AllowedTrailerNames(response.Headers, trailers).ToArray();
 
         private async Task WriteProxyErrorAsync(
             int connectionId,
