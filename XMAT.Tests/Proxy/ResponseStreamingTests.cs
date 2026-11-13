@@ -342,6 +342,70 @@ namespace XMAT.Tests.Proxy
             Assert.False(encoded.AsSpan().SequenceEqual(body), "the transfer-coded body reached the client unchanged");
         }
 
+        [Theory]
+        [InlineData("http11", "transfer-coding", HttpStatusCode.BadGateway)]
+        [InlineData("https11", "transfer-coding", HttpStatusCode.BadGateway)]
+        [InlineData("https2", "transfer-coding", HttpStatusCode.BadGateway)]
+        [InlineData("http11", "upstream-failure", HttpStatusCode.BadGateway)]
+        [InlineData("https11", "upstream-failure", HttpStatusCode.BadGateway)]
+        [InlineData("https2", "upstream-failure", HttpStatusCode.BadGateway)]
+        [InlineData("http11", "upstream-timeout", HttpStatusCode.GatewayTimeout)]
+        [InlineData("https11", "upstream-timeout", HttpStatusCode.GatewayTimeout)]
+        [InlineData("https2", "upstream-timeout", HttpStatusCode.GatewayTimeout)]
+        public async Task ProxyGeneratedFailures_ReportTheCommittedResponseCompletion(
+            string route,
+            string cause,
+            HttpStatusCode expectedStatus)
+        {
+            (Version version, bool tls) = Route(route);
+            HttpMessageHandler upstream = cause switch
+            {
+                "transfer-coding" => new UnsupportedTransferCodingResponseHandler(Gzip("encoded"u8.ToArray())),
+                "upstream-failure" => new UpstreamFailureHandler(timeout: false),
+                "upstream-timeout" => new UpstreamFailureHandler(timeout: true),
+                _ => throw new ArgumentOutOfRangeException(nameof(cause)),
+            };
+            await using var proxy = await ProxyTestHarness.StartAsync(upstreamHandler: upstream);
+            if (cause == "upstream-timeout")
+                proxy.UpstreamTimeout = TimeSpan.FromMilliseconds(500);
+            var completed = new TaskCompletionSource<HttpResponseEventArgs>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            proxy.Proxy.ReceivedWebResponse += (_, args) =>
+            {
+                if (args.ProxyGenerated)
+                    completed.TrySetResult(args);
+            };
+            using HttpClient client = proxy.CreateClient();
+            string scheme = tls ? "https" : "http";
+            using var request = NewRequest(
+                HttpMethod.Get,
+                $"{scheme}://proxy-generated.test/{cause}",
+                version);
+            DateTime started = DateTime.Now;
+
+            using HttpResponseMessage response = await client.SendAsync(request);
+            HttpResponseEventArgs completion = await completed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            DateTime finished = DateTime.Now;
+
+            Assert.Equal(expectedStatus, response.StatusCode);
+            Assert.Empty(await response.Content.ReadAsByteArrayAsync());
+            Assert.True(completion.ProxyGenerated);
+            Assert.True(completion.ResponseForwarded);
+            Assert.Same(Assert.Single(proxy.CapturedRequests), completion.Request);
+            Assert.Equal(
+                ((int)expectedStatus).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                completion.Response.Status);
+            Assert.Equal(
+                expectedStatus == HttpStatusCode.BadGateway ? "Bad Gateway" : "Gateway Timeout",
+                completion.Response.StatusDescription);
+            Assert.Equal(route == "https2" ? "HTTP/2" : "HTTP/1.1", completion.Response.Version);
+            Assert.Equal("0", completion.Response.ContentHeaders["Content-Length"]);
+            Assert.Empty(completion.Response.BodyBytes);
+            Assert.Empty(completion.Response.Trailers);
+            Assert.Equal(0, completion.Response.CaptureTruncatedAt);
+            Assert.InRange(completion.Timestamp, started, finished);
+        }
+
         [Fact]
         public async Task Http2Client_ReceivesOriginTrailers()
         {
@@ -736,9 +800,25 @@ namespace XMAT.Tests.Proxy
                 response.Headers.TransferEncodingChunked = true;
                 response.Headers.TryAddWithoutValidation(
                     "Trailer",
-                    "Content-Length, Host, Content-Type, x-checksum");
+                    "Content-Length, Host, Content-Type, Set-Cookie, x-checksum");
                 response.TrailingHeaders.TryAddWithoutValidation("x-checksum", "abc123");
                 return Task.FromResult(response);
+            }
+        }
+
+        private sealed class UpstreamFailureHandler(bool timeout) : HttpMessageHandler
+        {
+            protected override async Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                _ = request;
+                if (timeout)
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    throw new InvalidOperationException("The timeout delay completed unexpectedly.");
+                }
+                throw new HttpRequestException("Injected upstream failure.");
             }
         }
 

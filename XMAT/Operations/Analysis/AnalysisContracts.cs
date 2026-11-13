@@ -27,7 +27,8 @@ namespace XMAT.Operations.Analysis
         // (SAZ requests, or CaptureDevices and WebProxyConnections rows combined).
         // A capture row holds its bodies as base64 (4 bytes for every 3), so the
         // record default admits a row with a 32 MiB request body (the proxy's
-        // limit) and a 60 MiB response body: about 123 MiB.
+        // limit) and a response body at the largest capture limit, 40 MiB
+        // (ResponseStreamingOptions.MaximumCaptureLimitMegabytes): about 96 MiB.
         internal static AnalysisLimits Default { get; } = FromMib(
             DefaultInputMib,
             DefaultDataMib,

@@ -292,6 +292,7 @@ namespace XMAT.WebServiceCapture.Proxy
         BufferExhausted,
         Timeout,
         UnsupportedTransferCoding,
+        MalformedTransferCoding,
         UnsupportedExpectation,
     }
 
@@ -1102,6 +1103,7 @@ namespace XMAT.WebServiceCapture.Proxy
             out bool hasExpectation)
         {
             hasExpectation = false;
+            var sawContinue = false;
             foreach (RawHeader header in headers)
             {
                 if (!header.Name.Equals(
@@ -1118,20 +1120,24 @@ namespace XMAT.WebServiceCapture.Proxy
                     int separator = remaining.IndexOf(',');
                     ReadOnlySpan<char> expectation =
                         (separator < 0 ? remaining : remaining[..separator]).Trim();
-                    if (!expectation.Equals(
+                    if (!expectation.IsEmpty &&
+                        !expectation.Equals(
                             "100-continue",
                             StringComparison.OrdinalIgnoreCase))
                     {
                         throw new ProxyRequestReadException(
                             ProxyRequestReadFailure.UnsupportedExpectation);
                     }
+                    sawContinue |= !expectation.IsEmpty;
                     if (separator < 0)
                         break;
                     remaining = remaining[(separator + 1)..];
                 }
             }
 
-            if (!hasExpectation)
+            if (!hasExpectation || !sawContinue)
+                return false;
+            if (string.Equals(version, "HTTP/1.0", StringComparison.OrdinalIgnoreCase))
                 return false;
             if (!string.Equals(version, "HTTP/1.1", StringComparison.OrdinalIgnoreCase))
             {
@@ -1231,6 +1237,11 @@ namespace XMAT.WebServiceCapture.Proxy
                 }
                 if (codingCount == 1 && chunkedCount == 1)
                     return BodyFraming.Chunked;
+                if (chunkedCount == 0)
+                {
+                    throw new ProxyRequestReadException(
+                        ProxyRequestReadFailure.MalformedTransferCoding);
+                }
                 throw new ProxyRequestReadException(
                     ProxyRequestReadFailure.UnsupportedTransferCoding);
             }

@@ -384,7 +384,7 @@ namespace XMAT.Tests
                     WpfTestHost.Show(window, options);
                     Assert.Equal("32", ((TextBox)options.FindName("CaptureLimit")).Text);
                     EditStreaming(options, autoStream: false, streamAll: true);
-                    EditCaptureLimit(options, "128");
+                    EditCaptureLimit(options, "16");
 
                     preferences.Serialized();
 
@@ -394,7 +394,7 @@ namespace XMAT.Tests
 
                     options.CommitPreferences();
 
-                    Assert.Equal((false, true, 128), (preferences.AutoStreamMediaAndEvents, preferences.StreamAllResponses,
+                    Assert.Equal((false, true, 16), (preferences.AutoStreamMediaAndEvents, preferences.StreamAllResponses,
                         preferences.CaptureLimitMegabytes));
                 });
             }
@@ -408,7 +408,7 @@ namespace XMAT.Tests
         // streaming drafts uncommitted, too.
         [Theory]
         [InlineData("0")]
-        [InlineData("641")]
+        [InlineData("41")]
         [InlineData("32.5")]
         [InlineData("")]
         public void Preferences_AnInvalidCaptureLimitCommitsNothing(string limit)
@@ -486,16 +486,16 @@ namespace XMAT.Tests
                 {
                     AutoStreamMediaAndEvents = false,
                     StreamAllResponses = true,
-                    CaptureLimitMegabytes = 64,
+                    CaptureLimitMegabytes = 16,
                 };
                 var loaded = new XMAT.WebServiceCapture.Models.PreferencesModel();
 
                 loaded.DeserializeFrom(JsonSerializer.SerializeToElement<object>(saved));
 
-                Assert.Equal((false, true, 64), (loaded.AutoStreamMediaAndEvents, loaded.StreamAllResponses,
+                Assert.Equal((false, true, 16), (loaded.AutoStreamMediaAndEvents, loaded.StreamAllResponses,
                     loaded.CaptureLimitMegabytes));
                 Assert.Equal(
-                    ResponseStreamingOptions.FromPreferences(false, true, 64),
+                    ResponseStreamingOptions.FromPreferences(false, true, 16),
                     ResponseStreamingOptions.Current);
 
                 var older = new XMAT.WebServiceCapture.Models.PreferencesModel();
@@ -520,7 +520,7 @@ namespace XMAT.Tests
 
         [Theory]
         [InlineData(0, 1)]
-        [InlineData(5000, 640)]
+        [InlineData(5000, 40)]
         public void Preferences_ClampALoadedCaptureLimit(int saved, int expected)
         {
             ResponseStreamingOptions previous = ResponseStreamingOptions.Current;

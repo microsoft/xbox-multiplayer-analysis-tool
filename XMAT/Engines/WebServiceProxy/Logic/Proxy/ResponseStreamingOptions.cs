@@ -18,9 +18,9 @@ namespace XMAT.WebServiceCapture.Proxy
         internal const int DefaultCaptureLimitMegabytes = 32;
         internal const int MinimumCaptureLimitMegabytes = 1;
 
-        // Captured bodies are stored as base64 text, in a SQLite row of at most 1,000,000,000 bytes that also holds
-        // a request body of up to 32 MiB: 640 MiB of response body is about 895,000,000 bytes of base64.
-        internal const int MaximumCaptureLimitMegabytes = 640;
+        // A 40 MiB response peaked at about 1.5 GB through the full capture path; 48 MiB exceeded 2 GB. As base64, a
+        // 32 MiB request plus a 40 MiB response also stays below xmat's 128 MiB row limit.
+        internal const int MaximumCaptureLimitMegabytes = 40;
 
         private const int BytesPerMegabyte = 1024 * 1024;
 
