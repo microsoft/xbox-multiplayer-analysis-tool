@@ -940,26 +940,35 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
-        private static async Task WriteChunkAsync(
+        internal static async Task WriteChunkAsync(
             Stream stream,
             ReadOnlyMemory<byte> data,
             CancellationToken cancellationToken)
         {
-            byte[] size = Encoding.ASCII.GetBytes(data.Length.ToString("X", CultureInfo.InvariantCulture) + "\r\n");
-            int length = size.Length + data.Length + ChunkTerminator.Length;
-            byte[] chunk = ArrayPool<byte>.Shared.Rent(length);
-            try
+            // Framing must stay in the 64 KiB pool bucket; crossing it rents 128 KiB arrays on the LOH.
+            const int MaximumPayload = ProxyResponseStreaming.ReadBufferSize - 8;
+            while (!data.IsEmpty)
             {
-                size.CopyTo(chunk, 0);
-                data.Span.CopyTo(chunk.AsSpan(size.Length));
-                ChunkTerminator.CopyTo(chunk, size.Length + data.Length);
-                await stream.WriteAsync(
-                    chunk.AsMemory(0, length),
-                    cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(chunk);
+                int payloadLength = Math.Min(MaximumPayload, data.Length);
+                ReadOnlyMemory<byte> payload = data[..payloadLength];
+                byte[] size = Encoding.ASCII.GetBytes(
+                    payloadLength.ToString("X", CultureInfo.InvariantCulture) + "\r\n");
+                int length = size.Length + payloadLength + ChunkTerminator.Length;
+                byte[] chunk = ArrayPool<byte>.Shared.Rent(length);
+                try
+                {
+                    size.CopyTo(chunk, 0);
+                    payload.Span.CopyTo(chunk.AsSpan(size.Length));
+                    ChunkTerminator.CopyTo(chunk, size.Length + payloadLength);
+                    await stream.WriteAsync(
+                        chunk.AsMemory(0, length),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(chunk);
+                }
+                data = data[payloadLength..];
             }
         }
 
