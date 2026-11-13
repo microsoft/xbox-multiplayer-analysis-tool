@@ -734,78 +734,87 @@ namespace XMAT.WebServiceCapture.Proxy
                     clientRequest,
                     serverResponse,
                     processContext);
+            DateTime? transportEndedAt = null;
             try
             {
-                await clientStream.WriteAsync(
-                    BuildHead(serverResponse, framing, contentLength, trailerNames),
-                    ct)
-                    .ConfigureAwait(false);
-                await clientStream.FlushAsync(ct).ConfigureAwait(false);
-                serverResponse.BodyBytes = Array.Empty<byte>();
-                serverResponse.CaptureTruncatedAt = 0;
-                await _proxy.RaiseWebResponseProgressAsync(
-                    connectionID,
-                    clientRequest,
-                    serverResponse,
-                    _applicationStopping,
-                    processContext).ConfigureAwait(false);
-
-                await ProxyResponseStreaming.RelayBodyAsync(
-                    reader,
-                    capture,
-                    overflow,
-                    async data =>
+                using (result)
+                {
+                    try
                     {
+                        await clientStream.WriteAsync(
+                            BuildHead(serverResponse, framing, contentLength, trailerNames),
+                            ct)
+                            .ConfigureAwait(false);
+                        await clientStream.FlushAsync(ct).ConfigureAwait(false);
+                        serverResponse.BodyBytes = Array.Empty<byte>();
+                        serverResponse.CaptureTruncatedAt = 0;
+                        await _proxy.RaiseWebResponseProgressAsync(
+                            connectionID,
+                            clientRequest,
+                            serverResponse,
+                            _applicationStopping,
+                            processContext).ConfigureAwait(false);
+
+                        await ProxyResponseStreaming.RelayBodyAsync(
+                            reader,
+                            capture,
+                            overflow,
+                            async data =>
+                            {
+                                if (framing == ResponseFraming.Chunked)
+                                {
+                                    await WriteChunkAsync(clientStream, data, ct).ConfigureAwait(false);
+                                }
+                                else
+                                {
+                                    await clientStream.WriteAsync(data, ct).ConfigureAwait(false);
+                                    await clientStream.FlushAsync(ct).ConfigureAwait(false);
+                                }
+                            },
+                            NotifyCaptureAsync).ConfigureAwait(false);
+
+                        serverResponse.Trailers.CopyFrom(result.TrailingHeaders);
                         if (framing == ResponseFraming.Chunked)
                         {
-                            await WriteChunkAsync(clientStream, data, ct).ConfigureAwait(false);
+                            await WriteLastChunkAsync(clientStream, serverResponse.Trailers, ct).ConfigureAwait(false);
                         }
-                        else
+                        await clientStream.FlushAsync(ct).ConfigureAwait(false);
+                        _logger.Log(connectionID, LogLevel.DEBUG, "Streamed response sent to client");
+                    }
+                    catch (Exception ex) when (
+                        ex is IOException or
+                        SocketException or
+                        ObjectDisposedException or
+                        HttpRequestException or
+                        TimeoutException or
+                        OperationCanceledException)
+                    {
+                        if (!_applicationStopping.IsCancellationRequested)
                         {
-                            await clientStream.WriteAsync(data, ct).ConfigureAwait(false);
-                            await clientStream.FlushAsync(ct).ConfigureAwait(false);
+                            LogConnection(
+                                connectionID,
+                                LogLevel.WARN,
+                                $"Streamed response ended early: {ex.Message}");
                         }
-                    },
-                    NotifyCaptureAsync).ConfigureAwait(false);
-
-                serverResponse.Trailers.CopyFrom(result.TrailingHeaders);
-                if (framing == ResponseFraming.Chunked)
-                {
-                    await WriteLastChunkAsync(clientStream, serverResponse.Trailers, ct).ConfigureAwait(false);
-                }
-                await clientStream.FlushAsync(ct).ConfigureAwait(false);
-                _logger.Log(connectionID, LogLevel.DEBUG, "Streamed response sent to client");
-            }
-            catch (Exception ex) when (
-                ex is IOException or
-                SocketException or
-                ObjectDisposedException or
-                HttpRequestException or
-                TimeoutException or
-                OperationCanceledException)
-            {
-                if (!_applicationStopping.IsCancellationRequested)
-                {
-                    LogConnection(
-                        connectionID,
-                        LogLevel.WARN,
-                        $"Streamed response ended early: {ex.Message}");
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            await CompleteClientOutputAsync(clientStream, connectionID).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            transportEndedAt = DateTime.Now;
+                        }
+                    }
                 }
             }
             finally
             {
-                await CompleteClientOutputAsync(clientStream, connectionID).ConfigureAwait(false);
-                DateTime transportEndedAt = DateTime.Now;
-                try
-                {
-                    result.Dispose();
-                }
-                finally
-                {
-                    finalizer.Complete(
-                        transportEndedAt,
-                        () => capture.CopyFinalTo(serverResponse));
-                }
+                finalizer.Complete(
+                    transportEndedAt ?? DateTime.Now,
+                    () => capture.CopyFinalTo(serverResponse));
             }
 
             // Capture updates use the proxy's stop token, not the connection's: after
@@ -883,7 +892,7 @@ namespace XMAT.WebServiceCapture.Proxy
                     LogLevel.WARN,
                     $"Client connection ended while writing the response: {ex.Message}");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 LogConnection(
                     connectionId,

@@ -104,22 +104,24 @@ namespace XMAT.Tests.Proxy
             record => record.Str(WebServiceCaptureMethod.FieldKey_RequestPath)
                 .EndsWith(path, StringComparison.Ordinal));
 
-        // Best effort: a failed test still stops its proxy, and the cleanup never hides the test's own failure.
+        // Best effort: a failed test still stops its proxy, and the cleanup never hides the test's own failure: a stop that
+        // fails is only traced. The database is disposed last, whatever happened.
         public async ValueTask DisposeAsync()
         {
-            try
+            using (_database)
             {
-                if (Controller.IsRunning)
+                try
                 {
-                    await Controller.StopProxyAsync().WaitAsync(StopBudget);
+                    if (Controller.IsRunning)
+                    {
+                        await Controller.StopProxyAsync().WaitAsync(StopBudget);
+                    }
                 }
-            }
-            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
-            {
-            }
-            finally
-            {
-                _database.Dispose();
+                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+                {
+                    System.Diagnostics.Trace.WriteLine(
+                        $"Stopping a live capture failed: {exception.GetType().Name}: {exception.Message}");
+                }
             }
         }
 

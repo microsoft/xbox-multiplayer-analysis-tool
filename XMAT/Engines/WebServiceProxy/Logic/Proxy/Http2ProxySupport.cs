@@ -770,65 +770,68 @@ namespace XMAT.WebServiceCapture.Proxy
                     clientRequest,
                     serverResponse,
                     tunnel.ProcessContext);
+            DateTime? transportEndedAt = null;
             try
             {
-                HttpResponse response = context.Response;
-                response.StatusCode = int.Parse(serverResponse.Status, CultureInfo.InvariantCulture);
-                CopyResponseHeaders(serverResponse, response);
-                response.ContentLength = declaredLength;
-                if (response.SupportsTrailers())
+                using (upstreamResponse)
                 {
-                    foreach (string name in ProxyHeaderUtilities.AllowedTrailerNames(upstreamResponse.Headers))
-                        response.DeclareTrailer(name);
-                }
-
-                await response.StartAsync(cancellationToken).ConfigureAwait(false);
-                serverResponse.BodyBytes = Array.Empty<byte>();
-                serverResponse.CaptureTruncatedAt = 0;
-                await _proxy.RaiseWebResponseProgressAsync(
-                    tunnel.ConnectionId,
-                    clientRequest,
-                    serverResponse,
-                    _stoppingToken,
-                    tunnel.ProcessContext).ConfigureAwait(false);
-
-                await ProxyResponseStreaming.RelayBodyAsync(
-                    reader,
-                    capture,
-                    overflow,
-                    async data =>
+                    try
                     {
-                        await response.Body.WriteAsync(data, cancellationToken).ConfigureAwait(false);
-                        await response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
-                    },
-                    NotifyCaptureAsync).ConfigureAwait(false);
+                        HttpResponse response = context.Response;
+                        response.StatusCode = int.Parse(serverResponse.Status, CultureInfo.InvariantCulture);
+                        CopyResponseHeaders(serverResponse, response);
+                        response.ContentLength = declaredLength;
+                        if (response.SupportsTrailers())
+                        {
+                            foreach (string name in ProxyHeaderUtilities.AllowedTrailerNames(upstreamResponse.Headers))
+                                response.DeclareTrailer(name);
+                        }
 
-                serverResponse.Trailers.CopyFrom(upstreamResponse.TrailingHeaders);
-                AppendTrailers(response, serverResponse.Trailers, tunnel.ConnectionId);
-                await response.CompleteAsync().ConfigureAwait(false);
-            }
-            catch (Exception ex) when (
-                ex is IOException or HttpRequestException or TimeoutException or OperationCanceledException)
-            {
-                if (!_stoppingToken.IsCancellationRequested)
-                {
-                    Log(tunnel.ConnectionId, LogLevel.WARN, $"Streamed response ended early: {ex.Message}");
+                        await response.StartAsync(cancellationToken).ConfigureAwait(false);
+                        serverResponse.BodyBytes = Array.Empty<byte>();
+                        serverResponse.CaptureTruncatedAt = 0;
+                        await _proxy.RaiseWebResponseProgressAsync(
+                            tunnel.ConnectionId,
+                            clientRequest,
+                            serverResponse,
+                            _stoppingToken,
+                            tunnel.ProcessContext).ConfigureAwait(false);
+
+                        await ProxyResponseStreaming.RelayBodyAsync(
+                            reader,
+                            capture,
+                            overflow,
+                            async data =>
+                            {
+                                await response.Body.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+                                await response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
+                            },
+                            NotifyCaptureAsync).ConfigureAwait(false);
+
+                        serverResponse.Trailers.CopyFrom(upstreamResponse.TrailingHeaders);
+                        AppendTrailers(response, serverResponse.Trailers, tunnel.ConnectionId);
+                        await response.CompleteAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (
+                        ex is IOException or HttpRequestException or TimeoutException or OperationCanceledException)
+                    {
+                        if (!_stoppingToken.IsCancellationRequested)
+                        {
+                            Log(tunnel.ConnectionId, LogLevel.WARN, $"Streamed response ended early: {ex.Message}");
+                        }
+                        context.Abort();
+                    }
+                    finally
+                    {
+                        transportEndedAt = DateTime.Now;
+                    }
                 }
-                context.Abort();
             }
             finally
             {
-                DateTime transportEndedAt = DateTime.Now;
-                try
-                {
-                    upstreamResponse.Dispose();
-                }
-                finally
-                {
-                    finalizer.Complete(
-                        transportEndedAt,
-                        () => capture.CopyFinalTo(serverResponse));
-                }
+                finalizer.Complete(
+                    transportEndedAt ?? DateTime.Now,
+                    () => capture.CopyFinalTo(serverResponse));
             }
 
             // Capture updates use the proxy's stop token: the client may already have hung up.
