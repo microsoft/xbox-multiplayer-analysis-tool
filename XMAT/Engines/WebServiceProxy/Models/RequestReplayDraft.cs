@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using XMAT.Operations.Replay;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
 
@@ -47,6 +48,11 @@ namespace XMAT.WebServiceCapture
         }
 
         internal bool BodyIsBase64 { get; set; }
+
+        // The parts that a request file left out (FromRequestFile); None for every other draft. Immutable and shared by
+        // every copy of the draft. Only the Complete methods and ReplaceHeaders clear an omission: editing the text never
+        // does, so a placeholder is never sent or exported as if it had been supplied.
+        internal RequestOmissions Omissions { get; private set; } = RequestOmissions.None;
 
         // Only exactly GET, HEAD and OPTIONS are safe; any other method, in any case, can change server state. Shared by
         // the operation's policy and the GUI's confirmation, so both count the same requests.
@@ -123,6 +129,60 @@ namespace XMAT.WebServiceCapture
             return draft;
         }
 
+        // A draft from a request file. What the file left out stays omitted (Omissions) and shows as empty until it is
+        // supplied explicitly. The file's URL is the origin that a change needs consent for; a file without one gives none,
+        // so the URL supplied for it is the request's first origin. The body shows as text when it is UTF-8 without control
+        // characters and has no Content-Encoding, and is kept as its exact bytes, shown as Base64, otherwise.
+        internal static RequestReplayDraft FromRequestFile(RequestFileContent content)
+        {
+            ArgumentNullException.ThrowIfNull(content);
+            var draft = new RequestReplayDraft
+            {
+                Method = content.Method ?? "",
+                Url = content.Url ?? "",
+                _originalAuthority = content.Url == null ? null : AuthorityOf(content.Url),
+                HeadersText = content.Headers == null ? "" : FormatHeaders(content.Headers),
+                Omissions = content.Omitted ?? throw new ArgumentException("The content has no omissions.", nameof(content)),
+            };
+
+            byte[] body = content.Body ?? Array.Empty<byte>();
+            bool encoded = content.Headers != null && content.Headers.Any(header =>
+                header.Key.Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase) &&
+                !header.Value.Trim(' ', '\t').Equals("identity", StringComparison.OrdinalIgnoreCase));
+            string text = null;
+            if (!encoded)
+            {
+                try
+                {
+                    text = StrictUtf8.GetString(body);
+                    if (text.Any(c => char.IsControl(c) && c is not ('\r' or '\n' or '\t')))
+                        text = null;
+                }
+                catch (DecoderFallbackException)
+                {
+                    // Binary and non-UTF-8 bodies stay as their exact bytes, shown as Base64.
+                }
+            }
+
+            if (text != null)
+            {
+                draft.BodyText = text;
+                draft.BodyIsBase64 = false;
+            }
+            else
+            {
+                draft.SetBodyBytes(body);
+            }
+
+            return draft;
+        }
+
+        // The scheme, host and port of an absolute URL, which may be a sequence template ('#' only in its path or query).
+        private static string AuthorityOf(string url) =>
+            Uri.TryCreate(url.Replace(ReplaySequence.Placeholder.ToString(), "0"), UriKind.Absolute, out Uri uri)
+                ? uri.GetLeftPart(UriPartial.Authority)
+                : throw new ArgumentException("The URL is not an absolute URL.", nameof(url));
+
         private static byte[] GetCapturedBody(ProxyConnectionModel capture)
         {
             byte[] body = capture.RequestBody ?? Array.Empty<byte>();
@@ -154,8 +214,13 @@ namespace XMAT.WebServiceCapture
         internal const string RequestBodyNotKeptHeader = "X-XMAT-Request-Body-Not-Kept";
         internal const string ResponseBodyNotKeptHeader = "X-XMAT-Response-Body-Not-Kept";
 
-        internal HttpRequestMessage CreateRequest()
+        internal HttpRequestMessage CreateRequest() => CreateRequest(GetBodyBytes());
+
+        // The request with these body bytes in place of the draft's own, which it does not decode: an export builds the
+        // headers once over an empty body, and makes the body itself once.
+        internal HttpRequestMessage CreateRequest(byte[] body)
         {
+            ArgumentNullException.ThrowIfNull(body);
             if (!Uri.TryCreate(Url, UriKind.Absolute, out var uri) ||
                 (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
                 !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment))
@@ -182,7 +247,7 @@ namespace XMAT.WebServiceCapture
                     connectionHeaders.Add(name);
             }
 
-            var request = new ClientRequest { Method = Method, BodyBytes = GetBodyBytes() };
+            var request = new ClientRequest { Method = Method, BodyBytes = body };
             foreach (var header in headers)
             {
                 // The edited URL and body determine the new authority and length, not the captured framing.
@@ -234,45 +299,6 @@ namespace XMAT.WebServiceCapture
             BodyIsBase64 = base64;
         }
 
-        internal string ToCurlCommand()
-        {
-            using var request = CreateRequest();
-            byte[] body = GetBodyBytes();
-            if (Method == "HEAD" && body.Length > 0)
-                throw new ArgumentException("HEAD requests with a nonempty body cannot be exported to cURL.");
-
-            var command = new StringBuilder("curl.exe --globoff --noproxy '*'");
-            // --request HEAD alone does not tell curl to stop reading after the response headers.
-            if (Method == "HEAD")
-                command.Append(" --head");
-            command.Append(" --request ").Append(Quote(Method)).Append(" --url ").Append(Quote(request.RequestUri.AbsoluteUri));
-            foreach (var header in request.Headers.Concat(request.Content.Headers))
-            {
-                if (header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                foreach (string value in header.Value)
-                    // curl uses "Name;" to send an empty header; "Name:" removes the header instead.
-                    command.Append(" --header ").Append(Quote(
-                        string.IsNullOrEmpty(value) ? header.Key + ";" : $"{header.Key}: {value}"));
-            }
-            // curl adds these by default, whereas replay sends only explicitly supplied values.
-            foreach (string name in new[] { "Content-Type", "Accept", "User-Agent" })
-            {
-                if (!request.Headers.Concat(request.Content.Headers).Any(
-                    header => header.Key.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                    command.Append(" --header ").Append(Quote(name + ":"));
-            }
-
-            if (body.Length == 0)
-                return command.ToString();
-
-            // Pass body bytes through a temporary file, not shell text; finally removes sensitive payloads.
-            return "& {\r\n$xmatBodyFile = [System.IO.Path]::GetTempFileName()\r\ntry {\r\n" +
-                $"[System.IO.File]::WriteAllBytes($xmatBodyFile, [Convert]::FromBase64String('{Convert.ToBase64String(body)}'))\r\n" +
-                command + " --data-binary \"@$xmatBodyFile\"\r\n" +
-                "} finally {\r\n[System.IO.File]::Delete($xmatBodyFile)\r\n}\r\n}";
-        }
-
         // The body as it is sent. A body from SetBodyBytes is returned as the same array, which callers must not change.
         internal byte[] GetBodyBytes() =>
             _sharedBody ??
@@ -289,6 +315,7 @@ namespace XMAT.WebServiceCapture
                 _bodyText = _bodyText,
                 _sharedBody = _sharedBody,
                 _originalAuthority = _originalAuthority,
+                Omissions = Omissions,
             };
 
         // Replaces the body with these exact bytes, without copying them; BodyText shows them as Base64.
@@ -325,6 +352,189 @@ namespace XMAT.WebServiceCapture
                 HeadersText = FormatHeaders(headers);
         }
 
+        // Supplies the method that a request file left out.
+        internal void CompleteMethod(string method)
+        {
+            ArgumentNullException.ThrowIfNull(method);
+            Method = method;
+            Omissions = Omissions with { Method = false };
+        }
+
+        // Supplies the URL that a request file left out, which must be a valid request URL. A draft without an origin takes
+        // this URL's as its first, so a later change to another origin needs consent; an origin it already has, such as a
+        // file's or a capture's URL, is never replaced.
+        internal void CompleteUrl(string url)
+        {
+            ArgumentNullException.ThrowIfNull(url);
+            if (!IsValidRequestFileUrl(url))
+                throw new ArgumentException(
+                    "Enter an absolute HTTP or HTTPS URL without embedded credentials, with a '#' only in its path or query.",
+                    nameof(url));
+            Url = url;
+            _originalAuthority ??= AuthorityOf(url);
+            Omissions = Omissions with { Url = false };
+        }
+
+        // Replaces every header line, and with it a header block that a request file left out; "" clears them all. The
+        // lines are checked first, so invalid text changes nothing.
+        internal void ReplaceHeaders(string headersText)
+        {
+            ArgumentNullException.ThrowIfNull(headersText);
+            ParseHeaders(headersText);
+            HeadersText = headersText;
+            Omissions = Omissions with { Headers = false };
+        }
+
+        // Supplies the body that a request file left out, as these exact bytes; an empty array is an explicitly empty body.
+        internal void CompleteBody(byte[] body)
+        {
+            SetBodyBytes(body);
+            Omissions = Omissions with { Body = false };
+        }
+
+        // The draft as data, as a request file holds it: a method, an absolute HTTP or HTTPS URL (a '#' only in its path
+        // or query), valid header lines and a body, within RequestFileLimits. A part that is still omitted is not checked:
+        // its placeholder is not data. The header and body limits are checked before anything of their size is made: the
+        // header text is scanned in place, and the body's length is counted without decoding it. Sending checks more
+        // (Unicode header values, control headers, upgrades); this does not.
+        internal void ValidateStructure()
+        {
+            if (!Omissions.Method && (!IsValidMethod(Method) || Method.Length > RequestFileLimits.MaxMethodChars))
+                throw new FormatException("Enter a valid HTTP method other than CONNECT, of at most 64 characters.");
+            if (!Omissions.Url && !IsValidRequestFileUrl(Url))
+                throw new FormatException(
+                    "Enter an absolute HTTP or HTTPS URL without embedded credentials, of at most 65,536 characters, " +
+                    "with a '#' only in its path or query.");
+            if (!Omissions.Headers)
+                CheckHeaderLimits(HeadersText);
+            if (!Omissions.Body && GetBodyLength() > RequestFileLimits.MaxBodyBytes)
+                throw new FormatException("A request file holds a body of at most 64 MiB.");
+        }
+
+        // The body's length in bytes, counted without decoding it: shared bytes as they are, text as its UTF-8, and Base64
+        // from its significant characters and padding, checked as Convert.FromBase64String reads it (the Base64 alphabet,
+        // spaces, tabs and line breaks ignored, whole groups of four, at most two '=' and only at the end).
+        internal long GetBodyLength()
+        {
+            if (_sharedBody != null)
+                return _sharedBody.LongLength;
+            string text = _bodyText ?? "";
+            if (!BodyIsBase64)
+            {
+                try
+                {
+                    return StrictUtf8.GetByteCount(text);
+                }
+                catch (EncoderFallbackException exception)
+                {
+                    throw new FormatException("The body is not valid text.", exception);
+                }
+            }
+
+            long significant = 0;
+            int padding = 0;
+            foreach (char c in text)
+            {
+                if (c is ' ' or '\t' or '\r' or '\n')
+                    continue;
+                if (c == '=')
+                    padding++;
+                else if (padding > 0 || !(char.IsAsciiLetterOrDigit(c) || c is '+' or '/'))
+                    throw new FormatException("The body is not valid Base64.");
+                significant++;
+            }
+
+            if (significant % 4 != 0 || padding > 2)
+                throw new FormatException("The body is not valid Base64.");
+            return (significant / 4 * 3) - padding;
+        }
+
+        // The header lines as ParseHeaders reads them, checked in place against RequestFileLimits: each line is valid, and
+        // there are at most MaxHeaders of them, of at most MaxHeaderBytes of UTF-8 names and values together. Nothing is
+        // allocated, so text of any size is refused at no cost.
+        private static void CheckHeaderLimits(string headersText)
+        {
+            ReadOnlySpan<char> rest = (headersText ?? "").AsSpan();
+            int count = 0;
+            long bytes = 0;
+            while (!rest.IsEmpty)
+            {
+                int end = rest.IndexOfAny('\r', '\n');
+                ReadOnlySpan<char> line;
+                if (end < 0)
+                {
+                    line = rest;
+                    rest = ReadOnlySpan<char>.Empty;
+                }
+                else if (rest[end] == '\r' && (end + 1 == rest.Length || rest[end + 1] != '\n'))
+                {
+                    throw new FormatException("Headers must use complete lines.");
+                }
+                else
+                {
+                    line = rest[..end];
+                    rest = rest[(end + (rest[end] == '\r' ? 2 : 1))..];
+                }
+
+                if (line.IsWhiteSpace())
+                    continue;
+                int separator = line.IndexOf(':');
+                ReadOnlySpan<char> name = separator > 0 ? line[..separator] : ReadOnlySpan<char>.Empty;
+                ReadOnlySpan<char> value = separator > 0 ? line[(separator + 1)..] : ReadOnlySpan<char>.Empty;
+                if (separator <= 0 || !IsToken(name) || !IsHeaderValue(value))
+                    throw new FormatException(InvalidHeaderMessage);
+                bytes += Encoding.UTF8.GetByteCount(name) + Encoding.UTF8.GetByteCount(value.Trim(" \t"));
+                if (++count > RequestFileLimits.MaxHeaders || bytes > RequestFileLimits.MaxHeaderBytes)
+                    throw new FormatException("A request file holds at most 256 headers, of at most 256 KiB together.");
+            }
+        }
+
+        private static bool IsToken(ReadOnlySpan<char> text)
+        {
+            foreach (char c in text)
+            {
+                if (!IsTokenCharacter(c))
+                    return false;
+            }
+
+            return !text.IsEmpty;
+        }
+
+        // As IsValidHeader checks a value: no control character other than tab.
+        private static bool IsHeaderValue(ReadOnlySpan<char> text)
+        {
+            foreach (char c in text)
+            {
+                if ((char.IsControl(c) && c != '\t') || c == '\u007f')
+                    return false;
+            }
+
+            return true;
+        }
+
+        // An absolute HTTP or HTTPS URL without user info or a fragment, of at most MaxUrlChars characters; a URL with a
+        // '#' is a sequence template, which has its every '#' in its path or query and is checked with a number in their
+        // place.
+        internal static bool IsValidRequestFileUrl(string url)
+        {
+            if (url == null || url.Length > RequestFileLimits.MaxUrlChars)
+                return false;
+            string probe = url;
+            if (url.Contains(ReplaySequence.Placeholder))
+            {
+                if (!ReplaySequence.IsPathAndQueryTemplate(url))
+                    return false;
+                probe = url.Replace(ReplaySequence.Placeholder.ToString(), "0");
+            }
+
+            return Uri.TryCreate(probe, UriKind.Absolute, out var uri) &&
+                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
+                string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment);
+        }
+
+        // The header lines as name and value pairs, in order; FormatException when a line is not a valid header.
+        internal IReadOnlyList<KeyValuePair<string, string>> GetHeaders() => ParseHeaders();
+
         // Whether a header line has one of these names, in any case, whether or not the request built from the draft keeps
         // it: a header that Connection nominates is in the headers but never sent.
         internal bool HasAnyHeader(IReadOnlyCollection<string> names) =>
@@ -344,7 +554,7 @@ namespace XMAT.WebServiceCapture
             !string.Equals(method, "CONNECT", StringComparison.OrdinalIgnoreCase);
 
         // The request to send, refused before anything is sent when a header value is one the HTTP stack cannot send.
-        // ToCurlCommand uses CreateRequest instead: curl sends such values as they are.
+        // RequestCurlExporter uses CreateRequest instead: curl sends such values as they are.
         internal HttpRequestMessage CreateRequestToSend()
         {
             HttpRequestMessage message = CreateRequest();
@@ -370,12 +580,14 @@ namespace XMAT.WebServiceCapture
         private static string FormatHeaders(IEnumerable<KeyValuePair<string, string>> headers) =>
             string.Join("\r\n", headers.Select(header => $"{header.Key}: {header.Value}"));
 
-        private List<KeyValuePair<string, string>> ParseHeaders()
+        private List<KeyValuePair<string, string>> ParseHeaders() => ParseHeaders(HeadersText);
+
+        private static List<KeyValuePair<string, string>> ParseHeaders(string headersText)
         {
             var result = new List<KeyValuePair<string, string>>();
-            using var reader = new StringReader((HeadersText ?? "").Replace("\r\n", "\n"));
+            using var reader = new StringReader((headersText ?? "").Replace("\r\n", "\n"));
             // StringReader accepts lone CRs; reject these rather than allowing hidden header injection.
-            if ((HeadersText ?? "").Replace("\r\n", "").Contains('\r'))
+            if ((headersText ?? "").Replace("\r\n", "").Contains('\r'))
                 throw new FormatException("Headers must use complete lines.");
             string line;
             while ((line = reader.ReadLine()) != null)
@@ -395,9 +607,5 @@ namespace XMAT.WebServiceCapture
 
         private static bool IsTokenCharacter(char c) =>
             char.IsAsciiLetterOrDigit(c) || "!#$%&'*+-.^_`|~".Contains(c);
-
-        private static string Quote(string value) => "'" + value.Replace("'", "''")
-            .Replace("\u2018", "\u2018\u2018").Replace("\u2019", "\u2019\u2019")
-            .Replace("\u201a", "\u201a\u201a").Replace("\u201b", "\u201b\u201b") + "'";
     }
 }

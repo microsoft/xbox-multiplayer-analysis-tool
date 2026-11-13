@@ -37,7 +37,8 @@ namespace XMAT.Tests.Replay
         }
 
         // By default the HTTP version is Automatic and Connect to another endpoint is off, with its address disabled. Copy
-        // as cURL copies a request with the default transport only, and says why otherwise.
+        // as cURL copies a request with Automatic or HTTP/1.1 only, without Connect to another endpoint, and says why
+        // otherwise.
         [Fact]
         public Task TransportOptions_AreAutomaticAndDirectByDefault_AndCopyAsCurlNeedsThem() => _application.RunAsync(() =>
         {
@@ -48,7 +49,6 @@ namespace XMAT.Tests.Replay
                 var connectTo = Find<CheckBox>(window, "ConnectToBox");
                 var endpoint = Find<TextBox>(window, "ConnectToText");
                 var copy = Find<Button>(window, "CopyCurlButton");
-                string why = Localization.GetLocalizedString("COMPOSER_COPY_CURL_UNAVAILABLE");
                 Assert.Equal(
                     new object[] { ReplayHttpVersion.Auto, ReplayHttpVersion.Http11, ReplayHttpVersion.Http2 },
                     version.Items.Cast<ComboBoxItem>().Select(item => item.Tag));
@@ -64,15 +64,17 @@ namespace XMAT.Tests.Replay
                 Assert.True(copy.IsEnabled);
 
                 version.SelectedIndex = 1;
+                Assert.True(copy.IsEnabled);
+                version.SelectedIndex = 2;
                 Assert.False(copy.IsEnabled);
-                Assert.Equal(why, copy.ToolTip);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_CURL_HTTP2"), copy.ToolTip);
                 version.SelectedIndex = 0;
                 Assert.True(copy.IsEnabled);
 
                 connectTo.IsChecked = true;
                 Assert.True(endpoint.IsEnabled);
                 Assert.False(copy.IsEnabled);
-                Assert.Equal(why, copy.ToolTip);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_CURL_CONNECT_TO"), copy.ToolTip);
                 connectTo.IsChecked = false;
                 Assert.False(endpoint.IsEnabled);
                 Assert.True(copy.IsEnabled);

@@ -20,14 +20,16 @@ namespace XMAT.Cli
     {
         internal const string Analyze = "analyze";
         internal const string Compose = "compose";
+        internal const string Curl = "curl";
         internal const string Doctor = "doctor";
         internal const string Export = "export";
         internal const string Help = "help";
         internal const string Replay = "replay";
+        internal const string SaveRequest = "save-request";
         internal const string Version = "version";
 
         // The commands xmat.exe runs. Each one needs a Supported capability in the registry (XMAT.Tests/Cli checks it).
-        internal static IReadOnlyList<string> Implemented { get; } = new[] { Analyze, Compose, Doctor, Export, Replay };
+        internal static IReadOnlyList<string> Implemented { get; } = new[] { Analyze, Compose, Curl, Doctor, Export, Replay, SaveRequest };
     }
 
     internal sealed record CliRequest(
@@ -44,9 +46,12 @@ namespace XMAT.Cli
         CaptureExportFormat? Format = null,
         CaptureSelectionSpec Selection = null);
 
-    // What xmat replay and xmat compose send and how, as their command lines give it. Headers and RemoveHeaders keep
-    // the order they were given in; BodyFile is read when the run starts. Selection is the --request text (replay only)
-    // and Sequence the --sequence text (compose only), both already validated.
+    // What xmat replay, compose and save-request send or save, as their command lines give it. Headers and RemoveHeaders
+    // keep the order they were given in; BodyFile and RequestFile are read when the run starts. Selection is the --request
+    // text (replay and save-request) and Sequence the --sequence text (compose only), both already validated. RequestFile
+    // is a request file to start from (compose and save-request); ClearHeaders and EmptyBody complete what such a file left
+    // out; HttpVersionSet says whether --http-version was given, which then wins over a file's version. IncludeSensitive
+    // saves captured content (save-request only).
     internal sealed record CliReplay(
         string Selection = null,
         int Repeat = 1,
@@ -68,7 +73,12 @@ namespace XMAT.Cli
         ReplayHttpVersion HttpVersion = ReplayHttpVersion.Auto,
         ReplayConnectTo ConnectTo = null,
         bool AllowConnectTo = false,
-        bool VerifyDiff = false)
+        bool VerifyDiff = false,
+        string RequestFile = null,
+        bool ClearHeaders = false,
+        bool EmptyBody = false,
+        bool HttpVersionSet = false,
+        bool IncludeSensitive = false)
     {
         internal static CliReplay Default { get; } = new();
     }
@@ -120,6 +130,10 @@ namespace XMAT.Cli
         internal const string AllowUnsafeMethodsSwitch = "--allow-unsafe-methods";
         internal const string AllowOriginChangeSwitch = "--allow-origin-change";
         internal const string AllowConnectToSwitch = "--allow-connect-to";
+        internal const string RequestFileOption = "--request-file";
+        internal const string ClearHeadersSwitch = "--clear-headers";
+        internal const string EmptyBodySwitch = "--empty-body";
+        internal const string IncludeSensitiveSwitch = "--include-sensitive";
 
         internal const string HttpVersionMessage = "--http-version takes auto, 1.1 or 2.";
 
@@ -243,7 +257,7 @@ namespace XMAT.Cli
         };
 
         private static readonly HashSet<string> ComposeCommandOptions = new(
-            SendOptions.Concat(new[] { UrlOption, SequenceOption }), StringComparer.Ordinal);
+            SendOptions.Concat(new[] { UrlOption, SequenceOption, RequestFileOption, RemoveHeaderOption }), StringComparer.Ordinal);
 
         private static readonly HashSet<string> ReplayCommandOptions = new(
             SendOptions.Concat(new[]
@@ -263,17 +277,87 @@ namespace XMAT.Cli
         private static readonly HashSet<string> RepeatableOptions = new(StringComparer.Ordinal) { HeaderOption, RemoveHeaderOption };
 
         // compose has no captured origin to change, and replay never follows a redirect to another origin, so only replay
-        // takes --allow-origin-change. Both take --allow-connect-to, the permission that --connect-to needs. Only replay has
-        // captured responses to verify against (--verify, --verify-diff).
+        // takes --allow-origin-change, and compose only with --request-file, whose URL is the origin. Both take
+        // --allow-connect-to, the permission that --connect-to needs. Only replay has captured responses to verify against
+        // (--verify, --verify-diff).
         private static readonly HashSet<string> ComposeSwitches = new(StringComparer.Ordinal)
         {
             AllowUnsafeMethodsSwitch,
             AllowConnectToSwitch,
         };
 
+        // What compose takes only with --request-file: the completions of what a file left out, and consent for changing
+        // the origin of the file's URL.
+        private static readonly string[] RequestFileOnly =
+        {
+            RemoveHeaderOption, ClearHeadersSwitch, EmptyBodySwitch, AllowOriginChangeSwitch,
+        };
+
+        private static readonly HashSet<string> ComposeCommandSwitches = new(
+            ComposeSwitches.Concat(new[] { AllowOriginChangeSwitch, ClearHeadersSwitch, EmptyBodySwitch }),
+            StringComparer.Ordinal);
+
         private static readonly HashSet<string> ReplaySwitches = new(
             ComposeSwitches.Concat(new[] { AllowOriginChangeSwitch, UnconditionalSwitch, VerifySwitch, VerifyDiffSwitch }),
             StringComparer.Ordinal);
+
+        // save-request never sends: it takes edits, completions, --http-version and the content and consent switches, and
+        // no other transport option.
+        private static readonly HashSet<string> SaveRequestOptions = new(StringComparer.Ordinal)
+        {
+            OutOption,
+            RequestOption,
+            DeviceOption,
+            RequestFileOption,
+            UrlOption,
+            MethodOption,
+            HeaderOption,
+            RemoveHeaderOption,
+            BodyFileOption,
+            HttpVersionOption,
+            CliLimits.InputOption,
+            CliLimits.DataOption,
+            CliLimits.RecordOption,
+            CliLimits.RecordsOption,
+        };
+
+        private static readonly HashSet<string> SaveRequestSwitches = new(StringComparer.Ordinal)
+        {
+            UnconditionalSwitch, ClearHeadersSwitch, EmptyBodySwitch, IncludeSensitiveSwitch, AllowOriginChangeSwitch,
+        };
+
+        // curl takes what save-request takes. It reads the options that only a send uses so that it can refuse them with
+        // one message: a script is made with curl's default transport, never one that leaves a choice out.
+        private static readonly HashSet<string> CurlSendOnlyOptions = new(StringComparer.Ordinal)
+        {
+            RepeatOption.Name,
+            ParallelOption.Name,
+            TimeoutOption.Name,
+            MaxResponseOption.Name,
+            FollowRedirectsOption.Name,
+            ConnectToOption,
+            SequenceOption,
+            OriginOption,
+        };
+
+        private static readonly HashSet<string> CurlSendOnlySwitches = new(StringComparer.Ordinal)
+        {
+            AllowConnectToSwitch, AllowUnsafeMethodsSwitch, VerifySwitch, VerifyDiffSwitch,
+        };
+
+        private static readonly HashSet<string> CurlReadOptions = new(SaveRequestOptions.Concat(CurlSendOnlyOptions), StringComparer.Ordinal);
+
+        private static readonly HashSet<string> CurlReadSwitches = new(SaveRequestSwitches.Concat(CurlSendOnlySwitches), StringComparer.Ordinal);
+
+        private static readonly HashSet<string> CurlReadNames = new(CurlReadOptions.Concat(CurlReadSwitches), StringComparer.Ordinal);
+
+        internal const string CurlSendOnlyMessage =
+            "xmat curl exports each request with curl's default transport and sends nothing: --repeat, --parallel, " +
+            "--timeout, --max-response-mib, --follow-redirects, --connect-to, --allow-connect-to, --sequence, " +
+            "--allow-unsafe-methods, --verify, --verify-diff and --origin do not apply.";
+
+        internal const string CurlHttpVersionMessage =
+            "xmat curl takes --http-version auto or 1.1: curl's HTTP/2-only mode is not known to send the same request.";
 
         // The options that analyze accepts; its command line in the capability registry names exactly these.
         internal static IReadOnlySet<string> AnalyzeOptionNames => AnalyzeOptions;
@@ -281,10 +365,16 @@ namespace XMAT.Cli
         // The options that export accepts; the registry's export command lines name exactly these.
         internal static IReadOnlySet<string> ExportOptionNames => ExportOptions;
 
-        // The options and switches that replay and compose accept; their registry command lines name exactly these.
+        // The options and switches that replay, compose and save-request accept; their registry command lines name exactly
+        // these.
         internal static IReadOnlySet<string> ReplayOptionNames { get; } = new HashSet<string>(ReplayCommandOptions.Concat(ReplaySwitches), StringComparer.Ordinal);
 
-        internal static IReadOnlySet<string> ComposeOptionNames { get; } = new HashSet<string>(ComposeCommandOptions.Concat(ComposeSwitches), StringComparer.Ordinal);
+        internal static IReadOnlySet<string> ComposeOptionNames { get; } = new HashSet<string>(ComposeCommandOptions.Concat(ComposeCommandSwitches), StringComparer.Ordinal);
+
+        internal static IReadOnlySet<string> SaveRequestOptionNames { get; } = new HashSet<string>(SaveRequestOptions.Concat(SaveRequestSwitches), StringComparer.Ordinal);
+
+        // curl accepts exactly what save-request accepts; the options that only a send uses are refused (CurlSendOnlyMessage).
+        internal static IReadOnlySet<string> CurlOptionNames => SaveRequestOptionNames;
 
         internal static string FormatName(CaptureExportFormat format) => FormatNames[(int)format];
 
@@ -331,6 +421,16 @@ namespace XMAT.Cli
             if (first == CliCommands.Compose)
             {
                 return ParseCompose(args);
+            }
+
+            if (first == CliCommands.SaveRequest)
+            {
+                return ParseExport(args, CliCommands.SaveRequest);
+            }
+
+            if (first == CliCommands.Curl)
+            {
+                return ParseExport(args, CliCommands.Curl);
             }
 
             if (first.StartsWith('-'))
@@ -680,15 +780,10 @@ namespace XMAT.Cli
                         "without a path, query or credentials.");
             }
 
-            var removeHeaders = new List<string>();
-            foreach (string name in arguments.ValuesOf(RemoveHeaderOption))
+            error = ReadRemoveHeaders(command, arguments, out List<string> removeHeaders);
+            if (error != null)
             {
-                if (!RequestReplayDraft.IsValidHeader(name, string.Empty))
-                {
-                    return CliParseResult.UsageError(command, "cli.usage.invalid-value", "--remove-header takes a header name.");
-                }
-
-                removeHeaders.Add(name);
+                return error;
             }
 
             return CliParseResult.Success(new CliRequest(
@@ -714,7 +809,7 @@ namespace XMAT.Cli
         {
             const string command = CliCommands.Compose;
             var arguments = new CliArguments();
-            CliParseResult error = arguments.Read(args, command, ComposeOptionNames, RepeatableOptions, ComposeSwitches);
+            CliParseResult error = arguments.Read(args, command, ComposeOptionNames, RepeatableOptions, ComposeCommandSwitches);
             if (error != null)
             {
                 return error;
@@ -731,9 +826,26 @@ namespace XMAT.Cli
                     command, "cli.usage.unexpected-argument", "compose takes no arguments besides its options.");
             }
 
-            if (!arguments.Options.ContainsKey(UrlOption))
+            // --url is the request to compose, or with --request-file an edit of the file's request.
+            bool fromFile = arguments.Options.TryGetValue(RequestFileOption, out string requestFile);
+            if (!fromFile && !arguments.Options.ContainsKey(UrlOption))
             {
-                return CliParseResult.UsageError(command, "cli.usage.missing-option", "compose needs --url URL.");
+                return CliParseResult.UsageError(
+                    command, "cli.usage.missing-option", "compose needs --url URL or --request-file FILE.");
+            }
+
+            if (!fromFile && RequestFileOnly.Any(name => Has(arguments, name)))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-option",
+                    "--remove-header, --clear-headers, --empty-body and --allow-origin-change need --request-file.");
+            }
+
+            error = CheckBodyChoice(command, arguments);
+            if (error != null)
+            {
+                return error;
             }
 
             if (!arguments.Options.TryGetValue(OutOption, out string output))
@@ -742,7 +854,266 @@ namespace XMAT.Cli
             }
 
             error = ReadSendOptions(command, arguments, out CliReplay replay);
-            return error ?? CliParseResult.Success(new CliRequest(command, Output: output, Replay: replay));
+            if (error != null)
+            {
+                return error;
+            }
+
+            error = ReadRemoveHeaders(command, arguments, out List<string> removeHeaders);
+            return error ?? CliParseResult.Success(new CliRequest(
+                command,
+                Output: output,
+                Replay: replay with
+                {
+                    RequestFile = requestFile,
+                    RemoveHeaders = removeHeaders,
+                    ClearHeaders = arguments.Options.ContainsKey(ClearHeadersSwitch),
+                    EmptyBody = arguments.Options.ContainsKey(EmptyBodySwitch),
+                }));
+        }
+
+        // xmat save-request and xmat curl: one source (an INPUT capture file with --request, a request file, or --url for
+        // a new request), the edits and completions that compose takes, and whether to export captured content. Nothing is
+        // sent, so they take no transport option but --http-version: curl refuses the options that only a send uses, and
+        // HTTP/2 only. curl always exports captured content, so its missing consent is a policy refusal (exit code 3,
+        // CliCurlCommand), not a usage error.
+        private static CliParseResult ParseExport(IReadOnlyList<string> args, string command)
+        {
+            bool curl = command == CliCommands.Curl;
+            var arguments = new CliArguments();
+            CliParseResult error = arguments.Read(
+                args,
+                command,
+                curl ? CurlReadNames : SaveRequestOptionNames,
+                RepeatableOptions,
+                curl ? CurlReadSwitches : SaveRequestSwitches);
+            if (error != null)
+            {
+                return error;
+            }
+
+            if (arguments.HelpRequested)
+            {
+                return HelpFor(command);
+            }
+
+            if (curl && (CurlSendOnlyOptions.Any(name => Has(arguments, name)) || CurlSendOnlySwitches.Any(name => Has(arguments, name))))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.unsupported-option", CurlSendOnlyMessage);
+            }
+
+            if (arguments.Positionals.Count > 1)
+            {
+                return CliParseResult.UsageError(
+                    command, "cli.usage.unexpected-argument", command + " takes at most one INPUT capture file.");
+            }
+
+            string input = arguments.Positionals.Count == 1 ? arguments.Positionals[0] : null;
+            bool fromFile = arguments.Options.TryGetValue(RequestFileOption, out string requestFile);
+            arguments.Options.TryGetValue(RequestOption, out string selection);
+            bool captureOptions = selection != null || arguments.Options.ContainsKey(DeviceOption) ||
+                arguments.Options.ContainsKey(CliLimits.InputOption) || arguments.Options.ContainsKey(CliLimits.DataOption) ||
+                arguments.Options.ContainsKey(CliLimits.RecordOption) || arguments.Options.ContainsKey(CliLimits.RecordsOption);
+            if (input != null && fromFile)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.conflicting-options",
+                    command + " takes one source: an INPUT capture file, --request-file, or --url for a new request.");
+            }
+
+            if (input != null && selection == null)
+            {
+                return CliParseResult.UsageError(
+                    command, "cli.usage.missing-option", command + " needs --request with an INPUT capture file.");
+            }
+
+            if (input == null && captureOptions)
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-argument",
+                    "--request, --device and the input limits need an INPUT capture file.");
+            }
+
+            if (input == null && !fromFile && !arguments.Options.ContainsKey(UrlOption))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-argument",
+                    command + " needs an INPUT capture file with --request, --request-file FILE, or --url URL.");
+            }
+
+            if (!fromFile && (Has(arguments, ClearHeadersSwitch) || Has(arguments, EmptyBodySwitch)))
+            {
+                return CliParseResult.UsageError(
+                    command, "cli.usage.missing-option", "--clear-headers and --empty-body need --request-file.");
+            }
+
+            if (!curl && Has(arguments, AllowOriginChangeSwitch) && !Has(arguments, IncludeSensitiveSwitch))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.missing-option",
+                    "--allow-origin-change applies only with --include-sensitive: a template keeps no URL.");
+            }
+
+            error = CheckBodyChoice(command, arguments);
+            if (error != null)
+            {
+                return error;
+            }
+
+            if (!arguments.Options.TryGetValue(OutOption, out string output))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.missing-option", command + " needs --out DIR.");
+            }
+
+            if (selection != null && !ReplaySelection.TryParse(selection, out _))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    "--request takes all, or request numbers and ranges such as 1,5,9-12: at most 10,000 numbers in all.");
+            }
+
+            if (arguments.Options.TryGetValue(DeviceOption, out string deviceId) && !IsDeviceId(deviceId))
+            {
+                return CliParseResult.UsageError(
+                    command, "cli.usage.invalid-value", "--device takes a device id such as d1 from a previous summary.");
+            }
+
+            CliLimits limits = CliLimits.Read(arguments.Options, out CliLimitOption invalidLimit);
+            if (limits == null)
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", invalidLimit.RangeMessage);
+            }
+
+            if (limits.MaxRecordMib > limits.MaxDataMib)
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", CliLimits.RecordOverDataMessage);
+            }
+
+            // A saved URL may be a sequence template, which compose --sequence expands later.
+            if (arguments.Options.TryGetValue(UrlOption, out string url) && !RequestReplayDraft.IsValidRequestFileUrl(url))
+            {
+                return CliParseResult.UsageError(
+                    command,
+                    "cli.usage.invalid-value",
+                    "--url takes an absolute http or https URL without credentials or a fragment; a # only in its path or " +
+                        "query.");
+            }
+
+            if (arguments.Options.TryGetValue(MethodOption, out string method) && !RequestReplayDraft.IsValidMethod(method))
+            {
+                return CliParseResult.UsageError(
+                    command, "cli.usage.invalid-value", "--method takes an HTTP method such as GET or POST, other than CONNECT.");
+            }
+
+            var headers = new List<KeyValuePair<string, string>>();
+            foreach (string text in arguments.ValuesOf(HeaderOption))
+            {
+                if (!TryParseStoredHeader(text, out KeyValuePair<string, string> header))
+                {
+                    return CliParseResult.UsageError(
+                        command,
+                        "cli.usage.invalid-value",
+                        "--header takes NAME: VALUE, with a valid header name and a value without control characters " +
+                            "other than tabs.");
+                }
+
+                headers.Add(header);
+            }
+
+            ReplayHttpVersion httpVersion = ReplayHttpVersion.Auto;
+            if (arguments.Options.TryGetValue(HttpVersionOption, out string versionText) &&
+                !ReplayTransportOptions.TryParseVersion(versionText, out httpVersion))
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", HttpVersionMessage);
+            }
+
+            if (curl && httpVersion == ReplayHttpVersion.Http2)
+            {
+                return CliParseResult.UsageError(command, "cli.usage.invalid-value", CurlHttpVersionMessage);
+            }
+
+            error = ReadRemoveHeaders(command, arguments, out List<string> removeHeaders);
+            if (error != null)
+            {
+                return error;
+            }
+
+            arguments.Options.TryGetValue(BodyFileOption, out string bodyFile);
+            return CliParseResult.Success(new CliRequest(
+                command,
+                Input: input,
+                Output: output,
+                DeviceId: deviceId,
+                Limits: input != null ? limits : null,
+                Replay: new CliReplay(
+                    Selection: selection,
+                    Url: url,
+                    Method: method,
+                    Headers: headers,
+                    RemoveHeaders: removeHeaders,
+                    BodyFile: bodyFile,
+                    Unconditional: Has(arguments, UnconditionalSwitch),
+                    AllowOriginChange: Has(arguments, AllowOriginChangeSwitch),
+                    HttpVersion: httpVersion,
+                    RequestFile: requestFile,
+                    ClearHeaders: Has(arguments, ClearHeadersSwitch),
+                    EmptyBody: Has(arguments, EmptyBodySwitch),
+                    HttpVersionSet: arguments.Options.ContainsKey(HttpVersionOption),
+                    IncludeSensitive: Has(arguments, IncludeSensitiveSwitch))));
+        }
+
+        // Whether the command line gave an option, a repeated option or a switch.
+        private static bool Has(CliArguments arguments, string name) =>
+            arguments.Options.ContainsKey(name) || arguments.ValuesOf(name).Any();
+
+        // --body-file and --empty-body each give the body; only one can.
+        private static CliParseResult CheckBodyChoice(string command, CliArguments arguments) =>
+            Has(arguments, BodyFileOption) && Has(arguments, EmptyBodySwitch)
+                ? CliParseResult.UsageError(
+                    command, "cli.usage.conflicting-options", "--body-file and --empty-body cannot be used together.")
+                : null;
+
+        private static CliParseResult ReadRemoveHeaders(string command, CliArguments arguments, out List<string> removeHeaders)
+        {
+            removeHeaders = new List<string>();
+            foreach (string name in arguments.ValuesOf(RemoveHeaderOption))
+            {
+                if (!RequestReplayDraft.IsValidHeader(name, string.Empty))
+                {
+                    return CliParseResult.UsageError(command, "cli.usage.invalid-value", "--remove-header takes a header name.");
+                }
+
+                removeHeaders.Add(name);
+            }
+
+            return null;
+        }
+
+        // NAME: VALUE for a request file, which holds any valid header line: unlike a header to send, its value may be
+        // Unicode, and it may be one that sending sets itself, such as Host.
+        private static bool TryParseStoredHeader(string text, out KeyValuePair<string, string> header)
+        {
+            header = default;
+            int separator = text.IndexOf(':');
+            if (separator <= 0)
+            {
+                return false;
+            }
+
+            string name = text[..separator];
+            string value = text[(separator + 1)..].Trim(' ', '\t');
+            if (!RequestReplayDraft.IsValidHeader(name, value))
+            {
+                return false;
+            }
+
+            header = new(name, value);
+            return true;
         }
 
         // The options that compose and replay share. Messages name the option and what it takes, never the value.
@@ -790,7 +1161,7 @@ namespace XMAT.Cli
                     return CliParseResult.UsageError(command, "cli.usage.invalid-value", SequenceRangeMessage);
                 }
 
-                if (!ReplaySequence.IsPathAndQueryTemplate(url))
+                if (url != null && !ReplaySequence.IsPathAndQueryTemplate(url))
                 {
                     return CliParseResult.UsageError(command, "cli.usage.invalid-value", SequenceTemplateMessage);
                 }
@@ -858,7 +1229,8 @@ namespace XMAT.Cli
                 Sequence: sequenceText,
                 HttpVersion: httpVersion,
                 ConnectTo: connectTo,
-                AllowConnectTo: arguments.Options.ContainsKey(AllowConnectToSwitch));
+                AllowConnectTo: arguments.Options.ContainsKey(AllowConnectToSwitch),
+                HttpVersionSet: arguments.Options.ContainsKey(HttpVersionOption));
             return null;
         }
 

@@ -9,10 +9,11 @@ using System.Text.Json;
 using XMAT.Cli;
 using XMAT.Tests.Fixtures;
 using XMAT.Tests.Proxy;
+using XMAT.Tests.Replay;
 
 namespace XMAT.Tests.Cli
 {
-    // A real console signal to a running xmat analyze, made deterministic without test hooks in xmat: the test keeps a
+    // A real console signal to a running xmat analyze or curl, made deterministic without test hooks in xmat: the test keeps a
     // file open in xmat's staging folder, so xmat can neither publish (rename the folder to --out) nor remove the folder
     // until the test lets go, and the signal always lands before publication however fast the analysis is. Removing the
     // folder deletes the test's marker file first; once it is gone, xmat has given up publishing, the test lets go, and
@@ -35,8 +36,7 @@ namespace XMAT.Tests.Cli
             using XmatChild xmat = XmatProcess.Start(
                 XmatProcess.CliDirectory, directory.Root, "analyze", input, "--out", "results");
 
-            string staging = await WaitForStagingFolderAsync(directory.Root, xmat);
-            using (StagingHold hold = StagingHold.Take(staging))
+            using (StagingHold hold = await StagingHold.TakeAsync(directory.Root, xmat))
             {
                 await signal.SendAsync(xmat.Id, ConsoleSignal.CtrlBreak);
                 await hold.ReleaseOnceRemovalStartsAsync(xmat);
@@ -53,32 +53,35 @@ namespace XMAT.Tests.Cli
             Assert.Equal(new[] { "capture.saz" }, directory.Entries());
         }
 
-        // xmat creates its staging folder after it has checked its prerequisites and --out, and before it analyzes.
-        private static async Task<string> WaitForStagingFolderAsync(string directory, XmatChild xmat)
+        // The same for xmat curl, while it reads the capture or writes the scripts: nothing is published.
+        [Fact]
+        public async Task CtrlBreak_BeforeCurlPublication_CancelsAndPublishesNothing()
         {
-            var elapsed = Stopwatch.StartNew();
-            while (true)
+            using var directory = new CliTestDirectory();
+            using var helperDirectory = new CliTestDirectory();
+            string input = ReplayCaptures.WriteSaz(
+                directory.Root,
+                "capture.saz",
+                Enumerable.Range(1, 2000).Select(number => new CapturedExchange("GET", $"http://127.0.0.1:9/{number}")).ToArray());
+            using ConsoleSignal signal = await ConsoleSignal.StartAsync(helperDirectory.Root);
+            using XmatChild xmat = XmatProcess.Start(
+                XmatProcess.CliDirectory, directory.Root, "curl", input, "--request", "all", "--include-sensitive", "--out", "scripts");
+
+            using (StagingHold hold = await StagingHold.TakeAsync(directory.Root, xmat))
             {
-                string[] staging = Directory.GetDirectories(directory, CliOutputFolder.StagingPrefix + "*");
-                if (staging.Length != 0)
-                {
-                    return staging[0];
-                }
-
-                if (xmat.HasExited)
-                {
-                    XmatRun run = await xmat.CompleteAsync();
-                    Assert.Fail(
-                        $"xmat exited with {run.ExitCode} before the signal was sent.{Environment.NewLine}{run.Stderr}{run.Stdout}");
-                }
-
-                if (elapsed.Elapsed > WaitLimit)
-                {
-                    Assert.Fail("xmat did not create its staging folder.");
-                }
-
-                await Task.Delay(5);
+                await signal.SendAsync(xmat.Id, ConsoleSignal.CtrlBreak);
+                await hold.ReleaseOnceRemovalStartsAsync(xmat);
             }
+
+            XmatRun run = await xmat.CompleteAsync();
+
+            CliAssert.ExitCode(130, run);
+            JsonElement json = run.Json();
+            Assert.Equal("cancelled", json.GetProperty("status").GetString());
+            Assert.Contains(run.ErrorCodes(), code => code is "cli.cancelled" or "replay.cancelled");
+            Assert.Empty(json.GetProperty("artifacts").EnumerateArray());
+            Assert.Equal("completed", json.GetProperty("cleanup").GetProperty("state").GetString());
+            Assert.Equal(new[] { "capture.saz" }, directory.Entries());
         }
 
         // Keeps xmat's staging folder in place: a file in it stays open without delete sharing, so the folder can be
@@ -95,22 +98,75 @@ namespace XMAT.Tests.Cli
                 _marker = marker;
             }
 
-            internal static StagingHold Take(string staging)
+            // xmat creates its staging folder in directory after it has checked its prerequisites and --out, and before it
+            // works. The folder is held as soon as it appears, from a thread of its own that looks every millisecond: a
+            // fast run (xmat curl writing its scripts, say) can otherwise publish before a busy thread pool lets the test
+            // look again.
+            internal static async Task<StagingHold> TakeAsync(string directory, XmatChild xmat)
             {
-                FileStream hold;
-                try
+                var taken = new TaskCompletionSource<StagingHold>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var watcher = new Thread(() =>
                 {
-                    hold = new FileStream(Path.Combine(staging, "test-hold.bin"), FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-                }
-                catch (DirectoryNotFoundException ex)
+                    try
+                    {
+                        var elapsed = Stopwatch.StartNew();
+                        StagingHold hold;
+                        while ((hold = TryTake(directory)) is null && !xmat.HasExited)
+                        {
+                            if (elapsed.Elapsed > WaitLimit)
+                            {
+                                Assert.Fail("xmat did not create its staging folder.");
+                            }
+
+                            Thread.Sleep(1);
+                        }
+
+                        taken.SetResult(hold);
+                    }
+                    catch (Exception ex)
+                    {
+                        taken.SetException(ex);
+                    }
+                })
                 {
-                    throw new InvalidOperationException(
-                        "xmat published or removed its staging folder before the test could hold it.", ex);
+                    IsBackground = true,
+                    Name = "Staging hold",
+                };
+                watcher.Start();
+
+                StagingHold result = await taken.Task;
+                if (result is null)
+                {
+                    XmatRun run = await xmat.CompleteAsync();
+                    Assert.Fail(
+                        $"xmat exited with {run.ExitCode} before the signal was sent.{Environment.NewLine}{run.Stderr}{run.Stdout}");
                 }
 
-                string marker = Path.Combine(staging, "test-marker.txt");
-                File.WriteAllText(marker, "removed when xmat starts removing its staging folder");
-                return new StagingHold(hold, marker);
+                return result;
+            }
+
+            // Null when there is no staging folder yet, or when it went (published or removed) before it could be held.
+            private static StagingHold TryTake(string directory)
+            {
+                foreach (string staging in Directory.GetDirectories(directory, CliOutputFolder.StagingPrefix + "*"))
+                {
+                    FileStream hold;
+                    try
+                    {
+                        hold = new FileStream(
+                            Path.Combine(staging, "test-hold.bin"), FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                    }
+                    catch (DirectoryNotFoundException)
+                    {
+                        continue;
+                    }
+
+                    string marker = Path.Combine(staging, "test-marker.txt");
+                    File.WriteAllText(marker, "removed when xmat starts removing its staging folder");
+                    return new StagingHold(hold, marker);
+                }
+
+                return null;
             }
 
             // xmat removes the folder after it has seen the cancellation, or after it failed otherwise; the exit code

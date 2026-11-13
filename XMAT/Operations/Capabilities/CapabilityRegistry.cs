@@ -250,7 +250,6 @@ namespace XMAT.Operations.Capabilities
                     Window("XMAT.WebServiceCapture.RequestComposerWindow"),
                     Click(ComposerXaml, "Send_Click"),
                     Click(ComposerXaml, "CancelSend_Click"),
-                    Click(ComposerXaml, "CopyCurl_Click"),
                     Click(ComposerXaml, "UploadFile_Click"),
                     Click(ComposerXaml, "ClearBody_Click"),
                     Click(ComposerXaml, "Close_Click"),
@@ -260,10 +259,11 @@ namespace XMAT.Operations.Capabilities
                 }),
             Capability.Supported(
                 "request.compose", "Compose and send a new request", "S9",
-                cli: "compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header \"NAME: VALUE\"]... " +
-                    "[--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
+                cli: "compose --url URL | --request-file FILE --out DIR [--sequence START-END] [--method METHOD] " +
+                    "[--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] " +
+                    "[--empty-body] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] " +
-                    "[--allow-connect-to]",
+                    "[--allow-origin-change] [--allow-connect-to]",
                 operation: ReplayOperation,
                 gui: new[]
                 {
@@ -271,6 +271,40 @@ namespace XMAT.Operations.Capabilities
                     Window("XMAT.WebServiceCapture.RequestComposerWindow"),
                     Window("XMAT.WebServiceCapture.SequenceRangeWindow"),
                     Click(SequenceRangeXaml, "Ok_Click"),
+                }),
+
+            // A request file (xmat-request/1) holds one request without sending it: a template, by default, keeps only its
+            // shape; with consent, its captured content. Loading one never grants consent (request.compose sends it).
+            Capability.Supported(
+                "request.save", "Save requests as request files, without sending them", "S9",
+                cli: "save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] " +
+                    "[--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] " +
+                    "[--body-file FILE] [--empty-body] [--unconditional] [--http-version auto|1.1|2] [--include-sensitive] " +
+                    "[--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Click(ComposerXaml, "OpenRequest_Click"),
+                    Click(ComposerXaml, "SaveRequest_Click"),
+                    Click(ComposerXaml, "CompletePart_Click"),
+                    Window("XMAT.WebServiceCapture.SaveRequestWindow"),
+                    Click("Engines/WebServiceProxy/Windows/SaveRequestWindow.xaml", "Save_Click"),
+                }),
+
+            // A cURL script runs one request again outside XMAT: PowerShell 7 runs the inbox curl.exe with arguments that
+            // send what XMAT's sender sends. A script holds its request as captured, so exporting always needs consent; it
+            // sends nothing and starts nothing (RequestCurlExporter).
+            Capability.Supported(
+                "request.curl", "Export requests as cURL scripts for PowerShell 7, without sending them", "S9",
+                cli: "curl INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--include-sensitive] " +
+                    "[--device ID] [--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... " +
+                    "[--clear-headers] [--body-file FILE] [--empty-body] [--unconditional] [--http-version auto|1.1] " +
+                    "[--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
+                operation: ReplayOperation,
+                gui: new[]
+                {
+                    Click(ComposerXaml, "CopyCurl_Click"),
+                    Click(ComposerXaml, "SaveCurl_Click"),
                 }),
 
             // WebSocket handshakes are kept from the first capture slice on; message payloads are archived later.

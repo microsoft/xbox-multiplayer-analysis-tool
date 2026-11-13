@@ -82,7 +82,9 @@ namespace XMAT.Operations.Replay
     }
 
     // Changes applied to every selected request before anything is sent. Url replaces the whole URL (one request only);
-    // Origin replaces the scheme, host and port and keeps each request's path and query.
+    // Origin replaces the scheme, host and port and keeps each request's path and query. An edit that supplies a part that
+    // a request file left out completes it (Method, Url, Body); ClearHeaders replaces every header line with none, which
+    // completes a header block that a file left out, before RemoveHeaders and SetHeaders apply.
     internal sealed record ReplayEdits(
         string Url = null,
         string Origin = null,
@@ -90,10 +92,17 @@ namespace XMAT.Operations.Replay
         IReadOnlyList<KeyValuePair<string, string>> SetHeaders = null,
         IReadOnlyList<string> RemoveHeaders = null,
         byte[] Body = null,
-        bool Unconditional = false)
+        bool Unconditional = false,
+        bool ClearHeaders = false)
     {
         internal static ReplayEdits None { get; } = new();
     }
+
+    // A request prepared to be saved or exported, never sent (ReplayOperation.PrepareForExport): its draft, and the device
+    // and number of the captured request that it came from, or null for a composed one.
+    internal sealed record ReplayExportItem(string DeviceId, long? RequestNumber, RequestReplayDraft Draft);
+
+    internal sealed record ReplayExport(string InputKind, string InputSha256, IReadOnlyList<ReplayExportItem> Items);
 
     // VerifyDiff also builds the differences of each verified send (VerifyDiffOperation) and hands them to the sink with its
     // exchange (ReplayExchange.VerifyDiff), never in the result; it needs Verify.
