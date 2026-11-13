@@ -267,7 +267,7 @@ The capture limit bounds how much of each response a capture keeps, not how much
 XMAT uses. Capturing a large response currently takes much more memory than the response
 itself: in testing, XMAT's memory use peaked at about 1.5 GB while it captured one 40 MB
 response, and several large streams captured at once can use several GB. Large uploads
-add to that.
+add to that (see [Request body limits](#request-body-limits)).
 
 For a streamed response:
 
@@ -324,7 +324,8 @@ server or the server uses a transfer coding that XMAT doesn't decode, and `504 G
 Timeout` when the server doesn't answer in time. No Web Response script runs for such an
 answer, and XMAT logs the reason (see
 [Collect debug logs](troubleshooting.md#collect-debug-logs)). XMAT doesn't capture the
-requests that it refuses outright (`400`, `417` or `501`).
+requests that it refuses outright: those it answers with `400`, `417` or `501`, or with
+the `413`, `408` or `503` of the [request body limits](#request-body-limits).
 
 ## Block or bypass hosts
 
