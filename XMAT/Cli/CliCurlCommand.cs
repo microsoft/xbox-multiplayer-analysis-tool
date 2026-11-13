@@ -52,22 +52,19 @@ namespace XMAT.Cli
                 return report;
             }
 
-            // The body file and the request file are read before anything is reserved; their paths and content never reach
-            // the output, and a file that cannot be used is refused with exit code 3.
-            byte[] body = null;
+            // The body (the --body-file, or the --form files) and the request file are read before anything is reserved, and
+            // only after consent; their paths and content never reach the output, and a file that cannot be used is refused
+            // with exit code 3.
+            CliRequestBody requestBody;
             RequestFileReadResult file = null;
             try
             {
-                if (curl.BodyFile != null)
+                (requestBody, CliFailure bodyFailure) =
+                    await CliRequestBody.PrepareAsync(curl, cancellationToken).ConfigureAwait(false);
+                if (bodyFailure != null)
                 {
-                    ReplayBodyRead read = await ReplayBodyFile.ReadAsync(curl.BodyFile, cancellationToken).ConfigureAwait(false);
-                    if (!read.Succeeded)
-                    {
-                        report.Fail(CliExitCodes.InvalidInput, read.Code, CliReplayCommand.BodyFileMessage(read.Code));
-                        return report;
-                    }
-
-                    body = read.Body;
+                    report.Fail(bodyFailure.ExitCode, bodyFailure.Code, bodyFailure.Message);
+                    return report;
                 }
 
                 if (curl.RequestFile != null)
@@ -126,7 +123,7 @@ namespace XMAT.Cli
                 await CliStagedRun.CompleteAsync(
                     report,
                     output,
-                    token => Task.FromResult(Export(request, body, file, output, report, token)),
+                    token => Task.FromResult(Export(request, requestBody, file, output, report, token)),
                     null,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -148,7 +145,7 @@ namespace XMAT.Cli
         // run exported nothing (the report says why).
         private static IReadOnlyList<CliStagedFile> Export(
             CliRequest request,
-            byte[] body,
+            CliRequestBody requestBody,
             RequestFileReadResult file,
             CliOutputFolder output,
             CliReport report,
@@ -158,7 +155,7 @@ namespace XMAT.Cli
             HeadlessStorage.Configure(output.WorkPath);
             CliReplay curl = request.Replay;
             OperationResult<ReplayExport> prepared = new ReplayOperation().PrepareForExport(
-                CliSaveRequestCommand.CreateRequest(request, body, file?.Content), cancellationToken);
+                CliSaveRequestCommand.CreateRequest(request, requestBody, file?.Content), cancellationToken);
             foreach (OperationDiagnostic diagnostic in prepared.Diagnostics)
             {
                 if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)

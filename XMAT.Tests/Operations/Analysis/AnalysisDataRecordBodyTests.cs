@@ -167,6 +167,22 @@ namespace XMAT.Tests.Operations.Analysis
                 item.ReqBodyHash);
         }
 
+        // A head line that WebHeaderCollection refuses, such as a name with an apostrophe that replay sends and the SAZ
+        // readers keep, is left out of the headers that analysis reads (Host and the service headers) and never stops the
+        // conversion; the stored head keeps it.
+        [Fact]
+        public void ConverterLeavesOutAHeadLineThatWebHeaderCollectionRefuses_AndKeepsTheStoredHead()
+        {
+            var record = new RawBodyRecord(
+                Array.Empty<byte>(), Array.Empty<byte>(), "X'Name: apostrophe\r\nX-After: kept\r\n");
+
+            ServiceCallItem item = WebServiceCaptureRecordConverter.Convert(record);
+
+            Assert.NotNull(item);
+            Assert.Equal("example.test", item.Host);
+            Assert.Contains("\r\nX'Name: apostrophe\r\nX-After: kept\r\n", item.ReqHeader, StringComparison.Ordinal);
+        }
+
         [Fact]
         public void ConverterIdentityUsesAsciiDecodedRequestBody()
         {
@@ -199,13 +215,16 @@ namespace XMAT.Tests.Operations.Analysis
         {
             private readonly byte[] _request;
             private readonly byte[] _response;
+            private readonly string _extraRequestHeaders;
 
             internal RawBodyRecord(
                 byte[] request,
-                byte[] response)
+                byte[] response,
+                string extraRequestHeaders = "")
             {
                 _request = request;
                 _response = response;
+                _extraRequestHeaders = extraRequestHeaders;
             }
 
             public int RowId => 1;
@@ -253,7 +272,8 @@ namespace XMAT.Tests.Operations.Analysis
                     WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders =>
                         "POST /path HTTP/1.1\r\n" +
                         "Host: example.test\r\n" +
-                        "User-Agent: XboxServicesAPI\r\n",
+                        "User-Agent: XboxServicesAPI\r\n" +
+                        _extraRequestHeaders,
                     WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders =>
                         "HTTP/1.1 200 OK\r\n",
                     WebServiceCaptureMethod.FieldKey_ClientIP =>

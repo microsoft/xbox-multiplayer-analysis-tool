@@ -388,12 +388,14 @@ namespace XMAT.Tests
             yield return new object[] { "No colon" };
         }
 
+        // IsValidHeaderLine takes what WebHeaderCollection.Add takes, and also a name with an apostrophe, an HTTP token that
+        // replay sends: the line is compared with each apostrophe in its name replaced by another token character.
         private static void AssertAgreement(string line)
         {
             bool accepted;
             try
             {
-                new WebHeaderCollection().Add(line);
+                new WebHeaderCollection().Add(WithoutApostrophesInTheName(line));
                 accepted = true;
             }
             catch (ArgumentException)
@@ -410,6 +412,12 @@ namespace XMAT.Tests
                             Convert.ToHexString(
                                 Encoding.Unicode.GetBytes(line)));
             }
+        }
+
+        private static string WithoutApostrophesInTheName(string line)
+        {
+            int colon = line?.IndexOf(':') ?? -1;
+            return colon < 0 ? line : line[..colon].Replace('\'', '!') + line[colon..];
         }
 
         private static ProxyConnectionModel ParseMessage(

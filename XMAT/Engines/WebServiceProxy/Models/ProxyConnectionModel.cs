@@ -82,6 +82,29 @@ namespace XMAT.WebServiceCapture.Models
             _requestHeaders != null ||
             _responseHeaders != null;
 
+        // Whether RequestHeaders has a header with this name, answered as RequestHeaders.ContainsKey would. A dictionary
+        // that is already made answers; otherwise the head's lines are read in place, so a row whose head is large, such as
+        // one whose request line holds a long URL, is checked without making the dictionary or copying its head.
+        internal bool HasRequestHeader(string name)
+        {
+            Dictionary<string, string> headers = Volatile.Read(ref _requestHeaders);
+            if (headers != null)
+            {
+                return headers.ContainsKey(name);
+            }
+
+            var lines = new HeaderLines(RequestLineAndHeaders);
+            while (lines.TryReadNext(out ReadOnlySpan<char> headerName, out _))
+            {
+                if (headerName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         // The host offered by host-list menus (DNS spelling kept, IP literals canonical), or
         // null when the row has no valid host.
         public string ActionableHost => HostAuthority.TryNormalizeHost(Host, out string host) ? host : null;
@@ -218,29 +241,99 @@ namespace XMAT.WebServiceCapture.Models
         private static Dictionary<string, string> StringToHeaders(string firstLineAndHeaders)
         {
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            if (!string.IsNullOrEmpty(firstLineAndHeaders))
+            var lines = new HeaderLines(firstLineAndHeaders);
+            while (lines.TryReadNext(out ReadOnlySpan<char> name, out ReadOnlySpan<char> value))
             {
-                string[] lines = firstLineAndHeaders.Split("\r\n");
+                headers[name.ToString()] = value.ToString();
+            }
 
-                for (int i = 1; i < lines.Length; i++)
+            return headers;
+        }
+
+        // The headers of a head as rows have always read them: the lines that "\r\n" separates, after the first, which is the
+        // request or status line, each parsed by TryParseHeaderLine. A line that is not a header is skipped.
+        private ref struct HeaderLines
+        {
+            private ReadOnlySpan<char> _rest;
+            private bool _done;
+
+            internal HeaderLines(string firstLineAndHeaders)
+            {
+                ReadOnlySpan<char> head = firstLineAndHeaders;
+                int end = head.IndexOf("\r\n");
+                _done = end < 0;
+                _rest = _done ? default : head[(end + 2)..];
+            }
+
+            internal bool TryReadNext(out ReadOnlySpan<char> name, out ReadOnlySpan<char> value)
+            {
+                while (!_done)
                 {
-                    string line = lines[i];
-                    string[] header = line.Split(':', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                    if (header.Length < 2)
+                    int end = _rest.IndexOf("\r\n");
+                    ReadOnlySpan<char> line;
+                    if (end < 0)
                     {
-                        // TODO: we have a bad header
+                        line = _rest;
+                        _done = true;
                     }
                     else
                     {
-                        string name = header[0].Trim();
-                        string value = header[1].Trim();
+                        line = _rest[..end];
+                        _rest = _rest[(end + 2)..];
+                    }
 
-                        headers[name] = value;
+                    if (TryParseHeaderLine(line, out name, out value))
+                    {
+                        return true;
                     }
                 }
+
+                name = default;
+                value = default;
+                return false;
             }
-            return headers;
+        }
+
+        // One header line as line.Split(':', 2, RemoveEmptyEntries | TrimEntries) has always read it: the name is the first
+        // segment that a colon ends and that is not empty once trimmed; the value is the rest of the line after the colon
+        // that ends the name and after any empty segments that follow it, trimmed. A line without such a name, or whose value
+        // is empty, is not a header. So ":Upgrade: x" is Upgrade with "x", "Name::: v" is Name with "v", "Name: a: b" is Name
+        // with "a: b", and "Name:" and ": v" are not headers.
+        private static bool TryParseHeaderLine(ReadOnlySpan<char> line, out ReadOnlySpan<char> name, out ReadOnlySpan<char> value)
+        {
+            name = default;
+            value = default;
+            int current = 0;
+            while (true)
+            {
+                int colon = line[current..].IndexOf(':');
+                if (colon < 0)
+                {
+                    return false;
+                }
+
+                ReadOnlySpan<char> segment = line.Slice(current, colon).Trim();
+                current += colon + 1;
+                if (!segment.IsEmpty)
+                {
+                    name = segment;
+                    break;
+                }
+            }
+
+            while (true)
+            {
+                int colon = line[current..].IndexOf(':');
+                if (colon < 0 || !line.Slice(current, colon).Trim().IsEmpty)
+                {
+                    break;
+                }
+
+                current += colon + 1;
+            }
+
+            value = line[current..].Trim();
+            return !value.IsEmpty;
         }
 
         internal ProxyConnectionModel(IDataRecord dataRecord)
@@ -300,8 +393,7 @@ namespace XMAT.WebServiceCapture.Models
                         ToDateTimeString(RequestTime),
                     [WebServiceCaptureMethod
                         .FieldKey_ResponseTimestamp] =
-                        ToDateTimeString(
-                            RequestTime + Duration),
+                        ToDateTimeString(ResponseDoneTime),
                     [WebServiceCaptureMethod
                         .FieldKey_RequestScheme] =
                         Scheme,
@@ -388,7 +480,7 @@ namespace XMAT.WebServiceCapture.Models
             HasRecordedResponseTimestamp = !string.IsNullOrEmpty(responseTimestamp);
             if (!string.IsNullOrEmpty(responseTimestamp))
             {
-                Duration = DateTime.Parse(responseTimestamp) - RequestTime;
+                Duration = Elapsed(RequestTime, DateTime.Parse(responseTimestamp));
             }
 
             var requestScheme = dataRecord.Str(WebServiceCaptureMethod.FieldKey_RequestScheme);
@@ -471,9 +563,45 @@ namespace XMAT.WebServiceCapture.Models
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
         }
 
+        // A time as the capture table and analysis records keep it: its instant in UTC, in the round-trip format. An unknown
+        // time (DateTime.MinValue of no kind) names no instant: it is kept as UnknownTimeText, which reads back as unknown in
+        // any time zone, where its UTC would be read back east of UTC as a known time later in the year 1.
         public static string ToDateTimeString(DateTime dt)
         {
-            return dt.ToUniversalTime().ToString("o");
+            return dt.Kind == DateTimeKind.Unspecified && dt == DateTime.MinValue
+                ? UnknownTimeText
+                : dt.ToUniversalTime().ToString("o");
         }
+
+        // DateTime.MinValue in the round-trip format, without an offset, so DateTime.Parse reads it as DateTime.MinValue of no
+        // kind, the unknown time.
+        internal const string UnknownTimeText = "0001-01-01T00:00:00.0000000";
+
+        // When the response ended, in RequestTime's kind (EndOf).
+        internal DateTime ResponseDoneTime => EndOf(RequestTime, Duration);
+
+        // The time elapsed after start, in start's kind. Duration is elapsed time, so it is added to the instant that a local
+        // time names, never to its clock reading, which is an hour off across a daylight saving change. A UTC time is its
+        // instant, and a time of no kind, such as an unknown DateTime.MinValue, names none and is added to as it is.
+        internal static DateTime EndOf(DateTime start, TimeSpan elapsed) =>
+            start.Kind == DateTimeKind.Local ? (start.ToUniversalTime() + elapsed).ToLocalTime() : start + elapsed;
+
+        // The time from start to end, the inverse of EndOf: the time between their instants, unless start has no kind.
+        internal static TimeSpan Elapsed(DateTime start, DateTime end) =>
+            start.Kind == DateTimeKind.Unspecified ? end - start : end.ToUniversalTime() - start.ToUniversalTime();
+
+        // The instant that a time names, in UTC, to order and measure times by: a local time is converted, keeping which of
+        // a repeated hour it is, and a UTC time is its instant. A time of no kind names none and is used as it is.
+        internal static DateTime InstantOf(DateTime time) =>
+            time.Kind == DateTimeKind.Unspecified ? time : time.ToUniversalTime();
+
+        // The first instant at which a request is placed among others in time, by analysis, which keeps it as a FILETIME
+        // that starts then, and on the timeline. No request was made earlier: an unknown time is earlier, and so is the year 1,
+        // in which XMAT once kept the unknown time as a UTC that reads back as a known time east of UTC.
+        internal static readonly DateTime FirstPlacedInstant = new(1601, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        // Whether a request made at this time is placed among others in time (FirstPlacedInstant). A time of no kind is
+        // compared as it is, as UTC, which is how DateTime.ToFileTimeUtc reads it too.
+        internal static bool IsPlaced(DateTime time) => InstantOf(time) >= FirstPlacedInstant;
     }
 }

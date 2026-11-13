@@ -1033,7 +1033,8 @@ namespace XMAT.Tests.Replay
             Assert.Equal("DELETE /item?x=1 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", row.RequestLineAndHeaders);
             Assert.Equal("x"u8.ToArray(), row.RequestBody);
             Assert.Equal(("", 0), (row.ResponseLineAndHeaders, row.ResponseBody.Length));
-            Assert.Equal(exchange.Started, row.RequestTime);
+            Assert.Equal(DateTimeKind.Local, row.RequestTime.Kind);
+            Assert.Equal(exchange.Started, row.RequestTime.ToUniversalTime());
             Assert.True(row.IsReplay);
             Assert.Equal("Local PC #12", row.ReplaySource);
             Assert.Equal(40L, row.Replay.RecordRowId);

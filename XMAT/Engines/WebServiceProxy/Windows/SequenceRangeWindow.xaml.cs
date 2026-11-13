@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using XMAT.Operations.Replay;
 
@@ -21,6 +22,11 @@ namespace XMAT.WebServiceCapture
             PromptText.Text = Localization.GetLocalizedString("SEQUENCE_PROMPT");
             StartLabel.Content = Localization.GetLocalizedString("SEQUENCE_START");
             EndLabel.Content = Localization.GetLocalizedString("SEQUENCE_END");
+            // Each number has its own name for automation, as its label reads without the access key: a TextBox takes no
+            // name from a Label's Target, and the name that LabeledBy gives exists only once something has made the label's
+            // automation peer, which a screen reader that starts at the focused field has not.
+            AutomationProperties.SetName(StartBox, Localization.GetLocalizedString("SEQUENCE_START_FIELD"));
+            AutomationProperties.SetName(EndBox, Localization.GetLocalizedString("SEQUENCE_END_FIELD"));
             OkButton.Content = Localization.GetLocalizedString("SEQUENCE_OK");
             CancelButton.Content = Localization.GetLocalizedString("SEQUENCE_CANCEL");
             StartBox.Text = "1";

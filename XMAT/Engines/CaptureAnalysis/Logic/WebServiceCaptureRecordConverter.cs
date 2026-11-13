@@ -9,6 +9,7 @@ using System.Text;
 using CaptureAnalysisEngine;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.XboxLiveCaptureAnalysis
 {
@@ -70,7 +71,17 @@ namespace XMAT.XboxLiveCaptureAnalysis
             }
 
             var requestTime = DateTime.Parse(requestTimestamp);
-            var duration = DateTime.Parse(responseTimestamp) - requestTime;
+            // A call's time is a FILETIME (ReqTimeUTC), which starts in 1601. A request whose time is unknown or earlier
+            // than that cannot be placed among the calls that rules compare in time, so like a request without its times it
+            // is not analyzed, rather than failing the whole analysis.
+            if (!ProxyConnectionModel.IsPlaced(requestTime))
+            {
+                return null;
+            }
+
+            // The time between the two instants, never between their local clock readings, which differ by an hour across
+            // a daylight saving change.
+            var duration = ProxyConnectionModel.Elapsed(requestTime, DateTime.Parse(responseTimestamp));
 
             item.Host = string.IsNullOrWhiteSpace(requestHost)
                 ? string.Empty
@@ -129,6 +140,9 @@ namespace XMAT.XboxLiveCaptureAnalysis
                     dataRecord.Str(fieldName)));
         }
 
+        // The request headers that analysis reads, Host and those that name an analyzed service. A line that
+        // WebHeaderCollection refuses, such as a name with an apostrophe that replay sends and the SAZ readers keep, is
+        // left out of these headers only; the stored head (ReqHeader) keeps it.
         private static WebHeaderCollection GetRequestHeadersForString(
             string requestLineAndHeaders)
         {
@@ -141,7 +155,14 @@ namespace XMAT.XboxLiveCaptureAnalysis
                     var line = lines[index];
                     if (!string.IsNullOrEmpty(line) && line.Contains(':'))
                     {
-                        headers.Add(line);
+                        try
+                        {
+                            headers.Add(line);
+                        }
+                        catch (ArgumentException)
+                        {
+                            // Not a header that WebHeaderCollection holds.
+                        }
                     }
                 }
             }

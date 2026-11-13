@@ -13,10 +13,12 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
 using XMAT.Operations.Storage;
+using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -25,7 +27,8 @@ namespace XMAT.WebServiceCapture
     /// Edits an isolated request draft and sends it, or one request per number when its URL has a '#', and displays the
     /// latest response separately from capture. Every send is also recorded in the Replays tab. A request can also be opened
     /// from a request file and saved as one, without sending it, and exported for curl, without sending it: copied as a
-    /// command or saved as a script.
+    /// command or saved as a script. A request that the Replays tab recorded in this session can be loaded again from the
+    /// history. Its body can be built as a multipart form, from text and file parts (MultipartFormWindow).
     /// </summary>
     public partial class RequestComposerWindow : Window
     {
@@ -67,22 +70,38 @@ namespace XMAT.WebServiceCapture
         // when it closes. It is compared with each run's own cancellation, so an earlier run's cancel never counts.
         private CancellationTokenSource _cancelledByUser;
 
-        // A body that the editor does not hold, as its exact bytes, and the name of its file as the window shows it: a file
-        // uploaded for the body, or the body of a request file that is larger than the editor shows, which
-        // _fileBodyFromRequestFile tells apart. Null while the editor holds the body.
+        // A body that the editor does not hold, as its exact bytes; where it comes from as the window shows it; and the key
+        // of the text that shows it (ShowBody): a file uploaded for the body, by its name, a form that Build form made, by its
+        // number of parts, or a body that is larger than the editor shows, of a request file, by its name, or of a row of the
+        // Replays tab that Load took it from, by the tab's name and the row's number. Null while the editor holds the body.
         private byte[] _fileBody;
         private string _fileName;
-        private bool _fileBodyFromRequestFile;
+        private string _fileBodyKey;
 
-        // The request as it was loaded, with the transport options as the window or the last request file set them
-        // (EditorState), to tell whether the user has edited them since.
+        // The parts that Build form made the body from, to build the form from again, kept only while the body is still that
+        // form: every other body forgets them, and so does closing the window. They hold no file's path. And the Build form
+        // dialog while it is open.
+        private IReadOnlyList<MultipartPart> _formSeed;
+        private MultipartFormWindow _formDialog;
+
+        // The request as it was loaded, with the transport options as the window, the last request file or the last Load
+        // set them (EditorState), to tell whether the user has edited them since.
         private EditorState _loaded;
 
-        // What the window is doing; it starts nothing else meanwhile. Preparing covers checking a send and asking the user
-        // about it, or asking which file to upload or open, whether to replace an edited request, or where and how to save
-        // it or a cURL script, and whether to export it. ReadingFile covers reading a body or request file, Checking making
-        // the editor's body into bytes for Use this body, checking a request before saving it, or preparing a cURL command
-        // or script, and WritingFile saving a request file or a cURL script.
+        // The history view while its menu is open (OpenHistoryView): its one subscription to the history, the rebuild that a
+        // change queued, if any, and the number of the opening, which closing advances, so that work queued for an earlier
+        // opening does nothing.
+        private IDisposable _historyObservation;
+        private DispatcherOperation _historyRebuild;
+        private int _historyGeneration;
+        private bool _historyOpen;
+
+        // What the window is doing; it starts nothing else meanwhile. Preparing covers asking the user about a send, which
+        // numbers to send and whether to send it, or asking which file to upload or open, whether to replace an edited
+        // request, or where and how to save it or a cURL script, and whether to export it, and the Build form dialog while it
+        // is open. ReadingFile covers reading a body or request file, or preparing a request that Load takes from the
+        // history, Checking checking a send, making the editor's body into bytes for Use this body, checking a request before
+        // saving it, or preparing a cURL command or script, and WritingFile saving a request file or a cURL script.
         private enum ComposerState
         {
             Idle,
@@ -143,9 +162,19 @@ namespace XMAT.WebServiceCapture
             HeadersLabel.Content = Localization.GetLocalizedString("COMPOSER_HEADERS");
             BodyLabel.Content = Localization.GetLocalizedString("COMPOSER_BODY");
             BodyBox.ToolTip = Localization.GetLocalizedString("COMPOSER_BODY_HINT");
+            // Each field of the request, and the HTTP version, has its own name for automation, as its label reads without
+            // the access key: a TextBox or ComboBox takes no name from a Label's Target, and the name that LabeledBy gives
+            // exists only once something has made the label's automation peer, which a screen reader that starts at the
+            // focused field has not.
+            AutomationProperties.SetName(MethodBox, Localization.GetLocalizedString("COMPOSER_METHOD_FIELD"));
+            AutomationProperties.SetName(UrlBox, Localization.GetLocalizedString("COMPOSER_URL_FIELD"));
+            AutomationProperties.SetName(HeadersBox, Localization.GetLocalizedString("COMPOSER_HEADERS_FIELD"));
+            AutomationProperties.SetName(BodyBox, Localization.GetLocalizedString("COMPOSER_BODY_FIELD"));
             Base64Box.Content = Localization.GetLocalizedString("COMPOSER_BASE64");
             UploadFileButton.Content = Localization.GetLocalizedString("COMPOSER_UPLOAD_FILE");
             UploadFileButton.ToolTip = Localization.GetLocalizedString("COMPOSER_UPLOAD_FILE_HINT");
+            BuildFormButton.Content = Localization.GetLocalizedString("COMPOSER_BUILD_FORM");
+            BuildFormButton.ToolTip = Localization.GetLocalizedString("COMPOSER_BUILD_FORM_HINT");
             ClearBodyButton.Content = Localization.GetLocalizedString("COMPOSER_CLEAR_BODY");
             FollowRedirectsBox.Content = Localization.GetLocalizedString("COMPOSER_FOLLOW_REDIRECTS");
             FollowRedirectsBox.ToolTip = Localization.GetLocalizedString("COMPOSER_FOLLOW_REDIRECTS_HINT");
@@ -155,6 +184,7 @@ namespace XMAT.WebServiceCapture
             InspectSessionBox.ToolTip = Localization.GetLocalizedString("COMPOSER_INSPECT_SESSION_HINT");
             HttpVersionLabel.Content = Localization.GetLocalizedString("COMPOSER_HTTP_VERSION");
             HttpVersionBox.ToolTip = Localization.GetLocalizedString("COMPOSER_HTTP_VERSION_HINT");
+            AutomationProperties.SetName(HttpVersionBox, Localization.GetLocalizedString("COMPOSER_HTTP_VERSION_FIELD"));
             ConnectToBox.Content = Localization.GetLocalizedString("COMPOSER_CONNECT_TO");
             ConnectToBox.ToolTip = Localization.GetLocalizedString("COMPOSER_CONNECT_TO_HINT");
             ConnectToText.ToolTip = Localization.GetLocalizedString("COMPOSER_CONNECT_TO_HINT");
@@ -188,6 +218,11 @@ namespace XMAT.WebServiceCapture
             CompleteBodyButton.ToolTip = Localization.GetLocalizedString("COMPOSER_USE_BODY_HINT");
             CompleteEmptyBodyButton.Content = Localization.GetLocalizedString("COMPOSER_EMPTY_BODY");
             CompleteEmptyBodyButton.ToolTip = Localization.GetLocalizedString("COMPOSER_EMPTY_BODY_HINT");
+            HistoryButton.Content = Localization.GetLocalizedString("COMPOSER_HISTORY");
+            HistoryButton.ToolTip = Localization.GetLocalizedString("COMPOSER_HISTORY_HINT");
+            AutomationProperties.SetName(HistoryMenu, Localization.GetLocalizedString("COMPOSER_HISTORY_MENU"));
+            // The history is of what the Replays tab recorded: a window that records nothing, which only tests make, has none.
+            HistoryButton.Visibility = _recording == null ? Visibility.Collapsed : Visibility.Visible;
             StatusText.Text = Localization.GetLocalizedString("COMPOSER_READY");
 
             // Follow same-origin redirects is off; when selected, it follows at most 10 by default.
@@ -207,37 +242,78 @@ namespace XMAT.WebServiceCapture
 
         internal RequestReplayResult LastResult { get; private set; }
 
+        // Send. Everything that the run sends is fixed at its entry, on the UI thread and without parsing anything, before
+        // the user is asked anything (FrozenSend): the request, as a copy that later edits do not change, whether its body
+        // is a form that Build form made, the options, the transport as the controls hold it and where the request comes
+        // from. Checking it, which parses the headers, the body, the URL and the endpoint, runs off the UI thread
+        // (CheckSend); for a URL with '#', the user then chooses the numbers on the UI thread, and the run with them is
+        // checked off the UI thread too (CheckSequence), over the same request and the transport that the first check
+        // parsed, never the controls again. Cancel request or closing the window stops either check (RunSendCheckAsync).
+        // The one question for the whole run is worded from what the checks found; then the run is recorded and sent, and
+        // why the operation refused it, if it did, is worded off the UI thread too (RunRefusalText).
         internal async Task SendAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
 
-            // Everything that the run sends is fixed here, before the user is asked anything: the request, as a copy that
-            // later edits do not change, the options, the transport and where the request comes from.
             UpdateDraft();
-            int maxRedirects = MaxRedirects;
+            RequestReplayDraft draft = _draft.WithUrl(_draft.Url);
+            var send = new FrozenSend(
+                draft,
+                _formSeed != null,
+                MaxRedirects,
+                SelectedHttpVersion,
+                ConnectToBox.IsChecked == true,
+                ConnectToText.Text,
+                draft.Url.Contains(ReplaySequence.Placeholder));
             bool inspect = InspectSessionBox.IsChecked == true;
             ReplayProvenance provenance = _provenance;
-            if (!TryReadTransport(out ReplayTransportOptions transport))
-            {
-                StatusText.Text = ErrorText(Localization.GetLocalizedString("COMPOSER_CONNECT_TO_INVALID"));
+            string shown = StatusText.Text;
+            RequestReplayClient client = _client;
+            Func<FrozenSend, CancellationToken, SendCheck> check =
+                PrepareSend ?? ((frozen, token) => CheckSend(frozen, client, token));
+            SendCheck found = await RunSendCheckAsync(token => check(send, token), shown);
+            if (found == null)
                 return;
+
+            if (send.Numbered)
+            {
+                ReplaySequence sequence = AskSequence();
+                if (sequence == null)
+                    return;
+                ReplayTransportOptions transport = found.Transport;
+                Func<FrozenSend, ReplaySequence, ReplayTransportOptions, CancellationToken, SendCheck> previewSequence =
+                    PreviewSequence ?? ((frozen, numbers, checkedTransport, token) =>
+                        CheckSequence(frozen, numbers, checkedTransport, client, token));
+                found = await RunSendCheckAsync(token => previewSequence(send, sequence, transport, token), shown);
+                if (found == null)
+                    return;
             }
 
-            ReplayPlanPreview plan;
-            bool confirmed;
-            _state = ComposerState.Preparing;
-            try
+            // One question for the whole run, about what was checked: what is typed or chosen afterwards changes nothing in
+            // it. The window parses nothing to ask it: the URL's origin that it names comes from the check.
+            ReplayPlanPreview plan = found.Plan;
+            int maxRedirects = send.MaxRedirects;
+            bool confirmed = false;
+            if (plan.UsesUnsafeMethod || plan.ChangesOrigin || plan.UsesConnectTo)
             {
-                plan = Prepare(maxRedirects, transport, out confirmed);
-            }
-            finally
-            {
-                EndState();
-            }
+                _state = ComposerState.Preparing;
+                try
+                {
+                    confirmed = _confirm(ConfirmationMessage(plan, maxRedirects, found.ConnectToOrigin));
+                }
+                catch (Exception exception) when (IsInputError(exception))
+                {
+                    ShowError(exception);
+                }
+                finally
+                {
+                    EndState();
+                }
 
-            if (plan == null || _closed)
-                return;
+                if (!confirmed || _closed)
+                    return;
+            }
 
             using var cancellation = new CancellationTokenSource();
             // The recording keeps the Replays tab from being closed or replaced until the run ends; closing XMAT cancels
@@ -266,15 +342,29 @@ namespace XMAT.WebServiceCapture
                         StatusText.Text = Localization.GetLocalizedString("COMPOSER_SENDING_SEQUENCE", plan.Sends, done);
                 });
             RequestReplayBatchResult sent = null;
+            string refusal = null;
+            Func<OperationDiagnostic, ReplayPlanPreview, string> explain = ExplainRunRefusal ?? RunRefusalText;
             try
             {
-                sent = await _client.SendPlanAsync(
-                    plan, maxRedirects, confirmed, cancellation.Token, recording?.Recorder, progress);
-            }
-            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
-            {
-                // The Replays tab could not take a send, which ended the run.
-                PublicUtilities.AppLog(LogLevel.ERROR, $"Composer send stopped: {exception.GetType().FullName}");
+                try
+                {
+                    sent = await _client.SendPlanAsync(
+                        plan, maxRedirects, confirmed, cancellation.Token, recording?.Recorder, progress);
+                }
+                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+                {
+                    // The Replays tab could not take a send, which ended the run.
+                    PublicUtilities.AppLog(LogLevel.ERROR, $"Composer send stopped: {exception.GetType().FullName}");
+                }
+
+                // Why the operation refused the run once it was sent, worded off the UI thread before the window shows it:
+                // for a sequence, building its widest request again says it (PlanError). The run has ended, so a cancel
+                // meanwhile changes nothing: the window says what the run did.
+                if (sent is { WasCancelled: false, Result.Succeeded: false })
+                {
+                    OperationDiagnostic diagnostic = FirstDiagnostic(sent.Result.Diagnostics);
+                    refusal = await Task.Run(() => explain(diagnostic, plan));
+                }
             }
             finally
             {
@@ -287,7 +377,7 @@ namespace XMAT.WebServiceCapture
                 return;
 
             bool cancelled = sent?.WasCancelled ?? cancellation.IsCancellationRequested;
-            ShowOutcome(plan, sent, recording, maxRedirects, cancelled);
+            ShowOutcome(plan, sent, refusal, recording, maxRedirects, cancelled);
             // Inspect session selects the last row that this run recorded, whatever the run's outcome: also when it failed
             // or the user cancelled it after some of its requests were recorded. A run that XMAT stopped, because it is
             // closing or exiting, or because the run's tab closed, selects nothing, also when the user had cancelled it
@@ -342,84 +432,247 @@ namespace XMAT.WebServiceCapture
         // owns (ShowMessageBox), with the buttons, the icon and the answer that Enter gives: Yes or No, a warning, and No.
         internal Func<string, MessageBoxButton, MessageBoxImage, MessageBoxResult, MessageBoxResult> ShowQuestion { get; set; }
 
+        // Test seam: how Load makes a row of the Replays tab into a request, off the UI thread, by default
+        // RequestReplayDraft.FromCapture, which keeps a body larger than the editor shows as its exact bytes.
+        internal Func<ProxyConnectionModel, int, CancellationToken, RequestReplayDraft> PrepareHistoryDraft { get; set; }
+
+        // Test seam: how Build form shows its dialog, by default modally, owned by the window (ShowOwnedFormDialog).
+        internal Action<MultipartFormWindow> ShowFormDialog { get; set; }
+
+        // Test seam: whether building a request would drop the Content-Type of a form that Build form made, which Save request
+        // and both cURL exports check first, off the UI thread, over the request and the form flag that they froze; by default
+        // FormContentTypeDropped.
+        internal Func<bool, RequestReplayDraft, CancellationToken, bool> CheckFormContentType { get; set; }
+
+        // Test seams for Send, null in production: its first check, off the UI thread, by default CheckSend with the window's
+        // client; the check of a URL with '#' once the user chose its numbers, off the UI thread too, by default
+        // CheckSequence; and how the window words why the operation refused a run once it was sent, off the UI thread, by
+        // default RunRefusalText.
+        internal Func<FrozenSend, CancellationToken, SendCheck> PrepareSend { get; set; }
+
+        internal Func<FrozenSend, ReplaySequence, ReplayTransportOptions, CancellationToken, SendCheck> PreviewSequence
+        {
+            get;
+            set;
+        }
+
+        internal Func<OperationDiagnostic, ReplayPlanPreview, string> ExplainRunRefusal { get; set; }
+
         // The client that sends. The window disposes the client that it created once it is closed and no run uses it.
         internal RequestReplayClient Client => _client;
 
-        // The request to send, checked as sending it would check it and frozen with its transport, and whether the user gave
-        // the permission that it needs; null when nothing is to be sent: the input is invalid or still leaves out a part of
-        // its request file, the user cancelled or declined, or the window closed meanwhile. A '#' in the URL asks for a range
-        // and sends one request per number.
-        private ReplayPlanPreview Prepare(int maxRedirects, ReplayTransportOptions transport, out bool confirmed)
+        // What Send froze at its entry, on the UI thread, without parsing anything (SendAsync): the request, as a copy that
+        // later edits do not change, which shares the body's text or bytes, never changed in place; whether its body is a
+        // form that Build form made; the most redirects; the transport as the controls held it: the HTTP version, and
+        // whether Connect to another endpoint is on, with the endpoint as typed; and whether the URL has a '#', which numbers
+        // the requests. Both checks of Send read only this, and the client (CheckSend, CheckSequence).
+        internal sealed record FrozenSend(
+            RequestReplayDraft Draft,
+            bool Form,
+            int MaxRedirects,
+            ReplayHttpVersion HttpVersion,
+            bool ConnectTo,
+            string Endpoint,
+            bool Numbered);
+
+        // What a check of Send found: why nothing is sent, as the status says it (Refusal); otherwise the transport that it
+        // parsed and checked, which for a URL with '#' is the one that the check of its numbers takes (CheckSequence), and
+        // the plan that it previewed, if any, with the URL's origin that the question names when the plan connects to
+        // another endpoint (ConfirmationMessage).
+        internal sealed record SendCheck(
+            string Refusal, ReplayTransportOptions Transport, ReplayPlanPreview Plan, string ConnectToOrigin)
         {
-            confirmed = false;
-            // A part that a request file left out is never sent as the placeholder that the editors show for it.
-            if (_draft.Omissions.Any)
+            internal static SendCheck Refused(string refusal) => new(refusal, null, null, null);
+        }
+
+        // Runs a check of Send off the UI thread, as Checking: the window is busy and says that it checks the request, and
+        // Cancel request or closing the window stops the check (_checkingCancellation). The window releases its client only
+        // once the check has returned (EndState follows the await): the check may still be using it. A stopped check gives
+        // no result, and one that it gives once it was stopped is not used (Stopped). Null when nothing is to be sent: the
+        // check was stopped, which the status says unless the window closed, or it refused the request, which the status
+        // says in the check's words. Otherwise what it found, with the status as it was before the check (shown).
+        private async Task<SendCheck> RunSendCheckAsync(Func<CancellationToken, SendCheck> work, string shown)
+        {
+            using var checking = new CancellationTokenSource();
+            CancellationToken token = checking.Token;
+            _checkingCancellation = checking;
+            _state = ComposerState.Checking;
+            SetBusy(true);
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEND_CHECKING");
+            SendCheck found = null;
+            bool stopped;
+            try
             {
-                StatusText.Text = ErrorText(IncompleteText(_draft.Omissions));
+                found = await Task.Run(() => work(token), token);
+            }
+            catch (OperationCanceledException) when (checking.IsCancellationRequested)
+            {
+                // Cancelled, or the window closed: nothing is asked or sent.
+            }
+            finally
+            {
+                // A check that ended by the time that the user cancelled asks nothing and sends nothing either.
+                stopped = Stopped(checking, _checkingCancellation);
+                _checkingCancellation = null;
+                EndState();
+            }
+
+            if (_closed)
+                return null;
+            if (stopped)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEND_PREPARE_CANCELLED");
                 return null;
             }
 
+            StatusText.Text = found.Refusal ?? shown;
+            return found.Refusal == null ? found : null;
+        }
+
+        // The numbers for a URL with '#', which the user chooses on the UI thread, as Preparing, in a dialog that keeps them
+        // short; null when nothing is to be sent: the user cancelled, the window closed meanwhile, or the range is not one
+        // that a sequence can have, which the status says.
+        private ReplaySequence AskSequence()
+        {
+            string range = null;
+            _state = ComposerState.Preparing;
             try
             {
-                ReplaySequence sequence = null;
-                if (_draft.Url.Contains(ReplaySequence.Placeholder))
-                {
-                    if (!ReplaySequence.IsPathAndQueryTemplate(_draft.Url))
-                    {
-                        StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEQUENCE_INVALID");
-                        return null;
-                    }
-
-                    string range = (ChooseSequence ?? (() => SequenceRangeWindow.Ask(this)))();
-                    if (range == null || _closed)
-                        return null;
-                    if (!ReplaySequence.TryParse(range, out sequence))
-                    {
-                        StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEQUENCE_RANGE_INVALID");
-                        return null;
-                    }
-                }
-                else
-                {
-                    // Invalid input is reported, with what is wrong, before the user is asked anything.
-                    using var validated = _draft.CreateRequestToSend();
-                }
-
-                // The size of the run is checked before any number is put in the URL, and the transport with the request.
-                OperationResult<ReplayPlanPreview> preview = _client.Preview(
-                    sequence == null ? ReplaySource.FromDraft(_draft) : ReplaySource.FromTemplate(_draft, sequence),
-                    maxRedirects,
-                    transport);
-                if (!preview.Succeeded)
-                {
-                    StatusText.Text = ErrorText(PlanError(
-                        preview.Diagnostics.Count > 0 ? preview.Diagnostics[0] : null, _draft, sequence));
-                    return null;
-                }
-
-                // One question for the whole run, about what was checked: what is typed or chosen afterwards changes
-                // nothing in it.
-                ReplayPlanPreview plan = preview.Value;
-                if (plan.UsesUnsafeMethod || plan.ChangesOrigin || plan.UsesConnectTo)
-                {
-                    if (!_confirm(ConfirmationMessage(plan, maxRedirects)) || _closed)
-                        return null;
-                    confirmed = true;
-                }
-
-                return plan;
+                range = (ChooseSequence ?? (() => SequenceRangeWindow.Ask(this)))();
             }
             catch (Exception exception) when (IsInputError(exception))
             {
                 ShowError(exception);
+            }
+            finally
+            {
+                EndState();
+            }
+
+            if (range == null || _closed)
+                return null;
+            if (!ReplaySequence.TryParse(range, out ReplaySequence sequence))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEQUENCE_RANGE_INVALID");
                 return null;
             }
+
+            return sequence;
+        }
+
+        // Send's first check, off the UI thread, over what Send froze, in the order that its refusals keep: a form whose
+        // Content-Type the headers would drop (FormContentTypeDropped); the endpoint of Connect to another endpoint as typed
+        // (TryParseTransport); a part that a request file left out, which is never sent as the placeholder that the editors
+        // show for it; then, for a URL with '#', that only its path or query has one, with the transport that the check of
+        // its numbers takes once the user chose them (CheckSequence); otherwise that the request can be built, with what is
+        // wrong worded as building it says it, then the plan, as sending checks it (Previewed). Pure: it reads only what it
+        // is given, and the client, which makes an operation of its own for each check. The token is checked before each
+        // step and before the result is given, so a stopped check gives none. CreateRequestToSend and Preview take no
+        // token: a cancel that comes while either runs waits for it to return, as long as the request makes it.
+        internal static SendCheck CheckSend(FrozenSend send, RequestReplayClient client, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(send);
+            ArgumentNullException.ThrowIfNull(client);
+            if (FormContentTypeDropped(send.Form, send.Draft, cancellationToken))
+                return SendCheck.Refused(Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED"));
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryParseTransport(send.HttpVersion, send.ConnectTo, send.Endpoint, out ReplayTransportOptions transport))
+                return SendCheck.Refused(ErrorText(Localization.GetLocalizedString("COMPOSER_CONNECT_TO_INVALID")));
+            if (send.Draft.Omissions.Any)
+                return SendCheck.Refused(ErrorText(IncompleteText(send.Draft.Omissions)));
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (send.Numbered)
+                {
+                    if (!ReplaySequence.IsPathAndQueryTemplate(send.Draft.Url))
+                        return SendCheck.Refused(Localization.GetLocalizedString("COMPOSER_SEQUENCE_INVALID"));
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new SendCheck(null, transport, null, null);
+                }
+
+                using (send.Draft.CreateRequestToSend())
+                {
+                    // Invalid input is reported, with what is wrong, before the user is asked anything.
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                OperationResult<ReplayPlanPreview> preview =
+                    client.Preview(ReplaySource.FromDraft(send.Draft), send.MaxRedirects, transport);
+                return Previewed(preview, send.Draft, null, cancellationToken);
+            }
+            catch (Exception exception) when (IsInputError(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SendCheck.Refused(ErrorText(exception.Message));
+            }
+        }
+
+        // The run of a URL with '#' once the user chose its numbers, checked off the UI thread as sending checks it, over the
+        // request that Send froze and the transport that its first check parsed (CheckSend), never the controls as they are
+        // now: the size of the run before any number is put in the URL, then the widest request and the transport; what is
+        // wrong is worded as building the widest request says it (Previewed). Pure, with the checkpoints of CheckSend, and
+        // as it, no bound inside Preview.
+        internal static SendCheck CheckSequence(
+            FrozenSend send,
+            ReplaySequence sequence,
+            ReplayTransportOptions transport,
+            RequestReplayClient client,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(send);
+            ArgumentNullException.ThrowIfNull(sequence);
+            ArgumentNullException.ThrowIfNull(client);
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                OperationResult<ReplayPlanPreview> preview =
+                    client.Preview(ReplaySource.FromTemplate(send.Draft, sequence), send.MaxRedirects, transport);
+                return Previewed(preview, send.Draft, sequence, cancellationToken);
+            }
+            catch (Exception exception) when (IsInputError(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return SendCheck.Refused(ErrorText(exception.Message));
+            }
+        }
+
+        // What a preview found, as Send uses it: why the plan is refused, worded here, off the UI thread, since for a sequence
+        // that builds the widest request again (PlanError); or the plan, with the URL's origin that the question names when
+        // it connects to another endpoint (Origin), so that the window parses nothing to ask.
+        private static SendCheck Previewed(
+            OperationResult<ReplayPlanPreview> preview,
+            RequestReplayDraft draft,
+            ReplaySequence sequence,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SendCheck found = preview.Succeeded
+                ? Planned(preview.Value)
+                : SendCheck.Refused(ErrorText(PlanError(FirstDiagnostic(preview.Diagnostics), draft, sequence)));
+            cancellationToken.ThrowIfCancellationRequested();
+            return found;
+        }
+
+        private static SendCheck Planned(ReplayPlanPreview plan) =>
+            new(null, plan.Transport, plan, plan.UsesConnectTo ? Origin(plan.Template.Url) : null);
+
+        private static OperationDiagnostic FirstDiagnostic(IReadOnlyList<OperationDiagnostic> diagnostics) =>
+            diagnostics.Count > 0 ? diagnostics[0] : null;
+
+        // Why the operation refused a run once it was sent, as the status says it: as PlanError words its first diagnostic,
+        // which for a sequence builds the widest request again. SendAsync runs it off the UI thread.
+        internal static string RunRefusalText(OperationDiagnostic diagnostic, ReplayPlanPreview plan)
+        {
+            ArgumentNullException.ThrowIfNull(plan);
+            return ErrorText(PlanError(diagnostic, plan.Template, plan.Sequence));
         }
 
         // Why the operation refused a run: what the composer says itself about Fiddler's control headers, the transport
         // options and a part that a request file left out; for a sequence whose request cannot be built, what building it
         // with the widest number says, as a single send says it; otherwise the operation's message, such as a run that is
-        // too large.
+        // too large. Building the widest request parses it, so this runs off the UI thread only (Previewed,
+        // RunRefusalText).
         private static string PlanError(OperationDiagnostic diagnostic, RequestReplayDraft draft, ReplaySequence sequence)
         {
             string explained = diagnostic?.Code switch
@@ -457,8 +710,9 @@ namespace XMAT.WebServiceCapture
 
         // The one confirmation of a run: how many requests, with which method and to where; that they may change server
         // data or send captured credentials to another origin; that they go to another endpoint than the address of the
-        // URL's host, which it names with the URL's origin; and that redirects, when followed, are more requests.
-        internal static string ConfirmationMessage(ReplayPlanPreview plan, int maxRedirects)
+        // URL's host, which it names with the URL's origin as the check of the run found it (connectToOrigin), so that
+        // nothing is parsed to ask; and that redirects, when followed, are more requests.
+        internal static string ConfirmationMessage(ReplayPlanPreview plan, int maxRedirects, string connectToOrigin)
         {
             ArgumentNullException.ThrowIfNull(plan);
             ReplaySequence sequence = plan.Sequence;
@@ -476,7 +730,7 @@ namespace XMAT.WebServiceCapture
             if (plan.UsesConnectTo)
             {
                 message += "\n\n" + Localization.GetLocalizedString(
-                    "COMPOSER_CONFIRM_CONNECT_TO", plan.Transport.ConnectTo.ToString(), Origin(plan.Template.Url));
+                    "COMPOSER_CONFIRM_CONNECT_TO", plan.Transport.ConnectTo.ToString(), connectToOrigin);
             }
 
             return maxRedirects == 0
@@ -484,14 +738,23 @@ namespace XMAT.WebServiceCapture
                 : message + "\n\n" + Localization.GetLocalizedString("COMPOSER_CONFIRM_REDIRECTS", maxRedirects);
         }
 
-        // A URL's scheme, host and port, as the confirmation names the origin of a request that goes to another endpoint.
+        // A URL's scheme, host and port, as the confirmation names the origin of a request that goes to another endpoint,
+        // found by the check of the run (Planned), and as Save request as names an origin that its content needs a
+        // permission for.
         private static string Origin(string url) =>
             Uri.TryCreate(url, UriKind.Absolute, out Uri uri) ? uri.GetLeftPart(UriPartial.Authority) : url;
 
-        // Says how the run went. One request shows its response and status, or why it has none; a sequence counts its
-        // requests and shows the last response. Then what the Replays tab did with the sends.
+        // Says how the run went, from what it did and the words that SendAsync found for them, never parsing anything. One
+        // request shows its response and status, or why it has none; a sequence counts its requests and shows the last
+        // response; a run that the operation refused says why (refusal, worded off the UI thread by RunRefusalText). Then
+        // what the Replays tab did with the sends.
         private void ShowOutcome(
-            ReplayPlanPreview plan, RequestReplayBatchResult sent, ReplayRecording recording, int maxRedirects, bool cancelled)
+            ReplayPlanPreview plan,
+            RequestReplayBatchResult sent,
+            string refusal,
+            ReplayRecording recording,
+            int maxRedirects,
+            bool cancelled)
         {
             if (sent == null)
             {
@@ -511,10 +774,8 @@ namespace XMAT.WebServiceCapture
 
             if (!sent.Result.Succeeded)
             {
-                IReadOnlyList<OperationDiagnostic> diagnostics = sent.Result.Diagnostics;
                 StatusText.Text = WithRecording(
-                    ErrorText(PlanError(diagnostics.Count > 0 ? diagnostics[0] : null, plan.Template, plan.Sequence)),
-                    recording);
+                    refusal ?? ErrorText(Localization.GetLocalizedString("COMPOSER_FAILED")), recording);
                 return;
             }
 
@@ -639,6 +900,12 @@ namespace XMAT.WebServiceCapture
         {
             _closed = true;
             StopWork();
+            // Build form ends with the window: its dialog closes, which stops its work, and the form's parts are released.
+            _formDialog?.Close();
+            _formSeed = null;
+            // The history view ends with the window: its subscription, its queued rebuild and its items do not outlive it.
+            HistoryMenu.IsOpen = false;
+            CloseHistoryView();
             // The response's preview stops now, not when the view is unloaded later: a closed window shows nothing.
             ResponseView.StopPreview();
             // A run or read in progress releases the client once it has ended (EndState): it may still be using it.
@@ -682,11 +949,17 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        // Shows a request in the editors as loaded: the one that the window opened with, or one dropped on it or opened from
-        // a request file, with what that file left out. heldBody is the body of a request file that is larger than the
-        // editor shows (HeldBody), which the draft keeps as these exact bytes, and source that file's name as shown.
+        // Shows a request in the editors as loaded: the one that the window opened with, or one dropped on it, opened from a
+        // request file, with what that file left out, or loaded from the history; the parts of a form that the body was are
+        // forgotten. heldBody is a body larger than the editor shows (MaxShownBodyBytes), which the draft keeps as these
+        // exact bytes; source is where it comes from as the window shows it, and heldBodyKey the key of the text that shows
+        // it (ShowBody).
         private void LoadDraft(
-            RequestReplayDraft draft, ReplayProvenance provenance, byte[] heldBody = null, string source = null)
+            RequestReplayDraft draft,
+            ReplayProvenance provenance,
+            byte[] heldBody = null,
+            string source = null,
+            string heldBodyKey = null)
         {
             if (heldBody != null)
                 draft.SetBodyBytes(heldBody);
@@ -694,7 +967,8 @@ namespace XMAT.WebServiceCapture
             _provenance = provenance;
             _fileBody = heldBody;
             _fileName = heldBody == null ? null : source;
-            _fileBodyFromRequestFile = heldBody != null;
+            _fileBodyKey = heldBody == null ? null : heldBodyKey;
+            _formSeed = null;
             MethodBox.Text = draft.Method;
             UrlBox.Text = draft.Url;
             HeadersBox.Text = draft.HeadersText;
@@ -703,9 +977,9 @@ namespace XMAT.WebServiceCapture
             _loaded = CurrentEditors();
         }
 
-        // The body editor; or, for an uploaded file or a request file's body larger than the editor shows, the file's name
-        // and the body's size, since the editor would show the text or Base64 of a body that can be 64 MiB, made on the UI
-        // thread. Such a body is never shown otherwise.
+        // The body editor; or, for an uploaded file or a body larger than the editor shows, from a request file or the
+        // Replays tab, where it comes from and the body's size, since the editor would show the text or Base64 of a body
+        // that can be 64 MiB, made on the UI thread. Such a body is never shown otherwise.
         private void ShowBody()
         {
             bool fromFile = _fileBody != null;
@@ -724,10 +998,7 @@ namespace XMAT.WebServiceCapture
             BodyBox.Visibility = fromFile ? Visibility.Collapsed : Visibility.Visible;
             BodyFileText.Visibility = fromFile ? Visibility.Visible : Visibility.Collapsed;
             BodyFileText.Text = fromFile
-                ? Localization.GetLocalizedString(
-                    _fileBodyFromRequestFile ? "COMPOSER_BODY_REQUEST_FILE" : "COMPOSER_BODY_FILE",
-                    _fileName,
-                    _fileBody.LongLength)
+                ? Localization.GetLocalizedString(_fileBodyKey, _fileName, _fileBody.LongLength)
                 : null;
             Base64Box.IsEnabled = !fromFile;
             UpdateCurlAvailability();
@@ -802,17 +1073,25 @@ namespace XMAT.WebServiceCapture
             HttpVersionBox.SelectedItem is ComboBoxItem { Tag: ReplayHttpVersion version } ? version : ReplayHttpVersion.Auto;
 
         // The transport that the controls choose now, or false when Connect to another endpoint is on with text that is not
-        // an IP address and port. A run sends with the transport that its preview checked, never the controls afterwards.
-        private bool TryReadTransport(out ReplayTransportOptions transport)
+        // an IP address and port (TryParseTransport). The cURL exports read it so; Send freezes the controls as they are and
+        // parses them off the UI thread (CheckSend). A run sends with the transport that its preview checked, never the
+        // controls afterwards.
+        private bool TryReadTransport(out ReplayTransportOptions transport) =>
+            TryParseTransport(SelectedHttpVersion, ConnectToBox.IsChecked == true, ConnectToText.Text, out transport);
+
+        // The transport from what the controls held: the HTTP version, and with Connect to another endpoint on, the endpoint
+        // as typed, trimmed and parsed (ReplayConnectTo.TryParse); false when that text is not an IP address and port. Pure.
+        private static bool TryParseTransport(
+            ReplayHttpVersion httpVersion, bool connectTo, string endpoint, out ReplayTransportOptions transport)
         {
             ReplayConnectTo target = null;
-            if (ConnectToBox.IsChecked == true && !ReplayConnectTo.TryParse(ConnectToText.Text.Trim(), out target))
+            if (connectTo && !ReplayConnectTo.TryParse(endpoint?.Trim(), out target))
             {
                 transport = null;
                 return false;
             }
 
-            transport = new ReplayTransportOptions(SelectedHttpVersion, target);
+            transport = new ReplayTransportOptions(httpVersion, target);
             return true;
         }
 
@@ -927,20 +1206,22 @@ namespace XMAT.WebServiceCapture
                 _draft.SetBodyBytes(read.Body);
                 _fileBody = read.Body;
                 _fileName = name;
-                _fileBodyFromRequestFile = false;
+                _fileBodyKey = "COMPOSER_BODY_FILE";
+                _formSeed = null;
                 ShowBody();
                 StatusText.Text = Localization.GetLocalizedString("COMPOSER_UPLOADED", name, read.Body.LongLength);
             }
         }
 
-        // Clear body: an empty text body, in place of a body held as bytes, from an uploaded file or a request file, or of
-        // the text in the editor. It does not supply a body that a request file left out: Empty body does.
+        // Clear body: an empty text body, in place of a body held as bytes, from an uploaded file, a form or a request file,
+        // or of the text in the editor. It does not supply a body that a request file left out: Empty body does.
         internal void ClearBody()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
             _fileBody = null;
             _fileName = null;
+            _formSeed = null;
             _draft.BodyText = "";
             _draft.BodyIsBase64 = false;
             ShowBody();
@@ -955,6 +1236,100 @@ namespace XMAT.WebServiceCapture
                 CheckFileExists = true,
             };
             return dialog.ShowDialog(this) == true ? dialog.FileName : null;
+        }
+
+        // Build form: opens the dialog that builds a multipart form for the body (MultipartFormWindow), modal and owned by the
+        // window, with the parts of the form that the body still is, if any, or none. There, Use form changes the header
+        // text, the body and the parts in one step (CommitForm); nothing else that the dialog does changes the request. The
+        // window does nothing else until the dialog closes, and closing the window closes it.
+        internal void BuildForm()
+        {
+            if (_state != ComposerState.Idle || _closed)
+                return;
+            var dialog = new MultipartFormWindow(MethodBox.Text, _formSeed, () => HeadersBox.Text, CommitForm);
+            _formDialog = dialog;
+            _state = ComposerState.Preparing;
+            dialog.Closed += FormDialog_Closed;
+            (ShowFormDialog ?? ShowOwnedFormDialog)(dialog);
+        }
+
+        private void ShowOwnedFormDialog(MultipartFormWindow dialog)
+        {
+            dialog.Owner = this;
+            dialog.ShowDialog();
+        }
+
+        private void FormDialog_Closed(object sender, EventArgs e)
+        {
+            _formDialog = null;
+            EndState();
+        }
+
+        // Use form, in the dialog: the window takes the form in one step: the header text as the dialog prepared it, with the
+        // form's Content-Type in place of every Content-Type line; the body, which the window holds as the form's exact bytes
+        // and shows by its parts and size, as it does an uploaded file; and the parts, to build the form from again. It is an
+        // edit, not a load (LoadDraft): the method, the URL, the transport options, Inspect session, the response, where the
+        // request comes from and its origin stay as they are, and so do the parts that a request file left out, which only
+        // their own buttons supply. Open request and Load then ask before they replace the request.
+        private void CommitForm(MultipartFormBody form, string headersText)
+        {
+            HeadersBox.Text = headersText;
+            _draft.SetBodyBytes(form.Body);
+            _fileBody = form.Body;
+            _fileName = form.Parts.Count == 1
+                ? Localization.GetLocalizedString("COMPOSER_FORM_ONE_PART")
+                : Localization.GetLocalizedString("COMPOSER_FORM_PARTS", form.Parts.Count);
+            _fileBodyKey = "COMPOSER_BODY_FORM";
+            _formSeed = form.Parts;
+            ShowBody();
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_FORM_USED", _fileName, form.Body.LongLength);
+        }
+
+        // Whether building this request would drop the Content-Type of a form that Build form made (form): its Connection
+        // header nominates Content-Type (RequestReplayDraft.IsNominatedByConnection). Header text that is not valid is not
+        // this refusal: the action refuses it in its own words. Pure: it reads only the request and the form flag that it is
+        // given, which nothing changes meanwhile, and changes nothing, so it can parse header text of any length off the UI
+        // thread: Send's first check makes it first (CheckSend), and Save request and both cURL exports as the first step of
+        // their work (RefuseDroppedFormContentType), each before any question or output. The token is checked before the
+        // headers are parsed and again before the result is given: a cancelled check gives none.
+        internal static bool FormContentTypeDropped(bool form, RequestReplayDraft draft, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(draft);
+            cancellationToken.ThrowIfCancellationRequested();
+            bool dropped = form && NominatesContentType(draft);
+            cancellationToken.ThrowIfCancellationRequested();
+            return dropped;
+        }
+
+        // Whether the request's Connection header nominates Content-Type; false for header text that is not valid.
+        private static bool NominatesContentType(RequestReplayDraft draft)
+        {
+            IReadOnlyList<KeyValuePair<string, string>> headers;
+            try
+            {
+                headers = draft.GetHeaders();
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
+
+            return RequestReplayDraft.IsNominatedByConnection(headers, "Content-Type");
+        }
+
+        // The first step of the work that Save request and both cURL exports run off the UI thread, over the request and the
+        // form flag that they froze: a form's Content-Type that the headers would drop (CheckFormContentType, by default
+        // FormContentTypeDropped) refuses the action, as content-type-dropped, before anything is inspected, prepared or
+        // rendered for it, and so before any question or output; the window says so once the work has ended. It changes no
+        // header.
+        private static void RefuseDroppedFormContentType(
+            bool form,
+            RequestReplayDraft draft,
+            Func<bool, RequestReplayDraft, CancellationToken, bool> dropsContentType,
+            CancellationToken cancellationToken)
+        {
+            if (dropsContentType(form, draft, cancellationToken))
+                throw new MultipartFormException(MultipartCodes.ContentTypeDropped);
         }
 
         // Open request: loads a request file in place of the request in the editors, after asking when the user has edited
@@ -1058,15 +1433,17 @@ namespace XMAT.WebServiceCapture
 
             ResetTransport(opened.Content.HttpVersion);
             // A body larger than the editor shows stays the file's exact bytes, which the window shows by their size.
-            LoadDraft(draft, ReplayProvenance.FromRequestFile(name), HeldBody(opened.Content), name);
+            LoadDraft(
+                draft, ReplayProvenance.FromRequestFile(name), HeldBody(opened.Content), name, "COMPOSER_BODY_REQUEST_FILE");
             ClearResponse();
             StatusText.Text = draft.Omissions.Any
                 ? Localization.GetLocalizedString("COMPOSER_OPENED_INCOMPLETE", name, PendingParts(draft.Omissions))
                 : Localization.GetLocalizedString("COMPOSER_OPENED", name);
         }
 
-        // A request file carries the HTTP version and no other transport: Connect to another endpoint goes back to off,
-        // without an endpoint, and Follow same-origin redirects to off, with at most 10 when it is selected again.
+        // A request file carries the HTTP version and no other transport, and Load from the history none at all, which is
+        // Automatic: Connect to another endpoint goes back to off, without an endpoint, and Follow same-origin redirects to
+        // off, with at most 10 when it is selected again. Inspect session stays as it is.
         private void ResetTransport(ReplayHttpVersion httpVersion)
         {
             HttpVersionBox.SelectedItem = HttpVersionBox.Items.OfType<ComboBoxItem>()
@@ -1210,6 +1587,7 @@ namespace XMAT.WebServiceCapture
             {
                 _fileBody = null;
                 _fileName = null;
+                _formSeed = null;
                 _draft.CompleteBody(Array.Empty<byte>());
                 _draft.SetBodyFormat(false);
                 ShowBody();
@@ -1314,14 +1692,16 @@ namespace XMAT.WebServiceCapture
 
         // Save request as: saves the request as a request file, without sending it. What is saved is fixed first, on the UI
         // thread: a copy of the draft that later edits do not change, which shares the body's text or bytes, never changed
-        // in place, with the HTTP version chosen now. Checking that copy and recognizing what it holds can read a body of
-        // 64 MiB, so that runs off the UI thread (InspectForSaving). The window then asks where, then how: as a template,
-        // which keeps only the request's shape, unless the user includes the captured content for this save. The content
-        // needs every part that a request file left out, and its own permission when the URL goes to another origin than
-        // the request was captured or loaded for. The file is written off the UI thread too, privately and never in place
-        // of another file. The window is busy while it checks or writes, and closing it or Cancel request stops either: a
-        // check stopped even once it ended asks nothing and saves nothing. The request in the editors is never changed,
-        // whatever happens.
+        // in place, with the HTTP version chosen now, and whether the body is a form that Build form made. Off the UI thread,
+        // a form's Content-Type that the headers would drop refuses the save first, whether as a template or with the
+        // content, before anything is inspected or asked (RefuseDroppedFormContentType); then checking that copy and
+        // recognizing what it holds, which can read a body of 64 MiB (InspectForSaving). The window then asks where, then
+        // how: as a template, which keeps only the request's shape, unless the user includes the captured content for this
+        // save. The content needs every part that a request file left out, and its own permission when the URL goes to
+        // another origin than the request was captured or loaded for. The file is written off the UI thread too, privately
+        // and never in place of another file. The window is busy while it checks or writes, and closing it or Cancel request
+        // stops either: a check stopped even once it ended asks nothing and saves nothing. The request in the editors is
+        // never changed, whatever happens.
         internal async Task SaveRequestAsync()
         {
             if (_state != ComposerState.Idle || _closed)
@@ -1329,29 +1709,41 @@ namespace XMAT.WebServiceCapture
 
             UpdateDraft();
             RequestReplayDraft draft = _draft.WithUrl(_draft.Url);
+            bool form = _formSeed != null;
             ReplayHttpVersion httpVersion = SelectedHttpVersion;
+            Func<bool, RequestReplayDraft, CancellationToken, bool> dropsContentType =
+                CheckFormContentType ?? FormContentTypeDropped;
             Func<RequestReplayDraft, CancellationToken, RequestFileRecognized> inspect =
                 InspectRequest ?? InspectForSaving;
             using var checking = new CancellationTokenSource();
             CancellationToken checkingToken = checking.Token;
+            Func<RequestFileRecognized> examine = () =>
+            {
+                RefuseDroppedFormContentType(form, draft, dropsContentType, checkingToken);
+                return inspect(draft, checkingToken);
+            };
             _checkingCancellation = checking;
             _state = ComposerState.Checking;
             SetBusy(true);
             StatusText.Text = Localization.GetLocalizedString("COMPOSER_SAVE_CHECKING");
             RequestFileRecognized recognized = null;
-            string invalid = null;
+            string refusal = null;
             bool stopped;
             try
             {
-                recognized = await Task.Run(() => inspect(draft, checkingToken), checkingToken);
+                recognized = await Task.Run(examine, checkingToken);
             }
             catch (OperationCanceledException) when (checking.IsCancellationRequested)
             {
                 // Cancelled, or the window closed: nothing is saved.
             }
+            catch (MultipartFormException exception) when (exception.Code == MultipartCodes.ContentTypeDropped)
+            {
+                refusal = Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED");
+            }
             catch (Exception exception) when (exception is FormatException or ArgumentException or RequestFileException)
             {
-                invalid = exception.Message;
+                refusal = Localization.GetLocalizedString("COMPOSER_SAVE_INVALID", exception.Message);
             }
             finally
             {
@@ -1365,9 +1757,9 @@ namespace XMAT.WebServiceCapture
                 return;
             if (stopped || recognized == null)
             {
-                StatusText.Text = stopped || invalid == null
+                StatusText.Text = stopped || refusal == null
                     ? Localization.GetLocalizedString("COMPOSER_SAVE_CANCELLED")
-                    : Localization.GetLocalizedString("COMPOSER_SAVE_INVALID", invalid);
+                    : refusal;
                 return;
             }
 
@@ -1557,7 +1949,8 @@ namespace XMAT.WebServiceCapture
             }
 
             // A drop keeps the transport options as they are, so changing them is not an edit that it loses. Nor does it set
-            // them: they stay compared with those that the window or the last request file set, which Open request resets.
+            // them: they stay compared with those that the window, the last request file or the last Load set, which Open
+            // request and Load reset.
             TransportState loadedTransport = _loaded.Transport;
             if (CurrentEditors() with { Transport = loadedTransport } != _loaded)
             {
@@ -1599,6 +1992,294 @@ namespace XMAT.WebServiceCapture
             e.Handled = true;
         }
 
+        // History: the requests that the Replays tab recorded in this session (ReplayHistory), newest first, in a menu that
+        // lists them from the history as it is when the menu opens, and keeps them current while it is open. Each entry
+        // shows its tab and number, time, method, URL and status as the history bounded and escaped them
+        // (ReplayHistoryPreview), with Load, unavailable with the reason for a request that cannot be sent again, and Show
+        // in Replays, offered for every entry; then Clear history. An item's tag is its entry and nothing else, and what it
+        // shows, as its text, tooltip and automation name, is those previews or a localized reason, never the request
+        // itself. Every action finds its entry's row again when it is taken (ReplayHistory.TryResolve), whatever the menu
+        // still shows.
+        internal void OpenHistoryView()
+        {
+            ReplayHistory history = _recording?.History;
+            if (_closed || _historyOpen || history == null)
+                return;
+            _historyOpen = true;
+            // Observed before it is read, so that no change in between goes unseen.
+            _historyObservation = history.Observe(HistoryChanged);
+            ShowHistory(history.Snapshot());
+        }
+
+        // Closing the menu, or the window, ends the view: it stops observing the history, aborts the rebuild that a change
+        // queued, makes any work queued for this opening stale, and keeps none of its items, tags, tooltips or handlers.
+        internal void CloseHistoryView()
+        {
+            StopHistoryRebuild();
+            _historyObservation?.Dispose();
+            _historyObservation = null;
+            _historyOpen = false;
+            HistoryMenu.Items.Clear();
+        }
+
+        private void StopHistoryRebuild()
+        {
+            _historyGeneration++;
+            _historyRebuild?.Abort();
+            _historyRebuild = null;
+        }
+
+        // What the history calls, on the UI thread, when it changes while the view is open. It only queues a rebuild, at
+        // background priority, at most one however many changes come before it runs, and never rebuilds within the change.
+        private void HistoryChanged()
+        {
+            if (!_historyOpen || _historyRebuild != null)
+                return;
+            int generation = _historyGeneration;
+            Action rebuild = () => RebuildHistory(generation);
+            _historyRebuild = Dispatcher.BeginInvoke(DispatcherPriority.Background, rebuild);
+        }
+
+        // A queued rebuild does nothing once the view that queued it has closed, even if it has opened again since; otherwise
+        // it shows the history as it is when the rebuild runs, never as it was when the rebuild was queued.
+        private void RebuildHistory(int generation)
+        {
+            if (generation != _historyGeneration || !_historyOpen)
+                return;
+            _historyRebuild = null;
+            ShowHistory(_recording.History.Snapshot());
+        }
+
+        // The menu's items: the entries, newest first, then Clear history; or that the history is empty.
+        private void ShowHistory(IReadOnlyList<ReplayHistoryPreview> previews)
+        {
+            ItemCollection items = HistoryMenu.Items;
+            items.Clear();
+            if (previews.Count == 0)
+            {
+                items.Add(new MenuItem
+                {
+                    Name = "HistoryEmpty",
+                    Header = Localization.GetLocalizedString("COMPOSER_HISTORY_EMPTY"),
+                    IsEnabled = false,
+                });
+                return;
+            }
+
+            foreach (ReplayHistoryPreview preview in previews)
+                items.Add(HistoryItem(preview));
+            items.Add(new Separator());
+            items.Add(HistoryAction("HistoryClear", "COMPOSER_HISTORY_CLEAR", null, HistoryClear_Click));
+        }
+
+        // An entry, which shows its previews. Its Load is unavailable, and says why, for a request that cannot be sent again;
+        // its Show in Replays is offered whatever Load can do.
+        private MenuItem HistoryItem(ReplayHistoryPreview preview)
+        {
+            string shown = Localization.GetLocalizedString(
+                "COMPOSER_HISTORY_ITEM",
+                preview.TabNamePreview,
+                preview.RequestNumber,
+                preview.RequestTime,
+                preview.MethodPreview,
+                preview.UrlPreview,
+                string.IsNullOrEmpty(preview.StatusPreview)
+                    ? Localization.GetLocalizedString("COMPOSER_HISTORY_NO_RESPONSE")
+                    : Localization.GetLocalizedString("COMPOSER_HISTORY_STATUS", preview.StatusPreview));
+            // A text block as the header, not text, in which the menu would take an underscore for an access key; a long
+            // preview is cut short there, and shown whole in the tooltip.
+            var header = new TextBlock { Text = shown, MaxWidth = 640, TextTrimming = TextTrimming.CharacterEllipsis };
+            var item = new MenuItem { Header = header, ToolTip = shown, Tag = preview.Entry };
+            AutomationProperties.SetName(item, shown);
+            MenuItem load = HistoryAction("HistoryLoad", "COMPOSER_HISTORY_LOAD", preview.Entry, HistoryLoad_Click);
+            string loadHelp = Localization.GetLocalizedString(
+                preview.CanLoad ? "COMPOSER_HISTORY_LOAD_HINT" : "COMPOSER_HISTORY_CANNOT_LOAD");
+            load.IsEnabled = preview.CanLoad;
+            load.ToolTip = loadHelp;
+            ToolTipService.SetShowOnDisabled(load, true);
+            AutomationProperties.SetHelpText(load, loadHelp);
+            item.Items.Add(load);
+            item.Items.Add(HistoryAction("HistoryShow", "COMPOSER_HISTORY_SHOW", preview.Entry, HistoryShow_Click));
+            return item;
+        }
+
+        // An item that acts on an entry, or on the whole history (entry null); its tag is the entry and nothing else.
+        private static MenuItem HistoryAction(string name, string key, ReplayHistoryEntry entry, RoutedEventHandler click)
+        {
+            var item = new MenuItem { Name = name, Header = Localization.GetLocalizedString(key), Tag = entry };
+            // Handled by the item itself: the menu closes, and lets go of its items, before their Click arrives.
+            item.Click += click;
+            return item;
+        }
+
+        // Load: loads the request of a history entry in place of the request in the editors, as Edit and resend loads a
+        // captured request: from the entry's row in the Replays tab, never from what the menu shows. Refused while the window
+        // is busy, and for an entry that is no longer in the Replays tab or in the history, or a request that cannot be sent
+        // again. The request is prepared off the UI thread (RequestReplayDraft.FromCapture) while the window is busy; Cancel
+        // request or closing the window stops that, and a request prepared by then is neither asked about nor loaded. A body
+        // larger than the editor shows stays its exact bytes, shown by their size (MaxShownBodyBytes). The entry's row is
+        // found again once the request is prepared, and again just before it is loaded, after asking, when the user has
+        // edited the request or the transport options (EditorState), whether to replace them: No by default, and no
+        // permission to send. Loading resets the transport options before the request becomes the editors' baseline, keeps
+        // Inspect session, clears the previous response and sends nothing: a send or an export then asks for every
+        // permission that it needs, as always. A load that does not happen leaves the request, its transport options and the
+        // response as they were.
+        internal async Task LoadFromHistoryAsync(ReplayHistoryEntry entry)
+        {
+            if (_closed)
+                return;
+            if (_state is not ComposerState.Idle)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_BUSY");
+                return;
+            }
+
+            ReplayHistory history = _recording?.History;
+            if (history == null || !history.TryResolve(entry, out ICaptureDeviceContext tab, out ProxyConnectionModel row))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_GONE");
+                return;
+            }
+
+            if (!RequestReplayDraft.CanReplay(row))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_UNSUPPORTED");
+                return;
+            }
+
+            // The entry as the window names it: its tab's name and its request's number.
+            string source = tab.DeviceName;
+            long number = row.RequestNumber;
+            Func<ProxyConnectionModel, int, CancellationToken, RequestReplayDraft> prepare =
+                PrepareHistoryDraft ?? RequestReplayDraft.FromCapture;
+            using var loading = new CancellationTokenSource();
+            CancellationToken token = loading.Token;
+            _readingCancellation = loading;
+            _state = ComposerState.ReadingFile;
+            SetBusy(true);
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_LOADING", source, number);
+            RequestReplayDraft prepared = null;
+            byte[] held = null;
+            string failure = null;
+            bool stopped;
+            try
+            {
+                (prepared, held) = await Task.Run(() => PrepareFromHistory(prepare, row, token), token);
+            }
+            catch (OperationCanceledException) when (loading.IsCancellationRequested)
+            {
+                // Cancelled, or the window closed: the request stays as it was.
+            }
+            catch (Exception exception) when (exception is ArgumentException or FormatException or OverflowException)
+            {
+                failure = exception.Message;
+            }
+            finally
+            {
+                // A request prepared by the time that the user cancelled is not loaded either, and nothing is asked about it.
+                stopped = Stopped(loading, _readingCancellation);
+                _readingCancellation = null;
+                EndState();
+            }
+
+            if (_closed)
+                return;
+            if (stopped || prepared == null)
+            {
+                StatusText.Text = stopped || failure == null
+                    ? Localization.GetLocalizedString("COMPOSER_HISTORY_LOAD_CANCELLED")
+                    : Localization.GetLocalizedString("COMPOSER_HISTORY_LOAD_FAILED", failure);
+                return;
+            }
+
+            // The entry can have left the Replays tab or the history while its request was prepared.
+            if (!history.TryResolve(entry, out _, out _))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_GONE");
+                return;
+            }
+
+            if (CurrentEditors() != _loaded)
+            {
+                bool replace;
+                _state = ComposerState.Preparing;
+                try
+                {
+                    replace = _confirm(Localization.GetLocalizedString("COMPOSER_REPLACE_EDITED_HISTORY", source, number));
+                }
+                finally
+                {
+                    EndState();
+                }
+
+                if (_closed)
+                    return;
+                if (!replace)
+                {
+                    StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_LOAD_CANCELLED");
+                    return;
+                }
+            }
+
+            // Or while the user was asked.
+            if (!history.TryResolve(entry, out tab, out row))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_GONE");
+                return;
+            }
+
+            // The transport options are reset first, so that the request's baseline holds them as reset.
+            ResetTransport(ReplayHttpVersion.Auto);
+            LoadDraft(
+                prepared,
+                ReplayProvenance.Of(ReplaySourceKind.Edited, tab.DeviceName, row),
+                held,
+                Localization.GetLocalizedString("COMPOSER_HISTORY_ROW", source, number),
+                "COMPOSER_BODY_REPLAYS_ROW");
+            ClearResponse();
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_LOADED", source, number);
+        }
+
+        // Makes a row of the Replays tab into the request that Load loads, off the UI thread: a body larger than the editor
+        // shows comes back as its exact bytes (held), of which nothing else is made.
+        private static (RequestReplayDraft Draft, byte[] Held) PrepareFromHistory(
+            Func<ProxyConnectionModel, int, CancellationToken, RequestReplayDraft> prepare,
+            ProxyConnectionModel row,
+            CancellationToken token)
+        {
+            RequestReplayDraft draft = prepare(row, MaxShownBodyBytes, token);
+            return (draft, draft.GetBodyLength() > MaxShownBodyBytes ? draft.GetBodyBytes() : null);
+        }
+
+        // Show in Replays: selects the entry's request in its tab, by reference (ReplayRecordingTarget.TrySelect), whether or
+        // not Load can load it. Refused, and said so, for an entry that is no longer in the Replays tab or in the history,
+        // and once XMAT is shutting down.
+        internal void ShowInReplays(ReplayHistoryEntry entry)
+        {
+            ReplayHistory history = _recording?.History;
+            if (_closed || history == null)
+                return;
+            if (!history.TryResolve(entry, out ICaptureDeviceContext tab, out ProxyConnectionModel row) ||
+                !_recording.TrySelect(tab, row))
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_SHOW_GONE");
+                return;
+            }
+
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_SHOWN", tab.DeviceName, row.RequestNumber);
+        }
+
+        // Clear history: forgets every entry, for every composer, whose open menus then say that the history is empty. The
+        // Replays tab keeps its requests, and a request that Load loaded stays as it is.
+        internal void ClearHistory()
+        {
+            ReplayHistory history = _recording?.History;
+            if (_closed || history == null)
+                return;
+            history.Clear();
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_CLEARED");
+        }
+
         private EditorState CurrentEditors() =>
             new(MethodBox.Text, UrlBox.Text, HeadersBox.Text, BodyBox.Text, Base64Box.IsChecked == true, _fileBody,
                 _draft.Omissions,
@@ -1612,30 +2293,39 @@ namespace XMAT.WebServiceCapture
         // Copy as cURL: one click copies to the clipboard a command for PowerShell 7 that sends the request as the editors
         // hold it, with the inbox curl.exe (RequestCurlExporter, CurlScriptForm.Pasteable); the warning beside the button
         // says beforehand that it copies the full request, credentials and body included. The request and its options are
-        // fixed first (TryFreezeForCurl). Preparing the request, holding its body to 64 KiB, beyond which Save as cURL
-        // script saves it, and rendering the command run off the UI thread while the window is busy; Cancel request or
-        // closing the window stops them, and a command made by then is not copied. Only then, for a URL that goes to another
-        // origin than the request was captured or loaded for, the user is asked whether to export it for that origin
-        // (AllowsCurlOrigin). Nothing ever clears the clipboard: a command that is not copied leaves it as it was.
+        // fixed first (TryFreezeForCurl). Off the UI thread, while the window is busy, a form's Content-Type that the headers
+        // would drop refuses the copy first (RefuseDroppedFormContentType); then the request is prepared, its body held to 64
+        // KiB, beyond which Save as cURL script saves it, and the command rendered. Cancel request or closing the window stops
+        // that work, and a command made by then is not copied. Only then, for a URL that goes to another origin than the
+        // request was captured or loaded for, the user is asked whether to export it for that origin (AllowsCurlOrigin).
+        // Nothing ever clears the clipboard: a command that is not copied leaves it as it was.
         internal async Task CopyAsCurlAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
             if (!TryFreezeForCurl(
-                copying: true, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects))
+                copying: true,
+                out RequestReplayDraft draft,
+                out ReplayTransportOptions transport,
+                out int redirects,
+                out bool form))
             {
                 return;
             }
 
+            Func<bool, RequestReplayDraft, CancellationToken, bool> dropsContentType =
+                CheckFormContentType ?? FormContentTypeDropped;
             Func<RequestReplayDraft, ReplayTransportOptions, int, CancellationToken, CurlRequest> prepare =
                 PrepareCurl ?? RequestCurlExporter.Prepare;
             Action<CurlRequest, CurlScriptForm, string, Stream, CancellationToken> write =
                 WriteCurlScript ?? RequestCurlExporter.Write;
             using var rendering = new CancellationTokenSource();
             CancellationToken token = rendering.Token;
-            // Prepared, held to what the clipboard takes and rendered off the UI thread: no command for a larger body.
+            // Checked for a form's Content-Type, prepared, held to what the clipboard takes and rendered off the UI thread: no
+            // command for a larger body.
             Func<string> render = () =>
             {
+                RefuseDroppedFormContentType(form, draft, dropsContentType, token);
                 CurlRequest request = prepare(draft, transport, redirects, token);
                 if (request.Body.Length > RequestCurlExporter.MaxPasteableBodyBytes)
                     return null;
@@ -1714,29 +2404,42 @@ namespace XMAT.WebServiceCapture
 
         // Save as cURL script: saves, without sending it, a PowerShell 7 script that sends the request with the inbox
         // curl.exe, its body inline up to 64 MiB (RequestCurlExporter, CurlScriptForm.File). The request and its options are
-        // fixed first (TryFreezeForCurl) and prepared off the UI thread while the window is busy; Cancel request or closing
-        // the window stops that, and a request prepared by then is neither asked about nor saved. The window then asks
-        // where; for a URL that goes to another origin than the request was captured or loaded for, whether to export it for
-        // that origin (AllowsCurlOrigin); then whether to save the full request at all, No by default, for every script.
-        // The script is rendered straight into the file and published off the UI thread, privately and never in place of
-        // another file (PrivateFilePublisher). What the publication did is what the status says, also after Cancel request:
-        // a script published by then stays published, and closing the window never deletes it or says otherwise.
+        // fixed first (TryFreezeForCurl). Off the UI thread, while the window is busy, a form's Content-Type that the headers
+        // would drop refuses the script first (RefuseDroppedFormContentType); then the request is prepared. Cancel request or
+        // closing the window stops that work, and a request prepared by then is neither asked about nor saved. The window
+        // then asks where; for a URL that goes to another origin than the request was captured or loaded for, whether to
+        // export it for that origin (AllowsCurlOrigin); then whether to save the full request at all, No by default, for
+        // every script. The script is rendered straight into the file and published off the UI thread, privately and never
+        // in place of another file (PrivateFilePublisher). What the publication did is what the status says, also after
+        // Cancel request: a script published by then stays published, and closing the window never deletes it or says
+        // otherwise.
         internal async Task SaveCurlScriptAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
             if (!TryFreezeForCurl(
-                copying: false, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects))
+                copying: false,
+                out RequestReplayDraft draft,
+                out ReplayTransportOptions transport,
+                out int redirects,
+                out bool form))
             {
                 return;
             }
 
+            Func<bool, RequestReplayDraft, CancellationToken, bool> dropsContentType =
+                CheckFormContentType ?? FormContentTypeDropped;
             Func<RequestReplayDraft, ReplayTransportOptions, int, CancellationToken, CurlRequest> prepare =
                 PrepareCurl ?? RequestCurlExporter.Prepare;
             Action<CurlRequest, CurlScriptForm, string, Stream, CancellationToken> write =
                 WriteCurlScript ?? RequestCurlExporter.Write;
             using var preparing = new CancellationTokenSource();
             CancellationToken preparingToken = preparing.Token;
+            Func<CurlRequest> prepareChecked = () =>
+            {
+                RefuseDroppedFormContentType(form, draft, dropsContentType, preparingToken);
+                return prepare(draft, transport, redirects, preparingToken);
+            };
             _checkingCancellation = preparing;
             _state = ComposerState.Checking;
             SetBusy(true);
@@ -1746,7 +2449,7 @@ namespace XMAT.WebServiceCapture
             bool stopped;
             try
             {
-                request = await Task.Run(() => prepare(draft, transport, redirects, preparingToken), preparingToken);
+                request = await Task.Run(prepareChecked, preparingToken);
             }
             catch (OperationCanceledException) when (preparing.IsCancellationRequested)
             {
@@ -1842,13 +2545,16 @@ namespace XMAT.WebServiceCapture
         }
 
         // Fixes what a cURL export exports, from the editors and options as they are now: a copy of the draft that later
-        // edits do not change, which shares the body's text or bytes, never changed in place, with the transport and the
-        // most redirects. False, with the reason in the status, when the export is not available (CurlUnavailableText).
+        // edits do not change, which shares the body's text or bytes, never changed in place, with the transport, the most
+        // redirects, and whether the body is a form that Build form made, whose Content-Type the export checks off the UI
+        // thread first (RefuseDroppedFormContentType). False, with the reason in the status, when the export is not
+        // available (CurlUnavailableText), which costs nothing to know.
         private bool TryFreezeForCurl(
-            bool copying, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects)
+            bool copying, out RequestReplayDraft draft, out ReplayTransportOptions transport, out int redirects, out bool form)
         {
             draft = null;
             redirects = 0;
+            form = false;
             string unavailable = CurlUnavailableText(copying);
             if (unavailable != null || !TryReadTransport(out transport))
             {
@@ -1859,6 +2565,7 @@ namespace XMAT.WebServiceCapture
 
             UpdateDraft();
             draft = _draft.WithUrl(_draft.Url);
+            form = _formSeed != null;
             redirects = MaxRedirects;
             return true;
         }
@@ -1874,12 +2581,15 @@ namespace XMAT.WebServiceCapture
         // A URL's origin as a question or the status shows it (UntrustedText).
         private static string ShownOrigin(string url) => UntrustedText.Show(Origin(url), MaxShownOriginChars);
 
-        // Why RequestCurlExporter.Prepare refused the request, in the words that the buttons use when they are unavailable
-        // for the same reason; null for an exception that is no refusal. pending is what the request still leaves out.
+        // Why RequestCurlExporter.Prepare, or the check of a form's Content-Type before it (RefuseDroppedFormContentType),
+        // refused the request, in the words that the buttons use when they are unavailable for the same reason; null for an
+        // exception that is no refusal. pending is what the request still leaves out.
         private static string CurlRefusalText(Exception exception, RequestOmissions pending) => exception switch
         {
             RequestIncompleteException =>
                 Localization.GetLocalizedString("COMPOSER_CURL_INCOMPLETE", PendingParts(pending)),
+            MultipartFormException { Code: MultipartCodes.ContentTypeDropped } =>
+                Localization.GetLocalizedString("COMPOSER_FORM_CONTENT_TYPE_DROPPED"),
             CurlExportException { Code: CurlExportCodes.Unsupported, Reason: CurlUnsupported unsupported } =>
                 UnsupportedCurlText(unsupported),
             CurlExportException { Code: CurlExportCodes.HeadBody } =>
@@ -1924,11 +2634,31 @@ namespace XMAT.WebServiceCapture
 
         private async void Send_Click(object sender, RoutedEventArgs e) => await SendAsync();
         private async void UploadFile_Click(object sender, RoutedEventArgs e) => await UploadBodyAsync();
+        private void BuildForm_Click(object sender, RoutedEventArgs e) => BuildForm();
         private async void OpenRequest_Click(object sender, RoutedEventArgs e) => await OpenRequestAsync();
         private async void SaveRequest_Click(object sender, RoutedEventArgs e) => await SaveRequestAsync();
         private void ClearBody_Click(object sender, RoutedEventArgs e) => ClearBody();
         private void CancelSend_Click(object sender, RoutedEventArgs e) => CancelSend();
         private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+        // History opens its menu above the button, listed first so that it opens at its size; a right-click on the button
+        // opens it too, and lists it as it opens (HistoryMenu_Opened).
+        private void History_Click(object sender, RoutedEventArgs e)
+        {
+            OpenHistoryView();
+            HistoryMenu.PlacementTarget = HistoryButton;
+            HistoryMenu.IsOpen = true;
+        }
+
+        private void HistoryMenu_Opened(object sender, RoutedEventArgs e) => OpenHistoryView();
+        private void HistoryMenu_Closed(object sender, RoutedEventArgs e) => CloseHistoryView();
+        private void HistoryClear_Click(object sender, RoutedEventArgs e) => ClearHistory();
+
+        private async void HistoryLoad_Click(object sender, RoutedEventArgs e) =>
+            await LoadFromHistoryAsync((ReplayHistoryEntry)((MenuItem)sender).Tag);
+
+        private void HistoryShow_Click(object sender, RoutedEventArgs e) =>
+            ShowInReplays((ReplayHistoryEntry)((MenuItem)sender).Tag);
 
         private void ShowError(Exception exception) => StatusText.Text = ErrorText(exception.Message);
 
@@ -1942,19 +2672,19 @@ namespace XMAT.WebServiceCapture
             string message, MessageBoxButton buttons, MessageBoxImage image, MessageBoxResult defaultResult) =>
             MessageBox.Show(this, message, Title, buttons, image, defaultResult);
 
-        // What Open request would discard, to tell whether the user has edited it: what the editors hold and the parts that a
-        // request file left out and that are not supplied yet, edited since the request was loaded; and the transport
-        // options, changed from those that the window or the last request file set, also before a drop, which keeps them.
-        // Supplying a part is an edit, even as the empty part that the editor already showed. A body that the window holds
-        // as bytes, an uploaded file's or a large one from a request file, is compared by reference: it is the same bytes
-        // until another upload or Clear body.
+        // What Open request and Load would discard, to tell whether the user has edited it: what the editors hold and the
+        // parts that a request file left out and that are not supplied yet, edited since the request was loaded; and the
+        // transport options, changed from those that the window, the last request file or the last Load set, also before a
+        // drop, which keeps them. Supplying a part is an edit, even as the empty part that the editor already showed. A body
+        // that the window holds as bytes, an uploaded file's, a form's, or a large one from a request file or the Replays tab,
+        // is compared by reference: it is the same bytes until another upload, form or Clear body.
         private sealed record EditorState(
             string Method, string Url, string Headers, string Body, bool Base64, byte[] FileBody,
             RequestOmissions Omissions, TransportState Transport);
 
-        // The transport options as the user left them, which Open request resets (ResetTransport) and a drop keeps: the HTTP
-        // version, which a request file keeps too, and Connect to another endpoint and Follow same-origin redirects, each
-        // with what it holds also while it is off: the endpoint as typed and the most redirects.
+        // The transport options as the user left them, which Open request and Load reset (ResetTransport) and a drop keeps:
+        // the HTTP version, which a request file keeps too, and Connect to another endpoint and Follow same-origin
+        // redirects, each with what it holds also while it is off: the endpoint as typed and the most redirects.
         private sealed record TransportState(
             ReplayHttpVersion HttpVersion, bool ConnectTo, string Endpoint, bool FollowRedirects, int? RedirectLimit);
     }

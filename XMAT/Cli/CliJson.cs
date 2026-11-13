@@ -381,6 +381,7 @@ namespace XMAT.Cli
             // Whether --connect-to was given, never its address: the output names no endpoint.
             writer.WriteBoolean("connectTo", options.ConnectTo != null);
             writer.WriteBoolean("allowConnectTo", options.AllowConnectTo);
+            writer.WriteBoolean("saveSaz", options.SaveSaz);
             writer.WriteEndObject();
 
             writer.WriteStartArray("replays");
