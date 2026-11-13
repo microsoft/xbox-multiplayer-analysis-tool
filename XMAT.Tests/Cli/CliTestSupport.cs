@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: MIT
 
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
+using XMAT.Cli;
 using XMAT.Tests.Fixtures;
 using XMAT.Tests.HeadlessParity;
 
@@ -43,6 +46,234 @@ namespace XMAT.Tests.Cli
                 {
                     Thread.Sleep(100);
                 }
+            }
+        }
+    }
+
+    // Reserving --out in process as xmat does (CliOutputFolder.CheckTarget, then TryReserve).
+    internal static class CliTestOutput
+    {
+        // The staging folder for output, which the test expects xmat to accept.
+        internal static CliOutputFolder Reserve(string output, string runId, Action<string> checkpoint = null)
+        {
+            Assert.Null(CliOutputFolder.CheckTarget(output, out CliOutputTarget target));
+            CliFailure failure = CliOutputFolder.TryReserve(target, runId, out CliOutputFolder folder, checkpoint);
+            Assert.True(failure == null, failure?.Code);
+            return folder;
+        }
+
+        // How reserving output ends when the test expects it to fail: the reason it was refused, or the file system error
+        // it threw. A folder reserved anyway is let go, and the test's own assertions then fail.
+        internal static (CliFailure Failure, Exception Error) Attempt(string output, Action<string> checkpoint = null)
+        {
+            CliFailure failure = CliOutputFolder.CheckTarget(output, out CliOutputTarget target);
+            if (failure != null)
+            {
+                return (failure, null);
+            }
+
+            try
+            {
+                failure = CliOutputFolder.TryReserve(target, Guid.NewGuid().ToString("N"), out CliOutputFolder folder, checkpoint);
+                folder?.Dispose();
+                return (failure, null);
+            }
+            catch (Exception ex) when (CliOutputFolder.IsFileSystemFailure(ex))
+            {
+                return (null, ex);
+            }
+        }
+    }
+
+    // Junctions, symbolic links and folders turned into either, for the tests that attack the --out folder. Junctions need
+    // no privilege; symbolic links need Developer Mode or an administrator (SymbolicLinkFact, SymbolicLinkTheory).
+    internal static class Links
+    {
+        private const uint SymbolicLinkDirectory = 0x1;
+        private const uint SymbolicLinkAllowUnprivileged = 0x2;
+        private const uint WriteAttributes = 0x0100;
+        private const uint OpenExisting = 3;
+        private const uint BackupSemantics = 0x02000000;
+        private const uint OpenReparsePoint = 0x00200000;
+        private const uint SetReparsePoint = 0x000900A4;
+        private static readonly Lazy<bool> SymbolicLinksAllowed = new(ProbeSymbolicLinks);
+
+        internal static bool CanCreateSymbolicLinks => SymbolicLinksAllowed.Value;
+
+        // mklink /J needs no privilege, unlike a symbolic link.
+        internal static void Junction(string link, string target)
+        {
+            var start = new ProcessStartInfo(Path.Join(Environment.SystemDirectory, "cmd.exe"))
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (string argument in new[] { "/c", "mklink", "/J", link, target })
+            {
+                start.ArgumentList.Add(argument);
+            }
+
+            using Process process = Process.Start(start);
+            string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            Assert.True(process.ExitCode == 0, output);
+        }
+
+        internal static void SymbolicLink(string link, string target) =>
+            Assert.True(
+                NativeMethods.CreateSymbolicLinkW(link, target, SymbolicLinkDirectory | SymbolicLinkAllowUnprivileged),
+                $"CreateSymbolicLink failed: {Marshal.GetLastWin32Error()}");
+
+        // Turns the existing folder into a junction or a symbolic link to target, as another account with write access to
+        // it could; 0 when it did, otherwise the Windows error.
+        internal static int Convert(string folder, string target, bool symbolic)
+        {
+            using SafeFileHandle handle = NativeMethods.CreateFileW(
+                folder, WriteAttributes, 7, IntPtr.Zero, OpenExisting, BackupSemantics | OpenReparsePoint, IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                return Marshal.GetLastWin32Error();
+            }
+
+            byte[] buffer = symbolic ? SymbolicLinkData(target) : MountPointData(target);
+            return NativeMethods.DeviceIoControl(
+                handle, SetReparsePoint, buffer, buffer.Length, IntPtr.Zero, 0, out _, IntPtr.Zero)
+                ? 0
+                : Marshal.GetLastWin32Error();
+        }
+
+        // Removes the link itself, dangling or not; what it points to stays.
+        internal static void Remove(string link)
+        {
+            try
+            {
+                Directory.Delete(link);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // Already gone.
+            }
+        }
+
+        private static bool ProbeSymbolicLinks()
+        {
+            string probe = Path.Join(AppContext.BaseDirectory, "HeadlessTestArtifacts", "symlink-probe-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.GetDirectoryName(probe));
+            if (!NativeMethods.CreateSymbolicLinkW(probe, AppContext.BaseDirectory, SymbolicLinkDirectory | SymbolicLinkAllowUnprivileged))
+            {
+                return false;
+            }
+
+            Directory.Delete(probe);
+            return true;
+        }
+
+        // REPARSE_DATA_BUFFER of a junction (IO_REPARSE_TAG_MOUNT_POINT) to target.
+        private static byte[] MountPointData(string target)
+        {
+            byte[] substitute = Encoding.Unicode.GetBytes(@"\??\" + target);
+            byte[] print = Encoding.Unicode.GetBytes(target);
+            int length = 8 + substitute.Length + 2 + print.Length + 2;
+            var buffer = new byte[8 + length];
+            BitConverter.GetBytes(0xA0000003u).CopyTo(buffer, 0);
+            BitConverter.GetBytes((ushort)length).CopyTo(buffer, 4);
+            BitConverter.GetBytes((ushort)substitute.Length).CopyTo(buffer, 10);
+            BitConverter.GetBytes((ushort)(substitute.Length + 2)).CopyTo(buffer, 12);
+            BitConverter.GetBytes((ushort)print.Length).CopyTo(buffer, 14);
+            substitute.CopyTo(buffer, 16);
+            print.CopyTo(buffer, 16 + substitute.Length + 2);
+            return buffer;
+        }
+
+        // REPARSE_DATA_BUFFER of an absolute symbolic link (IO_REPARSE_TAG_SYMLINK) to target.
+        private static byte[] SymbolicLinkData(string target)
+        {
+            byte[] substitute = Encoding.Unicode.GetBytes(@"\??\" + target);
+            byte[] print = Encoding.Unicode.GetBytes(target);
+            int length = 12 + substitute.Length + print.Length;
+            var buffer = new byte[8 + length];
+            BitConverter.GetBytes(0xA000000Cu).CopyTo(buffer, 0);
+            BitConverter.GetBytes((ushort)length).CopyTo(buffer, 4);
+            BitConverter.GetBytes((ushort)substitute.Length).CopyTo(buffer, 10);
+            BitConverter.GetBytes((ushort)substitute.Length).CopyTo(buffer, 12);
+            BitConverter.GetBytes((ushort)print.Length).CopyTo(buffer, 14);
+            substitute.CopyTo(buffer, 20);
+            print.CopyTo(buffer, 20 + substitute.Length);
+            return buffer;
+        }
+
+        private static class NativeMethods
+        {
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+            [return: MarshalAs(UnmanagedType.U1)]
+            internal static extern bool CreateSymbolicLinkW(string link, string target, uint flags);
+
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+            internal static extern SafeFileHandle CreateFileW(
+                string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+
+            [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool DeviceIoControl(
+                SafeFileHandle device, uint code, byte[] input, int inputSize, IntPtr output, int outputSize, out int returned, IntPtr overlapped);
+        }
+    }
+
+    // The volume name (\\?\Volume{...}\) of the volume that holds a path.
+    internal static class Volumes
+    {
+        internal static string NameOf(string path)
+        {
+            var root = new StringBuilder(512);
+            Assert.True(NativeMethods.GetVolumePathNameW(path, root, (uint)root.Capacity), $"{Marshal.GetLastWin32Error()}");
+            var name = new StringBuilder(64);
+            Assert.True(
+                NativeMethods.GetVolumeNameForVolumeMountPointW(root.ToString(), name, (uint)name.Capacity),
+                $"{Marshal.GetLastWin32Error()}");
+            return name.ToString();
+        }
+
+        // The path below its volume's root, such as X\folder for C:\X\folder.
+        internal static string Relative(string path)
+        {
+            var root = new StringBuilder(512);
+            Assert.True(NativeMethods.GetVolumePathNameW(path, root, (uint)root.Capacity), $"{Marshal.GetLastWin32Error()}");
+            return path[root.Length..];
+        }
+
+        private static class NativeMethods
+        {
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool GetVolumePathNameW(string fileName, StringBuilder volumePathName, uint bufferLength);
+
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool GetVolumeNameForVolumeMountPointW(string mountPoint, StringBuilder volumeName, uint bufferLength);
+        }
+    }
+
+    // A test that needs symbolic links: skipped where they cannot be created.
+    public sealed class SymbolicLinkFactAttribute : FactAttribute
+    {
+        public SymbolicLinkFactAttribute()
+        {
+            if (!Links.CanCreateSymbolicLinks)
+            {
+                Skip = "Creating symbolic links needs Developer Mode or an administrator.";
+            }
+        }
+    }
+
+    public sealed class SymbolicLinkTheoryAttribute : TheoryAttribute
+    {
+        public SymbolicLinkTheoryAttribute()
+        {
+            if (!Links.CanCreateSymbolicLinks)
+            {
+                Skip = "Creating symbolic links needs Developer Mode or an administrator.";
             }
         }
     }

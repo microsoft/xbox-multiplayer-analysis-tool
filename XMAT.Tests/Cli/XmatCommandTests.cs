@@ -84,6 +84,8 @@ namespace XMAT.Tests.Cli
         [InlineData("doctor --for s3cretcanary9", "cli.usage.unknown-target")]
         [InlineData("analyze capture.saz --out results --s3cretcanary9=s3cretcanary9", "cli.usage.unknown-option")]
         [InlineData("analyze capture.saz --out results --max-records s3cretcanary9", "cli.usage.invalid-value")]
+        [InlineData("replay capture.saz --out results --request s3cretcanary9", "cli.usage.invalid-value")]
+        [InlineData("compose --url s3cretcanary9 --out results", "cli.usage.invalid-value")]
         public async Task UsageErrors_Return2AndWriteNothing(string commandLine, string code)
         {
             using var directory = new CliTestDirectory();

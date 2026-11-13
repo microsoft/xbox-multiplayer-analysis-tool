@@ -26,6 +26,9 @@
                      Foreground="{DynamicResource MenuForegroundBrush}"/>
     </UserControl.Resources>
     <UserControl.CommandBindings>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.EditAndResend}" Executed="EditAndResend_Executed" CanExecute="EditAndResend_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.Reissue}" Executed="Reissue_Executed" CanExecute="Reissue_CanExecute"/>
+        <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelReissue}" Executed="CancelReissue_Executed" CanExecute="CancelReissue_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ChangePort}" Executed="ChangePort_Executed" CanExecute="ChangePort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}" Executed="DiscardPort_Executed" CanExecute="DiscardPort_CanExecute"/>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}" Executed="CancelPort_Executed" CanExecute="CancelPort_CanExecute"/>
@@ -167,13 +170,25 @@
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   d:ItemsSource="{d:SampleData}" 
                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"
+                  AutoGenerateColumns="False" GridLinesVisibility="None" ScrollViewer.ScrollChanged="ConnectionList_ScrollChanged"
                   ContextMenuOpening="ConnectionList_ContextMenuOpening"
-                  AutoGenerateColumns="False" GridLinesVisibility="None" ScrollViewer.ScrollChanged="ConnectionList_ScrollChanged">
+                  PreviewMouseRightButtonDown="ConnectionList_PreviewMouseRightButtonDown"
+                  PreviewMouseLeftButtonDown="ConnectionList_PreviewMouseLeftButtonDown"
+                  PreviewMouseMove="ConnectionList_PreviewMouseMove">
             <!-- Only the grid binds Delete, so the key in a text box or filter never deletes sessions. -->
             <DataGrid.InputBindings>
                 <KeyBinding Key="Delete" Command="{x:Static local:WebServiceProxyCommands.DeleteSelectedSessions}"/>
                 <KeyBinding Key="Delete" Modifiers="Shift" Command="{x:Static local:WebServiceProxyCommands.DeleteUnselectedSessions}"/>
             </DataGrid.InputBindings>
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <!-- Popups have a separate visual tree; route the command through the owning grid. -->
+                    <MenuItem x:Name="EditAndResendMenuItem" Header="Edit and resend"
+                              Command="{x:Static local:WebServiceProxyCommands.EditAndResend}"
+                              CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"
+                              CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"/>
+                </ContextMenu>
+            </DataGrid.ContextMenu>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="30"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
                 <DataGridTextColumn Header="STATUS" Binding="{Binding Status}"        Width="50"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
@@ -215,6 +230,7 @@
             <TabItem x:Name="ReqestResponseTab" Header="Request/Response">
                 <Grid>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition/>
                         <RowDefinition Height="4"/>
                         <RowDefinition/>
@@ -224,31 +240,46 @@
                         <ColumnDefinition Width="300"/>
                     </Grid.ColumnDefinitions>
 
+                    <!-- Rows of the Replays tab: where the row comes from, and what the tab did not keep. -->
+                    <Border x:Name="ReplayDetails" Grid.Row="0" Grid.ColumnSpan="2" Padding="10,4" BorderThickness="0,0,0,1"
+                            BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource PanelBackgroundBrush}"
+                            Visibility="{Binding SelectedItem.IsReplay, ElementName=ConnectionList, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}, FallbackValue=Collapsed}">
+                        <StackPanel>
+                            <TextBlock TextWrapping="Wrap">
+                                <Run x:Name="ReplayOfLabel" Text="Replay of:" FontWeight="Bold"/>
+                                <Run Text="{Binding SelectedItem.ReplaySource, ElementName=ConnectionList, Mode=OneWay}" d:Text="Local PC #12"/>
+                            </TextBlock>
+                            <TextBlock x:Name="ReplayNoteText" TextWrapping="Wrap" FontStyle="Italic"
+                                       Text="{Binding SelectedItem.ReplayNote, ElementName=ConnectionList, Mode=OneWay}"
+                                       Visibility="{Binding SelectedItem.HasReplayNote, ElementName=ConnectionList, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                        </StackPanel>
+                    </Border>
+
                     <!--
                     NOTE: someday we can get rid of the BodyText binding if the JsonConverter can be made into a MultiValueConverter like
                     the way that the BodyConverter works off of the HeadersDictionary and BodyBytes.
                     -->
-                    <local:RequestResponseView x:Name="RequestViewControl" Grid.Row="0" Grid.ColumnSpan="2" Title="Request"
+                    <local:RequestResponseView x:Name="RequestViewControl" Grid.Row="1" Grid.ColumnSpan="2" Title="Request"
                                                FirstLineAndHeaders="{Binding SelectedItem.RequestLineAndHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                HeaderDictionary="{Binding SelectedItem.RequestHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.RequestBody, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyText="{Binding SelectedItem.RequestText, ElementName=ConnectionList, Mode=OneWay}"
                                                />
 
-                    <GridSplitter Grid.Row="1" Grid.ColumnSpan="2" Height="4" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                    <GridSplitter Grid.Row="2" Grid.ColumnSpan="2" Height="4" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
 
                     <!--
                     NOTE: someday we can get rid of the BodyText binding if the JsonConverter can be made into a MultiValueConverter like
                     the way that the BodyConverter works off of the HeadersDictionary and BodyBytes.
                     -->
-                    <local:RequestResponseView x:Name="ResponseViewControl" Grid.Row="2" Grid.ColumnSpan="2" Title="Response"
+                    <local:RequestResponseView x:Name="ResponseViewControl" Grid.Row="3" Grid.ColumnSpan="2" Title="Response"
                                                FirstLineAndHeaders="{Binding SelectedItem.ResponseLineAndHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                HeaderDictionary="{Binding SelectedItem.ResponseHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.ResponseBody, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyText="{Binding SelectedItem.ResponseText, ElementName=ConnectionList, Mode=OneWay}"
                                                />
 
-                    <Grid Grid.Row="0" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch">
+                    <Grid Grid.Row="1" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="150"/>
                             <ColumnDefinition/>

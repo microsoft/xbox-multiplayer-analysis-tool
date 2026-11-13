@@ -10,6 +10,7 @@ using XMAT.Operations.Capabilities;
 using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
+using XMAT.Operations.Replay;
 
 namespace XMAT.Cli
 {
@@ -96,6 +97,28 @@ namespace XMAT.Cli
         internal string Architecture { get; set; }
     }
 
+    // The allow-listed results of a replay or compose run: numbers, ordinal ids, outcomes and codes from
+    // ReplayItemResult, and the run's options without the URL, method, headers or body file it was given.
+    internal sealed class CliReplayReport
+    {
+        internal CliReplayReport(CliReplay options, CliLimits limits)
+        {
+            Options = options ?? CliReplay.Default;
+            Limits = limits;
+        }
+
+        internal CliReplay Options { get; }
+
+        // The input limits of a replay run; null for compose.
+        internal CliLimits Limits { get; }
+
+        internal string InputKind { get; set; }
+
+        internal string InputSha256 { get; set; }
+
+        internal IReadOnlyList<ReplayItemResult> Items { get; set; } = Array.Empty<ReplayItemResult>();
+    }
+
     // Everything one xmat run reports: the JSON document on standard output (CliJson) and the text on standard error.
     internal sealed class CliReport
     {
@@ -133,6 +156,8 @@ namespace XMAT.Cli
         internal CliAnalysisReport Analysis { get; set; }
 
         internal CliExportReport Export { get; set; }
+
+        internal CliReplayReport Replay { get; set; }
 
         internal CliDoctorReport Doctor { get; set; }
 

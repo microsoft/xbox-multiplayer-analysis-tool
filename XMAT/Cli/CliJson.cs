@@ -12,17 +12,22 @@ using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Capabilities;
 using XMAT.Operations.Export;
+using XMAT.Operations.Replay;
 
 namespace XMAT.Cli
 {
     // Writes xmat's JSON field by field, so only allow-listed values reach the output: rule names, levels, counts,
-    // service labels, ordinal ids, the input kind and SHA-256, the effective limits, the validated process selectors of
-    // the command line, an export's format and its published file's size and SHA-256, codes and fixed messages. Never
-    // AnalysisResult.Legacy, captured content or paths.
+    // service labels, ordinal ids, request numbers, outcomes and status codes, the input kind and SHA-256, the effective
+    // limits and options, the validated process selectors of the command line, an export's format and its published
+    // file's size and SHA-256, codes and fixed messages. Never AnalysisResult.Legacy, captured content or paths other
+    // than artifact paths.
     internal static class CliJson
     {
         // summary.json in a published --out folder.
         internal const string SummarySchema = "xmat-analysis/1";
+
+        // summary.json of a published replay or compose run.
+        internal const string ReplaySummarySchema = "xmat-replay/1";
 
         // The only error of the fallback document (SerializeFallback).
         internal static readonly OperationDiagnostic OutputFailure = new(
@@ -58,6 +63,11 @@ namespace XMAT.Cli
                 if (report.Export != null)
                 {
                     WriteExport(writer, report.Export);
+                }
+
+                if (report.Replay != null)
+                {
+                    WriteReplay(writer, report.Replay, includeFiles: report.Artifacts.Count != 0);
                 }
 
                 if (report.Doctor != null)
@@ -149,6 +159,146 @@ namespace XMAT.Cli
 
             return stream.ToArray();
         }
+
+        // summary.json of replay and compose: the results of every send and the run's warnings, without its status (the
+        // results are published whatever the responses were).
+        internal static byte[] SerializeReplaySummary(CliReport report)
+        {
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream, Options))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("schema", ReplaySummarySchema);
+                writer.WriteString("command", report.Command);
+                writer.WriteString("runId", report.RunId);
+                writer.WriteString("version", CliReport.ToolVersion);
+                WriteReplay(writer, report.Replay ?? new CliReplayReport(null, null), includeFiles: true);
+                WriteDiagnostics(writer, "warnings", report.Warnings);
+                writer.WriteEndObject();
+            }
+
+            return stream.ToArray();
+        }
+
+        // Only numbers, ordinal ids, outcome names, codes and the artifact paths of each send: never the URL, method,
+        // headers or bodies, which are in the request and response files.
+        private static void WriteReplay(Utf8JsonWriter writer, CliReplayReport replay, bool includeFiles)
+        {
+            if (replay.Limits != null)
+            {
+                writer.WriteStartObject("input");
+                writer.WriteString("kind", replay.InputKind);
+                writer.WriteString("sha256", replay.InputSha256);
+                writer.WriteEndObject();
+                WriteLimits(writer, replay.Limits);
+            }
+
+            CliReplay options = replay.Options;
+            writer.WriteStartObject("options");
+            writer.WriteNumber("repeat", options.Repeat);
+            writer.WriteNumber("parallel", options.Parallel);
+            writer.WriteNumber("timeoutSeconds", options.TimeoutSeconds);
+            writer.WriteNumber("maxResponseMib", options.MaxResponseMib);
+            writer.WriteNumber("followRedirects", options.FollowRedirects);
+            writer.WriteBoolean("unconditional", options.Unconditional);
+            writer.WriteBoolean("verify", options.Verify);
+            writer.WriteBoolean("allowUnsafeMethods", options.AllowUnsafeMethods);
+            writer.WriteBoolean("allowOriginChange", options.AllowOriginChange);
+            writer.WriteString("httpVersion", ReplayTransportOptions.VersionName(options.HttpVersion));
+
+            // Whether --connect-to was given, never its address: the output names no endpoint.
+            writer.WriteBoolean("connectTo", options.ConnectTo != null);
+            writer.WriteBoolean("allowConnectTo", options.AllowConnectTo);
+            writer.WriteEndObject();
+
+            writer.WriteStartArray("replays");
+            foreach (ReplayItemResult item in replay.Items)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("id", item.Id);
+                writer.WriteString("device", item.DeviceId);
+                if (item.RequestNumber is long request)
+                {
+                    writer.WriteNumber("request", request);
+                }
+                else
+                {
+                    writer.WriteNull("request");
+                }
+
+                if (item.Sequence is long sequence)
+                {
+                    writer.WriteNumber("sequence", sequence);
+                }
+                else
+                {
+                    writer.WriteNull("sequence");
+                }
+
+                writer.WriteNumber("iteration", item.Iteration);
+                writer.WriteString("outcome", OutcomeName(item.Outcome));
+                if (item.StatusCode != 0)
+                {
+                    writer.WriteNumber("status", item.StatusCode);
+                }
+                else
+                {
+                    writer.WriteNull("status");
+                }
+
+                writer.WriteNumber("durationMs", (long)item.Duration.TotalMilliseconds);
+                writer.WriteNumber("responseBytes", item.ResponseBytes);
+                writer.WriteNumber("redirects", item.Redirects);
+                writer.WriteString("transport", item.Transport);
+                writer.WriteString("httpVersion", item.HttpVersion);
+                writer.WriteString("responseVersion", item.ResponseVersion);
+                writer.WriteString("code", item.Code);
+                if (item.Verification == null)
+                {
+                    writer.WriteNull("verify");
+                }
+                else
+                {
+                    writer.WriteStartObject("verify");
+                    writer.WriteString("result", item.Verification.Matches ? "match" : "mismatch");
+                    WriteStrings(writer, "differences", item.Verification.Differences);
+                    writer.WriteEndObject();
+                }
+
+                if (includeFiles)
+                {
+                    string folder = CliReplayCommand.FolderOf(item.Id);
+                    writer.WriteStartObject("files");
+                    writer.WriteString("request", folder + "/" + CliReplayCommand.RequestFile);
+                    writer.WriteString(
+                        "response",
+                        item.Outcome is ReplayOutcome.Completed or ReplayOutcome.TooLarge
+                            ? folder + "/" + CliReplayCommand.ResponseFile
+                            : null);
+                    writer.WriteEndObject();
+                }
+
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            int completed = replay.Items.Count(item => item.Outcome == ReplayOutcome.Completed);
+            writer.WriteStartObject("totals");
+            writer.WriteNumber("replays", replay.Items.Count);
+            writer.WriteNumber("completed", completed);
+            writer.WriteNumber("failed", replay.Items.Count - completed);
+            writer.WriteNumber("matched", replay.Items.Count(item => item.Verification?.Matches == true));
+            writer.WriteNumber("mismatched", replay.Items.Count(item => item.Verification is { Matches: false }));
+            writer.WriteEndObject();
+        }
+
+        private static string OutcomeName(ReplayOutcome outcome) => outcome switch
+        {
+            ReplayOutcome.Completed => "completed",
+            ReplayOutcome.TimedOut => "timedOut",
+            ReplayOutcome.TooLarge => "tooLarge",
+            _ => "failed",
+        };
 
         private static void WriteAnalysis(Utf8JsonWriter writer, CliAnalysisReport analysis)
         {

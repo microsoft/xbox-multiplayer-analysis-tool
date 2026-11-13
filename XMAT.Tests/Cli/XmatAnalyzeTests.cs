@@ -402,6 +402,71 @@ namespace XMAT.Tests.Cli
             Assert.Equal(before, directory.Entries());
         }
 
+        // --out below a junction is refused before anything is created (exit code 6), and so is a network path, before xmat
+        // could reach it: 192.0.2.1 is reserved for documentation and never routed.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task Analyze_OutWhereOutputCannotStayPrivate_Returns6AndCreatesNothing(bool network)
+        {
+            using var directory = new CliTestDirectory();
+            string input = SyntheticCaptures.WriteSaz(directory.Root, "capture.saz");
+            string real = Path.Join(directory.Root, "real");
+            Directory.CreateDirectory(real);
+            string link = Path.Join(directory.Root, "link");
+            Links.Junction(link, real);
+            string[] before = directory.Entries();
+            try
+            {
+                XmatRun run = await XmatProcess.RunAsync(
+                    directory.Root, "analyze", input, "--out", network ? @"\\192.0.2.1\share\results" : Path.Join("link", "results"));
+
+                CliAssert.ExitCode(6, run);
+                Assert.Equal(new[] { "cli.output.unprotected" }, run.ErrorCodes());
+                Assert.Equal(before, directory.Entries());
+                Assert.Empty(Directory.GetFileSystemEntries(real));
+            }
+            finally
+            {
+                Links.Remove(link);
+            }
+        }
+
+        // --out as a verbatim path to a folder whose name ends with a dot, next to the decoy that the ordinary path would
+        // name, or by its volume's name: the analysis, whose legacy parts keep files in the staging folder while it runs,
+        // writes and publishes only there.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task Analyze_VerbatimOut_WritesAndPublishesOnlyThere(bool volume)
+        {
+            using var directory = new CliTestDirectory();
+            string input = SyntheticCaptures.WriteSaz(directory.Root, "capture.saz");
+            string decoy = Path.Join(directory.Root, "real");
+            string real = Path.Join(@"\\?\" + directory.Root, "real.");
+            Directory.CreateDirectory(decoy);
+            Directory.CreateDirectory(real);
+            string output = volume
+                ? Path.Join(Volumes.NameOf(directory.Root), Volumes.Relative(directory.Root), "results")
+                : Path.Join(real, "results");
+            try
+            {
+                XmatRun run = await XmatProcess.RunAsync(directory.Root, "analyze", input, "--out", output);
+
+                CliAssert.ExitCode(0, run);
+                string published = volume ? Path.Join(directory.Root, "results") : Path.Join(real, "results");
+                Assert.Equal(new[] { "summary.json" }, Directory.GetFileSystemEntries(published).Select(Path.GetFileName));
+                Assert.Equal(volume ? Array.Empty<string>() : new[] { "results" }, Directory.GetFileSystemEntries(real).Select(Path.GetFileName));
+                Assert.Empty(Directory.GetFileSystemEntries(decoy));
+                CliAssert.NoStagingFolders(directory.Root);
+            }
+            finally
+            {
+                // Only its verbatim path names it; an ordinary one would remove the decoy instead.
+                Directory.Delete(real, recursive: true);
+            }
+        }
+
         private static string[] DeviceIds(XmatRun run) =>
             run.Json().GetProperty("devices").EnumerateArray().Select(device => device.GetProperty("id").GetString()).ToArray();
 

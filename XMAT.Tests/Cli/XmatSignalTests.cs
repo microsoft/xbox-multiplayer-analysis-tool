@@ -39,7 +39,7 @@ namespace XMAT.Tests.Cli
             using (StagingHold hold = StagingHold.Take(staging))
             {
                 await signal.SendAsync(xmat.Id, ConsoleSignal.CtrlBreak);
-                await hold.WaitUntilRemovalStartsAsync(xmat);
+                await hold.ReleaseOnceRemovalStartsAsync(xmat);
             }
 
             XmatRun run = await xmat.CompleteAsync();
@@ -114,19 +114,41 @@ namespace XMAT.Tests.Cli
             }
 
             // xmat removes the folder after it has seen the cancellation, or after it failed otherwise; the exit code
-            // tells which. It retries the removal for about a second, so letting go right after is in time.
-            internal async Task WaitUntilRemovalStartsAsync(XmatChild xmat)
+            // tells which. It retries the removal for about a second, so the hold is let go as soon as the marker is
+            // gone, from a thread of its own: a thread-pool continuation can be held back for longer than that when
+            // earlier tests have left the pool busy.
+            internal Task ReleaseOnceRemovalStartsAsync(XmatChild xmat)
             {
-                var elapsed = Stopwatch.StartNew();
-                while (File.Exists(_marker) && !xmat.HasExited)
+                var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var watcher = new Thread(() =>
                 {
-                    if (elapsed.Elapsed > WaitLimit)
+                    try
                     {
-                        Assert.Fail("xmat did not start removing its staging folder after the signal.");
-                    }
+                        var elapsed = Stopwatch.StartNew();
+                        while (File.Exists(_marker) && !xmat.HasExited)
+                        {
+                            if (elapsed.Elapsed > WaitLimit)
+                            {
+                                Assert.Fail("xmat did not start removing its staging folder after the signal.");
+                            }
 
-                    await Task.Delay(5);
-                }
+                            Thread.Sleep(1);
+                        }
+
+                        _hold.Dispose();
+                        released.SetResult();
+                    }
+                    catch (Exception ex)
+                    {
+                        released.SetException(ex);
+                    }
+                })
+                {
+                    IsBackground = true,
+                    Name = "Staging hold",
+                };
+                watcher.Start();
+                return released.Task;
             }
 
             public void Dispose() => _hold.Dispose();
