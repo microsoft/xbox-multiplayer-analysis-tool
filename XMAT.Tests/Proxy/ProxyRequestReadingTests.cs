@@ -1260,6 +1260,7 @@ namespace XMAT.Tests.Proxy
         [Theory]
         [InlineData("gzip")]
         [InlineData("identity")]
+        [InlineData("chunked, gzip")]
         public async Task TransferCodingWithoutFinalChunked_ReturnsBadRequest(string coding)
         {
             await using var proxy = await ProxyTestHarness.StartAsync();

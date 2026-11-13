@@ -1278,12 +1278,13 @@ namespace XMAT.WebServiceCapture.Proxy
             new(StringComparer.OrdinalIgnoreCase)
             {
                 "Age",
-                "Authentication-Info",
                 "Authorization",
                 "Cache-Control",
                 "Cookie",
+                "Content-Disposition",
                 "Content-Encoding",
                 "Content-Length",
+                "Content-Location",
                 "Content-Range",
                 "Content-Type",
                 "Date",
@@ -1304,6 +1305,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 "Range",
                 "Retry-After",
                 "Set-Cookie",
+                "Set-Cookie2",
                 "Vary",
                 "Warning",
                 "WWW-Authenticate",

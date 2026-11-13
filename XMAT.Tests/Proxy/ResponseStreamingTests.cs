@@ -456,7 +456,10 @@ namespace XMAT.Tests.Proxy
                     originPort: 1,
                     clientVersion: "HTTP/1.1");
                 Assert.Equal("payload", response.DecodedBody);
-                Assert.Equal("x-checksum", response.Header("Trailer"));
+                Assert.Equal("Authentication-Info, x-checksum", response.Header("Trailer"));
+                Assert.Equal(
+                    "nextnonce=\"digest-next\"",
+                    response.Trailers.GetValueOrDefault("Authentication-Info"));
                 Assert.Equal("abc123", response.Trailers.GetValueOrDefault("x-checksum"));
                 return;
             }
@@ -470,7 +473,12 @@ namespace XMAT.Tests.Proxy
 
             Assert.Equal(HttpStatusCode.OK, intercepted.StatusCode);
             Assert.Equal("payload", await intercepted.Content.ReadAsStringAsync());
-            Assert.Equal(["x-checksum"], intercepted.Headers.Trailer.ToArray());
+            Assert.Equal(["Authentication-Info", "x-checksum"], intercepted.Headers.Trailer.ToArray());
+            Assert.True(
+                intercepted.TrailingHeaders.TryGetValues(
+                    "Authentication-Info",
+                    out IEnumerable<string> authenticationInfo));
+            Assert.Equal("nextnonce=\"digest-next\"", Assert.Single(authenticationInfo));
             Assert.True(intercepted.TrailingHeaders.TryGetValues("x-checksum", out IEnumerable<string> values));
             Assert.Equal("abc123", Assert.Single(values));
         }
@@ -800,7 +808,11 @@ namespace XMAT.Tests.Proxy
                 response.Headers.TransferEncodingChunked = true;
                 response.Headers.TryAddWithoutValidation(
                     "Trailer",
-                    "Content-Length, Host, Content-Type, Set-Cookie, x-checksum");
+                    "Content-Length, Content-Disposition, Content-Location, Host, Content-Type, Set-Cookie, " +
+                    "Set-Cookie2, Authentication-Info, x-checksum");
+                response.TrailingHeaders.TryAddWithoutValidation(
+                    "Authentication-Info",
+                    "nextnonce=\"digest-next\"");
                 response.TrailingHeaders.TryAddWithoutValidation("x-checksum", "abc123");
                 return Task.FromResult(response);
             }
