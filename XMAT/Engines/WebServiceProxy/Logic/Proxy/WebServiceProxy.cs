@@ -1194,6 +1194,7 @@ namespace XMAT.WebServiceCapture.Proxy
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                _logger.Log(connectionID, LogLevel.DEBUG, "Streamed response capture update was canceled.");
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {

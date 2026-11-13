@@ -1853,13 +1853,9 @@ namespace XMAT.Tests
 
             public async ValueTask DisposeAsync()
             {
-                try
+                using (_database)
                 {
                     await _callbacks.StopAcceptingAndWaitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-                }
-                finally
-                {
-                    _database.Dispose();
                 }
             }
 
