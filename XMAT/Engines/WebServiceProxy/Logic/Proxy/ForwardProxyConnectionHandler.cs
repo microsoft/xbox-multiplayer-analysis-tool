@@ -392,6 +392,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
             clientRequest.Headers.CopyTo(requestMessage.Headers);
             clientRequest.ContentHeaders.CopyTo(requestMessage.Content.Headers);
+            // Scripts may replace the body; let the buffered content calculate its length.
+            requestMessage.Content.Headers.Remove("Content-Length");
 
             HttpResponseMessage result;
             try

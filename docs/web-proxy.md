@@ -291,6 +291,29 @@ Analysis endpoints offer host actions only if every request came from the same
 captured host. Synthesized telemetry endpoints (such as `inGameEvents`), endpoints
 combining hosts, and older data without host provenance explain why no action is available.
 
+## Request body limits
+
+The proxy buffers complete request bodies so capture scripts can inspect or edit
+them. Plain HTTP and intercepted HTTPS (HTTP/1.1 and HTTP/2) use the same bounds:
+
+- **32 MiB** maximum body size per request.
+- **30 seconds** maximum wait without body data.
+- **120 seconds** maximum time to receive a body.
+- **128 MiB** aggregate budget for temporary request-body buffering while bodies are being read.
+
+A request exceeding the body-size limit receives **413 Content Too Large**. A body
+that exceeds either time limit receives **408 Request Timeout**. If concurrent
+request buffering exhausts the aggregate budget, XMAT rejects the request with
+**503 Service Unavailable**. Rejected incomplete bodies are not captured or
+forwarded. The aggregate budget is an estimated reservation for temporary
+staging allocations while bodies are read, not a process-wide memory cap. It can
+reserve more than the body length: HTTPS buffering can reserve up to about three
+times the body size, while plain HTTP buffering is about twice the body size.
+The reservation is released after the body has been assembled. It does not
+account for bodies retained while scripts, capture processing, or origin
+forwarding use them, Kestrel's connection buffers, or temporary arrays awaiting
+garbage collection.
+
 ## View WebSocket messages
 
 WebSocket connections through the proxy are captured automatically.

@@ -293,7 +293,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 _httpClient,
                 _interceptedTunnels,
                 _logger,
-                _cts.Token);
+                stoppingToken: _cts.Token);
             _interceptedHost = new InterceptedHttpHost(
                 SelectInterceptedCertificate,
                 interceptedApplication.InvokeAsync);
