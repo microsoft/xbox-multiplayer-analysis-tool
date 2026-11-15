@@ -1,5 +1,5 @@
-<!-- The design system window's own styles: the list of pages, and the sections and captioned examples a page is made
-     of. The window merges this dictionary with the new look's resources, so these styles use its roles and sizes. -->
+<!-- The design system's own styles: the list of pages, and the sections and captioned examples a page is made of. The
+     window merges this dictionary with the new look's resources, so these styles use its roles and sizes. -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:ds="clr-namespace:XMAT.DesignSystem">

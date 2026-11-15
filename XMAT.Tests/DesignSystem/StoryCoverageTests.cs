@@ -12,10 +12,10 @@ using XMAT.Tests.HeadlessParity;
 
 namespace XMAT.Tests.DesignSystem
 {
-    // Every style of the new look appears on a design system page, so the window shows every component the app has.
-    // Styles that no page shows yet are listed in UncoveredStyles.txt, which only shrinks: a new style comes with an
-    // example on its component's page (docs/design-system.md). Menus, dropdowns and More menus are opened to find the
-    // styles of their rows.
+    // Every style of the new look appears on a design system page, so the design system shows every component XMAT
+    // has. Styles that no page shows yet are listed in UncoveredStyles.txt, which only shrinks: a new style comes with
+    // an example on its component's page (docs/design-system.md). Menus, dropdowns and More menus are opened to find
+    // the styles of their rows.
     [Collection(CaptureUiApplicationCollection.Name)]
     public class StoryCoverageTests
     {
@@ -57,7 +57,7 @@ namespace XMAT.Tests.DesignSystem
                     string[] stale = listed.Except(notShown).ToArray();
                     Assert.True(unlisted.Length == 0,
                         "These styles appear on no design system page. Show each on its component's page in " +
-                        "XMAT/DesignSystem/Stories (docs/design-system.md):" + Lines(unlisted));
+                        "XMAT.DesignSystem/Stories (docs/design-system.md):" + Lines(unlisted));
                     Assert.True(stale.Length == 0,
                         "These styles are on a page now, or no longer exist. Remove them from " +
                         "XMAT.Tests/DesignSystem/UncoveredStyles.txt:" + Lines(stale));

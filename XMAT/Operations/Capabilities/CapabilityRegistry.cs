@@ -340,13 +340,6 @@ namespace XMAT.Operations.Capabilities
                     Click(WhatsNewXaml, "Next_Click"),
                 }),
             Capability.GuiOnly(
-                "view.design-system", "Design system", "Presentation: shows the new look's components in each state",
-                gui: new[]
-                {
-                    Click(MainWindowXaml, "DesignSystem_Click"),
-                    Window("XMAT.DesignSystemWindow"),
-                }),
-            Capability.GuiOnly(
                 "view.language", "Display language",
                 "Presentation: the command line emits stable codes and English diagnostics",
                 gui: new[] { Preference("XMAT.Models.AppPreferencesModel", "Language") }),

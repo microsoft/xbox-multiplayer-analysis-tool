@@ -1,6 +1,6 @@
 <!-- The new look's resources: the shape, spacing and type sizes every view shares, and the styles of its controls.
      App.xaml merges this dictionary, and the New look switch swaps it for Looks/OriginalLook.xaml. The design system
-     window and the tests load it too (docs/design-system.md). -->
+     app (XMAT.DesignSystem) and the tests load it too (docs/design-system.md). -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:local="clr-namespace:XMAT"

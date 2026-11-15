@@ -2,7 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="Windows/MainWindow.xaml" Startup="Application_Startup" Exit="Application_Exit">
-    <!-- The new look's resources live in Looks/NewLook.xaml, so the design system window and the tests can load them
+    <!-- The new look's resources live in Looks/NewLook.xaml, so the design system app and the tests can load them
          too; the New look switch swaps them for the original look's (ThemeManager.CreateLook). They are merged into
          this dictionary rather than loaded as it: a dictionary loaded from a file doesn't tell views when its merged
          dictionaries change, so a theme put into it later wouldn't show. -->

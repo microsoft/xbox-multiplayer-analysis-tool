@@ -71,8 +71,8 @@ namespace XMAT
             CurrentTheme = theme;
         }
 
-        // Puts THEME into RESOURCES like PrepareTheme, without making it the application's theme: the design system
-        // window shows any theme in its own resources and leaves the application's alone.
+        // Puts THEME into RESOURCES like PrepareTheme, without making it the application's theme: the design system app
+        // shows any theme in its window's resources, and its tests share the application with XMAT's.
         internal static void LoadTheme(ResourceDictionary resources, string theme, bool newLook, bool highContrast)
         {
             string uri = theme switch

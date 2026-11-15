@@ -13,7 +13,7 @@ namespace XMAT.DesignSystem
     internal static class StoryPreview
     {
         private const string StylesUri =
-            "pack://application:,,,/XboxMultiplayerAnalysisTool;component/DesignSystem/DesignSystem.xaml";
+            "pack://application:,,,/XMAT.DesignSystem;component/DesignSystemStyles.xaml";
 
         internal static ResourceDictionary CreateLook()
         {

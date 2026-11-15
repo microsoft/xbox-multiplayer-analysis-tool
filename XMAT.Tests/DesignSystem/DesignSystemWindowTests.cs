@@ -57,13 +57,14 @@ namespace XMAT.Tests.DesignSystem
             });
         }
 
+        // The preview settings change the window's resources only: XMAT's theme, which the tests share, stays as it is.
         [Fact]
-        public void PreviewSettings_ChangeTheWindowAndLeaveTheAppAsItIs()
+        public void PreviewSettings_ChangeTheWindowAndLeaveXmatsThemeAsItIs()
         {
             _application.Run(_ =>
             {
-                string appTheme = ThemeManager.CurrentTheme;
-                object appCanvas = Application.Current.TryFindResource("SurfaceCanvasBrush");
+                string xmatTheme = ThemeManager.CurrentTheme;
+                object applicationCanvas = Application.Current.TryFindResource("SurfaceCanvasBrush");
                 DesignSystemWindow window = Open("Light");
                 try
                 {
@@ -89,8 +90,8 @@ namespace XMAT.Tests.DesignSystem
                     Assert.False(window.Resources.Contains(SystemColors.WindowColorKey));
                     Assert.Equal(32.0, window.FindResource("MenuItemHeight"));
 
-                    Assert.Equal(appTheme, ThemeManager.CurrentTheme);
-                    Assert.Same(appCanvas, Application.Current.TryFindResource("SurfaceCanvasBrush"));
+                    Assert.Equal(xmatTheme, ThemeManager.CurrentTheme);
+                    Assert.Same(applicationCanvas, Application.Current.TryFindResource("SurfaceCanvasBrush"));
                 }
                 finally
                 {

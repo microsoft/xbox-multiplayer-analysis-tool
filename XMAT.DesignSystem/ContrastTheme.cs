@@ -9,10 +9,10 @@ using System.Windows.Media;
 
 namespace XMAT.DesignSystem
 {
-    // A Windows 11 contrast theme, to preview the high contrast theme in the design system window without turning
-    // high contrast on. XMAT's high contrast theme takes its colors from eight system colors; a preview puts this
-    // theme's values for them into a window's resources. The other system colors, which only WPF's built-in
-    // templates use, take the nearest of the eight.
+    // A Windows 11 contrast theme, to preview the high contrast theme in the design system without turning high
+    // contrast on. XMAT's high contrast theme takes its colors from eight system colors; a preview puts this theme's
+    // values for them into a window's resources. The other system colors, which only WPF's built-in templates use,
+    // take the nearest of the eight.
     internal sealed class ContrastTheme
     {
         private static readonly ResourceKey[] ColorKeys =

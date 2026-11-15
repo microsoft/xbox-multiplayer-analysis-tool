@@ -142,22 +142,29 @@ files of their own as they are worked on.
 - A new component gets its own file in `XMAT/Styles`. Merge it in `NewLook.xaml`, and add it to
   `XMAT.Tests/NewLookMarkup.cs` so tests can read its styles.
 
-## The design system window
+## The design system app
 
-**Help > Design system** opens a window with a page for each component: what it is for, its style file, and examples
-of it in the states it can be set to, such as disabled, checked or running. Hover, press and keyboard focus show
-live. The settings above a page preview the components in Light or Dark, in a Windows contrast theme, and with
-Comfort view on or off; they change the window only, not the app.
+The design system app, `XMAT.DesignSystem`, has a page for each component: what it is for, its style file, and
+examples of it in the states it can be set to, such as disabled, checked or running. Hover, press and keyboard focus
+show live. The settings above a page preview the components in Light or Dark, in a Windows contrast theme, and with
+Comfort view on or off. The app runs from source and isn't part of XMAT's release build. Run it from the repository
+root:
 
-Pages are XAML files in [`XMAT/DesignSystem/Stories`](../XMAT/DesignSystem/Stories). To add one:
+```powershell
+dotnet run --project XMAT.DesignSystem -p:Platform=x64
+```
+
+In Visual Studio, set `XMAT.DesignSystem` as the startup project.
+
+Pages are XAML files in [`XMAT.DesignSystem/Stories`](../XMAT.DesignSystem/Stories). To add one:
 
 1. Create `<Component>Story.xaml` with `ds:Story` as its root, setting `Title`, `Summary` and `StyleFile`.
 2. Add a `ds:StorySection` for each variant, with a `Title`, a `Description` and the `StyleName` it uses, holding a
    `ds:StoryExample` for each state, with a `Caption`. Build examples the way views do, so a page shows how to use
-   the component.
-3. Take the new look's resources with `DynamicResource`. A page loads before it joins the window, so a
-   `StaticResource` would find the app's resources, which may be the original look's.
-4. Add the page to `XMAT/DesignSystem/StoryCatalog.cs`. `DesignSystemWindowTests` checks that every page names its
+   the component. XMAT's controls are in `clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool`.
+3. Take the new look's resources with `DynamicResource`. A page loads before it joins the window that holds them, so
+   a `StaticResource` wouldn't find them.
+4. Add the page to `XMAT.DesignSystem/StoryCatalog.cs`. `DesignSystemWindowTests` checks that every page names its
    style file and shows its examples.
 5. Run the design system tests. `StoryCoverageTests` asks for the styles the page now shows to be removed from
    `XMAT.Tests/DesignSystem/UncoveredStyles.txt`, and `ReferenceImageTests` asks for the page's pictures; create them

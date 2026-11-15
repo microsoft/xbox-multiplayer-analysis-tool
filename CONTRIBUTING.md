@@ -119,9 +119,9 @@ packaging, and run a smoke command from the assembled artifact in `.github/workf
 
 Views and styles take their colors from the roles in [docs/design-system.md](docs/design-system.md), such as
 `TextPrimaryBrush`, never from color values. Each component's styles are in a file of its own in `XMAT/Styles`, and
-**Help > Design system** shows every component in its states. The page explains how to choose a role, change a base
-color, add a role, and add a component with its design system page; the tests in `XMAT.Tests/DesignSystem` check the
-rules.
+the design system app (`XMAT.DesignSystem`, which runs from source and isn't shipped) shows every component in its
+states. The page explains how to choose a role, change a base color, add a role, and add a component with its design
+system page; the tests in `XMAT.Tests/DesignSystem` check the rules.
 
 - `XMAT.Tests/DesignSystem/UncoveredStyles.txt` only shrinks: a new style comes with an example on its component's
   design system page.

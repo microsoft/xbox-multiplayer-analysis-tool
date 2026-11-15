@@ -7,23 +7,19 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows;
-using System.Windows.Automation;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Win32;
-using XMAT.DesignSystem;
-using XMAT.Models;
 
-namespace XMAT
+namespace XMAT.DesignSystem
 {
     // The design system: the new look's components in the states they can be set to, a page per component (the pages
-    // are in DesignSystem/Stories). Help > Design system opens it from either look. The window keeps its own copy of
-    // the new look's resources, so its theme, contrast theme and Comfort view settings preview the components here and
-    // leave the app as it is.
+    // are in Stories). The window keeps the new look's resources itself, so its theme, contrast theme and Comfort view
+    // settings preview the components without changing XMAT's settings, which the tests share.
     public partial class DesignSystemWindow : Window
     {
-        private static DesignSystemWindow _open;
+        // The first choice of the contrast theme list.
+        private const string NoContrastTheme = "None";
 
         private readonly ResourceDictionary _look = StoryPreview.CreateLook();
         private readonly IReadOnlyList<Story> _stories;
@@ -32,7 +28,7 @@ namespace XMAT
         private bool _comfortView;
         private bool _ready;
 
-        // THEME and COMFORT VIEW are the settings the preview starts from, normally the app's.
+        // THEME and COMFORT VIEW are the settings the preview starts from.
         internal DesignSystemWindow(string theme, bool comfortView)
         {
             _theme = theme;
@@ -41,22 +37,7 @@ namespace XMAT
             ApplyPreview();
             InitializeComponent();
 
-            Title = Localization.GetLocalizedString("DESIGN_SYSTEM_WINDOW_TITLE");
-            Heading.Text = Localization.GetLocalizedString("DESIGN_SYSTEM_HEADING");
-            Subheading.Text = Localization.GetLocalizedString("DESIGN_SYSTEM_SUBHEADING");
-            AutomationProperties.SetName(PageList, Localization.GetLocalizedString("DESIGN_SYSTEM_PAGES"));
-            string previewNote = Localization.GetLocalizedString("DESIGN_SYSTEM_PREVIEW");
-            AutomationProperties.SetName(PreviewSettings, previewNote);
-            PreviewSettings.ToolTip = previewNote;
-            ThemeLabel.Text = Localization.GetLocalizedString("DESIGN_SYSTEM_THEME");
-            LightTheme.Content = Localization.GetLocalizedString("THEME_LIGHT");
-            DarkTheme.Content = Localization.GetLocalizedString("THEME_DARK");
-            ContrastLabel.Text = Localization.GetLocalizedString("DESIGN_SYSTEM_CONTRAST");
-            AutomationProperties.SetLabeledBy(ContrastChoice, ContrastLabel);
-            ComfortViewChoice.Content = Localization.GetLocalizedString("COMFORT_VIEW");
-
-            ContrastChoice.ItemsSource = new object[] { Localization.GetLocalizedString("DESIGN_SYSTEM_CONTRAST_NONE") }
-                .Concat(ContrastTheme.All).ToList();
+            ContrastChoice.ItemsSource = new object[] { NoContrastTheme }.Concat(ContrastTheme.All).ToList();
             ContrastChoice.SelectedIndex = 0;
             LightTheme.IsChecked = theme != "Dark";
             DarkTheme.IsChecked = theme == "Dark";
@@ -82,26 +63,6 @@ namespace XMAT
 
         internal Story ShownStory => PageHost.Content as Story;
 
-        // Opens the design system beside OWNER, or brings it forward if it is open.
-        internal static void ShowFor(Window owner)
-        {
-            if (_open != null)
-            {
-                if (_open.WindowState == WindowState.Minimized)
-                {
-                    _open.WindowState = WindowState.Normal;
-                }
-
-                _open.Activate();
-                return;
-            }
-
-            _open = new DesignSystemWindow(
-                ThemeManager.CurrentTheme, CaptureAppModel.AppModel.PreferencesModel.ComfortView) { Owner = owner };
-            _open.Closed += (_, _) => _open = null;
-            _open.Show();
-        }
-
         internal void ShowPage(int index) => PageList.SelectedIndex = Math.Clamp(index, 0, _stories.Count - 1);
 
         // Previews THEME, CONTRAST (a Windows contrast theme, or null) and COMFORT VIEW, as the settings above a page
@@ -114,16 +75,6 @@ namespace XMAT
             ComfortViewChoice.IsChecked = comfortView;
         }
 
-        protected override void OnPreviewKeyDown(KeyEventArgs e)
-        {
-            base.OnPreviewKeyDown(e);
-            if (e.Key == Key.Escape)
-            {
-                Close();
-                e.Handled = true;
-            }
-        }
-
         private void ApplyPreview() => StoryPreview.Apply(
             _look, _theme, _contrast, _comfortView, SystemParameters.HighContrast, TextScale.ReadFactor());
 
@@ -133,7 +84,7 @@ namespace XMAT
             bool windowsHighContrast = SystemParameters.HighContrast;
             ContrastChoice.IsEnabled = !windowsHighContrast;
             ContrastChoice.ToolTip = windowsHighContrast
-                ? Localization.GetLocalizedString("DESIGN_SYSTEM_CONTRAST_WINDOWS")
+                ? "Windows high contrast is on, so the window shows its colors"
                 : null;
             LightTheme.IsEnabled = DarkTheme.IsEnabled = !windowsHighContrast && _contrast == null;
         }
@@ -148,7 +99,7 @@ namespace XMAT
             PageList.ScrollIntoView(page);
             PageTitle.Text = page.Story.Title;
             PageSummary.Text = page.Story.Summary;
-            PageStyleFile.Text = Localization.GetLocalizedString("DESIGN_SYSTEM_STYLE_FILE", page.Story.StyleFile);
+            PageStyleFile.Text = $"Styles: XMAT/{page.Story.StyleFile}";
             PageHost.Content = page.Story;
             PageScroller.ScrollToTop();
         }
@@ -181,7 +132,7 @@ namespace XMAT
             }
         }
 
-        // Windows high contrast was turned on or off; the app applies its theme again on the same event.
+        // Windows high contrast was turned on or off: Windows sets the colors, or the preview's theme returns.
         private void SystemParameters_StaticPropertyChanged(object sender, PropertyChangedEventArgs e)
         {
             if (e.PropertyName == nameof(SystemParameters.HighContrast))

@@ -7,8 +7,8 @@ using System.Windows.Controls;
 
 namespace XMAT.DesignSystem
 {
-    // A page of the design system window: one component of the new look, the style file that defines it, and examples
-    // of it in the states it can be set to. Pages are XAML files in DesignSystem/Stories, so their examples read like
+    // A page of the design system: one component of the new look, the style file that defines it, and examples of it
+    // in the states it can be set to. Pages are XAML files in XMAT.DesignSystem/Stories, so their examples read like
     // the views that use the component; hover, press and keyboard focus show live. StoryCatalog lists the pages.
     public class Story : UserControl
     {
