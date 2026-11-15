@@ -402,8 +402,19 @@ namespace XMAT.Tests
                     var label = (TextBlock)indicator.Template.FindName("Label", indicator);
                     Assert.Equal(Localization.GetLocalizedString("CAPTURE_CAPTURING"), label.Text);
                     Assert.Equal(new UIElement[] { label }, announced);
-                    // The dot holds still when Windows animation effects are off.
-                    Assert.Equal(SystemParameters.ClientAreaAnimation, indicator.IsPulsing);
+                    // The dot pulses, and holds still while animations are off.
+                    bool? motion = MotionSettings.Current.Override;
+                    try
+                    {
+                        MotionSettings.Current.Override = true;
+                        Assert.True(indicator.IsPulsing);
+                        MotionSettings.Current.Override = false;
+                        Assert.False(indicator.IsPulsing);
+                    }
+                    finally
+                    {
+                        MotionSettings.Current.Override = motion;
+                    }
 
                     indicator.IsActive = false;
                     WpfTestHost.Pump();
