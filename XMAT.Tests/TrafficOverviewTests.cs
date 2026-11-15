@@ -141,6 +141,12 @@ namespace XMAT.Tests
                 Assert.DoesNotContain(Descendants(overview.StatusLegend).OfType<Button>(),
                     button => ((TrafficOverviewPart)button.DataContext).StatusClass == TrafficStatusClass.None);
 
+                // Over a legend item's label the pointer is over one of its text runs, which still finds the item.
+                Button clientError = Part(overview.StatusLegend, TrafficStatusClass.ClientError);
+                System.Windows.Documents.Run run = Descendants(clientError).OfType<TextBlock>()
+                    .SelectMany(text => text.Inlines.OfType<System.Windows.Documents.Run>()).First();
+                Assert.Same(clientError.DataContext, TrafficOverview.PartUnder(run));
+
                 // Tab enters the status classes once, the arrow keys move within them and Enter selects.
                 requests.Clear();
                 Button success = Part(overview.StatusLegend, TrafficStatusClass.Success);
@@ -181,12 +187,12 @@ namespace XMAT.Tests
                     new[]
                     {
                         "2xx: 1,102 requests, 86 percent", "3xx: 98 requests, 8 percent", "4xx: 63 requests, 5 percent",
-                        "5xx: 14 requests, 1 percent", "No status: 7 requests, 1 percent",
+                        "5xx: 14 requests, 1 percent", "No status: 7 requests, less than 1 percent",
                     },
                     children[1].GetChildren().Select(item => item.GetName()));
                 Assert.Equal("sessiondirectory.xboxlive.com: 412 requests, 32 percent", children[2].GetChildren()[0].GetName());
                 Assert.Equal("4xx: 63 requests (5%). Select to filter.", overview.State.PartOf(TrafficStatusClass.ClientError).ToolTip);
-                Assert.Equal("No status: 7 requests (1%).", overview.State.PartOf(TrafficStatusClass.None).ToolTip);
+                Assert.Equal("No status: 7 requests (<1%).", overview.State.PartOf(TrafficStatusClass.None).ToolTip);
                 // Every part shows its name and count as text, so color is never the only cue.
                 Assert.All(overview.StatusLegend.Items.Cast<TrafficOverviewPart>(), part =>
                     Assert.Contains(Descendants(overview.StatusLegend).OfType<TextBlock>(),
@@ -197,6 +203,10 @@ namespace XMAT.Tests
                 overview.ItemsSource = few;
                 overview.Tick();
                 Assert.Equal("5xx: 1 request, less than 1 percent", overview.State.PartOf(TrafficStatusClass.ServerError).Name);
+                // 201 of 202 requests is 99.5%, but a part short of every request never reads 100 percent.
+                TrafficOverviewPart success = overview.State.PartOf(TrafficStatusClass.Success);
+                Assert.Equal("2xx: 201 requests, 99 percent", success.Name);
+                Assert.Equal("2xx: 201 requests (99%). Select to filter.", success.ToolTip);
             });
         }
 

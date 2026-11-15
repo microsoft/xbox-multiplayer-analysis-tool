@@ -191,12 +191,12 @@
                 <KeyBinding Key="Delete" Modifiers="Shift" Command="{x:Static local:WebServiceProxyCommands.DeleteUnselectedSessions}"/>
             </DataGrid.InputBindings>
             <DataGrid.Columns>
-                <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="{app:Look New=44, Original=30}" MinWidth="{app:Look New=44, Original=30}"/>
-                <DataGridTextColumn Header="STATUS" Binding="{Binding Status}"        Width="{app:Look New=80, Original=50}" MinWidth="{app:Look New=80, Original=50}"/>
-                <DataGridTextColumn Header="METHOD" Binding="{Binding Method}"        Width="{app:Look New=88, Original=70}" MinWidth="{app:Look New=88, Original=70}"/>
-                <DataGridTextColumn Header="SCHEME" Binding="{Binding Scheme}"        Width="{app:Look New=88, Original=70}" MinWidth="{app:Look New=88, Original=70}"/>
-                <DataGridTextColumn Header="HOST"   Binding="{Binding Host}"          Width="{app:Look New=162, Original=200}" MinWidth="100"/>
-                <DataGridTextColumn Header="PROCESS" Width="{app:Look New=112, Original=140}" MinWidth="100" SortMemberPath="ClientProcess.Name">
+                <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="{app:Look New=44, Original=30}" MinWidth="{app:Look New=44, Original=20}"/>
+                <DataGridTextColumn Header="STATUS" Binding="{Binding Status}"        Width="{app:Look New=80, Original=50}" MinWidth="{app:Look New=80, Original=20}"/>
+                <DataGridTextColumn Header="METHOD" Binding="{Binding Method}"        Width="{app:Look New=88, Original=70}" MinWidth="{app:Look New=88, Original=20}"/>
+                <DataGridTextColumn Header="SCHEME" Binding="{Binding Scheme}"        Width="{app:Look New=88, Original=70}" MinWidth="{app:Look New=88, Original=20}"/>
+                <DataGridTextColumn Header="HOST"   Binding="{Binding Host}"          Width="{app:Look New=162, Original=200}" MinWidth="{app:Look New=100, Original=20}"/>
+                <DataGridTextColumn Header="PROCESS" Width="{app:Look New=112, Original=140}" MinWidth="{app:Look New=100, Original=20}" SortMemberPath="ClientProcess.Name">
                     <DataGridTextColumn.Binding>
                         <MultiBinding Converter="{StaticResource processDisplayConverter}" Mode="OneWay">
                             <Binding Path="ClientProcess" />
@@ -204,7 +204,7 @@
                         </MultiBinding>
                     </DataGridTextColumn.Binding>
                 </DataGridTextColumn>
-                <DataGridTextColumn Header="PATH"   Binding="{Binding Path}"          Width="*" MinWidth="120"/>
+                <DataGridTextColumn Header="PATH"   Binding="{Binding Path}"          Width="*" MinWidth="{app:Look New=120, Original=20}"/>
             </DataGrid.Columns>
             <DataGrid.RowStyle>
                 <Style TargetType="DataGridRow">

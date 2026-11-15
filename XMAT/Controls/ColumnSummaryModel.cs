@@ -138,11 +138,13 @@ namespace XMAT
 
         internal int Total { get; }
 
-        internal int ValueCount => _values.Count;
+        // The number of different values; rows without a value aren't a value of their own.
+        internal int ValueCount => _values.Count - (_values.Contains(string.Empty) ? 1 : 0);
 
         internal IReadOnlyList<ColumnSummaryValue> Shown { get; }
 
-        // The values in the rest, none when every value is shown, and their rows.
+        // The values in the rest, none when every value is shown, and their rows. Rows without a value can be in the
+        // rest, but aren't counted as one of its values.
         internal int MoreValues { get; }
 
         internal int MoreCount { get; }
@@ -178,8 +180,9 @@ namespace XMAT
             }
 
             List<ColumnSummaryValue> shown = values.Take(MaxRows - 1).ToList();
+            List<ColumnSummaryValue> rest = values.Skip(shown.Count).ToList();
             return new ColumnSummaryCounts(
-                total, keys, shown, values.Count - shown.Count, values.Skip(shown.Count).Sum(value => value.Count));
+                total, keys, shown, rest.Count(value => value.Value.Length > 0), rest.Sum(value => value.Count));
         }
 
         // COUNT as a whole percentage of TOTAL. Less than 1% is UnderOne, and a count short of the total stays below 100.
@@ -262,7 +265,7 @@ namespace XMAT
             if (counts.MoreValues > 0)
             {
                 Func<int, string> more = column.MoreValuesText ??
-                    (count => Localization.GetLocalizedString("COLUMN_SUMMARY_MORE_VALUES", Number(count)));
+                    (count => Counted(count, "COLUMN_SUMMARY_MORE_VALUE", "COLUMN_SUMMARY_MORE_VALUES"));
                 shown.Add(new ColumnSummaryRow(
                     more(counts.MoreValues),
                     new ColumnSummaryValue(null, counts.MoreCount, null),

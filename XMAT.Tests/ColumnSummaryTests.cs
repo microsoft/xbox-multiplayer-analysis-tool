@@ -118,6 +118,28 @@ namespace XMAT.Tests
             });
         }
 
+        // Rows without a value are counted as rows, but not as one of the column's values, in the totals or the rest.
+        [Fact]
+        public void Counts_LeaveRowsWithoutAValueOutOfTheNumberOfValues()
+        {
+            InEnglish(() =>
+            {
+                var hosts = new ColumnSummaryColumn(row => (string)row)
+                {
+                    RowCountText = Requests,
+                    ValueCountText = count => ColumnSummaryModel.Counted(count, "COLUMN_SUMMARY_HOST", "COLUMN_SUMMARY_HOSTS"),
+                    MoreValuesText = count => ColumnSummaryModel.Counted(count, "COLUMN_SUMMARY_MORE_HOST", "COLUMN_SUMMARY_MORE_HOSTS"),
+                };
+                string[] rows = Rows(("a", 3), ("b", 3), ("c", 3), ("d", 3), ("e", 3), ("f", 3), ("g", 1), (string.Empty, 1));
+
+                ColumnSummaryModel model = ColumnSummaryModel.Create("Host", hosts, rows, null);
+
+                Assert.Equal("20 requests \u00B7 7 hosts", model.Totals);
+                Assert.Equal("1 more host", model.Rows[6].Label);
+                Assert.Equal("2", model.Rows[6].CountText);
+            });
+        }
+
         [Theory]
         [InlineData(1102, 1284, 86, false)]
         [InlineData(14, 1284, 1, false)]
@@ -507,6 +529,8 @@ namespace XMAT.Tests
                     Assert.Equal(grid.Columns.Count, Descendants(grid).OfType<DataGridColumnHeader>().Count(header => header.Column != null));
                     Assert.Empty(Descendants(grid).OfType<ColumnSummaryButton>());
                     Assert.False(ColumnSummary.PopupOf(grid).Open(grid.Columns[1]));
+                    // Its columns narrow as they always did, to the DataGrid's 20px default.
+                    Assert.All(grid.Columns, column => Assert.Equal(20, column.MinWidth));
                 }
                 finally
                 {

@@ -32,7 +32,7 @@ namespace XMAT.WebServiceCapture
                     Filtered(model => model.Host, HostFilters, () => _attachedController?.HostFilterList, "COLUMN_SUMMARY_HINT_HOST") with
                     {
                         ValueCountText = count => ColumnSummaryModel.Counted(count, "COLUMN_SUMMARY_HOST", "COLUMN_SUMMARY_HOSTS"),
-                        MoreValuesText = count => Localization.GetLocalizedString("COLUMN_SUMMARY_MORE_HOSTS", ColumnSummaryModel.Number(count)),
+                        MoreValuesText = count => ColumnSummaryModel.Counted(count, "COLUMN_SUMMARY_MORE_HOST", "COLUMN_SUMMARY_MORE_HOSTS"),
                     },
                 nameof(ProxyConnectionModel.Scheme) => Unfiltered(model => model.Scheme),
                 nameof(ProxyConnectionModel.Path) => Unfiltered(model => model.Path),

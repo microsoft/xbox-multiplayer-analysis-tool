@@ -364,18 +364,23 @@ namespace XMAT
             TrafficOverviewPart part = null;
             if (StatusLegend.IsMouseOver || CompactLegend.IsMouseOver)
             {
-                part = (Mouse.DirectlyOver as FrameworkElement)?.DataContext as TrafficOverviewPart;
+                part = PartUnder(Mouse.DirectlyOver);
             }
 
             if (part == null && (StatusLegend.IsKeyboardFocusWithin || CompactLegend.IsKeyboardFocusWithin))
             {
-                part = (Keyboard.FocusedElement as FrameworkElement)?.DataContext as TrafficOverviewPart;
+                part = PartUnder(Keyboard.FocusedElement);
             }
 
             int highlighted = part?.StatusClass is { } statusClass ? (int)statusClass : -1;
             StatusBar.HighlightedClass = highlighted;
             CompactBar.HighlightedClass = highlighted;
         }
+
+        // The part an element belongs to. Over a legend item's label the pointer is over one of its runs, which is a
+        // content element rather than a framework element.
+        internal static TrafficOverviewPart PartUnder(IInputElement element) =>
+            ((element as FrameworkElement)?.DataContext ?? (element as FrameworkContentElement)?.DataContext) as TrafficOverviewPart;
 
         // When a narrower overview hides the part that has focus, focus moves to the same part in what is shown, or to
         // the first part of the status.
@@ -523,8 +528,8 @@ namespace XMAT
             string requests = count == 1
                 ? Localization.GetLocalizedString("TRAFFIC_OVERVIEW_ONE_REQUEST")
                 : Localization.GetLocalizedString("TRAFFIC_OVERVIEW_REQUEST_COUNT", CountText);
-            double percent = total > 0 ? Math.Round(count * 100.0 / total, MidpointRounding.AwayFromZero) : 0;
-            bool underOne = count > 0 && percent < 1;
+            // Rounded as the column summaries round, so a part short of every request never reads 100 percent.
+            (int percent, bool underOne) = ColumnSummaryCounts.Percent(count, total);
             Name = Localization.GetLocalizedString(
                 "TRAFFIC_OVERVIEW_PART_NAME", described, requests,
                 underOne
