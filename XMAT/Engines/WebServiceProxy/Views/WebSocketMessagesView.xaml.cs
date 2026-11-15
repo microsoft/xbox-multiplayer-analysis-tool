@@ -5,6 +5,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
 using XMAT.WebServiceCapture.Models;
@@ -44,6 +45,10 @@ namespace XMAT.WebServiceCapture
         public WebSocketMessagesView()
         {
             InitializeComponent();
+            AutomationProperties.SetName(MessagesGrid, Localization.GetLocalizedString("A11Y_MESSAGES_TABLE"));
+            AutomationProperties.SetName(MessagesSplitter, Localization.GetLocalizedString("A11Y_SPLITTER_MESSAGES"));
+            AutomationProperties.SetName(MessageJsonTree, Localization.GetLocalizedString("A11Y_JSON_TREE"));
+            DataGridColumnInfo.SetDescription(MessagesGrid.Columns[1], Localization.GetLocalizedString("A11Y_COLUMN_REQUEST_NUMBER"));
         }
 
         private static void OnItemsSourceChanged(

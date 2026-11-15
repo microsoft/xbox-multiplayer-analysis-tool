@@ -6,6 +6,12 @@ Capture and inspect web requests, responses, and WebSocket messages from a devic
 XMAT automates the console proxy setup traditionally described under "Fiddler" in
 the GDK documentation.
 
+The toolbar below the selected capture tab spans the traffic and inspector panes.
+**Start/Stop Capture**, **Analyze Capture**, and **Clear Capture** apply to that
+capture, not to the individual pane or every open capture tab. Pane dividers appear
+on hover, while dragging, or when keyboard-focused; their wider grab areas remain
+available when the lines are hidden.
+
 ## Prerequisites
 
 Check the [device requirements](../README.md#requirements) and start XMAT.
@@ -122,8 +128,9 @@ listeners, but two global proxy endpoints do not duplicate the same device traff
 
 ![Headers, body, and timing for a selected connection](../ReadmeImages/8.png)
 
-**Auto Scroll** is enabled by default to follow incoming connections. Turn it off
-to keep a request in view. Status codes appear when responses arrive.
+**Auto Scroll**, beside the timeline modes, is enabled by default to follow incoming connections. Turn it off
+to keep a request in view. While a capture runs, a red dot and **Capturing** appear beside it. In a narrow traffic
+pane, both move to a line of their own under the modes. Status codes appear when responses arrive.
 
 ### Filter connections
 
@@ -132,9 +139,29 @@ values found in the capture; only checked values are shown. Filters combine and
 update as traffic arrives. **ALL/NONE** helps include or exclude a small set of values.
 Status codes of 400 or higher are colored red.
 
+When the traffic pane is too narrow for the filters, the new look folds them into a
+**Filters** button with a funnel icon. The button opens a list of the same filters, and
+a dot on it shows that a filter is on. The filters return to their row when it is wide
+enough again. A process filter's summary stays in view on its line under the button.
+
 ![Filtering connections by host](../ReadmeImages/9.png)
 
 ![Combining host and status-code filters](../ReadmeImages/10.png)
+
+With **New look** on, every column header other than **#** has an info icon at its
+right end. Select it to see how that column's values are spread over the connections
+the list shows: the six most common values, largest first, with counts and percentages,
+then the rest in one row. The selected connection's value is highlighted. Select a
+status, host or method to set that filter to the value, or a process to show only that
+process; **Scheme** and **Path** have no filter. While capturing, the counts hold still
+while the summary is open; open it again to count new connections. Select the icon
+again, press Esc or click outside the summary to close it. Selecting the rest of the
+header still sorts the list by that column.
+
+From the keyboard, Tab reaches the header icons as one stop, and Left and Right move
+between them. Enter, Space or Alt+Down opens the summary with focus on its first value:
+Up and Down move through the values, Enter chooses one, and Esc closes the summary and
+returns focus to the icon. Tab from the icons moves on to the list.
 
 ### Filter by process
 
@@ -158,9 +185,10 @@ To focus on one program:
   id. The filter applies shortly after you stop typing, or when you press Enter or
   **Apply**. **Hide svchost.exe** hides Windows' service host processes.
 
-While a process filter is set, the filter bar shows **Process filter: N/M; H hidden;
-U unknown**: the sessions that the process filter shows out of all sessions in the
-tab, how many it hides, and how many have no process information. Sessions without
+While a process filter is set, a line under the filters shows **Process filter: N/M;
+H hidden; U unknown** and **Show all processes** (the original look shows them at the
+end of the filter bar): the sessions that the process filter shows out of all sessions
+in the tab, how many it hides, and how many have no process information. Sessions without
 process information appear only while **Show only** is empty. A session whose program
 is identified after it appears is shown or hidden at that moment, without reloading
 the list. The process filter combines with the status, host and method filters, and
@@ -176,7 +204,28 @@ unless you choose otherwise: analyze only the filtered sessions (see
 filter, which [clearing the capture](#clear-a-capture) keeps and which is not saved.
 The timeline follows the process filter, but not the status, host and method filters.
 
+### Traffic overview
+
+With **New look** on, the traffic overview between the filters and the timeline sums up
+the connections that every filter shows, the same ones as the list: how many requests
+there are, with a line of requests per second over the capture; how many fall in each
+status class, in the timeline's colors (2xx, 3xx, 4xx, 5xx, and **No status** for
+requests without a status yet); and the three busiest hosts. While a capture runs, it
+updates once a second, and the line ends at the last full second, whose rate shows
+beside **Requests**. Hover over a status class or a host for its count and share.
+Select a status class (in the bar or its legend) or a host to set the **Status** or
+**Host** filter to it alone; select it again to clear that filter. From the keyboard,
+Tab moves to the status classes and to the hosts, the arrow keys move within them, and
+Enter selects. In a narrow pane the busiest hosts go first, then the status becomes a
+line of text with successes and errors. The arrow at the overview's top right hides it,
+and **Show overview** brings it back in every capture tab; XMAT remembers the choice.
+
 ### Capture timeline
+
+Bars are colored by response status: 2xx, 3xx, 4xx, 5xx, or no status yet. With
+**New look** on, a bar's label starts with its status code. Hover over a bar for its
+URL, status, time and duration. The connections list shows the same requests and
+works with the keyboard and screen readers.
 
 The Waterfall and By Host views retain complete capture history, including gaps
 between capture sessions. Only visible request bars, host labels, and time-axis ticks
@@ -187,6 +236,16 @@ limits presentation only, not request capture or storage. Scrolling, resizing,
 switching modes, and stopping refresh the visible timeline without waiting for the
 live-update cadence. Stopping displays final response statuses and durations even
 if no further requests arrive.
+
+With **New look** on, **Volume** shows requests per second as a line instead of
+bars. While a capture runs, it shows the last 60 seconds, one point per second, and
+moves left once a second; a line along zero means nothing is arriving. After you stop,
+or for a saved capture, it fits the whole capture to the width; when there is no room
+for every second, each point is the average per second over a step of 2 seconds or
+more. The top right shows the last second's rate, or the total and the busiest second.
+Hover over the chart for a point's time and request count, and click a point to select
+its first request. Like the bars, Volume follows the process filter but not the status,
+host and method filters.
 
 ### Clear a capture
 
@@ -327,8 +386,8 @@ or exiting XMAT (including **File > Exit** and the window close button) prompts 
 each reachable console whose proxy is enabled. **Yes** disables proxying and reboots
 the console; **No** leaves settings unchanged. Imported read-only captures do not prompt.
 
-Tabs left open when XMAT exits are remembered and reopened at the next start. Their
-connections lists remain empty until proxying resumes.
+Tabs left open when XMAT exits are remembered and reopened, in the same order, at the
+next start. Their connections lists remain empty until proxying resumes.
 
 ![Remembered capture tab reopened after restarting XMAT](../ReadmeImages/12.png)
 

@@ -41,6 +41,15 @@ namespace XMAT.WebServiceCapture
     /// </summary>
     public partial class RequestResponseView : UserControl
     {
+        public static readonly DependencyProperty HeaderContentProperty =
+            DependencyProperty.Register(nameof(HeaderContent), typeof(object), typeof(RequestResponseView));
+
+        public object HeaderContent
+        {
+            get => GetValue(HeaderContentProperty);
+            set => SetValue(HeaderContentProperty, value);
+        }
+
         public string Title
         {
             get { return (string)GetValue(TitleProperty); }
@@ -102,6 +111,7 @@ namespace XMAT.WebServiceCapture
             HeadersTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_HEADERS");
             BodyTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_BODY");
             JsonTab.Header = Localization.GetLocalizedString("WEBCAP_REQRES_TAB_JSON");
+            System.Windows.Automation.AutomationProperties.SetName(TestTreeView, Localization.GetLocalizedString("A11Y_JSON_TREE"));
         }
     }
 }

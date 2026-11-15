@@ -32,8 +32,10 @@ namespace XMAT.Operations.Capabilities
         private const string CaptureViewXaml = "Engines/WebServiceProxy/Views/CaptureConnectionView.xaml";
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
         private const string ExportProgressXaml = "Windows/ExportProgressWindow.xaml";
+        private const string TrafficOverviewXaml = "Controls/TrafficOverview.xaml";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
+        private const string DeviceTabsPrefix = "XMAT.AllCaptureDevicesTabControl.";
         private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
         private const string ScriptCommandsPrefix = "XMAT.ScriptCommands.";
         private const string NavigationCommandsPrefix = "XMAT.XboxLiveCaptureAnalysis.CaptureAnalysisCommands.";
@@ -304,14 +306,28 @@ namespace XMAT.Operations.Capabilities
 
             // Presentation only
             Capability.GuiOnly(
+                "view.look", "New look switch",
+                "Presentation: switches between the redesigned and the original appearance",
+                gui: new[]
+                {
+                    Preference("XMAT.Models.AppPreferencesModel", "UseNewLook"),
+                }),
+            Capability.GuiOnly(
                 "view.main-window", "Main window", "Presentation: hosts the GUI adapters of every capability",
                 gui: new[] { Window("XMAT.MainWindow") }),
             Capability.GuiOnly(
-                "view.theme", "Light and dark theme", "Presentation: colors only",
+                "view.theme", "Appearance themes", "Presentation: colors only",
                 gui: new[]
                 {
-                    Click(MainWindowXaml, "ToggleDarkMode_Click"),
+                    Click(MainWindowXaml, "SelectTheme_Click"),
                     Preference("XMAT.Models.AppPreferencesModel", "Theme"),
+                }),
+            Capability.GuiOnly(
+                "view.comfort", "Comfort view", "Presentation: spacing only",
+                gui: new[]
+                {
+                    Click(MainWindowXaml, "ComfortView_Click"),
+                    Preference("XMAT.Models.AppPreferencesModel", "ComfortView"),
                 }),
             Capability.GuiOnly(
                 "view.language", "Display language",
@@ -343,6 +359,14 @@ namespace XMAT.Operations.Capabilities
                     WpfCommand("Close", AnalysisTabsXaml),
                 }),
             Capability.GuiOnly(
+                "view.capture-tabs", "Capture tab order",
+                "Presentation: changes only the order of the capture tabs",
+                gui: new[]
+                {
+                    Command(DeviceTabsPrefix + "MoveTabLeft"),
+                    Command(DeviceTabsPrefix + "MoveTabRight"),
+                }),
+            Capability.GuiOnly(
                 "view.script-editor", "Script editor",
                 "Presentation: editor buffer, save, revert and error navigation; headless scripts are files",
                 gui: new[]
@@ -359,10 +383,22 @@ namespace XMAT.Operations.Capabilities
                     WpfCommand("ScrollBar.PageDownCommand", "App.xaml"),
                     WpfCommand("ScrollBar.PageLeftCommand", "App.xaml"),
                     WpfCommand("ScrollBar.PageRightCommand", "App.xaml"),
+                    WpfCommand("ScrollBar.PageUpCommand", "Looks/OriginalLook.xaml"),
+                    WpfCommand("ScrollBar.PageDownCommand", "Looks/OriginalLook.xaml"),
+                    WpfCommand("ScrollBar.PageLeftCommand", "Looks/OriginalLook.xaml"),
+                    WpfCommand("ScrollBar.PageRightCommand", "Looks/OriginalLook.xaml"),
                 }),
             Capability.GuiOnly(
                 "view.capture-viewers", "Capture viewers",
-                "Presentation: filters, timeline and the request, response, WebSocket and packet views"),
+                "Presentation: filters, timeline and the request, response, WebSocket and packet views",
+                gui: new[]
+                {
+                    // The traffic overview only sets the capture view's own filters, and remembers whether it is shown.
+                    Click(TrafficOverviewXaml, "Part_Click"),
+                    Click(TrafficOverviewXaml, "Hide_Click"),
+                    Click(TrafficOverviewXaml, "Show_Click"),
+                    Preference("XMAT.Models.AppPreferencesModel", "ShowTrafficOverview"),
+                }),
         };
 
         private static string[] ExportEntryPoints(string fileCommand) => new[]

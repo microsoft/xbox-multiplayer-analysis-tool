@@ -10,7 +10,6 @@
              ContextMenuOpening="HostListMenuOpening"
              d:DesignHeight="450" d:DesignWidth="800">
     <UserControl.Resources>
-        <logic:ViolationLevelToColorBrushConverter x:Key="ViolationLevelToColorBrushConverter"/>
         <!-- Filled for the right-clicked or focused summary row when it opens. -->
         <ContextMenu x:Key="HostListRowMenu"
                      Background="{DynamicResource MenuBackgroundBrush}"
@@ -56,8 +55,9 @@
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Button
-                                    Content="{Binding BatchFrequencyIssueCount.ErrorsAndWarnings}"
-                                    Background="{Binding BatchFrequencyIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    logic:IssueBadge.Count="{Binding BatchFrequencyIssueCount}"
+                                    AutomationProperties.Name="{Binding BatchFrequencyIssueCount.AccessibleName}"
+                                    ToolTip="{Binding BatchFrequencyIssueCount.AccessibleName}"
                                     Tag="{Binding EndpointName}"
                                     Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBfr}" CommandParameter="{Binding Key}"
                                     />
@@ -68,8 +68,9 @@
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Button
-                                    Content="{Binding BurstDetectionIssueCount.ErrorsAndWarnings}"
-                                    Background="{Binding BurstDetectionIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    logic:IssueBadge.Count="{Binding BurstDetectionIssueCount}"
+                                    AutomationProperties.Name="{Binding BurstDetectionIssueCount.AccessibleName}"
+                                    ToolTip="{Binding BurstDetectionIssueCount.AccessibleName}"
                                     Tag="{Binding EndpointName}"
                                     Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointBdr}" CommandParameter="{Binding Key}"
                                     />
@@ -80,8 +81,9 @@
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Button
-                                    Content="{Binding CallFrequencyIssueCount.ErrorsAndWarnings}"
-                                    Background="{Binding CallFrequencyIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    logic:IssueBadge.Count="{Binding CallFrequencyIssueCount}"
+                                    AutomationProperties.Name="{Binding CallFrequencyIssueCount.AccessibleName}"
+                                    ToolTip="{Binding CallFrequencyIssueCount.AccessibleName}"
                                     Tag="{Binding EndpointName}"
                                     Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointCfr}" CommandParameter="{Binding Key}"
                                     />
@@ -92,8 +94,9 @@
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Button
-                                    Content="{Binding PollingDetectionIssueCount.ErrorsAndWarnings}"
-                                    Background="{Binding PollingDetectionIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    logic:IssueBadge.Count="{Binding PollingDetectionIssueCount}"
+                                    AutomationProperties.Name="{Binding PollingDetectionIssueCount.AccessibleName}"
+                                    ToolTip="{Binding PollingDetectionIssueCount.AccessibleName}"
                                     Tag="{Binding EndpointName}"
                                     Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointPdr}" CommandParameter="{Binding Key}"
                                     />
@@ -104,8 +107,9 @@
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Button
-                                    Content="{Binding RepeatedCallsIssueCount.ErrorsAndWarnings}"
-                                    Background="{Binding RepeatedCallsIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    logic:IssueBadge.Count="{Binding RepeatedCallsIssueCount}"
+                                    AutomationProperties.Name="{Binding RepeatedCallsIssueCount.AccessibleName}"
+                                    ToolTip="{Binding RepeatedCallsIssueCount.AccessibleName}"
                                     Tag="{Binding EndpointName}"
                                     Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointRcr}" CommandParameter="{Binding Key}"
                                     />
@@ -116,8 +120,9 @@
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Button
-                                    Content="{Binding SmallBatchDetectionIssueCount.ErrorsAndWarnings}"
-                                    Background="{Binding SmallBatchDetectionIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    logic:IssueBadge.Count="{Binding SmallBatchDetectionIssueCount}"
+                                    AutomationProperties.Name="{Binding SmallBatchDetectionIssueCount.AccessibleName}"
+                                    ToolTip="{Binding SmallBatchDetectionIssueCount.AccessibleName}"
                                     Tag="{Binding EndpointName}"
                                     Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointSbdr}" CommandParameter="{Binding Key}"
                                     />
@@ -128,8 +133,9 @@
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <Button
-                                    Content="{Binding ThrottledCallIssueCount.ErrorsAndWarnings}"
-                                    Background="{Binding ThrottledCallIssueCount.IssueLevel, Mode=OneWay, Converter={StaticResource ViolationLevelToColorBrushConverter}}"
+                                    logic:IssueBadge.Count="{Binding ThrottledCallIssueCount}"
+                                    AutomationProperties.Name="{Binding ThrottledCallIssueCount.AccessibleName}"
+                                    ToolTip="{Binding ThrottledCallIssueCount.AccessibleName}"
                                     Tag="{Binding EndpointName}"
                                     Command="{x:Static logic:CaptureAnalysisCommands.GoToEndpointTcr}" CommandParameter="{Binding Key}"
                                     />
@@ -138,6 +144,8 @@
                     </DataGridTemplateColumn>
                 </DataGrid.Columns>
             </DataGrid>
+            <!-- Each endpoint's call rate against its call frequency limits; the new look only. -->
+            <local:CallRateView DataContext="{Binding CallRates}"/>
             <Separator/>
             <TextBlock x:Name="DetailsLabel" Text="DETAILS" FontWeight="Bold"/>
             <Separator/>

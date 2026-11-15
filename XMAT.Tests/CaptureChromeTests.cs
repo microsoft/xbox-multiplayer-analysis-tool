@@ -6,9 +6,11 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Xml.Linq;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
@@ -22,6 +24,7 @@ namespace XMAT.Tests
     {
         private static readonly XNamespace Presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
         private static readonly XNamespace Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        private static readonly XNamespace Sys = "clr-namespace:System;assembly=mscorlib";
         private readonly CaptureUiApplicationFixture _application;
 
         public CaptureChromeTests(CaptureUiApplicationFixture application) => _application = application;
@@ -187,12 +190,168 @@ namespace XMAT.Tests
             });
         }
 
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
+        public void CaptureToolbar_StatesRemainReadableAndFitAfterThemeChanges(string theme)
+        {
+            _application.Run(window =>
+            {
+                window.Width = 1280;
+                window.Height = 720;
+                window.Resources.Remove("PrimaryForegroundBrush");
+                window.Resources.Remove("SecondaryForegroundBrush");
+                var toolbarStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                    .Single(style => (string)style.Attribute("TargetType") == "ToolBar");
+                window.Resources[typeof(ToolBar)] = Parse<Style>(toolbarStyle);
+                window.Resources.MergedDictionaries.Add(AccessibilityTests.AppResources("RecordingIndicatorStyle"));
+                var dictionary = Theme(theme);
+                window.Resources.MergedDictionaries.Add(dictionary);
+                var controller = Proxy(9000);
+                var view = new CaptureConnectionView { DataContext = new Context(controller) };
+                ((DataGrid)view.FindName("ConnectionList")).IsSynchronizedWithCurrentItem = false;
+                WpfTestHost.Show(window, view);
+                var start = (ToggleButton)view.FindName("StartButton");
+                var toolbar = Descendants(view).OfType<ToolBar>().Single();
+                var workspace = Assert.IsType<Grid>(toolbar.Parent);
+                var inspector = Assert.IsType<TabControl>(((TabItem)view.FindName("ReqestResponseTab")).Parent);
+                var toolbarBounds = toolbar.TransformToAncestor(view).TransformBounds(new Rect(toolbar.RenderSize));
+                var inspectorBounds = inspector.TransformToAncestor(view).TransformBounds(new Rect(inspector.RenderSize));
+                Assert.InRange(Math.Abs(toolbarBounds.Width - workspace.ActualWidth), 0, 1);
+                Assert.True(toolbarBounds.Bottom <= inspectorBounds.Top,
+                    "Capture-wide actions must sit above both the traffic and inspector panes.");
+                Assert.InRange(Math.Abs(workspace.ColumnDefinitions[0].ActualWidth -
+                    workspace.ColumnDefinitions[2].ActualWidth), 0, 1);
+                foreach (var name in new[] { "StartButton", "AnalyzeButton", "ClearButton" })
+                {
+                    Assert.Same(view, ((ButtonBase)view.FindName(name)).CommandTarget);
+                }
+
+                foreach (var name in new[] { theme, theme == "Dark" ? "Light" : "Dark" })
+                {
+                    if (name != theme)
+                    {
+                        window.Resources.MergedDictionaries.Remove(dictionary);
+                        dictionary = Theme(name);
+                        window.Resources.MergedDictionaries.Add(dictionary);
+                        WpfTestHost.Pump();
+                    }
+                    Assert.True(start.IsEnabled);
+                    Assert.False(start.IsChecked);
+                    AssertButtonTextContrast(start);
+                    // Start is the toolbar's one filled action, in Xbox green with a soft gradient.
+                    var startBackground = Assert.IsType<LinearGradientBrush>(start.Background);
+                    Assert.Contains(startBackground.GradientStops, stop => stop.Color == Color.FromRgb(0x10, 0x7C, 0x10));
+                    Assert.True(start.ActualHeight >= 28);
+                    var timeline = (CaptureTimelineView)view.FindName("TimelineView");
+                    var autoScroll = (CheckBox)timeline.FindName("AutoScrollButton");
+                    var mode = (RadioButton)timeline.FindName("ByHostMode");
+                    var autoBounds = autoScroll.TransformToAncestor(view).TransformBounds(new Rect(autoScroll.RenderSize));
+                    var modeBounds = mode.TransformToAncestor(view).TransformBounds(new Rect(mode.RenderSize));
+                    var timelineBounds = timeline.TransformToAncestor(view).TransformBounds(new Rect(timeline.RenderSize));
+                    Assert.True(autoBounds.Left >= modeBounds.Right && autoBounds.Right <= timelineBounds.Right,
+                        "Auto Scroll must remain visible beside the timeline modes.");
+                    foreach (var button in Descendants(toolbar).OfType<ButtonBase>().Where(button => button.IsVisible))
+                    {
+                        var bounds = button.TransformToAncestor(toolbar)
+                            .TransformBounds(new Rect(button.RenderSize));
+                        Assert.True(bounds.Left >= 0 && bounds.Right <= toolbar.ActualWidth + 1,
+                            "Capture toolbar actions must fit at 1280 pixels.");
+                        Assert.True(bounds.Top >= 0 && bounds.Bottom <= toolbar.ActualHeight + 1,
+                            "The taller toolbar actions must not be clipped.");
+                    }
+
+                    // Set only the controller's observable state; do not start a proxy listener.
+                    controller.IsRunning = true;
+                    WpfTestHost.Pump();
+                    Assert.True(start.IsChecked);
+                    // The Capturing indicator sits with the live timeline, between its modes and Auto Scroll.
+                    var capturing = (RecordingIndicator)timeline.FindName("CapturingIndicator");
+                    Assert.True(capturing.IsVisible);
+                    Assert.DoesNotContain(capturing, Descendants(toolbar));
+                    var capturingBounds = capturing.TransformToAncestor(view).TransformBounds(new Rect(capturing.RenderSize));
+                    var liveAutoBounds = autoScroll.TransformToAncestor(view).TransformBounds(new Rect(autoScroll.RenderSize));
+                    Assert.True(capturingBounds.Left >= modeBounds.Right && capturingBounds.Right <= liveAutoBounds.Left,
+                        "Capturing must sit between the timeline modes and Auto Scroll.");
+                    Assert.InRange(Math.Abs((capturingBounds.Top + capturingBounds.Bottom) - (liveAutoBounds.Top + liveAutoBounds.Bottom)) / 2, 0, 1);
+                    Assert.Contains(Descendants(start).OfType<TextBlock>(),
+                        text => text.Text == CaptureConnectionView.StopTraceText);
+                    Assert.NotSame(startBackground, start.Background);
+                    AssertButtonTextContrast(start);
+                    controller.IsRunning = false;
+                    WpfTestHost.Pump();
+                    Assert.False(start.IsChecked);
+                    Assert.Contains(Descendants(start).OfType<TextBlock>(),
+                        text => text.Text == CaptureConnectionView.StartTraceText);
+                    AssertButtonTextContrast(start);
+                }
+
+                view.DataContext = new Context(Proxy(9001, true)) { IsReadOnly = true };
+                WpfTestHost.Pump();
+                Assert.False(start.IsEnabled);
+                Assert.Equal(((SolidColorBrush)view.FindResource("DisabledForegroundBrush")).Color,
+                    Assert.IsType<SolidColorBrush>(start.Foreground).Color);
+                Assert.All(Descendants(start).OfType<TextBlock>(),
+                    text => Assert.Equal(start.Foreground, text.Foreground));
+                view.DataContext = null;
+            });
+        }
+
         private static void AssertButtonTextContrast(ButtonBase button)
         {
             var background = Descendants(button).OfType<Border>().First().Background;
             Assert.True(Contrast(button.Foreground, background) >= 4.5, "Enabled button text must meet 4.5:1 contrast.");
             Assert.All(Descendants(button).OfType<TextBlock>(),
-                text => Assert.True(Contrast(text.Foreground, background) >= 4.5, "Button label must meet 4.5:1 contrast."));
+                text => Assert.True(Contrast(text.Foreground, background) >= 4.5,
+                    $"Button label '{text.Text}' ({text.Foreground}) must contrast with {background}."));
+        }
+
+        [Theory]
+        [InlineData("Light", GridResizeDirection.Columns)]
+        [InlineData("Light", GridResizeDirection.Rows)]
+        [InlineData("Dark", GridResizeDirection.Columns)]
+        [InlineData("Dark", GridResizeDirection.Rows)]
+        public void PaneDividers_StayHiddenUntilInteractionWithoutShrinkingTheGrabArea(
+            string theme, GridResizeDirection direction)
+        {
+            _application.Run(window =>
+            {
+                var dictionary = Theme(theme);
+                window.Resources.MergedDictionaries.Add(dictionary);
+                var style = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                    .Single(element => (string)element.Attribute("TargetType") == "GridSplitter" &&
+                        element.Attribute(Xaml + "Key") == null);
+                var splitter = new DraggableGridSplitter
+                {
+                    Style = Parse<Style>(style),
+                    ResizeDirection = direction,
+                    Width = direction == GridResizeDirection.Columns ? 12 : 160,
+                    Height = direction == GridResizeDirection.Rows ? 12 : 160
+                };
+                WpfTestHost.Show(window, splitter);
+                var line = Assert.IsType<Border>(splitter.Template.FindName("ResizeLine", splitter));
+                Assert.Equal(0, line.Opacity);
+                Assert.Equal(1, direction == GridResizeDirection.Columns ? line.ActualWidth : line.ActualHeight);
+                Assert.Equal(160, direction == GridResizeDirection.Columns ? line.ActualHeight : line.ActualWidth);
+                Assert.NotNull(splitter.InputHitTest(new Point(1, 1)));
+                Assert.NotNull(splitter.InputHitTest(new Point(splitter.ActualWidth - 1, splitter.ActualHeight - 1)));
+
+                splitter.SetDragging(true);
+                WpfTestHost.Pump();
+                Assert.Equal(1, line.Opacity);
+                Assert.Equal(((SolidColorBrush)dictionary["GridSplitterBrush"]).Color,
+                    Assert.IsType<SolidColorBrush>(line.Background).Color);
+                window.Resources.MergedDictionaries.Remove(dictionary);
+                dictionary = Theme(theme == "Dark" ? "Light" : "Dark");
+                window.Resources.MergedDictionaries.Add(dictionary);
+                WpfTestHost.Pump();
+                Assert.Equal(((SolidColorBrush)dictionary["GridSplitterBrush"]).Color,
+                    Assert.IsType<SolidColorBrush>(line.Background).Color);
+
+                splitter.SetDragging(false);
+                WpfTestHost.Pump();
+                Assert.Equal(0, line.Opacity);
+            });
         }
 
         [Theory]
@@ -270,19 +429,363 @@ namespace XMAT.Tests
         [Theory]
         [InlineData("Light")]
         [InlineData("Dark")]
+        public void CaptureRows_NarrowInspectorLayoutKeepsShortValuesReadable(string theme)
+        {
+            _application.Run(window =>
+            {
+                window.Width = 1200;
+                window.Height = 650;
+                window.Resources.MergedDictionaries.Add(Theme(theme));
+                var gridStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                    .Single(style => (string)style.Attribute("TargetType") == "DataGrid");
+                window.Resources[typeof(DataGrid)] = Parse<Style>(gridStyle);
+                var controller = Proxy(9000);
+                var model = new ProxyConnectionModel(
+                    63, "429", CaptureTimelineTestData.Origin, TimeSpan.FromMilliseconds(20),
+                    "https", "sessions.example", "CONNECT", "/sessions/active",
+                    "", Array.Empty<byte>(), "", Array.Empty<byte>(), "192.0.2.10");
+                controller.ProxyConnections.Add(model);
+                var view = new CaptureConnectionView { DataContext = new Context(controller) };
+                var grid = (DataGrid)view.FindName("ConnectionList");
+                grid.IsSynchronizedWithCurrentItem = false;
+                WpfTestHost.Show(window, view);
+
+                window.Width = 900;
+                WpfTestHost.Pump();
+                var scroller = Descendants(grid).OfType<ScrollViewer>().First();
+                Assert.True(scroller.ScrollableWidth > 0,
+                    "A narrow traffic pane must scroll rather than crush its columns.");
+                var row = Assert.IsType<DataGridRow>(grid.ItemContainerGenerator.ContainerFromItem(model));
+                var cells = Descendants(row).OfType<DataGridCell>()
+                    .Where(cell => cell.Column.DisplayIndex < 4).ToArray();
+                Assert.Equal(4, cells.Length);
+                foreach (var cell in cells)
+                {
+                    var text = Assert.Single(Descendants(cell).OfType<TextBlock>());
+                    var measured = new FormattedText(
+                        text.Text, System.Globalization.CultureInfo.CurrentCulture, text.FlowDirection,
+                        new Typeface(text.FontFamily, text.FontStyle, text.FontWeight, text.FontStretch),
+                        text.FontSize, text.Foreground, VisualTreeHelper.GetDpi(text).PixelsPerDip);
+                    Assert.True(text.ActualWidth + 0.5 >= measured.WidthIncludingTrailingWhitespace,
+                        $"The complete capture value '{text.Text}' must remain visible after resizing.");
+                }
+            });
+        }
+
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
+        public void AddCaptureButton_CentersItsIconAndKeepsTheNewCommandWithAFullTabRow(string theme)
+        {
+            _application.Run(window =>
+            {
+                window.Width = 720;
+                window.Height = 500;
+                window.Resources.Remove("PrimaryForegroundBrush");
+                window.Resources.Remove("SecondaryForegroundBrush");
+                window.Resources.MergedDictionaries.Add(Theme(theme));
+                var tabStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                    .Single(style => (string)style.Attribute("TargetType") == "TabItem");
+                window.Resources[typeof(TabItem)] = Parse<Style>(tabStyle);
+                var model = new CaptureAppModel();
+                for (ushort index = 0; index < 6; index++)
+                {
+                    model.CaptureDeviceContexts.Add(new Context(Proxy((ushort)(9000 + index))));
+                }
+                model.SelectedDeviceContext = model.CaptureDeviceContexts[0];
+                var captures = new AllCaptureDevicesTabControl { DataContext = model };
+                var tabs = (TabControl)captures.FindName("CaptureDevicesTabs");
+                tabs.ContentTemplateSelector = null;
+                tabs.ContentTemplate = new DataTemplate();
+                var newRequests = 0;
+                window.CommandBindings.Add(new CommandBinding(ApplicationCommands.New,
+                    (_, e) => { newRequests++; e.Handled = true; },
+                    (_, e) => { e.CanExecute = true; e.Handled = true; }));
+                WpfTestHost.Show(window, captures);
+                var add = (Button)tabs.Template.FindName("AddCaptureButton", tabs);
+                Assert.True(add.IsEnabled);
+                Assert.Equal(Localization.GetLocalizedString("FILE_NEW_CAPTURE"),
+                    System.Windows.Automation.AutomationProperties.GetName(add));
+                AssertButtonTextContrast(add);
+                var icon = Assert.IsType<System.Windows.Shapes.Path>(add.Content);
+                var bounds = icon.TransformToAncestor(add).TransformBounds(new Rect(icon.RenderSize));
+                Assert.InRange(Math.Abs(bounds.Left + bounds.Width / 2 - add.ActualWidth / 2), 0, 0.5);
+                Assert.InRange(Math.Abs(bounds.Top + bounds.Height / 2 - add.ActualHeight / 2), 0, 0.5);
+                var headers = (OverflowTabPanel)tabs.Template.FindName("headerPanel", tabs);
+                Assert.True(headers.HasOverflow, "Exercise a tab row with more tabs than fit.");
+                Assert.True(headers.ActualHeight < add.ActualHeight * 2, "The tabs stay in one row.");
+                var addBounds = add.TransformToAncestor(tabs).TransformBounds(new Rect(add.RenderSize));
+                var headerBounds = headers.TransformToAncestor(tabs).TransformBounds(new Rect(headers.RenderSize));
+                Assert.True(addBounds.Right <= headerBounds.Left, "The add action must not overlap any tab.");
+                var active = Assert.IsType<TabItem>(tabs.ItemContainerGenerator.ContainerFromItem(model.SelectedDeviceContext));
+                var backplate = (Border)tabs.Template.FindName("ContentPanel", tabs);
+                Assert.Equal(new CornerRadius(0), backplate.CornerRadius);
+                Assert.Equal(new Thickness(0), backplate.BorderThickness);
+                var activeBounds = active.TransformToAncestor(tabs).TransformBounds(new Rect(active.RenderSize));
+                var plateTop = backplate.TransformToAncestor(tabs).Transform(new Point()).Y;
+                var fill = Assert.IsType<SolidColorBrush>(((Border)active.Template.FindName("Border", active)).Background).Color;
+                Assert.Equal(fill, RenderedColor(tabs, new Point(activeBounds.Left + activeBounds.Width / 2, plateTop)));
+                Assert.Same(ApplicationCommands.New, add.Command);
+                ApplicationCommands.New.Execute(null, add);
+                Assert.Equal(1, newRequests);
+                model.SelectedDeviceContext = null;
+                captures.DataContext = null;
+            });
+        }
+
+        [Theory]
+        [InlineData("Light", 1280)]
+        [InlineData("Dark", 960)]
+        public void Inspector_TextWellsAreInsetAndMetadataDoesNotOverlapTheViewSelectors(string theme, int width)
+        {
+            _application.Run(window =>
+            {
+                window.Width = width;
+                window.Height = 720;
+                window.Resources.Remove("PrimaryForegroundBrush");
+                window.Resources.MergedDictionaries.Add(Theme(theme));
+                foreach (var target in new[] { "TabControl", "TabItem" })
+                {
+                    var source = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                        .Single(style => (string)style.Attribute("TargetType") == target);
+                    var style = Parse<Style>(source);
+                    window.Resources[style.TargetType] = style;
+                }
+                var controller = Proxy(9000);
+                var connection = new ProxyConnectionModel(
+                    42, "200", CaptureTimelineTestData.Origin, TimeSpan.FromMilliseconds(1500),
+                    "https", "example.test:443", "GET", "/inspect",
+                    "GET /inspect HTTP/1.1\r\nHost: example.test\r\nAccept: */*",
+                    Array.Empty<byte>(), "", Array.Empty<byte>(), "127.0.0.1");
+                controller.ProxyConnections.Add(connection);
+                var view = new CaptureConnectionView { DataContext = new Context(controller) };
+                var grid = (DataGrid)view.FindName("ConnectionList");
+                grid.IsSynchronizedWithCurrentItem = false;
+                WpfTestHost.Show(window, view);
+                grid.SelectedItem = connection;
+                WpfTestHost.Pump();
+                var request = (RequestResponseView)view.FindName("RequestViewControl");
+                var metadata = Assert.IsType<TextBlock>(request.HeaderContent);
+                Assert.Contains(metadata.Inlines.OfType<System.Windows.Documents.Run>(), run => run.Text == "42");
+                // The whole request's duration, not only the milliseconds part of it.
+                Assert.Contains(metadata.Inlines.OfType<System.Windows.Documents.Run>(), run => run.Text == "1500 ms");
+                var selector = Descendants(request).OfType<OverflowTabPanel>().Single();
+                var metadataBounds = metadata.TransformToAncestor(request).TransformBounds(new Rect(metadata.RenderSize));
+                var selectorBounds = selector.TransformToAncestor(request).TransformBounds(new Rect(selector.RenderSize));
+                Assert.True(metadataBounds.Bottom + 8 <= selectorBounds.Top + 1,
+                    "Metadata must wrap in its heading row, leaving an eight-pixel gap before view selectors.");
+                var text = Descendants(request).OfType<TextBox>().Single();
+                Assert.True(text.IsReadOnly);
+                Assert.Contains("example.test", text.Text, StringComparison.Ordinal);
+                var well = Descendants(request).OfType<ContentControl>()
+                    .Single(control => control.Style == request.FindResource("RecessedSurfaceStyle"));
+                Assert.DoesNotContain(Descendants(well).OfType<Border>(), border => border.Background is LinearGradientBrush);
+                Assert.True(Luminance(((SolidColorBrush)well.Background).Color) <
+                    Luminance(((SolidColorBrush)request.FindResource("PanelBackgroundBrush")).Color));
+                Assert.True(Contrast(text.Foreground, well.Background) >= 4.5);
+                var insideText = text.TransformToAncestor(well).Transform(
+                    new Point(text.ActualWidth - 2, text.ActualHeight - 2));
+                Assert.Equal(((SolidColorBrush)well.Background).Color, RenderedColor(well, insideText));
+                var firstLine = text.GetRectFromCharacterIndex(0);
+                var secondLine = text.GetRectFromCharacterIndex(text.Text.IndexOf('\n') + 1);
+                Assert.InRange(secondLine.Top - firstLine.Top, 17, 19);
+                view.DataContext = null;
+            });
+        }
+
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
+        public void EditableDropdowns_DrawTheirLabelOnTheFieldBackground(string theme)
+        {
+            _application.Run(window =>
+            {
+                window.Resources.MergedDictionaries.Add(Theme(theme));
+                var comboStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                    .Single(style => (string)style.Attribute("TargetType") == "ComboBox");
+                window.Resources[typeof(ComboBox)] = Parse<Style>(comboStyle);
+                var combo = new ComboBox
+                {
+                    IsEditable = true, IsReadOnly = true, Text = "Status", Width = 140, Height = 28,
+                    HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top
+                };
+                WpfTestHost.Show(window, combo);
+                var label = (TextBox)combo.Template.FindName("PART_EditableTextBox", combo);
+                var field = Assert.IsType<SolidColorBrush>(combo.Background).Color;
+                // A field reads as a field by its outline: a soft edge with a strong bottom line at 3:1 or more, while
+                // its fill may match the panel around it.
+                var panel = ((SolidColorBrush)window.FindResource("PanelBackgroundBrush")).Color;
+                var outline = Assert.IsType<LinearGradientBrush>(combo.BorderBrush);
+                Assert.Contains(outline.GradientStops, stop => ColorContrast(stop.Color, panel) >= 3);
+                var besideLabel = label.TransformToAncestor(combo)
+                    .Transform(new Point(label.ActualWidth - 4, label.ActualHeight / 2));
+                Assert.Equal(field, RenderedColor(combo, besideLabel));
+            });
+        }
+
+        [Fact]
+        public void Appearance_SwitchesAllPalettesAndNativeColorsWithoutAccumulatingDictionaries()
+        {
+            _application.Run(window =>
+            {
+                var previous = ThemeManager.CurrentTheme;
+                window.Resources.Remove("PrimaryForegroundBrush");
+                window.Resources.Remove("SecondaryForegroundBrush");
+                var panel = new Border();
+                panel.SetResourceReference(Border.BackgroundProperty, "PanelBackgroundBrush");
+                var text = new TextBlock { Text = "Theme preview" };
+                text.SetResourceReference(TextBlock.ForegroundProperty, "PrimaryForegroundBrush");
+                panel.Child = text;
+                WpfTestHost.Show(window, panel);
+                try
+                {
+                    foreach (var name in new[] { "Dark", "Light", "Dark", "Light" })
+                    {
+                        // A test machine with high contrast on would get the high contrast theme from ApplyTheme.
+                        ThemeManager.PrepareTheme(
+                            Application.Current.Resources, name, LookState.Current.IsNewLook, highContrast: false);
+                        ThemeManager.RaiseThemeChanged();
+                        WpfTestHost.Pump();
+                        var expected = Theme(name);
+                        Assert.Equal(name, ThemeManager.CurrentTheme);
+                        Assert.Equal(((SolidColorBrush)expected["PanelBackgroundBrush"]).Color,
+                            Assert.IsType<SolidColorBrush>(panel.Background).Color);
+                        Assert.True(Contrast(text.Foreground, panel.Background) >= 4.5);
+                        foreach (var key in new[] { SystemColors.WindowBrushKey, SystemColors.HighlightBrushKey,
+                            SystemColors.MenuBrushKey, SystemColors.InactiveSelectionHighlightTextBrushKey })
+                        {
+                            Assert.Equal(((SolidColorBrush)expected[key]).Color,
+                                Assert.IsType<SolidColorBrush>(Application.Current.Resources[key]).Color);
+                        }
+                        Assert.True(Contrast((Brush)expected["ActiveSelectionForegroundBrush"],
+                            (Brush)expected["ActiveSelectionBrush"]) >= 4.5);
+                        Assert.Single(Application.Current.Resources.MergedDictionaries,
+                            dictionary => dictionary.Source?.OriginalString.EndsWith("Theme.xaml", StringComparison.Ordinal) == true);
+                    }
+                    Assert.Throws<ArgumentOutOfRangeException>(() => ThemeManager.ApplyTheme("Unknown"));
+                    Assert.Equal("Light", ThemeManager.CurrentTheme);
+                }
+                finally
+                {
+                    ThemeManager.ApplyTheme(previous);
+                }
+            });
+        }
+
+        // Comfort view off swaps the new look's spacing for Looks/DenseSpacing.xaml's in open views, and on swaps it
+        // back. Only spacing changes, and header text still lines up with the text in its column.
+        [Fact]
+        public void ComfortView_SwapsTheNewLooksSpacingForTheDenseSpacingInOpenViews()
+        {
+            _application.Run(window =>
+            {
+                AddButtonStyles(window.Resources);
+                window.Resources.MergedDictionaries.Add(AccessibilityTests.AppResources(
+                    "DataGrid", "DataGridRow", "DataGridCell", "SelectionForegroundConverter", "DataGridColumnHeader",
+                    "ColumnHeaderGripperStyle"));
+                var grid = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true, ItemsSource = new[] { "a", "b" } };
+                grid.Columns.Add(new DataGridTextColumn { Header = "Host", Binding = new System.Windows.Data.Binding(".") });
+                WpfTestHost.Show(window, grid);
+                var header = Descendants(grid).OfType<DataGridColumnHeader>().First(candidate => candidate.Column != null);
+                var row = Descendants(grid).OfType<DataGridRow>().First();
+                double TextLeft(DependencyObject container) =>
+                    Descendants(container).OfType<TextBlock>().First().TransformToAncestor(grid).Transform(new Point()).X;
+
+                var dense = new ResourceDictionary
+                {
+                    Source = new Uri("pack://application:,,,/XboxMultiplayerAnalysisTool;component/Looks/DenseSpacing.xaml")
+                };
+                Assert.All(dense.Keys.Cast<object>(), key =>
+                {
+                    Assert.True(window.Resources.Contains(key), $"App.xaml must define {key} for Comfort view.");
+                    Assert.True(dense[key] is Thickness or double, $"{key}: Comfort view changes spacing only.");
+                    Assert.DoesNotContain((string)key, TextScale.FontSizeKeys);
+                });
+
+                foreach (var (on, headerHeight, rowHeight) in new[] { (false, 28, 20), (true, 36, 24), (false, 28, 20) })
+                {
+                    ComfortView.Apply(window.Resources, on);
+                    WpfTestHost.Pump();
+                    Assert.Equal(headerHeight, (double)window.Resources["TableHeaderMinHeight"]);
+                    Assert.Equal(headerHeight, header.ActualHeight);
+                    Assert.Equal(rowHeight, row.ActualHeight);
+                    Assert.Equal(TextLeft(row), TextLeft(header), 1);
+                }
+                ComfortView.Apply(window.Resources, on: true);
+                Assert.All(dense.Keys.Cast<object>(), key => Assert.NotEqual(dense[key], window.Resources[key]));
+            });
+        }
+
+        // Comfort view follows the theme items in Edit > Appearance. The original look keeps its own spacing, so there
+        // the item is unavailable and its tooltip says why.
+        [Fact]
+        public void ComfortView_FollowsTheThemesAndIsUnavailableInTheOriginalLook()
+        {
+            _application.Run(window =>
+            {
+                var markup = ProductMarkup("MainWindow.xaml").Descendants(Presentation + "MenuItem")
+                    .Single(element => (string)element.Attribute(Xaml + "Name") == "AppearanceMenu");
+                Assert.Equal("ComfortView_Click", (string)markup.Elements(Presentation + "MenuItem").Last().Attribute("Click"));
+                var appearance = Parse<MenuItem>(markup);
+                var comfort = appearance.Items.OfType<MenuItem>().Last();
+                Assert.Equal("ComfortViewMenu", comfort.Name);
+                Assert.Equal(new[] { "Light", "Dark" },
+                    appearance.Items.OfType<MenuItem>().SkipLast(1).Select(item => (string)item.Tag));
+                Assert.IsType<Separator>(appearance.Items[appearance.Items.IndexOf(comfort) - 1]);
+                Assert.True(comfort.IsCheckable);
+
+                bool newLook = LookState.Current.IsNewLook;
+                try
+                {
+                    LookState.Current.IsNewLook = true;
+                    Assert.True(comfort.IsEnabled);
+                    Assert.Equal(Localization.GetLocalizedString("COMFORT_VIEW_TOOLTIP"), comfort.ToolTip);
+
+                    LookState.Current.IsNewLook = false;
+                    Assert.False(comfort.IsEnabled);
+                    Assert.True(ToolTipService.GetShowOnDisabled(comfort));
+                    Assert.Equal(Localization.GetLocalizedString("COMFORT_VIEW_NEW_LOOK_ONLY"), comfort.ToolTip);
+                    Assert.DoesNotContain("NO_IMPL_", (string)comfort.ToolTip, StringComparison.Ordinal);
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = newLook;
+                }
+            });
+        }
+
+        private static Color RenderedColor(FrameworkElement element, Point point)
+        {
+            var dpi = VisualTreeHelper.GetDpi(element);
+            var image = new RenderTargetBitmap(
+                (int)Math.Ceiling(element.ActualWidth * dpi.DpiScaleX),
+                (int)Math.Ceiling(element.ActualHeight * dpi.DpiScaleY),
+                dpi.PixelsPerInchX, dpi.PixelsPerInchY, PixelFormats.Pbgra32);
+            image.Render(element);
+            var pixel = new byte[4];
+            image.CopyPixels(new Int32Rect(
+                (int)Math.Floor(point.X * dpi.DpiScaleX),
+                (int)Math.Ceiling(point.Y * dpi.DpiScaleY), 1, 1), pixel, 4, 0);
+            return Color.FromArgb(pixel[3], pixel[2], pixel[1], pixel[0]);
+        }
+
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
         public void SelectedTabs_AreLighterAndTextRemainsReadableAcrossThemeChanges(string theme)
         {
             _application.Run(window =>
             {
-                var tabStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
-                    .Single(style => (string)style.Attribute("TargetType") == "TabItem");
-                window.Resources[typeof(TabItem)] = Parse<Style>(tabStyle);
-                var first = new TabItem { Header = "First", Content = "First capture" };
-                var second = new TabItem { Header = "Second", Content = "Second capture" };
+                AddButtonStyles(window.Resources);
+                var secondContent = new TextBlock { Text = "Second capture" };
+                var first = new TabItem { Header = "First", Content = new TextBlock { Text = "First capture" } };
+                var second = new TabItem { Header = "Second", Content = secondContent };
                 var tabs = new TabControl { Items = { first, second } };
                 var dictionary = Theme(theme);
                 window.Resources.MergedDictionaries.Add(dictionary);
                 WpfTestHost.Show(window, tabs);
+                // A tab keeps its width whichever tab is selected, so the strip never shifts.
+                var widths = new[] { first.ActualWidth, second.ActualWidth };
 
                 foreach (var name in new[] { theme, theme == "Dark" ? "Light" : "Dark" })
                 {
@@ -302,10 +805,38 @@ namespace XMAT.Tests
                         Assert.True(Luminance(Assert.IsType<SolidColorBrush>(selectedBackground).Color) >
                             Luminance(Assert.IsType<SolidColorBrush>(otherBackground).Color),
                             $"{name}: the selected tab must be lighter than an unselected tab.");
-                        Assert.True(Contrast(selected.Foreground, selectedBackground) >= 4.5);
-                        Assert.True(Contrast(other.Foreground, otherBackground) >= 4.5);
+                        var selectedLabel = (ContentPresenter)selected.Template.FindName("ContentSite", selected);
+                        var otherLabel = (ContentPresenter)other.Template.FindName("ContentSite", other);
+                        Assert.True(Contrast(TextElement.GetForeground(selectedLabel), selectedBackground) >= 4.5);
+                        Assert.True(Contrast(TextElement.GetForeground(otherLabel), otherBackground) >= 4.5);
+                        Assert.Equal(FontWeights.SemiBold, TextElement.GetFontWeight(selectedLabel));
+                        Assert.Equal(FontWeights.Normal, TextElement.GetFontWeight(otherLabel));
+                        Assert.Equal(widths, new[] { first.ActualWidth, second.ActualWidth });
+                        // Only the gap between capture tabs separates them; there is no divider line.
+                        Assert.Equal(new Thickness(0), ((Border)other.Template.FindName("Border", other)).BorderThickness);
+                        var backplate = (Border)tabs.Template.FindName("ContentPanel", tabs);
+                        Assert.Equal(((SolidColorBrush)selectedBackground).Color,
+                            Assert.IsType<SolidColorBrush>(backplate.Background).Color);
+                        var selectedBounds = selected.TransformToAncestor(tabs)
+                            .TransformBounds(new Rect(selected.RenderSize));
+                        var backplateBounds = backplate.TransformToAncestor(tabs)
+                            .TransformBounds(new Rect(backplate.RenderSize));
+                        Assert.True(selectedBounds.Bottom >= backplateBounds.Top + backplate.BorderThickness.Top,
+                            "The selected tab must overlap the backplate edge so they remain visually connected.");
+                        Assert.Equal(0, ((Border)selected.Template.FindName("Border", selected)).BorderThickness.Bottom);
+                        Assert.Equal(new CornerRadius(4, 4, 0, 0), ((Border)selected.Template.FindName("Border", selected)).CornerRadius);
+                        Assert.Equal(Visibility.Collapsed,
+                            ((Border)selected.Template.FindName("InsetShadow", selected)).Visibility);
+                        var shadow = (Border)other.Template.FindName("InsetShadow", other);
+                        Assert.Equal(Visibility.Visible, shadow.Visibility);
+                        var stops = Assert.IsType<LinearGradientBrush>(shadow.Background).GradientStops;
+                        Assert.True(stops.First().Color.A < stops.Last().Color.A,
+                            "The inactive tab's inner shadow must darken toward the tab's base.");
                     }
                 }
+                // The selected tab's semibold label must not make the capture inside it bold.
+                Assert.Same(second, tabs.SelectedItem);
+                Assert.Equal(FontWeights.Normal, secondContent.FontWeight);
             });
         }
 
@@ -338,11 +869,236 @@ namespace XMAT.Tests
             return 0.2126 * Linear(color.R) + 0.7152 * Linear(color.G) + 0.0722 * Linear(color.B);
         }
 
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
+        public void InspectorAndFormatTabs_ShareTheToolbarTextSizeAndKeepFormatsConnected(string theme)
+        {
+            _application.Run(window =>
+            {
+                window.Resources.MergedDictionaries.Add(Theme(theme));
+                var view = new RequestResponseView
+                {
+                    Title = "Response",
+                    FirstLineAndHeaders = "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1",
+                    BodyText = "{\"error\":\"rate_limited\"}"
+                };
+                WpfTestHost.Show(window, view);
+                var tabs = (TabControl)view.FindName("RequestTabs");
+                var headers = (TabItem)view.FindName("HeadersTab");
+                var body = (TabItem)view.FindName("BodyTab");
+                var json = (TabItem)view.FindName("JsonTab");
+                Assert.Same(window.FindResource("FormatTabControlStyle"), tabs.Style);
+                Assert.Equal(28, headers.MinHeight);
+                Assert.Equal(new Thickness(), tabs.Padding);
+                var well = (Brush)window.FindResource("TextAreaBackgroundBrush");
+                var formatWidths = new[] { headers.ActualWidth, body.ActualWidth, json.ActualWidth };
+                foreach (var selected in new[] { headers, body, json })
+                {
+                    tabs.SelectedItem = selected;
+                    WpfTestHost.Pump();
+                    Assert.Equal(formatWidths, new[] { headers.ActualWidth, body.ActualWidth, json.ActualWidth });
+                    // The selected format takes the well's color, so it reads as the top of the well below it.
+                    var selectedSurface = (Border)selected.Template.FindName("TabSurface", selected);
+                    Assert.Equal(((SolidColorBrush)well).Color, Assert.IsType<SolidColorBrush>(selectedSurface.Background).Color);
+                    Assert.Equal(new CornerRadius(4, 4, 0, 0), selectedSurface.CornerRadius);
+                    Assert.Null(selected.Template.FindName("TabShadow", selected));
+                    var inactive = selected == headers ? body : headers;
+                    var inactiveSurface = (Border)inactive.Template.FindName("TabSurface", inactive);
+                    Assert.Equal(0, Assert.IsType<SolidColorBrush>(inactiveSurface.Background).Color.A);
+                    var surface = (Border)tabs.Template.FindName("ContentPanel", tabs);
+                    var headerBounds = selected.TransformToAncestor(tabs).TransformBounds(new Rect(selected.RenderSize));
+                    var surfaceBounds = surface.TransformToAncestor(tabs).TransformBounds(new Rect(surface.RenderSize));
+                    Assert.InRange(Math.Abs(headerBounds.Bottom - surfaceBounds.Top), 0, 1);
+                }
+                var inspector = new TabControl
+                {
+                    Style = (Style)window.FindResource("InspectorTabControlStyle"),
+                    Items = { new TabItem { Header = "Request/Response" }, new TabItem { Header = "WebSockets" } }
+                };
+                WpfTestHost.Show(window, inspector);
+                inspector.SelectedIndex = 0;
+                WpfTestHost.Pump();
+                // Inspector and format tabs use the toolbar buttons' text size; the inspector's accent underline sets
+                // its tabs apart. The selected view keeps the same size, in semibold.
+                var active = (TabItem)inspector.Items[0];
+                var other = (TabItem)inspector.Items[1];
+                Assert.Equal(28, active.MinHeight);
+                var activeLabel = (ContentPresenter)active.Template.FindName("HeaderSite", active);
+                var otherLabel = (ContentPresenter)other.Template.FindName("HeaderSite", other);
+                double buttonSize = (double)window.FindResource("BaseFontSize");
+                Assert.Equal(12, buttonSize);
+                Assert.Equal(buttonSize, TextElement.GetFontSize(activeLabel));
+                Assert.Equal(FontWeights.SemiBold, TextElement.GetFontWeight(activeLabel));
+                Assert.Equal(buttonSize, TextElement.GetFontSize(otherLabel));
+                Assert.Equal(FontWeights.Normal, TextElement.GetFontWeight(otherLabel));
+                Assert.Equal(buttonSize, TextElement.GetFontSize((ContentPresenter)body.Template.FindName("HeaderSite", body)));
+                Assert.Equal(Visibility.Visible, ((Border)active.Template.FindName("SelectionIndicator", active)).Visibility);
+            });
+        }
+
+        [Theory]
+        [InlineData("Light")]
+        [InlineData("Dark")]
+        public void QuietLabels_KeepTheirOwnColorsUnderTheAppWideTextStyle(string theme)
+        {
+            _application.Run(window =>
+            {
+                // The app-wide TextBlock style (in application resources, as in the app) reaches into templates, so tab,
+                // column header and status bar labels have to reset it to show their own, quieter colors.
+                window.Resources.MergedDictionaries.Add(Theme(theme));
+                window.Resources.MergedDictionaries.Add(AccessibilityTests.AppResources(
+                    "TitleCaseConverter", "DataGridColumnHeader", "ColumnHeaderGripperStyle", "TrafficGridHeaderStyle",
+                    "StatusBar", "MainStatusBarStyle", "ToolTip"));
+                Color Of(string key) => ((SolidColorBrush)window.FindResource(key)).Color;
+                TextBlock Label(DependencyObject root, string text) =>
+                    Descendants(root).OfType<TextBlock>().Single(block => block.Text == text);
+                Color ColorOf(TextBlock label) => Assert.IsType<SolidColorBrush>(label.Foreground).Color;
+
+                var inspector = new TabControl
+                {
+                    Style = (Style)window.FindResource("InspectorTabControlStyle"),
+                    Items = { new TabItem { Header = "Request/Response" }, new TabItem { Header = "WebSockets" } }
+                };
+                var grid = new DataGrid
+                {
+                    AutoGenerateColumns = false, ItemsSource = new[] { "a" }, Height = 80,
+                    ColumnHeaderStyle = (Style)window.FindResource("TrafficGridHeaderStyle")
+                };
+                grid.Columns.Add(new DataGridTextColumn { Header = "STATUS", Binding = new System.Windows.Data.Binding(".") });
+                var statusBar = new StatusBar
+                {
+                    Style = (Style)window.FindResource("MainStatusBarStyle"),
+                    Items = { new StatusBarItem { Content = new TextBlock { Text = "Capture stopped" } } }
+                };
+                var tipTarget = new Button { Content = "Target" };
+                WpfTestHost.Show(window, new StackPanel { Children = { inspector, grid, statusBar, tipTarget } });
+                inspector.SelectedIndex = 0;
+                WpfTestHost.Pump();
+
+                Assert.Equal(Of("HeadingForegroundBrush"), ColorOf(Label(inspector, "Request/Response")));
+                Assert.Equal(Of("SecondaryForegroundBrush"), ColorOf(Label(inspector, "WebSockets")));
+                Assert.Equal(Of("DataGridHeaderForegroundBrush"), ColorOf(Label(grid, "Status")));
+                Assert.Equal(Of("StatusBarForegroundBrush"), ColorOf(Label(statusBar, "Capture stopped")));
+
+                // Tooltips take the menu surface, so their text reads in both themes.
+                var tip = new ToolTip
+                {
+                    Content = "Resize the column",
+                    Style = (Style)window.FindResource(typeof(ToolTip)),
+                    PlacementTarget = tipTarget,
+                    Placement = PlacementMode.Bottom
+                };
+                tip.Resources.MergedDictionaries.Add(Theme(theme));
+                tip.IsOpen = true;
+                WpfTestHost.Pump();
+                try
+                {
+                    Assert.Equal(((SolidColorBrush)tip.FindResource("MenuBackgroundBrush")).Color,
+                        Assert.IsType<SolidColorBrush>(tip.Background).Color);
+                    var tipLabel = Label(tip, "Resize the column");
+                    Assert.Equal(((SolidColorBrush)tip.FindResource("MenuForegroundBrush")).Color, ColorOf(tipLabel));
+                    Assert.True(Contrast(tipLabel.Foreground, tip.Background) >= 4.5, "Tooltip text must meet 4.5:1 contrast.");
+                }
+                finally
+                {
+                    tip.IsOpen = false;
+                }
+            });
+        }
+
+        [Fact]
+        public void AnalysisEmptyState_FollowsSelectedDataAndSharedCaptureEligibility()
+        {
+            _application.Run(window =>
+            {
+                var model = new CaptureAppModel();
+                var view = new CaptureAnalysisControl();
+                window.DataContext = model;
+                window.CommandBindings.Add(new CommandBinding(AppCommands.AnalyzeCaptures,
+                    (_, _) => { }, (_, e) => e.CanExecute = model.CanAnalyzeCaptures));
+                WpfTestHost.Show(window, view);
+                var empty = (Border)view.FindName("AnalysisEmptyState");
+                var message = (TextBlock)view.FindName("AnalysisEmptyMessage");
+                var button = (Button)view.FindName("AnalyzeEmptyCaptureButton");
+                Assert.Equal(Visibility.Visible, empty.Visibility);
+                Assert.Equal(Localization.GetLocalizedString("ANALYSIS_EMPTY_CAPTURE"), message.Text);
+                Assert.Equal(Visibility.Collapsed, button.Visibility);
+
+                var proxy = Proxy(9000);
+                var context = new Context(proxy);
+                model.CaptureDeviceContexts.Add(context);
+                model.SelectedDeviceContext = context;
+                WpfTestHost.Pump();
+                Assert.Equal(Visibility.Collapsed, button.Visibility);
+                proxy.ProxyConnections.Add(new ProxyConnectionModel(1, 1, 1));
+                WpfTestHost.Pump();
+                Assert.Equal(Localization.GetLocalizedString("ANALYSIS_EMPTY_READY"), message.Text);
+                Assert.Equal(Visibility.Visible, button.Visibility);
+                Assert.True(button.IsEnabled);
+                Assert.Same(AppCommands.AnalyzeCaptures, button.Command);
+                Assert.Same(window, button.CommandTarget);
+
+                var other = Proxy(9100);
+                model.CaptureDeviceContexts.Add(new Context(other));
+                other.IsRunning = true;
+                WpfTestHost.Pump();
+                Assert.Equal(Localization.GetLocalizedString("ANALYSIS_EMPTY_STOP"), message.Text);
+                Assert.False(button.IsEnabled);
+                other.IsRunning = false;
+                WpfTestHost.Pump();
+                Assert.True(button.IsEnabled);
+
+                var tabs = (TabControl)view.FindName("CaptureAnalysisResultsTabs");
+                tabs.ContentTemplateSelector = null;
+                model.AnalysisRuns.Add(new AnalysisRunModel(null, 1) { Header = "Results" });
+                WpfTestHost.Pump();
+                Assert.Equal(Visibility.Collapsed, empty.Visibility);
+                model.AnalysisRuns.Clear();
+                proxy.ProxyConnections.Clear();
+                WpfTestHost.Pump();
+                Assert.Equal(Visibility.Visible, empty.Visibility);
+                Assert.Equal(Localization.GetLocalizedString("ANALYSIS_EMPTY_CAPTURE"), message.Text);
+                Assert.Equal(Visibility.Collapsed, button.Visibility);
+                model.SelectedDeviceContext = null;
+                model.CaptureDeviceContexts.Clear();
+                window.DataContext = null;
+            });
+        }
+
         private static double Contrast(Brush foreground, Brush background)
         {
-            double first = Luminance(Assert.IsType<SolidColorBrush>(foreground).Color);
-            double second = Luminance(Assert.IsType<SolidColorBrush>(background).Color);
-            return (Math.Max(first, second) + 0.05) / (Math.Min(first, second) + 0.05);
+            Color text = Assert.IsType<SolidColorBrush>(foreground).Color;
+            return BackgroundColors(background).Min(color => ColorContrast(text, color));
+        }
+
+        private static double ColorContrast(Color first, Color second)
+        {
+            double a = Luminance(first), b = Luminance(second);
+            return (Math.Max(a, b) + 0.05) / (Math.Min(a, b) + 0.05);
+        }
+
+        // The colors behind a label: a solid fill, or a vertical gradient across the middle half, where text sits.
+        private static IEnumerable<Color> BackgroundColors(Brush background)
+        {
+            if (background is LinearGradientBrush gradient)
+            {
+                return new[] { 0.25, 0.5, 0.75 }.Select(offset => ColorAt(gradient.GradientStops, offset));
+            }
+
+            return new[] { Assert.IsType<SolidColorBrush>(background).Color };
+        }
+
+        private static Color ColorAt(GradientStopCollection stops, double offset)
+        {
+            var ordered = stops.OrderBy(stop => stop.Offset).ToList();
+            var after = ordered.FirstOrDefault(stop => stop.Offset >= offset) ?? ordered[^1];
+            var before = ordered.LastOrDefault(stop => stop.Offset <= offset) ?? ordered[0];
+            double span = after.Offset - before.Offset;
+            double t = span <= 0 ? 0 : (offset - before.Offset) / span;
+            byte Mix(byte a, byte b) => (byte)Math.Round(a + (b - a) * t);
+            return Color.FromRgb(Mix(before.Color.R, after.Color.R), Mix(before.Color.G, after.Color.G),
+                Mix(before.Color.B, after.Color.B));
         }
 
         [Theory]
@@ -418,19 +1174,19 @@ namespace XMAT.Tests
             Source = new Uri($"pack://application:,,,/XboxMultiplayerAnalysisTool;component/Themes/{name}Theme.xaml")
         };
 
-        private static XDocument ProductMarkup(string name)
+        internal static XDocument ProductMarkup(string name)
         {
             using var stream = typeof(CaptureChromeTests).Assembly.GetManifestResourceStream("XMAT.Tests." + name);
             Assert.NotNull(stream);
             return XDocument.Load(stream);
         }
 
-        private static T Parse<T>(XElement source)
+        internal static T Parse<T>(XElement source)
         {
             var element = new XElement(source);
             var namespaceMap = new Dictionary<string, string>();
             element.Attribute(Xaml + "Key")?.Remove();
-            var windowEvents = new[] { "Click", "DeviceTabClosed", "AnalysisTabAdded", "AnalysisTabClosed" };
+            var windowEvents = new[] { "Click", "Checked", "Unchecked", "DeviceTabClosed", "AnalysisTabAdded", "AnalysisTabClosed" };
             foreach (var attribute in element.DescendantsAndSelf().Attributes()
                 .Where(attribute => windowEvents.Contains(attribute.Name.LocalName)).ToArray())
             {
@@ -452,15 +1208,38 @@ namespace XMAT.Tests
                 {
                     child.Name = XName.Get(child.Name.LocalName, qualifiedNamespace);
                 }
+                // Attached properties written as attributes, such as local:LiveRegion.Mode, need the assembly too.
+                foreach (var attribute in child.Attributes()
+                    .Where(attribute => !attribute.IsNamespaceDeclaration && namespaceMap.ContainsKey(attribute.Name.NamespaceName))
+                    .ToArray())
+                {
+                    attribute.Remove();
+                    child.SetAttributeValue(
+                        XName.Get(attribute.Name.LocalName, namespaceMap[attribute.Name.NamespaceName]), attribute.Value);
+                }
             }
             return (T)XamlReader.Parse(element.ToString());
         }
 
         internal static void AddButtonStyles(ResourceDictionary resources)
         {
-            var styles = ProductMarkup("App.xaml").Descendants(Presentation + "ResourceDictionary").First()
-                .Elements(Presentation + "Style")
-                .Where(style => new[] { "Button", "ToggleButton", "TextBlock", "{x:Type MenuItem}" }
+            // App.xaml merges the menus' surface and labels, which its menu styles build on.
+            resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri("pack://application:,,,/XboxMultiplayerAnalysisTool;component/Styles/Menus.xaml")
+            });
+            var dictionary = ProductMarkup("App.xaml").Descendants(Presentation + "ResourceDictionary").First();
+            foreach (var primitive in dictionary.Elements()
+                .Where(element => element.Name == Presentation + "CornerRadius" ||
+                    element.Name == Presentation + "Thickness" ||
+                    element.Name == Presentation + "ControlTemplate" ||
+                    element.Name == Sys + "Double"))
+            {
+                resources[(string)primitive.Attribute(Xaml + "Key")] = Parse<object>(primitive);
+            }
+            var styles = dictionary.Elements(Presentation + "Style")
+                .Where(style => new[] { "Button", "ToggleButton", "TextBlock", "TextBox", "ScrollViewer", "ContentControl",
+                    "TabItem", "TabControl", "{x:Type TabItem}", "{x:Type TabControl}", "{x:Type MenuItem}", "ContextMenu" }
                     .Contains((string)style.Attribute("TargetType")));
             foreach (var source in styles)
             {
@@ -470,6 +1249,7 @@ namespace XMAT.Tests
                 {
                     "{x:Static ToolBar.ButtonStyleKey}" => ToolBar.ButtonStyleKey,
                     "{x:Static ToolBar.ToggleButtonStyleKey}" => ToolBar.ToggleButtonStyleKey,
+                    _ when key != null => key,
                     _ => style.TargetType
                 };
                 resources[resourceKey] = style;
@@ -486,6 +1266,11 @@ namespace XMAT.Tests
                     yield return child;
                 }
             }
+        }
+
+        private sealed class DraggableGridSplitter : GridSplitter
+        {
+            internal void SetDragging(bool dragging) => IsDragging = dragging;
         }
 
         private sealed class Context : ICaptureDeviceContext

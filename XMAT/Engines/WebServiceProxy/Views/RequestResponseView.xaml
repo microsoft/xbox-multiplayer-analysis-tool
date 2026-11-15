@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:local="clr-namespace:XMAT.WebServiceCapture"
+             xmlns:app="clr-namespace:XMAT"
              mc:Ignorable="d"
              DataContext="{Binding RelativeSource={RelativeSource Self}}"
              d:DesignHeight="450" d:DesignWidth="800">
@@ -12,42 +13,57 @@
         <local:JsonConverter x:Key="JsonConverter"/>
     </UserControl.Resources>
     <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
-        <TextBlock DockPanel.Dock="Top" Height="24" FontWeight="Bold" Margin="10,0,0,0" VerticalAlignment="Center" Text="{Binding Title, FallbackValue=Request}"/>
-        <TabControl x:Name="RequestTabs">
-            <TabItem x:Name="HeadersTab" Header="Headers">
-                <ScrollViewer>
-                    <TextBox IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True" Text="{Binding FirstLineAndHeaders, Mode=OneWay}"/>
-                </ScrollViewer>
+        <!-- The title's details sit at its right when they fit, and wrap below it when the pane is narrow. -->
+        <app:ReflowPanel DockPanel.Dock="Top" Margin="{DynamicResource HeadingBottomSpacing}"
+                         Spacing="{app:Look New=16, Original=0}" StackedSpacing="2">
+            <TextBlock Style="{DynamicResource SectionTitleStyle}" MinHeight="{app:Look New=20, Original=24}"
+                       Padding="{app:Look New='0', Original='10,0,0,0'}"
+                       VerticalAlignment="Center" Text="{Binding Title, FallbackValue=Request}"/>
+            <ContentPresenter Content="{Binding HeaderContent}" VerticalAlignment="Center"
+                              HorizontalAlignment="Right" app:ReflowPanel.Weight="1"
+                              app:ReflowPanel.StackedAlignment="Left"/>
+        </app:ReflowPanel>
+        <TabControl x:Name="RequestTabs" Style="{DynamicResource FormatTabControlStyle}">
+            <TabItem x:Name="HeadersTab" Header="Headers" Style="{DynamicResource FormatTabItemStyle}">
+                <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
+                    <ScrollViewer>
+                        <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True" Text="{Binding FirstLineAndHeaders, Mode=OneWay}"/>
+                    </ScrollViewer>
+                </ContentControl>
             </TabItem>
-            <TabItem x:Name="BodyTab" Header="Body">
-                <ScrollViewer>
-                    <TextBox IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True">
-                        <TextBox.Text>
-                            <MultiBinding Converter="{StaticResource BodyConverter}">
-                                <Binding Path="HeaderDictionary"/>
-                                <Binding Path="BodyBytes"/>
-                            </MultiBinding>
-                        </TextBox.Text>
-                    </TextBox>
-                </ScrollViewer>
+            <TabItem x:Name="BodyTab" Header="Body" Style="{DynamicResource FormatTabItemStyle}">
+                <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
+                    <ScrollViewer>
+                        <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True">
+                            <TextBox.Text>
+                                <MultiBinding Converter="{StaticResource BodyConverter}">
+                                    <Binding Path="HeaderDictionary"/>
+                                    <Binding Path="BodyBytes"/>
+                                </MultiBinding>
+                            </TextBox.Text>
+                        </TextBox>
+                    </ScrollViewer>
+                </ContentControl>
             </TabItem>
-            <TabItem x:Name="JsonTab" Header="JSON">
-                <ScrollViewer>
-                    <TreeView Name="TestTreeView" ItemsSource="{Binding BodyText, Converter={StaticResource JsonConverter}}">
-                        <TreeView.ItemTemplate>
-                            <HierarchicalDataTemplate
-                                DataType="{x:Type local:JsonTreeViewItem}"
-                                ItemsSource="{Binding JsonTreeViewItems}">
-                                <TextBlock Text="{Binding PropertyDescriptor}" />
-                            </HierarchicalDataTemplate>
-                        </TreeView.ItemTemplate>
-                        <TreeView.ItemContainerStyle>
-                            <Style TargetType="{x:Type TreeViewItem}">
-                                <Setter Property="IsExpanded" Value="{Binding AutoExpandJson}"/>
-                            </Style>
-                        </TreeView.ItemContainerStyle>
-                    </TreeView>
-                </ScrollViewer>
+            <TabItem x:Name="JsonTab" Header="JSON" Style="{DynamicResource FormatTabItemStyle}">
+                <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
+                    <ScrollViewer>
+                        <TreeView Name="TestTreeView" Style="{DynamicResource InspectorTreeViewStyle}" ItemsSource="{Binding BodyText, Converter={StaticResource JsonConverter}}">
+                            <TreeView.ItemTemplate>
+                                <HierarchicalDataTemplate
+                                    DataType="{x:Type local:JsonTreeViewItem}"
+                                    ItemsSource="{Binding JsonTreeViewItems}">
+                                    <TextBlock Text="{Binding PropertyDescriptor}" />
+                                </HierarchicalDataTemplate>
+                            </TreeView.ItemTemplate>
+                            <TreeView.ItemContainerStyle>
+                                <Style TargetType="{x:Type TreeViewItem}">
+                                    <Setter Property="IsExpanded" Value="{Binding AutoExpandJson}"/>
+                                </Style>
+                            </TreeView.ItemContainerStyle>
+                        </TreeView>
+                    </ScrollViewer>
+                </ContentControl>
             </TabItem>
             <!--<TabItem Header="Image">
                     <Image Source="{Binding BodyBytes, Mode=OneWay}" Stretch="Uniform"/>

@@ -34,7 +34,8 @@ every HTTPS tunnel.
 2. Use **Params** to inspect or modify **Request** and **Response**. Set
    **Continue** to `false` to cancel the request or response.
 3. Click a property in the right-hand list for its description, or double-click to
-   insert its name at the cursor.
+   insert its name at the cursor. Drag the dividers between the editor, the list
+   and the description to give any of them more room.
 4. Click **Enable** and check **Script Compilation Status**.
 
 The button shows **Compiling...** and cannot be clicked again while compilation is

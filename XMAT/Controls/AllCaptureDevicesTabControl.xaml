@@ -7,7 +7,8 @@
                  xmlns:logic="clr-namespace:XMAT"
                  xmlns:wscc="clr-namespace:XMAT.WebServiceCapture"
                  xmlns:ntcc="clr-namespace:NetworkTraceCaptureControls"
-                 mc:Ignorable="d" 
+                 mc:Ignorable="d"
+                 Background="Transparent"
                  >
     <UserControl.CommandBindings>
             <CommandBinding Command="Close" Executed="TabClose_Executed" CanExecute="TabClose_CanExecute"/>
@@ -41,6 +42,7 @@
                 <Style x:Key="CaptureDeviceTabControlStyle" TargetType="{x:Type local:TabControlEx}">
                     <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}"/>
                     <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+                    <Setter Property="Padding" Value="{DynamicResource PanelPadding}"/>
                     <Setter Property="Template">
                         <Setter.Value>
                             <ControlTemplate TargetType="{x:Type TabControl}">
@@ -53,19 +55,69 @@
                                         <RowDefinition x:Name="RowDefinition0" Height="Auto"/>
                                         <RowDefinition x:Name="RowDefinition1" Height="*"/>
                                     </Grid.RowDefinitions>
-                                    <Button Grid.Column="0" Content="&#xE710;" Height="24" Width="24"
-                                            HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                                            FontFamily="Segoe MDL2 Assets" Command="New" />
-                                    <TabPanel x:Name="headerPanel" Background="Transparent" Grid.Column="0" IsItemsHost="true" Margin="26,2,2,0" Grid.Row="0" KeyboardNavigation.TabIndex="1" Panel.ZIndex="1"/>
+                                    <!-- The original look keeps its add button and tab strip offsets; the template stays
+                                         the same in both looks so switching never recreates open capture views. The new
+                                         look keeps the tabs in one row, with More for tabs that don't fit; the original
+                                         look's tabs wrap into rows as they always have. -->
+                                    <Border Grid.Row="0" Style="{DynamicResource CaptureTabStripStyle}" Panel.ZIndex="1">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Content="&#xE710;" Height="24" Width="24"
+                                                HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                                FontFamily="Segoe MDL2 Assets" Command="New"
+                                                KeyboardNavigation.TabIndex="0"
+                                                ToolTip="{x:Static local:AllCaptureDevicesTabControl.NewCaptureLabel}"
+                                                AutomationProperties.Name="{x:Static local:AllCaptureDevicesTabControl.NewCaptureLabel}"
+                                                Visibility="{local:Look New=Collapsed, Original=Visible}"/>
+                                        <Button x:Name="AddCaptureButton" Grid.Column="0"
+                                                Style="{DynamicResource SoftIconButtonStyle}"
+                                                Margin="0,0,8,0" VerticalAlignment="Center"
+                                                Command="New"
+                                                KeyboardNavigation.TabIndex="0"
+                                                Visibility="{local:Look New=Visible, Original=Collapsed}"
+                                                ToolTip="{x:Static local:AllCaptureDevicesTabControl.NewCaptureLabel}"
+                                                AutomationProperties.Name="{x:Static local:AllCaptureDevicesTabControl.NewCaptureLabel}">
+                                            <Path Width="10" Height="10" Stretch="Uniform"
+                                                  Data="M 0,7 L 14,7 M 7,0 L 7,14"
+                                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                  StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                        </Button>
+                                        <local:OverflowTabPanel x:Name="headerPanel" Background="Transparent"
+                                                                Grid.Column="1" IsItemsHost="true"
+                                                                Wraps="{local:Look New=False, Original=True}"
+                                                                OverflowButtonWidth="{Binding ActualWidth, ElementName=MoreButton}"
+                                                                Margin="{local:Look New='0', Original='2,2,2,0'}"
+                                                                KeyboardNavigation.TabIndex="1" Panel.ZIndex="1"/>
+                                        <!-- A canvas measures the button at its full width, so the row can keep exactly
+                                             that much room for it. -->
+                                        <Canvas Grid.Column="1" KeyboardNavigation.TabIndex="2" Panel.ZIndex="2">
+                                            <local:TabOverflowButton x:Name="MoreButton" Visibility="Hidden"
+                                                                     Style="{DynamicResource CaptureOverflowButtonStyle}"
+                                                                     OverflowPanel="{Binding ElementName=headerPanel}"
+                                                                     Canvas.Left="{Binding OverflowButtonOffset, ElementName=headerPanel}"
+                                                                     Height="{Binding ActualHeight, ElementName=headerPanel}"/>
+                                        </Canvas>
+                                    </Grid>
+                                    </Border>
+                                    <!-- Flat, full-bleed content surface: no card border, radius or margin. -->
                                     <Border x:Name="ContentPanel" Grid.Row="1" Grid.Column="0"
                                             Background="{TemplateBinding Background}"
                                             BorderBrush="{TemplateBinding BorderBrush}"
-                                            BorderThickness="{TemplateBinding BorderThickness}"
+                                            BorderThickness="{local:Look New='0', Original='1'}"
+                                            Padding="{local:Look New='0', Original='2'}"
                                             KeyboardNavigation.DirectionalNavigation="Contained" KeyboardNavigation.TabIndex="2" KeyboardNavigation.TabNavigation="Local">
                                         <!-- The Grid's x:Name is important!! Please see TabControlEx.cs for more info -->
                                         <Grid x:Name="PART_ItemsHolder" Margin="{TemplateBinding Padding}" SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
                                     </Border>
                                 </Grid>
+                                <ControlTemplate.Triggers>
+                                    <Trigger SourceName="headerPanel" Property="local:OverflowTabPanel.HasOverflow" Value="True">
+                                        <Setter TargetName="MoreButton" Property="Visibility" Value="Visible"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
                             </ControlTemplate>
                         </Setter.Value>
                     </Setter>
@@ -73,7 +125,7 @@
             </TabControl.Resources>
             <TabControl.ItemTemplate>
                 <DataTemplate>
-                    <StackPanel Height="20" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="Visible">
+                    <StackPanel Height="{local:Look New=Auto, Original=20}" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="Visible">
                         <TextBlock HorizontalAlignment="Left" VerticalAlignment="Center">
                             <TextBlock.Inlines>
                                 <Run Text="{Binding DeviceName, Mode=OneWay}"/>
@@ -83,13 +135,20 @@
                         </TextBlock>
                         <TextBlock VerticalAlignment="Center" Text="{x:Static local:AllCaptureDevicesTabControl.ReadOnlyLabel}" Visibility="{Binding IsReadOnly, Mode=OneWay, FallbackValue=Collapsed, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                         <!--<CheckBox x:Name="SelectCheckBox" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10,0,10,0" IsChecked="{Binding IsSelected}"/>-->
-                        <Button x:Name="CloseButton" Width="20" Height="20" Margin="8,0,0,0"
-                                Padding="0" BorderThickness="0" BorderBrush="{x:Null}" Background="Transparent"
+                        <!-- The new look's 24px target overlaps the tab's padding, so the tab keeps its size. -->
+                        <Button x:Name="CloseButton" Style="{DynamicResource TabCloseButtonStyle}"
+                                Margin="{local:Look New='10,-2,-2,-2', Original='8,0,0,0'}"
                                 Content="&#xE894;" FontFamily="Segoe MDL2 Assets"
+                                AutomationProperties.Name="{Binding StringFormat={x:Static local:AllCaptureDevicesTabControl.CloseTabFormat}}"
+                                ToolTip="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource Self}}"
                                 Command="Close" CommandParameter="{Binding}"/>
                     </StackPanel>
                 </DataTemplate>
             </TabControl.ItemTemplate>
         </local:TabControlEx>
+        <!-- Screen readers hear where a moved tab now is: the text is read, not shown. -->
+        <TextBlock x:Name="TabMoveAnnouncement" Grid.ColumnSpan="2" Width="1" Height="1"
+                   HorizontalAlignment="Left" VerticalAlignment="Top" Opacity="0" IsHitTestVisible="False"
+                   local:LiveRegion.Mode="Polite"/>
     </Grid>
 </UserControl>

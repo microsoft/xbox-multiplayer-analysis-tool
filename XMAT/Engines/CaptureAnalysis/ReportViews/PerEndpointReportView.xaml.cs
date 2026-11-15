@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -28,6 +29,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
             SummaryLabel.Text = Localization.GetLocalizedString("LTA_ENDPOINT_REPORT_SUMMARY_LABEL");
             DetailsLabel.Text = Localization.GetLocalizedString("LTA_ENDPOINT_REPORT_DETAILS_LABEL");
 
+            AutomationProperties.SetName(EndpointSummary, Localization.GetLocalizedString("LTA_ENDPOINT_SUMMARY_TABLE"));
             EndpointSummary.Columns[0].Header = Localization.GetLocalizedString("LTA_SUMMARY_HEADER_ENDPOINT_NAME");
             EndpointSummary.Columns[1].Header = Localization.GetLocalizedString("LTA_SUMMARY_HEADER_BATCH_FREQ");
             EndpointSummary.Columns[2].Header = Localization.GetLocalizedString("LTA_SUMMARY_HEADER_BURST_DETECT");

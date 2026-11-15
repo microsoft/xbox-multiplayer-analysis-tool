@@ -12,6 +12,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
@@ -92,6 +93,10 @@ namespace XMAT.WebServiceCapture
             get { return Localization.GetLocalizedString("WEBCAP_STOP"); }
         }
 
+        public static string RequestIdText => Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_REQID");
+        public static string RequestTimeText => Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_TIME");
+        public static string DurationText => Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_DURATION");
+
         // The shared selection that picks and counts the rows a new process filter shows; tests substitute it.
         internal Func<FilterCaptureSessionsRequest, CancellationToken, OperationResult<FilterCaptureSessionsResult>>
             ProcessSelection { get; set; } = FilterCaptureSessionsOperation.Select;
@@ -149,7 +154,7 @@ namespace XMAT.WebServiceCapture
             AnalyzeButton.Content = Localization.GetLocalizedString("WEBCAP_ANALYZE");
             AnalyzeButton.ToolTip = Localization.GetLocalizedString("ANALYZE_CAPTURE_REQUIRES_STOP_TOOLTIP");
             ClearButton.Content = Localization.GetLocalizedString("WEBCAP_CLEAR");
-            AutoScrollButton.Content = Localization.GetLocalizedString("WEBCAP_AUTOSCROLL");
+            ToolbarAutoScrollButton.Content = Localization.GetLocalizedString("WEBCAP_AUTOSCROLL");
             FiltersText.Text = Localization.GetLocalizedString("GENERIC_FILTERS");
 
             StatusFilters.FilterDesc = Localization.GetLocalizedString("WEBCAP_FILTER_STATUS");
@@ -169,10 +174,6 @@ namespace XMAT.WebServiceCapture
             RequestViewControl.Title = Localization.GetLocalizedString("WEBCAP_REQRES_TITLE_REQUEST");
             ResponseViewControl.Title = Localization.GetLocalizedString("WEBCAP_REQRES_TITLE_RESPONSE");
 
-            RequestIdLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_REQID");
-            TimeLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_TIME");
-            DurationLabel.Text = Localization.GetLocalizedString("WEBCAP_REQRES_LABEL_DURATION");
-
             ConnectionList.Columns[0].Header = Localization.GetLocalizedString("WEBCAP_HEADER_NUMBER");
             ConnectionList.Columns[1].Header = Localization.GetLocalizedString("WEBCAP_HEADER_STATUS");
             ConnectionList.Columns[2].Header = Localization.GetLocalizedString("WEBCAP_HEADER_METHOD");
@@ -180,6 +181,20 @@ namespace XMAT.WebServiceCapture
             ConnectionList.Columns[4].Header = Localization.GetLocalizedString("WEBCAP_HEADER_HOST");
             ConnectionList.Columns[5].Header = Localization.GetLocalizedString("WEBCAP_HEADER_PROCESS");
             ConnectionList.Columns[6].Header = Localization.GetLocalizedString("WEBCAP_HEADER_PATH");
+            DataGridColumnInfo.SetDescription(ConnectionList.Columns[0], Localization.GetLocalizedString("A11Y_COLUMN_REQUEST_NUMBER"));
+            ColumnSummary.SetSource(ConnectionList, this);
+
+            AutomationProperties.SetName(ConnectionList, Localization.GetLocalizedString("A11Y_SESSIONS_TABLE"));
+            AutomationProperties.SetName(TimelineSplitter, Localization.GetLocalizedString("A11Y_SPLITTER_TIMELINE"));
+            AutomationProperties.SetName(InspectorSplitter, Localization.GetLocalizedString("A11Y_SPLITTER_INSPECTOR"));
+            AutomationProperties.SetName(RequestResponseSplitter, Localization.GetLocalizedString("A11Y_SPLITTER_REQUEST_RESPONSE"));
+
+            // The process filter popup takes focus when it opens and keeps Tab inside it; Esc closes it and returns
+            // to the Process button.
+            ProcessFilterPopup.Opened += (_, _) =>
+                Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => ProcessIncludeText.Focus()));
+            ProcessFilterPopup.PreviewKeyDown += ProcessFilterPopup_PreviewKeyDown;
+            ProcessFilterPopup.Closed += (_, _) => ReturnFocusFromProcessFilter();
         }
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
@@ -500,7 +515,19 @@ namespace XMAT.WebServiceCapture
 
         private void OnFiltersChanged(object sender, RoutedEventArgs e)
         {
+            UpdateActiveFilterCount();
             RequestFilterRefresh();
+        }
+
+        // The Filters button that stands in for a folded filter row shows how many filters are on.
+        private void UpdateActiveFilterCount()
+        {
+            if (FiltersHost != null)
+            {
+                FiltersHost.ActiveFilterCount =
+                    new[] { StatusFilters, HostFilters, MethodFilters }.Count(filter => filter is { IsFilterEnabled: true }) +
+                    (_attachedController != null && !ProcessFilter.IsEmpty(_processSpec) ? 1 : 0);
+            }
         }
 
         private void RequestFilterRefresh()
@@ -1081,6 +1108,12 @@ namespace XMAT.WebServiceCapture
                 row.Item as ProxyConnectionModel,
                 controller.ProcessFilter,
                 row);
+            if (LookState.Current.IsNewLook)
+            {
+                AddSessionsGroup(row.ContextMenu, row, tab.IsReadOnly);
+                return;
+            }
+
             row.ContextMenu.Items.Add(new Separator());
             row.ContextMenu.Items.Add(CommandItem("WEBCAP_EXPORT_SELECTED", WebServiceProxyCommands.ExportSelectedSessions, row));
             row.ContextMenu.Items.Add(CommandItem("WEBCAP_EXPORT_VISIBLE", WebServiceProxyCommands.ExportVisibleSessions, row));
@@ -1094,6 +1127,32 @@ namespace XMAT.WebServiceCapture
 
         private static MenuItem CommandItem(string header, RoutedCommand command, IInputElement target) =>
             new() { Header = Localization.GetLocalizedString(header), CommandTarget = target, Command = command };
+
+        // The new look's Sessions group: short labels under the group's header; the accessible names say "sessions".
+        private static void AddSessionsGroup(ContextMenu menu, IInputElement target, bool readOnly)
+        {
+            GroupedMenu.AddGroup(menu, Localization.GetLocalizedString("MENU_GROUP_SESSIONS"), null);
+            menu.Items.Add(SessionsItem("MENU_EXPORT_SELECTED", MenuGlyphs.Export, WebServiceProxyCommands.ExportSelectedSessions, target));
+            menu.Items.Add(SessionsItem("MENU_EXPORT_VISIBLE", MenuGlyphs.Export, WebServiceProxyCommands.ExportVisibleSessions, target));
+            string why = readOnly ? Localization.GetLocalizedString("CAPTURE_DELETE_READ_ONLY") : null;
+            menu.Items.Add(WithDeleteKey(
+                SessionsItem("MENU_DELETE_SELECTED", MenuGlyphs.Delete, WebServiceProxyCommands.DeleteSelectedSessions, target),
+                ModifierKeys.None,
+                why));
+            menu.Items.Add(WithDeleteKey(
+                SessionsItem("MENU_DELETE_UNSELECTED", MenuGlyphs.Delete, WebServiceProxyCommands.DeleteUnselectedSessions, target),
+                ModifierKeys.Shift,
+                why));
+        }
+
+        private static MenuItem SessionsItem(string key, string glyph, RoutedCommand command, IInputElement target)
+        {
+            MenuItem item = GroupedMenu.Item(
+                Localization.GetLocalizedString(key), glyph, Localization.GetLocalizedString(key + "_NAME"));
+            item.CommandTarget = target;
+            item.Command = command;
+            return item;
+        }
 
         private void ExportSessions_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {

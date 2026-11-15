@@ -1,0 +1,47 @@
+<!-- Spacing: the 4 px grid that panels are laid out on. Every gap, padding and size is a multiple of 4, and the main steps
+     are 4, 8, 12, 16 and 24. Both looks merge it, so its keys always resolve; views apply these values to the new look's
+     layout and keep the original look's own values. Views take them with DynamicResource. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- The scale -->
+    <sys:Double x:Key="SpaceXS">4</sys:Double>
+    <sys:Double x:Key="SpaceS">8</sys:Double>
+    <sys:Double x:Key="SpaceM">12</sys:Double>
+    <sys:Double x:Key="SpaceL">16</sys:Double>
+    <sys:Double x:Key="SpaceXL">24</sys:Double>
+
+    <!-- Vertical rhythm, as the bottom margin of what comes before the gap: 4 between a heading and its own description
+         (or a field and its hint), 8 between a heading and its content, 16 between related groups and 24 between
+         sections. Items in a list of bullets are 4 apart. -->
+    <Thickness x:Key="HeadingDescriptionGap">0,0,0,4</Thickness>
+    <Thickness x:Key="HeadingContentGap">0,0,0,8</Thickness>
+    <Thickness x:Key="GroupGap">0,0,0,16</Thickness>
+    <Thickness x:Key="SectionGap">0,0,0,24</Thickness>
+    <Thickness x:Key="BulletGap">0,0,0,4</Thickness>
+
+    <!-- Across a row: 8 after an icon, a heading or a button that something follows, and 24 before a second column. -->
+    <Thickness x:Key="InlineGap">0,0,8,0</Thickness>
+    <Thickness x:Key="ColumnGap">24,0,0,0</Thickness>
+
+    <!-- Insets. A panel's padding is the one left edge for its headings and fields, and a dialog has more room around its
+         content. A dialog's footer keeps the content's side edges, with 16 above and below its buttons. A recessed well
+         keeps its rows 4 from its edge: 3 inside the 1 px border that its style draws. A row's text is inset 8 more, 12
+         from the well's edge. Text in a small table's rows has 4 above and below its 20 px line. Content under a
+         disclosure starts where the disclosure's text does, after its 12 px chevron and the 8 px gap. -->
+    <Thickness x:Key="PanelInset">16</Thickness>
+    <Thickness x:Key="DialogInset">24</Thickness>
+    <Thickness x:Key="DialogFooterInset">24,16</Thickness>
+    <Thickness x:Key="WellInset">3</Thickness>
+    <Thickness x:Key="RowInset">8,0</Thickness>
+    <Thickness x:Key="TableRowInset">0,4</Thickness>
+    <Thickness x:Key="DisclosureIndent">20,0,0,0</Thickness>
+
+    <!-- Sizes on the grid: text boxes and buttons, rows of a list, lines of text that people read, and the column that a
+         bullet sits in. -->
+    <sys:Double x:Key="ControlHeight">28</sys:Double>
+    <sys:Double x:Key="ListRowHeight">32</sys:Double>
+    <sys:Double x:Key="TextLineHeight">20</sys:Double>
+    <sys:Double x:Key="BulletIndent">12</sys:Double>
+</ResourceDictionary>

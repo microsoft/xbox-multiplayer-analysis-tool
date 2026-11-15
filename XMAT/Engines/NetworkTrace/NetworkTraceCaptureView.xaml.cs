@@ -10,6 +10,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using XMAT;
@@ -65,6 +66,23 @@ namespace NetworkTraceCaptureControls
             PacketList.Columns[12].Header = XMAT.Localization.GetLocalizedString("NETCAP_HEADER_TYPE");
             PacketList.Columns[13].Header = XMAT.Localization.GetLocalizedString("NETCAP_HEADER_PROCESSID");
             PacketList.Columns[14].Header = XMAT.Localization.GetLocalizedString("NETCAP_HEADER_THREADID");
+
+            // Screen readers and tooltips give the abbreviated column headers their full names.
+            string[] fullNames =
+            {
+                null, "A11Y_COLUMN_PROTOCOL", "A11Y_COLUMN_START_OF_PACKET", "A11Y_COLUMN_END_OF_PACKET",
+                "A11Y_COLUMN_FRAGMENT", "A11Y_COLUMN_SENT", "A11Y_COLUMN_RECEIVED", "A11Y_COLUMN_LENGTH",
+            };
+            for (int column = 0; column < fullNames.Length; column++)
+            {
+                if (fullNames[column] != null)
+                {
+                    DataGridColumnInfo.SetDescription(PacketList.Columns[column], XMAT.Localization.GetLocalizedString(fullNames[column]));
+                }
+            }
+
+            AutomationProperties.SetName(PacketList, XMAT.Localization.GetLocalizedString("A11Y_PACKETS_TABLE"));
+            AutomationProperties.SetName(PacketSplitter, XMAT.Localization.GetLocalizedString("A11Y_SPLITTER_PACKETS"));
         }
 
         public static string EnabledText

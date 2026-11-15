@@ -6,12 +6,21 @@ using System.Drawing;
 using System.Collections.ObjectModel;
 using System.Reflection;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using XMAT.NetworkTrace;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
+using Ellipse = System.Windows.Shapes.Ellipse;
+using Point = System.Windows.Point;
+using Visual = System.Windows.Media.Visual;
+using VisualTreeHelper = System.Windows.Media.VisualTreeHelper;
 
 namespace XMAT.Tests
 {
@@ -485,6 +494,253 @@ namespace XMAT.Tests
             });
         }
 
+        [Fact]
+        public void NarrowTrafficPane_FoldsTheFiltersIntoAFiltersButtonUntilTheyFitAgain()
+        {
+            _application.Run(window =>
+            {
+                var view = View(Controller());
+                ShowAt(window, view, 1600);
+                var host = (FilterOverflowHost)view.FindName("FiltersHost");
+                var row = (Grid)view.FindName("FiltersPanel");
+                var button = host.OverflowButton;
+                UIElement[] filters = Filters(view);
+                Assert.False(host.IsOverflowing);
+                Assert.False(button.IsVisible);
+                double line = Middle(filters[0], row);
+                Assert.All(filters, filter =>
+                {
+                    Assert.True(filter.IsVisible);
+                    Assert.InRange(Middle(filter, row) - line, -0.5, 0.5);
+                });
+
+                window.Width = 700;
+                WpfTestHost.Pump();
+                Assert.True(host.IsOverflowing);
+                Assert.True(button.IsVisible);
+                Assert.Equal(28, button.ActualWidth);
+                Assert.Equal(28, button.ActualHeight);
+                Assert.Equal(Localization.GetLocalizedString("GENERIC_FILTERS"), AutomationProperties.GetName(button));
+                Assert.Equal(AutomationProperties.GetName(button), button.ToolTip);
+                Assert.False(((UIElement)view.FindName("FiltersText")).IsVisible);
+                Assert.All(filters, filter => Assert.False(filter.IsVisible));
+
+                // The popup lists the filters themselves, in row order, 8px apart inside 12px of padding: the dropdowns as
+                // wide as the list, the Process button at its own width.
+                window.Resources.MergedDictionaries.Add(AccessibilityTests.AppResources("FilterOverflowPopupStyle"));
+                button.IsChecked = true;
+                WpfTestHost.Pump();
+                Assert.True(host.OverflowPopup.IsOpen);
+                var list = (FrameworkElement)VisualTreeHelper.GetParent(filters[0]);
+                var surface = (Border)host.OverflowPopup.Child;
+                Assert.True(surface.IsAncestorOf(list));
+                Assert.Equal(new Point(13, 13), list.TranslatePoint(new Point(), surface));
+                Assert.Same(row, VisualTreeHelper.GetParent((UIElement)view.FindName("FiltersText")));
+                Assert.All(filters, filter =>
+                {
+                    Assert.Same(list, VisualTreeHelper.GetParent(filter));
+                    Assert.True(filter.IsVisible);
+                    Assert.InRange(Bounds(filter, list).Left, -0.5, 0.5);
+                });
+                for (var index = 1; index < filters.Length; index++)
+                {
+                    Assert.InRange(Bounds(filters[index], list).Top - Bounds(filters[index - 1], list).Bottom, 7.5, 8.5);
+                }
+                Assert.All(filters.Take(3), filter =>
+                {
+                    Assert.InRange(Bounds(filter, list).Width - list.ActualWidth, -0.5, 0.5);
+                    // The gap that follows each dropdown in the row is set aside: the dropdown ends at the list's edge.
+                    var dropdown = (UIElement)((CheckBoxFilters)filter).FindName("FilterList");
+                    Assert.InRange(Bounds(dropdown, list).Right - list.ActualWidth, -0.5, 0.5);
+                });
+                Assert.InRange(Bounds(filters[3], list).Width - filters[3].DesiredSize.Width, -0.5, 0.5);
+                Assert.True(Bounds(filters[3], list).Width < list.ActualWidth / 2);
+
+                button.IsChecked = false;
+                WpfTestHost.Pump();
+                Assert.False(host.OverflowPopup.IsOpen);
+                Assert.All(filters, filter => Assert.Same(row, VisualTreeHelper.GetParent(filter)));
+
+                window.Width = 1600;
+                WpfTestHost.Pump();
+                Assert.False(host.IsOverflowing);
+                Assert.False(button.IsVisible);
+                Assert.All(filters, filter => Assert.True(filter.IsVisible));
+
+                // The original look keeps its row, and the process filter's summary in it, at any width.
+                window.Width = 700;
+                WpfTestHost.Pump();
+                Assert.True(host.IsOverflowing);
+                var indicator = (UIElement)view.FindName("ProcessFilterIndicator");
+                Assert.Same(host.SummaryLine, VisualTreeHelper.GetParent(indicator));
+                LookState.Current.IsNewLook = false;
+                try
+                {
+                    WpfTestHost.Pump();
+                    Assert.False(host.IsOverflowing);
+                    Assert.False(button.IsVisible);
+                    Assert.All(filters, filter => Assert.Same(row, VisualTreeHelper.GetParent(filter)));
+                    Assert.Same(row, VisualTreeHelper.GetParent(indicator));
+                    Assert.Equal(5, Grid.GetColumn(indicator));
+                    Assert.True(filters[0].IsVisible);
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = true;
+                }
+
+                WpfTestHost.Pump();
+                Assert.Same(host.SummaryLine, VisualTreeHelper.GetParent(indicator));
+            });
+        }
+
+        [Fact]
+        public void NarrowTrafficPane_MovesAutoScrollUnderTheTimelineModesInsteadOfOverThem()
+        {
+            _application.Run(window =>
+            {
+                var controller = Controller();
+                var view = View(controller);
+                ShowAt(window, view, 1600);
+                controller.IsRunning = true;
+                WpfTestHost.Pump();
+                var timeline = (CaptureTimelineView)view.FindName("TimelineView");
+                var header = (ReflowPanel)timeline.FindName("HeaderRow");
+                var volume = (UIElement)timeline.FindName("VolumeMode");
+                var autoScroll = (CheckBox)timeline.FindName("AutoScrollButton");
+                UIElement[] trailing = new[] { (UIElement)timeline.FindName("CapturingIndicator"), autoScroll }
+                    .Where(element => element.IsVisible).ToArray();
+                Assert.Contains(autoScroll, trailing);
+
+                // The timeline's Auto Scroll is the view's own.
+                Assert.False(autoScroll.IsChecked);
+                autoScroll.IsChecked = true;
+                Assert.True(view.AutoScroll);
+                view.AutoScroll = false;
+                Assert.False(autoScroll.IsChecked);
+
+                // With room, Capturing and Auto Scroll end the modes' line at its right, 16px or more past Volume.
+                Assert.False(header.IsStacked);
+                Assert.True(trailing.All(element => Bounds(element, header).Left >= Bounds(volume, header).Right + 15.5));
+                Assert.InRange(Bounds(autoScroll, header).Right - header.ActualWidth, -0.5, 0.5);
+                Assert.InRange(Middle(autoScroll, header) - Middle(volume, header), -1, 1);
+
+                // A narrow pane moves them to a line of their own under the modes, at its left, 4px down.
+                window.Width = 700;
+                WpfTestHost.Pump();
+                Assert.True(header.IsStacked);
+                Assert.True(autoScroll.IsVisible);
+                double modesBottom = ((FrameworkElement)VisualTreeHelper.GetParent(volume)).ActualHeight;
+                Assert.All(trailing, element => Assert.InRange(Bounds(element, header).Top - modesBottom, 3.5, header.ActualHeight));
+                Assert.InRange(trailing.Min(element => Bounds(element, header).Left), -0.5, 0.5);
+                Assert.True(Bounds(autoScroll, header).Right <= header.ActualWidth + 0.5);
+
+                window.Width = 1600;
+                WpfTestHost.Pump();
+                Assert.False(header.IsStacked);
+                controller.IsRunning = false;
+            });
+        }
+
+        [Fact]
+        public void FoldedFilters_MarkTheFiltersButtonWhileAnyFilterIsOn()
+        {
+            _application.Run(window =>
+            {
+                var controller = Controller();
+                var view = View(controller);
+                ShowAt(window, view, 700);
+                var host = (FilterOverflowHost)view.FindName("FiltersHost");
+                var button = host.OverflowButton;
+                var dot = Descendants(button).OfType<Ellipse>().Single();
+                Assert.Equal(Visibility.Collapsed, dot.Visibility);
+
+                var status = (CheckBox)((CheckBoxFilters)view.FindName("StatusFilters")).FindName("EnableFilters");
+                ((IToggleProvider)UIElementAutomationPeer.CreatePeerForElement(status).GetPattern(PatternInterface.Toggle)).Toggle();
+                WpfTestHost.Pump();
+                Assert.Equal(Visibility.Visible, dot.Visibility);
+                Assert.Equal("Filters (1 active)", AutomationProperties.GetName(button));
+
+                controller.SetProcessFilter(ProcessFilterTestSupport.Spec(null, new[] { "svchost.exe" }));
+                WpfTestHost.Pump();
+                Assert.Equal("Filters (2 active)", AutomationProperties.GetName(button));
+                Assert.Equal(AutomationProperties.GetName(button), button.ToolTip);
+
+                // The process filter's summary and Show all processes stay in view on their line under the Filters
+                // button, 4px below it, and the popup doesn't repeat them. A pane this narrow wraps Show all under the
+                // summary rather than cutting either short.
+                var indicator = (TextBlock)view.FindName("ProcessFilterIndicator");
+                var showAll = (Button)view.FindName("ShowAllProcessesButton");
+                Assert.True(indicator.IsVisible);
+                Assert.True(showAll.IsVisible);
+                Assert.InRange(Bounds(indicator, host).Left - Bounds(button, host).Left, -0.5, 0.5);
+                Assert.InRange(Bounds(indicator, host).Top - Bounds(button, host).Bottom, 3.5, 4.5);
+                Assert.InRange(Bounds(showAll, host).Left - Bounds(indicator, host).Left, -0.5, 0.5);
+                Assert.InRange(Bounds(showAll, host).Top - Bounds(indicator, host).Bottom, -0.5, 0.5);
+                Assert.InRange(Bounds(showAll, host).Bottom - host.ActualHeight, -0.5, 0.5);
+                button.IsChecked = true;
+                WpfTestHost.Pump();
+                Assert.True(host.OverflowPopup.IsOpen);
+                Assert.False(host.OverflowPopup.Child.IsAncestorOf(indicator));
+                Assert.False(host.OverflowPopup.Child.IsAncestorOf(showAll));
+                Assert.True(indicator.IsVisible);
+                button.IsChecked = false;
+                WpfTestHost.Pump();
+
+                status.IsChecked = false;
+                controller.SetProcessFilter(ProcessFilterSpec.Empty);
+                WpfTestHost.Pump();
+                Assert.Equal(Visibility.Collapsed, dot.Visibility);
+                Assert.Equal("Filters", AutomationProperties.GetName(button));
+            });
+        }
+
+        [Fact]
+        public void FiltersButton_OpensFromTheKeyboardOnTheFirstFilterAndEscReturnsToIt()
+        {
+            _application.Run(window =>
+            {
+                var view = View(Controller());
+                ShowAt(window, view, 700);
+                var host = (FilterOverflowHost)view.FindName("FiltersHost");
+                var button = host.OverflowButton;
+                var peer = UIElementAutomationPeer.CreatePeerForElement(button);
+                Assert.Equal(AutomationControlType.Button, peer.GetAutomationControlType());
+                var expander = Assert.IsAssignableFrom<IExpandCollapseProvider>(peer.GetPattern(PatternInterface.ExpandCollapse));
+                Assert.Equal(ExpandCollapseState.Collapsed, expander.ExpandCollapseState);
+                var status = (CheckBoxFilters)view.FindName("StatusFilters");
+                var first = (CheckBox)status.FindName("EnableFilters");
+
+                Assert.True(button.Focus());
+                Press(button, Key.Enter);
+                WpfTestHost.Pump();
+                Assert.True(host.OverflowPopup.IsOpen);
+                Assert.Equal(ExpandCollapseState.Expanded, expander.ExpandCollapseState);
+                Assert.Same(first, Keyboard.FocusedElement);
+                // Tab moves on through the filters in the popup.
+                Assert.True(first.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
+                Assert.True(status.IsKeyboardFocusWithin);
+                Assert.NotSame(first, Keyboard.FocusedElement);
+
+                Press((UIElement)Keyboard.FocusedElement, Key.Escape);
+                WpfTestHost.Pump();
+                Assert.False(host.OverflowPopup.IsOpen);
+                Assert.True(button.IsKeyboardFocused);
+                Assert.Equal(ExpandCollapseState.Collapsed, expander.ExpandCollapseState);
+                Assert.Same(view.FindName("FiltersPanel"), VisualTreeHelper.GetParent(status));
+
+                // Screen readers open and close it the same way.
+                expander.Expand();
+                WpfTestHost.Pump();
+                Assert.True(host.OverflowPopup.IsOpen);
+                Assert.Same(first, Keyboard.FocusedElement);
+                expander.Collapse();
+                WpfTestHost.Pump();
+                Assert.False(host.OverflowPopup.IsOpen);
+                Assert.True(button.IsKeyboardFocused);
+            });
+        }
+
         private sealed class UnusedConfiguration : IProxyDeviceConfiguration
         {
             private readonly TaskCompletionSource<ProxyConfiguration> _pending = new();
@@ -508,6 +764,44 @@ namespace XMAT.Tests
             view.DataContext = new TestCaptureDeviceContext(controller);
             return view;
         }
+
+        // The traffic pane takes about half of the view's width.
+        private static void ShowAt(Window window, CaptureConnectionView view, double width)
+        {
+            window.Width = width;
+            window.Height = 720;
+            WpfTestHost.Show(window, view);
+        }
+
+        // The filters that fold into the Filters button, in row order.
+        private static UIElement[] Filters(CaptureConnectionView view) =>
+            new[] { "StatusFilters", "HostFilters", "MethodFilters", "ProcessFilterButton" }
+                .Select(name => (UIElement)view.FindName(name)).ToArray();
+
+        private static double Middle(UIElement element, Visual ancestor) =>
+            element.TransformToAncestor(ancestor).Transform(new Point(0, element.RenderSize.Height / 2)).Y;
+
+        private static Rect Bounds(UIElement element, Visual ancestor) =>
+            element.TransformToAncestor(ancestor).TransformBounds(new Rect(element.RenderSize));
+
+        private static IEnumerable<DependencyObject> Descendants(DependencyObject parent)
+        {
+            for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, index);
+                yield return child;
+                foreach (var descendant in Descendants(child))
+                {
+                    yield return descendant;
+                }
+            }
+        }
+
+        private static void Press(UIElement target, Key key) =>
+            target.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(target), 0, key)
+            {
+                RoutedEvent = Keyboard.KeyDownEvent
+            });
 
         private static int HandlerCount(object source) =>
             ((Delegate)source.GetType().GetField("PropertyChanged",

@@ -6,7 +6,8 @@
              xmlns:local="clr-namespace:XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews"
              mc:Ignorable="d" 
              d:DesignHeight="450" d:DesignWidth="800">
-    <DataGrid ItemsSource="{Binding Data}" AutoGenerateColumns="False" IsReadOnly="True">
+    <DataGrid ItemsSource="{Binding Data}" AutoGenerateColumns="False" IsReadOnly="True"
+              AutomationProperties.Name="{x:Static local:CallFrequencyRuleDataView.TableName}">
         <DataGrid.Columns>
             <DataGridTextColumn Binding="{Binding TotalCalls}" Header="{x:Static local:CallFrequencyRuleDataView.TotalCallsLabel}"/>
             <DataGridTextColumn Binding="{Binding TimesSustainedExceeded}" Header="{x:Static local:CallFrequencyRuleDataView.TimesSustainedExceededLabel}"/>

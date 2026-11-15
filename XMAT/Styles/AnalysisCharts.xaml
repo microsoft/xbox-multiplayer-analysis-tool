@@ -1,0 +1,225 @@
+<!-- Styles for the call rate charts in the analysis results (CallRateView), in the new look only: App.xaml merges this
+     dictionary, and the original look's resources leave it out, as that look doesn't show the charts. Colors are theme
+     brushes taken by resource reference, so the light, dark and high contrast themes all apply. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="clr-namespace:XMAT.XboxLiveCaptureAnalysis.ReportViews.Controls">
+
+    <!-- The section title, beside the window switch. -->
+    <Style x:Key="CallRateHeaderStyle" TargetType="DockPanel">
+        <Setter Property="MinHeight" Value="28"/>
+        <Setter Property="Margin" Value="0,0,0,8"/>
+        <Setter Property="LastChildFill" Value="True"/>
+    </Style>
+
+    <Style x:Key="CallRateTitleStyle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="{DynamicResource PaneTitleFontSize}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Foreground" Value="{DynamicResource HeadingForegroundBrush}"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Margin" Value="0,0,16,0"/>
+        <Setter Property="AutomationProperties.HeadingLevel" Value="Level3"/>
+    </Style>
+
+    <!-- A keyboard-only focus outline, for the switch's segments and the table's rows. -->
+    <Style x:Key="CallRateFocusVisualStyle">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Margin="2" BorderThickness="1" CornerRadius="2" SnapsToDevicePixels="True"
+                            BorderBrush="{DynamicResource PrimaryForegroundBrush}"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The window switch: two joined segments, the chosen one in the accent like a checked toggle. Tag holds a
+         segment's corner radius. -->
+    <Style x:Key="CallRateSegmentStyle" TargetType="RadioButton">
+        <Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
+        <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
+        <Setter Property="Padding" Value="12,0"/>
+        <Setter Property="MinHeight" Value="28"/>
+        <Setter Property="FocusVisualStyle" Value="{StaticResource CallRateFocusVisualStyle}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Bd"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{TemplateBinding Tag}"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonPressedBackgroundBrush}"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource TabSelectionIndicatorBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The segments share the border between them, which the chosen one draws. -->
+    <Style x:Key="CallRateFirstSegmentStyle" TargetType="RadioButton" BasedOn="{StaticResource CallRateSegmentStyle}">
+        <Setter Property="BorderThickness" Value="1,1,0,1"/>
+        <Setter Property="Tag">
+            <Setter.Value>
+                <CornerRadius>4,0,0,4</CornerRadius>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsChecked" Value="True">
+                <Setter Property="BorderThickness" Value="1"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style x:Key="CallRateLastSegmentStyle" TargetType="RadioButton" BasedOn="{StaticResource CallRateSegmentStyle}">
+        <Setter Property="BorderThickness" Value="0,1,1,1"/>
+        <Setter Property="Tag">
+            <Setter.Value>
+                <CornerRadius>0,4,4,0</CornerRadius>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsChecked" Value="True">
+                <Setter Property="BorderThickness" Value="1"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- The table: a recessed well with a header band, like the analysis tables, and taller rows that fit a chart. -->
+    <Style x:Key="CallRateTableStyle" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource TextAreaBackgroundBrush}"/>
+        <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+    </Style>
+
+    <Style x:Key="CallRateHeaderBandStyle" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource DataGridHeaderBackgroundBrush}"/>
+        <Setter Property="CornerRadius" Value="4,4,0,0"/>
+        <Setter Property="MinHeight" Value="{DynamicResource TableHeaderMinHeight}"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+    </Style>
+
+    <Style x:Key="CallRateHeaderTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource DataGridHeaderForegroundBrush}"/>
+        <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
+        <Setter Property="Margin" Value="7,0,4,0"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <Style x:Key="CallRateHeaderDividerStyle" TargetType="Border">
+        <Setter Property="Width" Value="1"/>
+        <Setter Property="Margin" Value="0,8"/>
+        <Setter Property="HorizontalAlignment" Value="Right"/>
+        <Setter Property="Background" Value="{DynamicResource ColumnHeaderDividerBrush}"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+    </Style>
+
+    <!-- A row reads as one sentence to screen readers; Tab enters the rows and the arrow keys move between them. -->
+    <Style x:Key="CallRateRowStyle" TargetType="ContentPresenter">
+        <Setter Property="Focusable" Value="True"/>
+        <Setter Property="FocusVisualStyle" Value="{StaticResource CallRateFocusVisualStyle}"/>
+        <Setter Property="AutomationProperties.Name" Value="{Binding Sentence}"/>
+    </Style>
+
+    <Style x:Key="CallRateCellTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    </Style>
+
+    <!-- The limits' own description, under the endpoint when it has more than one set; empty, it takes no room. -->
+    <Style x:Key="CallRateDetailTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="FontSize" Value="{DynamicResource MetadataFontSize}"/>
+        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+        <Style.Triggers>
+            <Trigger Property="Text" Value="">
+                <Setter Property="Visibility" Value="Collapsed"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- "None", or a pill with the analyzer's count and level in words, such as "1 warning", in the analysis report's
+         issue colors, which IssueBadge.Level sets as the control's Background and Foreground. -->
+    <Style x:Key="CallRateBadgeStyle" TargetType="ContentControl">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="HorizontalAlignment" Value="Left"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContentControl">
+                    <TextBlock Text="{TemplateBinding Content}" FontSize="{DynamicResource BaseFontSize}"
+                               Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsOverLimit}" Value="True">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ContentControl">
+                            <Border MinHeight="16" Padding="6,0" CornerRadius="8" Background="{TemplateBinding Background}"
+                                    SnapsToDevicePixels="True">
+                                <TextBlock Text="{TemplateBinding Content}" VerticalAlignment="Center"
+                                           FontSize="{DynamicResource MetadataFontSize}" FontWeight="SemiBold"
+                                           Foreground="{TemplateBinding Foreground}"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- The charts: the line in the text color, the limit and its label in the secondary text color, and the stretches
+         over the limit in the error color, thicker and shaded. Keyed, since an implicit style wouldn't reach a chart
+         in a data template from a window's resources. The charts and their axis take their column's width. -->
+    <Style x:Key="CallRateChartStyle" TargetType="controls:CallRateChart">
+        <Setter Property="Stroke" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="OverLimitStroke" Value="{DynamicResource CaptureErrorForegroundBrush}"/>
+        <Setter Property="GuideBrush" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="PlotHeight" Value="32"/>
+    </Style>
+
+    <Style x:Key="CallRateLimitLabelStyle" TargetType="controls:CallRateLimitLabel">
+        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="FontSize" Value="{DynamicResource MetadataFontSize}"/>
+        <Setter Property="PlotHeight" Value="32"/>
+    </Style>
+
+    <Style x:Key="CallRateAxisStyle" TargetType="controls:CallRateAxis">
+        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="FontSize" Value="{DynamicResource MetadataFontSize}"/>
+    </Style>
+
+    <!-- The hover readout, raised over the rows. -->
+    <Style x:Key="CallRateTipStyle" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}"/>
+        <Setter Property="Padding" Value="8,3"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="TextElement.FontSize" Value="{DynamicResource BaseFontSize}"/>
+        <Setter Property="TextElement.Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect BlurRadius="12" ShadowDepth="4" Direction="270" Color="Black" Opacity="0.12"/>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

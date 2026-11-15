@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -30,6 +31,7 @@ namespace XMAT
             Localization.LoadLanguage(CaptureAppModel.AppModel.PreferencesModel.Language);
 
             ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
+            SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
 
             InitializeExceptionHandlers();
             // Before any proxy, certificate or database initialization.
@@ -38,6 +40,17 @@ namespace XMAT
             InitializeCaptureMethods();
             InitializeCaptureAnalyzers();
             TrackXboxCaptures();
+        }
+
+        // Windows high contrast was turned on or off, or another contrast theme was chosen. The theme is applied again
+        // after the system colors that change with it are updated.
+        private void SystemParameters_StaticPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(SystemParameters.HighContrast))
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.Background,
+                    new Action(() => ThemeManager.ApplyTheme(ThemeManager.CurrentTheme)));
+            }
         }
 
         private void InitializeExceptionHandlers()
@@ -176,6 +189,12 @@ namespace XMAT
             }
             CaptureAppModel.AppModel.CaptureDeviceContexts.CollectionChanged += (s, e) =>
             {
+                // A tab moved to another place is already tracked.
+                if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Move)
+                {
+                    return;
+                }
+
                 foreach (var context in e.NewItems?.OfType<ICaptureDeviceContext>() ?? Enumerable.Empty<ICaptureDeviceContext>())
                 {
                     Track(context);

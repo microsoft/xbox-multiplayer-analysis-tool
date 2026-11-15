@@ -49,6 +49,29 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void Layout_VolumeCountsOnlyTheRequestsThatTheProcessFilterShows()
+        {
+            ProxyConnectionModel game = WithProcess(Create(1, start: Origin), Local("Game.exe", 10));
+            ProxyConnectionModel tool = WithProcess(Create(2, start: Origin.AddMilliseconds(5)), Local("Tool.exe", 11));
+            ProxyConnectionModel pending = WithProcess(
+                Create(3, start: Origin.AddSeconds(1)), ClientProcessInfo.NotRecorded, resolving: true);
+            var second = CaptureVolumeSeries.SecondOf(Origin);
+            var layout = new CaptureTimelineLayout();
+            layout.Reset(new[] { game, tool, pending });
+            Assert.Equal((3, 2), (layout.Volume.Total, layout.Volume.CountAt(second)));
+
+            layout.SetFilter(model => model.ClientProcess.Name == "Game.exe");
+            Assert.Equal((1, 1, 0), (layout.Volume.Total, layout.Volume.CountAt(second), layout.Volume.CountAt(second + 1)));
+
+            pending.SetClientProcess(Local("Game.exe", 10));
+            Assert.True(layout.Update(pending));
+            Assert.Equal((2, 1), (layout.Volume.Total, layout.Volume.CountAt(second + 1)));
+
+            layout.SetFilter(null);
+            Assert.Equal((3, 2), (layout.Volume.Total, layout.Volume.CountAt(second)));
+        }
+
+        [Fact]
         public void View_ShowsOnlyMatchingBarsAndAddsALateMatchWithoutRebuildingTheLayout()
         {
             WpfTestHost.Run(window =>

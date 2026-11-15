@@ -1,0 +1,115 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- The original XMAT colors, shown when the New look switch is off. -->
+
+    <!-- Window / Panel backgrounds -->
+    <SolidColorBrush x:Key="WindowBackgroundBrush"          Color="#FF1E1E1E"/>
+    <SolidColorBrush x:Key="PanelBackgroundBrush"           Color="#FF252526"/>
+    <SolidColorBrush x:Key="AltRowBackgroundBrush"          Color="#FF2D2D30"/>
+
+    <!-- Foreground / text -->
+    <SolidColorBrush x:Key="PrimaryForegroundBrush"         Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="SecondaryForegroundBrush"       Color="#FF9B9B9B"/>
+    <SolidColorBrush x:Key="DisabledForegroundBrush"        Color="#FF808080"/>
+    <SolidColorBrush x:Key="CapturePendingForegroundBrush"  Color="#FFFFC000"/>
+    <SolidColorBrush x:Key="CaptureErrorForegroundBrush"    Color="#FFFF8080"/>
+    <SolidColorBrush x:Key="WarningForegroundBrush"         Color="DarkOrange"/>
+
+    <!-- Borders -->
+    <SolidColorBrush x:Key="BorderBrush"                    Color="#FF3F3F46"/>
+
+    <!-- Selection -->
+    <SolidColorBrush x:Key="InactiveSelectionBrush"         Color="#FF3E3E42"/>
+    <SolidColorBrush x:Key="ActiveSelectionBrush"           Color="#FF264F78"/>
+    <SolidColorBrush x:Key="ActiveSelectionForegroundBrush" Color="#FFFFFFFF"/>
+
+    <!-- Expander / section backgrounds -->
+    <SolidColorBrush x:Key="ExpanderHeaderBrush"            Color="#FF3C3C3C"/>
+    <SolidColorBrush x:Key="ExpanderSubHeaderBrush"         Color="#FF333337"/>
+    <SolidColorBrush x:Key="ExpanderDetailBrush"            Color="#FF2D2D30"/>
+
+    <!-- Menu / toolbar -->
+    <SolidColorBrush x:Key="MenuBackgroundBrush"            Color="#FF2D2D30"/>
+    <SolidColorBrush x:Key="MenuForegroundBrush"            Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="StatusBarBackgroundBrush"       Color="#FF005A9E"/>
+    <SolidColorBrush x:Key="StatusBarForegroundBrush"       Color="White"/>
+    <SolidColorBrush x:Key="ToolBarBackgroundBrush"         Color="#FF2D2D30"/>
+    <SolidColorBrush x:Key="ToolBarForegroundBrush"         Color="#FFD4D4D4"/>
+
+    <!-- Tab / header -->
+    <SolidColorBrush x:Key="TabPanelBackgroundBrush"        Color="Transparent"/>
+    <SolidColorBrush x:Key="TabItemBackgroundBrush"         Color="#FF1E1E1E"/>
+    <SolidColorBrush x:Key="TabItemSelectedBackgroundBrush" Color="#FF2D2D30"/>
+    <SolidColorBrush x:Key="TabItemForegroundBrush"         Color="#FF9B9B9B"/>
+    <SolidColorBrush x:Key="TabItemSelectedForegroundBrush" Color="#FFD4D4D4"/>
+
+    <!-- Button -->
+    <SolidColorBrush x:Key="ButtonBackgroundBrush"          Color="#FF3F3F46"/>
+    <SolidColorBrush x:Key="ButtonForegroundBrush"          Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="ButtonHoverBackgroundBrush"     Color="#FF505058"/>
+    <SolidColorBrush x:Key="ButtonPressedBackgroundBrush"   Color="#FF005A9E"/>
+
+    <!-- TextBox / Input -->
+    <SolidColorBrush x:Key="TextBoxBackgroundBrush"         Color="#FF1E1E1E"/>
+    <SolidColorBrush x:Key="TextBoxForegroundBrush"         Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="TextBoxBorderBrush"             Color="#FF3F3F46"/>
+
+    <!-- DataGrid -->
+    <SolidColorBrush x:Key="DataGridHeaderBackgroundBrush"  Color="#FF333337"/>
+    <SolidColorBrush x:Key="DataGridHeaderForegroundBrush"  Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="DataGridGridLinesBrush"         Color="#FF3F3F46"/>
+
+    <!-- GridSplitter -->
+    <SolidColorBrush x:Key="GridSplitterBrush"              Color="#FF3F3F46"/>
+
+    <!-- ScrollViewer / ScrollBar -->
+    <SolidColorBrush x:Key="ScrollBarBackgroundBrush"       Color="#FF1E1E1E"/>
+    <SolidColorBrush x:Key="ScrollBarThumbBrush"            Color="#FF686868"/>
+
+    <!-- CheckBox -->
+    <SolidColorBrush x:Key="CheckBoxForegroundBrush"        Color="#FFD4D4D4"/>
+
+    <!-- Timeline bars by response status with white labels, and analysis issue counts by level in the theme's text
+         color, as the original look showed them -->
+    <SolidColorBrush x:Key="TimelineBarNoStatusBrush" Color="#FF686868"/>
+    <SolidColorBrush x:Key="TimelineBarNoStatusForegroundBrush" Color="White"/>
+    <SolidColorBrush x:Key="TimelineBarSuccessBrush" Color="#FF4CAF50"/>
+    <SolidColorBrush x:Key="TimelineBarSuccessForegroundBrush" Color="White"/>
+    <SolidColorBrush x:Key="TimelineBarRedirectBrush" Color="#FF2196F3"/>
+    <SolidColorBrush x:Key="TimelineBarRedirectForegroundBrush" Color="White"/>
+    <SolidColorBrush x:Key="TimelineBarClientErrorBrush" Color="#FFFF9800"/>
+    <SolidColorBrush x:Key="TimelineBarClientErrorForegroundBrush" Color="White"/>
+    <SolidColorBrush x:Key="TimelineBarServerErrorBrush" Color="#FFF44336"/>
+    <SolidColorBrush x:Key="TimelineBarServerErrorForegroundBrush" Color="White"/>
+    <SolidColorBrush x:Key="IssueErrorBackgroundBrush" Color="Red"/>
+    <SolidColorBrush x:Key="IssueErrorForegroundBrush" Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="IssueWarningBackgroundBrush" Color="Orange"/>
+    <SolidColorBrush x:Key="IssueWarningForegroundBrush" Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="IssueInfoBackgroundBrush" Color="Green"/>
+    <SolidColorBrush x:Key="IssueInfoForegroundBrush" Color="#FFD4D4D4"/>
+
+    <!-- SystemColors overrides for built-in control templates -->
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#FF2D2D30"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#FF1E1E1E"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#FF264F78"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#FF3E3E42"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#FF656565"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="#FF2D2D30"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuHighlightBrushKey}" Color="#FF3E3E42"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightBrushKey}" Color="#FF333337"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightLightBrushKey}" Color="#FF252526"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlDarkBrushKey}" Color="#FF3F3F46"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlDarkDarkBrushKey}" Color="#FF1E1E1E"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ActiveBorderBrushKey}" Color="#FF3F3F46"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveBorderBrushKey}" Color="#FF3F3F46"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.InfoBrushKey}" Color="#FF2D2D30"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.InfoTextBrushKey}" Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ScrollBarBrushKey}" Color="#FF1E1E1E"/>
+
+</ResourceDictionary>

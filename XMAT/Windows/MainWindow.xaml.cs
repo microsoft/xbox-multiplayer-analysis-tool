@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
 using XMAT.DataAbstractionLayer;
@@ -35,12 +37,19 @@ namespace XMAT
         private bool _isCloseInProgress;
         private bool _closeConfirmed;
 
+        private const string OriginalLookUri =
+            "pack://application:,,,/XboxMultiplayerAnalysisTool;component/Looks/OriginalLook.xaml";
+        private ResourceDictionary _newLookResources;
+        private ResourceDictionary _originalLookResources;
+
         public MainWindow()
         {
             CaptureAppSettings.Deserialize(CaptureAppModel.AppModel);
 
-            // Apply theme after preferences are deserialized
-            ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
+            // Apply the look and theme after preferences are deserialized
+            SetLook(CaptureAppModel.AppModel.PreferencesModel.UseNewLook, CaptureAppModel.AppModel.PreferencesModel.Theme);
+            // Comfort view sets the new look's spacing; the original look keeps its own.
+            ComfortView.Apply(_newLookResources, CaptureAppModel.AppModel.PreferencesModel.ComfortView);
 
             _analysisReportExportWorkflow =
                 new AnalysisReportExportWorkflow(
@@ -49,6 +58,16 @@ namespace XMAT
                     ExportAnalysisReportAsync);
 
             InitializeComponent();
+            NewLookToggle.Content = Localization.GetLocalizedString("NEW_LOOK_TOGGLE");
+            NewLookToggle.ToolTip = Localization.GetLocalizedString("NEW_LOOK_TOOLTIP");
+            NewLookToggle.IsChecked = LookState.Current.IsNewLook;
+            System.Windows.Automation.AutomationProperties.SetName(
+                AnalysisSplitter, Localization.GetLocalizedString("A11Y_SPLITTER_ANALYSIS"));
+            SystemEvents.UserPreferenceChanged += SystemEvents_UserPreferenceChanged;
+            Closed += (_, _) => SystemEvents.UserPreferenceChanged -= SystemEvents_UserPreferenceChanged;
+            // High contrast can turn on or off while the app runs, so the theme items are brought up to date as the
+            // menu opens.
+            EditMenu.SubmenuOpened += (_, _) => UpdateThemeMenu();
 
             // LOC
             FileMenu.Header = Localization.GetLocalizedString("FILE_MENU");
@@ -76,9 +95,65 @@ namespace XMAT
             ChangeProxyPort.ToolTip = Localization.GetLocalizedString("PROXY_PORT_CHANGE_TOOLTIP");
             ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
 
-            // Sync dark mode checkbox with saved preference
-            ToggleDarkMode.IsChecked = CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark";
+            AppearanceMenu.Header = Localization.GetLocalizedString("EDIT_APPEARANCE");
+            foreach (var item in ThemeMenuItems)
+            {
+                item.Header = Localization.GetLocalizedString("THEME_" + ((string)item.Tag).ToUpperInvariant());
+            }
+            ComfortViewMenu.Header = Localization.GetLocalizedString("COMFORT_VIEW");
+            HighContrastThemeNote.Header = Localization.GetLocalizedString("THEME_HIGH_CONTRAST_NOTE");
+            UpdateThemeMenu();
         }
+
+        // Comfort view's tooltip in the new look, and in the original look, where the item is unavailable.
+        public static string ComfortViewTooltip => Localization.GetLocalizedString("COMFORT_VIEW_TOOLTIP");
+
+        public static string ComfortViewNewLookOnlyTooltip =>
+            Localization.GetLocalizedString("COMFORT_VIEW_NEW_LOOK_ONLY");
+
+        // The Appearance menu's theme items, which name their theme in Tag.
+        private IEnumerable<MenuItem> ThemeMenuItems =>
+            AppearanceMenu.Items.OfType<MenuItem>().Where(item => item.Tag is string);
+
+
+        // Follows the switch's state, so a click, the keyboard and accessibility tools all change the look.
+        private void NewLookToggle_Changed(object sender, RoutedEventArgs e)
+        {
+            bool newLook = NewLookToggle.IsChecked == true;
+            if (newLook == LookState.Current.IsNewLook)
+            {
+                return;
+            }
+            SetLook(newLook, ThemeManager.CurrentTheme);
+            UpdateThemeMenu();
+            CaptureAppModel.AppModel.PreferencesModel.UseNewLook = newLook;
+            CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+        }
+
+        // Shows the redesigned resources (App.xaml) or the original ones, so the two can be compared. Views take
+        // the layout values that differ from LookState, so open captures keep their data, selection and filters.
+        private void SetLook(bool newLook, string theme)
+        {
+            var app = Application.Current;
+            _newLookResources ??= app.Resources;
+            var resources = newLook
+                ? _newLookResources
+                : _originalLookResources ??= new ResourceDictionary { Source = new Uri(OriginalLookUri) };
+            LookState.Current.IsNewLook = newLook;
+            // The look's resources get the theme before they are shown, in one swap: views that resolved resources
+            // against one theme can miss a later theme change, and would show a mix of the two.
+            ThemeManager.PrepareTheme(resources, theme, newLook);
+            TextScale.Apply(resources, TextScale.ReadFactor());
+            if (!ReferenceEquals(app.Resources, resources))
+            {
+                app.Resources = resources;
+            }
+            ThemeManager.RaiseThemeChanged();
+        }
+
+        // The Windows Text size setting can change while XMAT runs.
+        private void SystemEvents_UserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e) =>
+            Dispatcher.BeginInvoke(new Action(() => TextScale.Apply(Application.Current.Resources, TextScale.ReadFactor())));
 
         private void ChangeProxyPort_CanExecute(object sender, CanExecuteRoutedEventArgs e)
         {
@@ -690,11 +765,34 @@ namespace XMAT
             XMAT.WebServiceCapture.Proxy.WebServiceProxy.CertManager.ExportRootCertificate(PublicUtilities.DesktopDirectoryPath);
         }
 
-        private void ToggleDarkMode_Click(object sender, RoutedEventArgs e)
+        private void UpdateThemeMenu()
         {
-            string theme = ToggleDarkMode.IsChecked ? "Dark" : "Light";
+            foreach (var item in ThemeMenuItems)
+            {
+                item.IsChecked = (string)item.Tag == ThemeManager.CurrentTheme;
+            }
+            ToggleDarkMode.IsChecked = ThemeManager.CurrentTheme == "Dark";
+            ComfortViewMenu.IsChecked = CaptureAppModel.AppModel.PreferencesModel.ComfortView;
+            HighContrastThemeNote.Visibility = SystemParameters.HighContrast ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void SelectTheme_Click(object sender, RoutedEventArgs e)
+        {
+            var item = (MenuItem)sender;
+            // The original look's Dark Mode item switches between its two themes.
+            string theme = item == ToggleDarkMode ? (item.IsChecked ? "Dark" : "Light") : (string)item.Tag;
             ThemeManager.ApplyTheme(theme);
             CaptureAppModel.AppModel.PreferencesModel.Theme = theme;
+            UpdateThemeMenu();
+            CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
+        }
+
+        // The item is checkable, so its check mark already shows the new setting. The new look's views follow at once.
+        private void ComfortView_Click(object sender, RoutedEventArgs e)
+        {
+            bool comfortView = ComfortViewMenu.IsChecked;
+            ComfortView.Apply(_newLookResources, comfortView);
+            CaptureAppModel.AppModel.PreferencesModel.ComfortView = comfortView;
             CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
         }
 

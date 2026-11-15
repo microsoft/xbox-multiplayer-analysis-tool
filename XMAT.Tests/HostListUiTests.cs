@@ -5,8 +5,11 @@
 using System.Collections.ObjectModel;
 using System.Reflection;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
@@ -52,7 +55,8 @@ namespace XMAT.Tests
                 Assert.Equal("clicked.example", block.Host);
                 Assert.Equal(HostListOperation.Add, block.Operation);
                 Assert.Same(policy, block.Policy);
-                Assert.Equal(Localization.GetLocalizedString("HOST_LIST_ADD_BLOCK", "clicked.example"), Item(menu, block).Header);
+                Assert.Equal(Localization.GetLocalizedString("MENU_ADD_TO_BLOCK_LIST_NAME", "clicked.example"), Name(Item(menu, block)));
+                Assert.Equal("clicked.example", Assert.IsType<MenuGroupHeader>(menu.Items[0]).Subject);
                 Execute(menu, block);
                 menu.IsOpen = false;
                 WpfTestHost.Pump();
@@ -116,7 +120,7 @@ namespace XMAT.Tests
                 WpfTestHost.Pump();
 
                 Assert.Same(block, Actions(menu).Single(action => action.List == HostListKind.Block));
-                Assert.Equal(Localization.GetLocalizedString("HOST_LIST_ADD_BLOCK", "clicked.example"), Item(menu, block).Header);
+                Assert.Equal(Localization.GetLocalizedString("MENU_ADD_TO_BLOCK_LIST_NAME", "clicked.example"), Name(Item(menu, block)));
                 Execute(menu, block);
                 Assert.True(policy.BlockList.Contains("clicked.example"));
                 Assert.False(policy.BlockList.Contains("changed.example"));
@@ -222,9 +226,7 @@ namespace XMAT.Tests
                     .Single(endpoint => endpoint.Key.Kind == EndpointKind.SyntheticTelemetry);
                 ContextMenu syntheticMenu = Open(Row(grid, synthetic));
                 Assert.Empty(Actions(syntheticMenu));
-                Assert.Contains(syntheticMenu.Items.OfType<MenuItem>(), item =>
-                    !item.IsEnabled &&
-                    Equals(Localization.GetLocalizedString("HOST_LIST_NO_PHYSICAL_HOST"), item.Header));
+                Assert.Contains(Localization.GetLocalizedString("HOST_LIST_NO_PHYSICAL_HOST"), Notes(syntheticMenu));
                 syntheticMenu.IsOpen = false;
                 WpfTestHost.Pump();
 
@@ -255,9 +257,7 @@ namespace XMAT.Tests
                 ContextMenu syntheticMenu = Open(DetailHeader(
                     view, new EndpointKey(EndpointKind.SyntheticTelemetry, "inGameEvents")));
                 Assert.Empty(Actions(syntheticMenu));
-                Assert.Contains(syntheticMenu.Items.OfType<MenuItem>(), item =>
-                    !item.IsEnabled &&
-                    Equals(Localization.GetLocalizedString("HOST_LIST_NO_PHYSICAL_HOST"), item.Header));
+                Assert.Contains(Localization.GetLocalizedString("HOST_LIST_NO_PHYSICAL_HOST"), Notes(syntheticMenu));
                 syntheticMenu.IsOpen = false;
                 WpfTestHost.Pump();
 
@@ -375,6 +375,153 @@ namespace XMAT.Tests
                 // Only the manager hides this note (its intro states the scope); capture tabs show it.
                 Assert.Equal(Visibility.Visible, ((TextBlock)blockView.FindName("ScopeText")).Visibility);
                 Assert.Equal(Visibility.Visible, ((TextBlock)bypassView.FindName("ScopeText")).Visibility);
+            });
+        }
+
+        // The new look shows the list views as sections with sentence-case labels, a description that states the list's
+        // scope and the matching rules' code in the monospace font; the original look keeps its instructions and labels and
+        // shows none of the sections.
+        [Fact]
+        public void ListViews_ShowTheirSectionsInTheNewLookAndTheOriginalInstructionsInTheOriginalLook()
+        {
+            _application.Run(window =>
+            {
+                bool newLook = LookState.Current.IsNewLook;
+                try
+                {
+                    LookState.Current.IsNewLook = true;
+                    var view = new BlockListView { BlockList = new HostListPolicy().BlockList };
+                    WpfTestHost.Show(window, view);
+                    var add = (Button)view.FindName("AddUrlBlockButton");
+                    var heading = (TextBlock)view.FindName("BlockedUrlsLabel");
+                    var description = (TextBlock)view.FindName("DescriptionText");
+                    var rule = (TextBlock)view.FindName("PortRuleText");
+                    Assert.Equal(Localization.GetLocalizedString("HOST_LIST_ADD"), add.Content);
+                    Assert.Equal(Localization.GetLocalizedString("HOST_LIST_BLOCKED_HEADING"), heading.Text);
+                    Assert.Equal(AutomationHeadingLevel.Level3, AutomationProperties.GetHeadingLevel(heading));
+                    Assert.True(description.IsVisible);
+                    Assert.Equal(Localization.GetLocalizedString("HOST_LIST_BLOCK_DESCRIPTION"), description.Text);
+                    Assert.DoesNotContain("NO_IMPL_", description.Text);
+                    Assert.True(((FrameworkElement)view.FindName("MatchingRules")).IsVisible);
+                    Assert.False(((FrameworkElement)view.FindName("PatternHelpText")).IsVisible);
+                    Assert.Equal(Localization.GetLocalizedString("HOST_LIST_RULE_PORT").Replace("`", ""),
+                        UIElementAutomationPeer.CreatePeerForElement(rule).GetName());
+                    Assert.Contains(rule.Inlines.OfType<Run>(), run =>
+                        run.Text == "example.com:443" && run.FontFamily.Source == "Consolas");
+
+                    LookState.Current.IsNewLook = false;
+                    WpfTestHost.Pump();
+                    Assert.Equal("Add URL Block", add.Content);
+                    Assert.Equal("Blocked URLs:", heading.Text);
+                    Assert.Equal("Remove Selected", ((Button)view.FindName("RemoveSelectedButton")).Content);
+                    Assert.Equal("Clear All", ((Button)view.FindName("ClearAllButton")).Content);
+                    Assert.True(((FrameworkElement)view.FindName("PatternHelpText")).IsVisible);
+                    Assert.False(description.IsVisible);
+                    Assert.False(((FrameworkElement)view.FindName("MatchingRules")).IsVisible);
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = newLook;
+                }
+            });
+        }
+
+        // The new look turns a list's actions off while they have nothing to do: Remove selected until an entry is
+        // selected, and Clear all while the list is empty. Keyboard focus on an action that turns off moves to the list,
+        // or to the entry field once the list is empty. The original look keeps both actions on.
+        [Fact]
+        public void ListActions_TurnOffWhileTheyHaveNothingToDoAndKeepKeyboardFocusInThePanel()
+        {
+            _application.Run(window =>
+            {
+                bool newLook = LookState.Current.IsNewLook;
+                try
+                {
+                    LookState.Current.IsNewLook = true;
+                    var policy = new HostListPolicy();
+                    var view = new BypassListView { BypassList = policy.BypassList };
+                    WpfTestHost.Show(window, view);
+                    var list = (ListBox)view.FindName("BypassedUrlList");
+                    var entry = (TextBox)view.FindName("NewBypassTextBox");
+                    var remove = (Button)view.FindName("RemoveSelectedButton");
+                    var clear = (Button)view.FindName("ClearAllButton");
+                    Assert.False(remove.IsEnabled);
+                    Assert.False(clear.IsEnabled);
+
+                    policy.BypassList.Add("one.example");
+                    policy.BypassList.Add("two.example");
+                    WpfTestHost.Pump();
+                    Assert.False(remove.IsEnabled);
+                    Assert.True(clear.IsEnabled);
+
+                    list.SelectedIndex = 0;
+                    WpfTestHost.Pump();
+                    Assert.True(remove.IsEnabled);
+                    Assert.True(remove.Focus());
+                    remove.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                    WpfTestHost.Pump();
+                    Assert.Equal(new[] { "two.example" }, policy.BypassList.BypassedUrls);
+                    Assert.False(remove.IsEnabled);
+                    Assert.True(list.IsKeyboardFocusWithin);
+
+                    Assert.True(clear.Focus());
+                    clear.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                    WpfTestHost.Pump();
+                    Assert.Empty(policy.BypassList.BypassedUrls);
+                    Assert.False(clear.IsEnabled);
+                    Assert.True(entry.IsKeyboardFocused);
+
+                    LookState.Current.IsNewLook = false;
+                    WpfTestHost.Pump();
+                    Assert.True(remove.IsEnabled);
+                    Assert.True(clear.IsEnabled);
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = newLook;
+                }
+            });
+        }
+
+        // The new look counts a list's entries beside its heading and says in the list's well when it is empty.
+        [Fact]
+        public void ListViews_CountTheirEntriesAndSayWhenTheyAreEmpty()
+        {
+            _application.Run(window =>
+            {
+                var policy = new HostListPolicy();
+                var views = new (FrameworkElement View, string Count, string Empty, string EmptyKey, Action<string> Add)[]
+                {
+                    (new BlockListView { BlockList = policy.BlockList }, "BlockedCountText", "BlockedEmptyText",
+                        "HOST_LIST_BLOCK_EMPTY", entry => policy.BlockList.Add(entry)),
+                    (new BypassListView { BypassList = policy.BypassList }, "BypassedCountText", "BypassedEmptyText",
+                        "HOST_LIST_BYPASS_EMPTY", entry => policy.BypassList.Add(entry)),
+                };
+                foreach (var (view, countName, emptyName, emptyKey, add) in views)
+                {
+                    WpfTestHost.Show(window, view);
+                    var count = (TextBlock)view.FindName(countName);
+                    var empty = (TextBlock)view.FindName(emptyName);
+                    Assert.False(count.IsVisible);
+                    Assert.True(empty.IsVisible);
+                    Assert.Equal(Localization.GetLocalizedString(emptyKey), empty.Text);
+
+                    add("one.example");
+                    WpfTestHost.Pump();
+                    Assert.True(count.IsVisible);
+                    Assert.Equal(Localization.GetLocalizedString("HOST_LIST_COUNT_ONE"), count.Text);
+                    Assert.False(empty.IsVisible);
+
+                    add("two.example");
+                    WpfTestHost.Pump();
+                    Assert.Equal(Localization.GetLocalizedString("HOST_LIST_COUNT", 2), count.Text);
+                    Assert.DoesNotContain("NO_IMPL_", count.Text);
+                }
+
+                policy.BlockList.Clear();
+                WpfTestHost.Show(window, views[0].View);
+                Assert.False(((TextBlock)views[0].View.FindName("BlockedCountText")).IsVisible);
+                Assert.True(((TextBlock)views[0].View.FindName("BlockedEmptyText")).IsVisible);
             });
         }
 
@@ -654,7 +801,7 @@ namespace XMAT.Tests
             var element = new XElement(source);
             var namespaceMap = new Dictionary<string, string>();
             element.Attribute(Xaml + "Key")?.Remove();
-            var windowEvents = new[] { "Click", "DeviceTabClosed", "AnalysisTabAdded", "AnalysisTabClosed" };
+            var windowEvents = new[] { "Click", "Checked", "Unchecked", "DeviceTabClosed", "AnalysisTabAdded", "AnalysisTabClosed" };
             foreach (XAttribute attribute in element.DescendantsAndSelf().Attributes()
                 .Where(attribute => windowEvents.Contains(attribute.Name.LocalName)).ToArray())
             {
@@ -677,6 +824,15 @@ namespace XMAT.Tests
                 {
                     child.Name = XName.Get(child.Name.LocalName, qualifiedNamespace);
                 }
+                // Attached properties written as attributes, such as local:LiveRegion.Mode, need the assembly too.
+                foreach (XAttribute attribute in child.Attributes()
+                    .Where(attribute => !attribute.IsNamespaceDeclaration && namespaceMap.ContainsKey(attribute.Name.NamespaceName))
+                    .ToArray())
+                {
+                    attribute.Remove();
+                    child.SetAttributeValue(
+                        XName.Get(attribute.Name.LocalName, namespaceMap[attribute.Name.NamespaceName]), attribute.Value);
+                }
             }
             return (T)XamlReader.Parse(element.ToString());
         }
@@ -684,12 +840,17 @@ namespace XMAT.Tests
         private static IReadOnlyList<HostListAction> Actions(ContextMenu menu) =>
             menu.Items.OfType<MenuItem>().Select(item => item.CommandParameter).OfType<HostListAction>().ToList();
 
-        // A menu for an item without a host identity: only the disabled explanation, then closed.
+        // What a screen reader reads for the item; the new look's labels leave the host to the group's header.
+        private static string Name(MenuItem item) => UIElementAutomationPeer.CreatePeerForElement(item).GetName();
+
+        // The notes the new look shows in place of actions that aren't available.
+        private static IEnumerable<string> Notes(ContextMenu menu) => menu.Items.OfType<MenuNote>().Select(note => note.Text);
+
+        // A menu for an item without a host identity: only the explanation, then closed.
         private static void AssertNoHostActions(ContextMenu menu)
         {
             Assert.Empty(Actions(menu));
-            Assert.Contains(menu.Items.OfType<MenuItem>(), item =>
-                !item.IsEnabled && Equals(Localization.GetLocalizedString("HOST_LIST_NO_HOST"), item.Header));
+            Assert.Contains(Localization.GetLocalizedString("HOST_LIST_NO_HOST"), Notes(menu));
             menu.IsOpen = false;
             WpfTestHost.Pump();
         }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Windows.Controls;
+using CaptureAnalysisEngine;
 
 namespace XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews
 {
@@ -16,6 +17,8 @@ namespace XMAT.XboxLiveCaptureAnalysis.ReportViews.RuleDataViews
         public static string BurstSizeLabel { get { return Localization.GetLocalizedString("LTA_BURST_CALLS_SIZE"); } }
         public static string BurstWindowLabel { get { return Localization.GetLocalizedString("LTA_BURST_CALLS_WINDOW"); } }
         public static string TotalBurstsLabel { get { return Localization.GetLocalizedString("LTA_BURST_CALLS_TOTAL"); } }
+
+        public static string TableName { get { return Localization.GetLocalizedString("LTA_RULE_DATA_TABLE", BurstDetectionRule.DisplayName); } }
 
         public BurstDetectionRuleDataView()
         {

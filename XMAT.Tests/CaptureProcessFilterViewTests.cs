@@ -182,6 +182,9 @@ namespace XMAT.Tests
                 DataGrid grid = ConnectionList(view);
                 TextBlock indicator = Indicator(view);
                 var showAll = Assert.IsType<Button>(view.FindName("ShowAllProcessesButton"));
+                var host = (FilterOverflowHost)view.FindName("FiltersHost");
+                var row = (Grid)view.FindName("FiltersPanel");
+                double rowHeight = host.ActualHeight;
                 Assert.False(indicator.IsVisible);
                 Assert.False(showAll.IsVisible);
 
@@ -190,6 +193,15 @@ namespace XMAT.Tests
                 Assert.True(indicator.IsVisible);
                 Assert.Equal("Process filter: 1/2; 1 hidden; 0 unknown", indicator.Text);
                 Assert.True(showAll.IsVisible);
+                // At the designed size the filters keep their row: the summary takes a line of its own, 4px under the
+                // row and in line with the Filters label, in 12px secondary text beside a 24px Show all button.
+                Assert.False(host.IsOverflowing);
+                var label = (UIElement)view.FindName("FiltersText");
+                Assert.Equal(label.TranslatePoint(new Point(), host).X, indicator.TranslatePoint(new Point(), host).X, 1);
+                Assert.Equal(row.ActualHeight + 4, showAll.TranslatePoint(new Point(), host).Y, 1);
+                Assert.Equal(24, showAll.ActualHeight);
+                Assert.Equal(12, indicator.FontSize);
+                Assert.Same(indicator.FindResource("SecondaryForegroundBrush"), indicator.Foreground);
 
                 Click(showAll);
 
@@ -199,6 +211,8 @@ namespace XMAT.Tests
                 Assert.False(indicator.IsVisible);
                 Assert.False(showAll.IsVisible);
                 Assert.Null(grid.Items.Filter);
+                WpfTestHost.Pump();
+                Assert.Equal(rowHeight, host.ActualHeight);
             });
         }
 
@@ -310,7 +324,7 @@ namespace XMAT.Tests
                 ShowCaptureView(window, view);
                 DataGrid grid = ConnectionList(view);
 
-                Invoke(Open(Container(grid, game)), "Show only \"Game.exe\"");
+                Invoke(Open(Container(grid, game)), "Show only Game.exe");
                 Assert.Equal(Items(Spec(new[] { "Game.exe" }).Include), Items(controller.ProcessFilter.Include));
                 Assert.Empty(Items(controller.ProcessFilter.Exclude));
                 Assert.Equal(new[] { game }, Visible(grid));
@@ -319,7 +333,7 @@ namespace XMAT.Tests
                 Assert.Empty(Items(controller.ProcessFilter.Include));
                 Assert.Equal(new[] { game, tool, unknown }, Visible(grid));
 
-                Invoke(Open(Container(grid, tool)), "Hide \"Tool.exe\"");
+                Invoke(Open(Container(grid, tool)), "Hide Tool.exe");
                 Assert.Empty(Items(controller.ProcessFilter.Include));
                 Assert.Equal(Items(Spec(null, new[] { "Tool.exe" }).Exclude), Items(controller.ProcessFilter.Exclude));
                 Assert.Equal(new[] { game, unknown }, Visible(grid));
@@ -344,7 +358,7 @@ namespace XMAT.Tests
                 var timeline = (CaptureTimelineView)view.FindName("TimelineView");
                 Border bar = Assert.Single(Bars(timeline), item => ReferenceEquals(item.Tag, game));
 
-                Invoke(Open(bar), "Hide \"Game.exe\"");
+                Invoke(Open(bar), "Hide Game.exe");
 
                 Assert.Equal(Items(Spec(null, new[] { "Game.exe" }).Exclude), Items(controller.ProcessFilter.Exclude));
                 Assert.Equal(new[] { tool }, Visible(grid));
@@ -814,7 +828,7 @@ namespace XMAT.Tests
                 WpfTestHost.Pump();
                 Assert.Equal(new[] { game, tool }, Visible(grid));
 
-                Invoke(Open(Container(grid, game)), "Show only \"Game.exe\"");
+                Invoke(Open(Container(grid, game)), "Show only Game.exe");
 
                 Assert.Equal(Items(Spec(new[] { "Game.exe" }).Include), Items(controller.ProcessFilter.Include));
                 Assert.Empty(Items(controller.ProcessFilter.Exclude));
@@ -1018,12 +1032,12 @@ namespace XMAT.Tests
                 .Count(handler => handler.Target is CollectionView) ?? 0;
         }
 
-        // Runs the menu item with this header, as a click does, and closes the menu.
-        private static void Invoke(ContextMenu menu, string header)
+        // Runs the menu item with this accessible name, as a click does, and closes the menu.
+        private static void Invoke(ContextMenu menu, string name)
         {
             try
             {
-                MenuItem item = Assert.Single(menu.Items.OfType<MenuItem>(), candidate => Equals(candidate.Header, header));
+                MenuItem item = Named(menu, name);
                 Assert.True(item.IsEnabled);
                 if (item.Command is RoutedCommand routed)
                 {
@@ -1052,8 +1066,8 @@ namespace XMAT.Tests
         {
             try
             {
-                Assert.Equal("ShowOnlyProcess", ProxyCommandName(menu, "Show only \"Game.exe\""));
-                Assert.Equal("HideProcess", ProxyCommandName(menu, "Hide \"Game.exe\""));
+                Assert.Equal("ShowOnlyProcess", ProxyCommandName(menu, "Show only Game.exe"));
+                Assert.Equal("HideProcess", ProxyCommandName(menu, "Hide Game.exe"));
                 Assert.Equal("ShowAllProcesses", ProxyCommandName(menu, "Show all processes"));
             }
             finally
@@ -1063,9 +1077,9 @@ namespace XMAT.Tests
             }
         }
 
-        private static string ProxyCommandName(ContextMenu menu, string header)
+        private static string ProxyCommandName(ContextMenu menu, string name)
         {
-            MenuItem item = Assert.Single(menu.Items.OfType<MenuItem>(), candidate => Equals(candidate.Header, header));
+            MenuItem item = Named(menu, name);
             var command = Assert.IsAssignableFrom<RoutedCommand>(item.Command);
             Assert.Equal(typeof(WebServiceProxyCommands), command.OwnerType);
             Assert.True(command.CanExecute(item.CommandParameter, item.CommandTarget));
@@ -1108,9 +1122,9 @@ namespace XMAT.Tests
             {
                 Assert.DoesNotContain(
                     menu.Items.OfType<MenuItem>(),
-                    item => item.IsEnabled && item.Header is string header &&
-                        (header.StartsWith("Show only ", StringComparison.Ordinal) ||
-                            header.StartsWith("Hide ", StringComparison.Ordinal)));
+                    item => item.IsEnabled &&
+                        (item.Command == WebServiceProxyCommands.ShowOnlyProcess || item.Command == WebServiceProxyCommands.HideProcess));
+                Assert.Contains(menu.Items.OfType<MenuNote>(), note => note.Text == Localization.GetLocalizedString("PROCESS_FILTER_NO_PROCESS"));
             }
             finally
             {
@@ -1118,6 +1132,12 @@ namespace XMAT.Tests
                 WpfTestHost.Pump();
             }
         }
+
+        // The item a screen reader names NAME. The new look's labels leave the process to the group's header; their
+        // accessible names keep it.
+        private static MenuItem Named(ContextMenu menu, string name) =>
+            Assert.Single(menu.Items.OfType<MenuItem>(),
+                candidate => UIElementAutomationPeer.CreatePeerForElement(candidate).GetName() == name);
 
         // The right-click route, as HostListUiTests opens it: ContextMenuOpening bubbles from the clicked element, then
         // the menu of the first element on the route that owns one opens for that owner.

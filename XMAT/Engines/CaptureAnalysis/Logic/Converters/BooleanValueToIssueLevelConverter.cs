@@ -5,16 +5,18 @@
 using System;
 using System.Globalization;
 using System.Windows.Data;
+using CaptureAnalysisEngine;
 
 namespace XMAT.NetworkTraceCaptureAnalysis
 {
-    internal class BooleanValueToColorConverter : IValueConverter
+    // A check's result as the issue level that IssueBadge colors: a nonzero count, or true, is an error.
+    internal class BooleanValueToIssueLevelConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
             if (value == null)
             {
-                return string.Empty;
+                return null;
             }
 
             bool result;
@@ -29,15 +31,15 @@ namespace XMAT.NetworkTraceCaptureAnalysis
             }
             else
             {
-                throw new ArgumentException("BooleanValueToColorConverter can only convert from int or bool");
+                throw new ArgumentException("BooleanValueToIssueLevelConverter can only convert from int or bool");
             }
 
-            return result ? System.Windows.Media.Brushes.Red : System.Windows.Media.Brushes.Green;
+            return result ? ViolationLevel.Error : ViolationLevel.Info;
         }
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
         {
-            throw new NotImplementedException("BooleanValueToColorConverter.ConvertBack() not implemented");
+            throw new NotImplementedException("BooleanValueToIssueLevelConverter.ConvertBack() not implemented");
         }
     }
 }

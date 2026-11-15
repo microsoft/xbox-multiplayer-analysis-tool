@@ -185,6 +185,116 @@ namespace XMAT.Tests
             Assert.Equal(200, layout.GetBarBounds(Rows(layout, true, 0, 100)[0]).Width);
         }
 
+        [Fact]
+        public void Volume_CountsShownRequestsPerSecondAsTheyAreAddedChangedAndRemoved()
+        {
+            var second = CaptureVolumeSeries.SecondOf(Origin);
+            var first = Create(1, Origin.AddMilliseconds(200));
+            var tied = Create(2, Origin.AddMilliseconds(700));
+            var later = Create(3, Origin.AddMilliseconds(2100));
+            var missing = Create(4, DateTime.MinValue);
+            var layout = new CaptureTimelineLayout();
+            layout.Reset([first, tied, later, missing]);
+            var volume = layout.Volume;
+
+            Assert.Equal((3, 2, 1, 2), (volume.Total, volume.CountAt(second), volume.CountAt(second + 2), volume.Peak));
+            Assert.Equal((second, second + 2), (volume.FirstSecond, volume.LastSecond));
+            layout.Add(Create(5, Origin.AddMilliseconds(2900)));
+            Update(later, Origin.AddSeconds(5));
+            Assert.True(layout.Update(later));
+            Assert.Equal((1, 1), (volume.CountAt(second + 2), volume.CountAt(second + 5)));
+            Assert.Equal(second + 5, volume.LastSecond);
+
+            layout.Remove(first);
+            layout.Remove(tied);
+            Assert.Equal((2, 1, second + 2), (volume.Total, volume.Peak, volume.FirstSecond));
+            Assert.Same(later, layout.FirstRequestBetween(Origin.AddSeconds(3), Origin.AddSeconds(6)));
+            Assert.Null(layout.FirstRequestBetween(Origin, Origin.AddSeconds(2)));
+            int resets = layout.ResetCount;
+            Update(missing, Origin);
+            Assert.True(layout.Update(missing));
+            Assert.Equal((3, 1), (volume.Total, volume.CountAt(second)));
+            Assert.Equal(resets, layout.ResetCount);
+            layout.Reset([]);
+            Assert.Equal((0, 0), (volume.Total, volume.Peak));
+        }
+
+        [Fact]
+        public void Volume_LiveWindowIsTheLastMinuteOfCompletedSecondsNewestLast()
+        {
+            var start = CaptureVolumeSeries.SecondOf(Origin);
+            var layout = new CaptureTimelineLayout();
+            layout.Reset([
+                Create(1, Origin.AddSeconds(39.5)), Create(2, Origin.AddSeconds(40.1)), Create(3, Origin.AddSeconds(98.2)),
+                Create(4, Origin.AddSeconds(99.1)), Create(5, Origin.AddSeconds(99.9)), Create(6, Origin.AddSeconds(100.2))
+            ]);
+            var totals = new List<int>();
+
+            var span = layout.Volume.GetLive(Origin.AddSeconds(100.5), totals);
+
+            Assert.Equal(new CaptureVolumeSeries.PlotSpan(start + 40, start + 100, 1), span);
+            Assert.Equal(CaptureVolumeSeries.LiveSeconds, totals.Count);
+            Assert.Equal((1, 1, 2), (totals[0], totals[^2], totals[^1]));
+            Assert.Equal(4, totals.Sum());
+            layout.Volume.GetLive(Origin.AddSeconds(500), totals);
+            Assert.All(totals, total => Assert.Equal(0, total));
+        }
+
+        [Fact]
+        public void Volume_WholeCaptureUsesWiderStepsThatAverageTheirSecondsWhenSecondsDontFit()
+        {
+            // 3 min 37 s: two requests in each of the first 30 seconds, then one per second, and one in the last second.
+            var models = Enumerable.Range(0, 30).SelectMany(index => new[] { index * 2, (index * 2) + 1 })
+                .Select(number => Create(number + 1, Origin.AddSeconds(number / 2)))
+                .Concat(Enumerable.Range(30, 170).Select(index => Create(index + 100, Origin.AddSeconds(index))))
+                .Append(Create(999, Origin.AddSeconds(216.5)))
+                .ToList();
+            var layout = new CaptureTimelineLayout();
+            layout.Reset(models);
+            var totals = new List<int>();
+
+            var fits = layout.Volume.GetWhole(651, totals);
+            Assert.Equal((1L, 217), (fits.Step, fits.Count));
+
+            var span = layout.Volume.GetWhole(640, totals);
+            Assert.Equal((2L, 109), (span.Step, span.Count));
+            Assert.Equal(models.Count, totals.Sum());
+            Assert.Equal((4, 2.0), (totals[0], span.Average(0, totals[0])));
+            Assert.Equal((2, 1.0), (totals[20], span.Average(20, totals[20])));
+            Assert.Equal((0, 0.0), (totals[105], span.Average(105, totals[105])));
+            // The last step covers only the capture's last second.
+            Assert.Equal((1, 1.0), (totals[^1], span.Average(span.Count - 1, totals[^1])));
+            Assert.Equal((10L, 1800L), (CaptureVolumeSeries.ChooseStep(2130, 640), CaptureVolumeSeries.ChooseStep(86400, 200)));
+            Assert.Equal(5 * 86400L, CaptureVolumeSeries.ChooseStep(86400L * 1000, 640));
+            Assert.Equal(CaptureVolumeSeries.PlotSpan.Empty, new CaptureTimelineLayout().Volume.GetWhole(640, totals));
+            Assert.Empty(totals);
+        }
+
+        [Theory]
+        [InlineData(0, 5)]
+        [InlineData(3, 5)]
+        [InlineData(5, 5)]
+        [InlineData(7, 10)]
+        [InlineData(15, 20)]
+        [InlineData(38, 40)]
+        [InlineData(52, 60)]
+        [InlineData(61, 80)]
+        [InlineData(100, 100)]
+        [InlineData(100.5, 150)]
+        [InlineData(700, 800)]
+        [InlineData(1000, 1000)]
+        [InlineData(1001, 1500)]
+        [InlineData(4999.5, 5000)]
+        [InlineData(8001, 10000)]
+        [InlineData(10001, 15000)]
+        public void Volume_TopValueRoundsUpThroughStepsThatKeepTheLineTall(double peak, double top) =>
+            Assert.Equal(top, CaptureVolumeSeries.NiceTop(peak));
+
+        [Fact]
+        public void Volume_ElapsedTimeReadsAsMinutesAndSecondsThenHours() =>
+            Assert.Equal(new[] { "0:00", "0:42", "2:10", "59:59", "1:02:05" },
+                new long[] { 0, 42, 130, 3599, 3725 }.Select(CaptureVolumeSeries.FormatElapsed));
+
         private static List<CaptureTimelineLayout.Row> Rows(
             CaptureTimelineLayout layout, bool waterfall, double offset, double height)
         {

@@ -7,15 +7,16 @@
         mc:Ignorable="d"
         x:Name="DisableDeviceOnCloseControl"
         Title="Disable Xbox Proxy?"
+        FontSize="{DynamicResource BaseFontSize}"
         SizeToContent="WidthAndHeight"
         WindowStartupLocation="CenterOwner">
     <StackPanel Orientation="Vertical" Margin="10">
         <StackPanel Orientation="Horizontal">
-            <TextBlock x:Name="PromptPartOne" FontSize="14">Would you like disable the WebProxy for </TextBlock>
-            <TextBlock FontSize="14" Margin="5,0,5,0" FontWeight="Bold" Text="{Binding DeviceName}"/>
-            <TextBlock x:Name="PromptPartTwo" FontSize="14"> before closing?</TextBlock>
+            <TextBlock x:Name="PromptPartOne" FontSize="{DynamicResource DialogTextFontSize}">Would you like disable the WebProxy for </TextBlock>
+            <TextBlock FontSize="{DynamicResource DialogTextFontSize}" Margin="5,0,5,0" FontWeight="Bold" Text="{Binding DeviceName}"/>
+            <TextBlock x:Name="PromptPartTwo" FontSize="{DynamicResource DialogTextFontSize}"> before closing?</TextBlock>
         </StackPanel>
-        <TextBlock x:Name="PromptPartThree" HorizontalAlignment="Center" FontSize="10">*Disabling the proxy will reboot the Xbox</TextBlock>
+        <TextBlock x:Name="PromptPartThree" HorizontalAlignment="Center" FontSize="{DynamicResource DialogNoteFontSize}">*Disabling the proxy will reboot the Xbox</TextBlock>
         <StackPanel Orientation="Horizontal" Margin="20" HorizontalAlignment="Center">
             <Button x:Name="OkButton" Content="Yes" Width="100" IsDefault="True" Click="OkButton_Click"/>
             <Button x:Name="CancelButton" Content="No" Width="100" Margin="20,0,0,0" IsCancel="True"/>

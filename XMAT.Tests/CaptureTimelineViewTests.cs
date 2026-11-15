@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Threading;
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -168,6 +169,42 @@ namespace XMAT.Tests
                 Assert.Equal(scroller.ViewportWidth, Canvas(view, "TimelineCanvas").Width);
                 Assert.All(Canvas(view, "TimeAxisCanvas").Children.OfType<TextBlock>(), label =>
                     Assert.InRange(System.Windows.Controls.Canvas.GetLeft(label), -202, scroller.ViewportWidth + 202));
+            });
+        }
+
+        [Fact]
+        public void LargeTextSize_GrowsTheTimeAxisSoItsLabelsAreNotCutOff()
+        {
+            WpfTestHost.Run(window =>
+            {
+                window.Resources["TimelineAxisFontSize"] = 12.0;
+                var view = new CaptureTimelineView
+                {
+                    ItemsSource = new ObservableCollection<ProxyConnectionModel>
+                    {
+                        Create(1, Origin), Create(2, Origin.AddMilliseconds(400))
+                    }
+                };
+                WpfTestHost.Show(window, view);
+                var axis = Canvas(view, "TimeAxisCanvas");
+                var rows = Canvas(view, "TimelineCanvas");
+                // At the designed size the axis keeps its 20 px, with the rows under it.
+                Assert.Equal(20, axis.ActualHeight);
+                Assert.Equal(20, System.Windows.Controls.Canvas.GetTop(rows));
+
+                // A Windows text size of 200% doubles the labels, so the axis grows to fit them above its ticks.
+                window.Resources["TimelineAxisFontSize"] = 24.0;
+                WpfTestHost.Pump();
+                var labels = axis.Children.OfType<TextBlock>().ToList();
+                Assert.NotEmpty(labels);
+                Assert.All(labels, label => Assert.True(label.ActualHeight + 4 <= axis.ActualHeight + 0.5,
+                    $"A {label.ActualHeight}px label doesn't fit above the ticks of a {axis.ActualHeight}px axis."));
+                Assert.All(axis.Children.OfType<System.Windows.Shapes.Line>(), tick =>
+                {
+                    Assert.Equal(axis.ActualHeight, tick.Y2);
+                    Assert.Equal(axis.ActualHeight - 6, tick.Y1);
+                });
+                Assert.Equal(axis.ActualHeight, System.Windows.Controls.Canvas.GetTop(rows));
             });
         }
 
@@ -337,6 +374,88 @@ namespace XMAT.Tests
                 Assert.Empty(Canvas(view, "TimelineCanvas").Children);
                 Assert.Empty(Canvas(view, "TimeAxisCanvas").Children);
                 Assert.False(view.HasPendingRefresh);
+            });
+        }
+
+        // Bars and their labels take the theme's colors for their status, so Dark and high contrast supply their own.
+        [Fact]
+        public void StatusBars_TakeTheThemeColorsForTheirStatusAndFollowThemeChanges()
+        {
+            WpfTestHost.Run(window =>
+            {
+                var statuses = new Dictionary<string, string>
+                {
+                    [""] = "NoStatus", ["204"] = "Success", ["302"] = "Redirect", ["404"] = "ClientError", ["503"] = "ServerError"
+                };
+                var view = new CaptureTimelineView
+                {
+                    ItemsSource = new ObservableCollection<ProxyConnectionModel>(
+                        statuses.Keys.Select((status, index) => Create(index + 1, status: status)))
+                };
+                WpfTestHost.Show(window, view);
+
+                Assert.Equal(statuses.Count, Bars(view).Count());
+                foreach (Border bar in Bars(view))
+                {
+                    string status = statuses[((ProxyConnectionModel)bar.Tag).Status];
+                    Assert.Same(view.FindResource($"TimelineBar{status}Brush"), bar.Background);
+                    Assert.Same(view.FindResource($"TimelineBar{status}ForegroundBrush"), ((TextBlock)bar.Child).Foreground);
+                }
+                window.Resources["TimelineBarServerErrorBrush"] = Brushes.Purple;
+                window.Resources["TimelineBarServerErrorForegroundBrush"] = Brushes.Yellow;
+                WpfTestHost.Pump();
+
+                Border serverError = Bars(view).Single(bar => ((ProxyConnectionModel)bar.Tag).Status == "503");
+                Assert.Same(Brushes.Purple, serverError.Background);
+                Assert.Same(Brushes.Yellow, ((TextBlock)serverError.Child).Foreground);
+            });
+        }
+
+        [Fact]
+        public void BarLabels_StartWithTheStatusInTheNewLookOnly()
+        {
+            WpfTestHost.Run(window =>
+            {
+                bool newLook = LookState.Current.IsNewLook;
+                try
+                {
+                    LookState.Current.IsNewLook = true;
+                    var view = new CaptureTimelineView
+                    {
+                        ItemsSource = new ObservableCollection<ProxyConnectionModel> { Create(status: "404"), Create(2, status: "") }
+                    };
+                    WpfTestHost.Show(window, view);
+                    TextBlock Label(int number) =>
+                        (TextBlock)Bars(view).Single(bar => ((ProxyConnectionModel)bar.Tag).RequestNumber == number).Child;
+
+                    Assert.Equal("404 GET /request/1", Label(1).Text);
+                    Assert.Equal("GET /request/2", Label(2).Text);
+                    LookState.Current.IsNewLook = false;
+                    WpfTestHost.Pump();
+                    Assert.Equal("GET /request/1", Label(1).Text);
+                    LookState.Current.IsNewLook = true;
+                    WpfTestHost.Pump();
+                    Assert.Equal("404 GET /request/1", Label(1).Text);
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = newLook;
+                }
+            });
+        }
+
+        [Fact]
+        public void Timeline_TellsAssistiveTechnologyWhatItShowsAndWhereElse()
+        {
+            WpfTestHost.Run(window =>
+            {
+                var view = new CaptureTimelineView();
+                WpfTestHost.Show(window, view);
+                AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement((ScrollViewer)view.FindName("TimelineScrollViewer"));
+
+                Assert.Equal(Localization.GetLocalizedString("TIMELINE_AUTOMATION_NAME"), peer.GetName());
+                Assert.Equal(Localization.GetLocalizedString("TIMELINE_AUTOMATION_HELP"), peer.GetHelpText());
+                Assert.DoesNotContain("NO_IMPL_", peer.GetName() + peer.GetHelpText());
             });
         }
 

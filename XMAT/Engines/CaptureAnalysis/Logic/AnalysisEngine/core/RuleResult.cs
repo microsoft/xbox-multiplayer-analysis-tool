@@ -27,6 +27,10 @@ namespace CaptureAnalysisEngine
         // Detailed information captured by the rule
         public Dictionary<string, Object> Results { get; }
 
+        // The calls the call frequency rule counted against each set of limits, for the call rate charts. Other rules
+        // leave it null; reports and result files never include it.
+        internal CallRateTimeline CallRates { get; set; }
+
         // The endpoint identity reports project. A result recorded without one keeps its
         // endpoint name as an Unknown endpoint; its kind is never inferred from that name.
         public EndpointKey Identity =>

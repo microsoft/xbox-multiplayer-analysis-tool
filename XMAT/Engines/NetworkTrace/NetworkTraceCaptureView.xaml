@@ -17,9 +17,6 @@
         <logic:PacketFlagsConverter x:Key="PacketFlagsConverter"/>
         <logic:NetworkProtocolConverter x:Key="NetworkProtocolConverter"/>
         <logic:DeviceStatusConverter x:Key="DeviceStatusConverter"/>
-        <Style x:Key="CenterGridHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
-            <Setter Property="HorizontalContentAlignment" Value="Center"/>
-        </Style>
     </UserControl.Resources>
     <UserControl.CommandBindings>
         <CommandBinding Command="{x:Static logic:NetworkTraceCommands.StartStopCapture}" Executed="StartStopCapture_Executed" CanExecute="StartStopCapture_CanExecute"/>
@@ -27,43 +24,24 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="30"/>
-            <RowDefinition Height="30"/>
+            <RowDefinition Height="{app:Look New=Auto, Original=30}" MinHeight="30"/>
+            <RowDefinition Height="{app:Look New=Auto, Original=30}" MinHeight="30"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto"/>
-            <ColumnDefinition Width="4"/>
+            <ColumnDefinition Width="{app:Look New=12, Original=4}"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <ToolBar Grid.Row="0" Grid.ColumnSpan="2" ToolBarTray.IsLocked="True">
-            <ToggleButton IsChecked="{Binding CaptureController.IsRunning, Mode=OneWay}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" Command="{x:Static logic:NetworkTraceCommands.StartStopCapture}" CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}">
-                <ToggleButton.Style>
-                    <Style TargetType="{x:Type ToggleButton}" BasedOn="{StaticResource {x:Static ToolBar.ToggleButtonStyleKey}}">
-                        <Setter Property="Content">
-                            <Setter.Value>
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
-                                    <TextBlock Text="{x:Static local:NetworkTraceCaptureView.EnabledText}" VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </Setter.Value>
-                        </Setter>
-                        <Style.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter Property="Content">
-                                    <Setter.Value>
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{x:Static local:NetworkTraceCaptureView.DisabledText}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Setter.Value>
-                                </Setter>
-                            </Trigger>
-                        </Style.Triggers>
-                    </Style>
-                </ToggleButton.Style>
-            </ToggleButton>
+        <!-- Tab continues past the toolbar's last button instead of cycling inside the toolbar. -->
+        <ToolBar Grid.Row="0" Grid.ColumnSpan="{app:Look New=3, Original=2}" ToolBarTray.IsLocked="True"
+                 KeyboardNavigation.TabNavigation="Continue">
+            <!-- The new look shares the web proxy capture's green start action; the original look keeps its toggle. -->
+            <app:ActionToggleButton x:Name="StartStopButton" Style="{DynamicResource NetworkTraceStartStopButtonStyle}"
+                                    IsChecked="{Binding CaptureController.IsRunning, Mode=OneWay}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" Command="{x:Static logic:NetworkTraceCommands.StartStopCapture}" CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}"/>
+            <app:RecordingIndicator x:Name="CapturingIndicator" Style="{DynamicResource RecordingIndicatorStyle}"
+                                    IsActive="{Binding CaptureController.IsRunning, Mode=OneWay}"/>
             <Separator/>
             <Button x:Name="AnalyzeCaptureButton"
                     Command="{x:Static app:AppCommands.AnalyzeCaptures}"
@@ -75,7 +53,7 @@
         </ToolBar>
         <StackPanel Grid.Row="1" Orientation="Horizontal" Background="{DynamicResource PanelBackgroundBrush}">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock x:Name="FiltersText" FontWeight="Bold" Margin="20,0" Text="Filters"/>
+                <TextBlock x:Name="FiltersText" Style="{DynamicResource FilterLabelStyle}" Margin="{app:Look New='0,0,12,0', Original='20,0'}" Text="Filters"/>
                 <app:CheckBoxFilters x:Name="PidFilters" FilterDesc="PID" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.PidFilterList}"/>
                 <app:CheckBoxFilters x:Name="TidFilters" FilterDesc="TID" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.TidFilterList}"/>
                 <app:CheckBoxFilters x:Name="ProtocolFilters" FilterDesc="PROTO" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.ProtocolFilterList}"/>
@@ -83,41 +61,44 @@
                 <app:CheckBoxFilters x:Name="DestIpFilters" FilterDesc="DESTIP" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.DestIpFilterList}"/>
             </StackPanel>
         </StackPanel>
-        <TextBlock Grid.Row="2" Grid.RowSpan="3" FontSize="20"
+        <TextBlock Grid.Row="2" Grid.RowSpan="3" FontSize="{DynamicResource EmptyStateFontSize}"
                    HorizontalAlignment="Center" VerticalAlignment="Center"
                    Visibility="{Binding CaptureController.HaveNoTraces, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}"
                    Text="{Binding CaptureController.DeviceStatus, Mode=OneWay, Converter={StaticResource DeviceStatusConverter}}"/>
-        <DataGrid x:Name="PacketList" Grid.Row="2" Grid.RowSpan="3"
+        <DataGrid x:Name="PacketList" Grid.Row="2" Grid.RowSpan="3" ColumnHeaderStyle="{DynamicResource PacketGridHeaderStyle}"
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   Visibility="{Binding CaptureController.HaveTraces, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}"
                   ItemsSource="{Binding NetworkTracePackets, ElementName=NetworkTraceCaptureControl, Mode=OneWay}"
                   AutoGenerateColumns="False" GridLinesVisibility="None">
             <DataGrid.Columns>
-                <DataGridTextColumn Header="TIMESTAMP" Binding="{Binding Timestamp, StringFormat={}{0:HH:mm:ss.fffffff}}" Width="120"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="PROTO" Binding="{Binding Protocol, Mode=OneWay, Converter={StaticResource NetworkProtocolConverter}}" Width="62"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="S" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.StartOfPacket}}" Width="22"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="E" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.EndOfPacket}}" Width="22"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="F" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.Fragment}}" Width="22"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="Tx" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.Send}}" Width="22"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="Rx" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.Receive}}" Width="22"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="LEN" Binding="{Binding Payload.Length}" Width="40"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="SRC IP" Binding="{Binding SourceIpv4Address}" Width="100"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="DEST IP" Binding="{Binding DestinationIpv4Address}" Width="100"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="SRC MAC" Binding="{Binding SourceMacAddress}" Width="110"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="DEST MAC" Binding="{Binding DestinationMacAddress}" Width="110"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="TYPE" Binding="{Binding MediaType}" Width="80"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="PID" Binding="{Binding ProcessId}" Width="40"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="TID" Binding="{Binding ThreadId}" Width="40"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
+                <DataGridTextColumn Header="TIMESTAMP" Binding="{Binding Timestamp, StringFormat={}{0:HH:mm:ss.fffffff}}" Width="120"/>
+                <DataGridTextColumn Header="PROTO" Binding="{Binding Protocol, Mode=OneWay, Converter={StaticResource NetworkProtocolConverter}}" Width="62"/>
+                <DataGridTextColumn Header="S" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.StartOfPacket}}" Width="22"/>
+                <DataGridTextColumn Header="E" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.EndOfPacket}}" Width="22"/>
+                <DataGridTextColumn Header="F" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.Fragment}}" Width="22"/>
+                <DataGridTextColumn Header="Tx" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.Send}}" Width="22"/>
+                <DataGridTextColumn Header="Rx" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.Receive}}" Width="22"/>
+                <DataGridTextColumn Header="LEN" Binding="{Binding Payload.Length}" Width="40"/>
+                <DataGridTextColumn Header="SRC IP" Binding="{Binding SourceIpv4Address}" Width="100"/>
+                <DataGridTextColumn Header="DEST IP" Binding="{Binding DestinationIpv4Address}" Width="100"/>
+                <DataGridTextColumn Header="SRC MAC" Binding="{Binding SourceMacAddress}" Width="110"/>
+                <DataGridTextColumn Header="DEST MAC" Binding="{Binding DestinationMacAddress}" Width="110"/>
+                <DataGridTextColumn Header="TYPE" Binding="{Binding MediaType}" Width="80"/>
+                <DataGridTextColumn Header="PID" Binding="{Binding ProcessId}" Width="40"/>
+                <DataGridTextColumn Header="TID" Binding="{Binding ThreadId}" Width="40"/>
             </DataGrid.Columns>
         </DataGrid>
 
-        <GridSplitter Grid.Row="2" Grid.Column="1" Grid.RowSpan="63" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
+        <GridSplitter x:Name="PacketSplitter" Grid.Row="{app:Look New=1, Original=2}" Grid.Column="1" Grid.RowSpan="{app:Look New=2, Original=63}" Width="{app:Look New=12, Original=4}" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
 
-        <TabControl x:Name="PacketEvent" Grid.Row="0" Grid.RowSpan="3" Grid.Column="2">
+        <TabControl x:Name="PacketEvent" Grid.Row="{app:Look New=1, Original=0}" Grid.RowSpan="{app:Look New=2, Original=3}" Grid.Column="2">
             <TabItem x:Name="PacketRawTextTab" Header="Packet Data">
-                <ScrollViewer>
-                    <TextBlock x:Name="PayloadRawText" TextWrapping="Wrap" FontFamily="Consolas" ScrollViewer.CanContentScroll="True" Text="{Binding SelectedItem, ElementName=PacketList, Mode=OneWay, Converter={StaticResource NetworkPayloadConverter}}"/>
-                </ScrollViewer>
+                <!-- A read-only text box, so the keyboard can reach, scroll and select the packet data. It draws like
+                     the text it replaced. -->
+                <TextBox x:Name="PayloadRawText" IsReadOnly="True" IsReadOnlyCaretVisible="True" TextWrapping="Wrap"
+                         FontFamily="Consolas" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                         BorderThickness="0" Padding="0" Background="Transparent"
+                         Text="{Binding SelectedItem, ElementName=PacketList, Mode=OneWay, Converter={StaticResource NetworkPayloadConverter}}"/>
             </TabItem>
         </TabControl>
 

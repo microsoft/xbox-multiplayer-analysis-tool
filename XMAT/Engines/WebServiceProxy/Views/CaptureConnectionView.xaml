@@ -17,9 +17,6 @@
         <BooleanToVisibilityConverter x:Key="booleanToVisibilityConverter" />
         <local:ProxyStatusIsErrorConverter x:Key="proxyStatusIsErrorConverter" />
         <local:ProcessDisplayConverter x:Key="processDisplayConverter" />
-        <Style x:Key="CenterGridHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
-            <Setter Property="HorizontalContentAlignment" Value="Center"/>
-        </Style>
         <!-- Filled for the right-clicked or focused row when it opens. -->
         <ContextMenu x:Key="HostListRowMenu"
                      Background="{DynamicResource MenuBackgroundBrush}"
@@ -44,101 +41,106 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="30"/>
-            <RowDefinition Height="30"/>
-            <RowDefinition Height="120"/>
-            <RowDefinition Height="4"/>
+            <RowDefinition Height="{app:Look New=Auto, Original=30}"/>
+            <RowDefinition Height="{app:Look New=Auto, Original=30}"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="{app:Look New=136, Original=120}"/>
+            <RowDefinition Height="{app:Look New=8, Original=4}"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="4"/>
+            <ColumnDefinition Width="{app:Look New=12, Original=4}"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <ToolBar Grid.Row="0" Grid.ColumnSpan="2" ToolBarTray.IsLocked="True">
+        <!-- Tab continues past the toolbar's last button instead of cycling inside the toolbar. -->
+        <ToolBar Grid.Row="0" Grid.ColumnSpan="{app:Look New=3, Original=2}" ToolBarTray.IsLocked="True" Margin="{DynamicResource SectionBottomSpacing}"
+                 KeyboardNavigation.TabNavigation="Continue">
             <Button x:Name="EnableButton" Command="{x:Static local:WebServiceProxyCommands.EnableDevice}" CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    Style="{DynamicResource CaptureToolbarButtonStyle}"
                     d:Visibility="Visible"
                     Visibility="{Binding Path=IsEnabled, RelativeSource={RelativeSource Self}, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}}">Enable Xbox Proxy</Button>
             <Separator Visibility="{Binding Path=IsEnabled, ElementName=EnableButton, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}}"/>
             <Button x:Name="DisableButton" Command="{x:Static local:WebServiceProxyCommands.DisableDevice}" CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    Style="{DynamicResource CaptureToolbarButtonStyle}"
                     d:Visibility="Visible"
                     Visibility="{Binding Path=IsEnabled, RelativeSource={RelativeSource Self}, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}}">Disable Xbox Proxy</Button>
             <Separator Visibility="{Binding Path=IsEnabled, ElementName=DisableButton, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}}"/>
 
             <Button x:Name="CheckButton" Command="{x:Static local:WebServiceProxyCommands.CheckDevice}" CommandTarget="{Binding ElementName=CaptureConnectionControl}"
+                    Style="{DynamicResource CaptureToolbarButtonStyle}"
         d:Visibility="Visible"
         Visibility="{Binding Path=IsEnabled, RelativeSource={RelativeSource Self}, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}}">Check Xbox Proxy Status</Button>
             <Separator Visibility="{Binding Path=IsEnabled, ElementName=DisableButton, Mode=OneWay, Converter={StaticResource booleanToVisibilityConverter}}"/>
 
-            <ToggleButton x:Name="StartButton" IsChecked="{Binding CaptureController.IsRunning, Mode=OneWay}" Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}"
-                          CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}" CommandTarget="{Binding ElementName=CaptureConnectionControl}">
-                <ToggleButton.Style>
-                    <Style TargetType="{x:Type ToggleButton}" BasedOn="{StaticResource {x:Static ToolBar.ToggleButtonStyleKey}}">
-                        <Setter Property="Content">
-                            <Setter.Value>
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
-                                    <TextBlock Text="{x:Static local:CaptureConnectionView.StartTraceText}" VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </Setter.Value>
-                        </Setter>
-                        <Style.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter Property="Content">
-                                    <Setter.Value>
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE769;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{x:Static local:CaptureConnectionView.StopTraceText}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Setter.Value>
-                                </Setter>
-                            </Trigger>
-                        </Style.Triggers>
-                    </Style>
-                </ToggleButton.Style>
-            </ToggleButton>
+            <app:ActionToggleButton x:Name="StartButton" IsChecked="{Binding CaptureController.IsRunning, Mode=OneWay}" Command="{x:Static local:WebServiceProxyCommands.StartStopCapture}"
+                          Style="{DynamicResource CaptureStartStopButtonStyle}"
+                          CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}" CommandTarget="{Binding ElementName=CaptureConnectionControl}"/>
             <Separator/>
             <Button x:Name="DiscardPortButton" Command="{x:Static local:WebServiceProxyCommands.DiscardPortChange}"
+                    Style="{DynamicResource CaptureToolbarButtonStyle}"
                     CommandTarget="{Binding ElementName=CaptureConnectionControl}"
                     Visibility="{Binding CaptureController.HasPendingPort, Converter={StaticResource booleanToVisibilityConverter}}"/>
             <Button x:Name="CancelPortButton" Command="{x:Static local:WebServiceProxyCommands.CancelPortChange}"
+                    Style="{DynamicResource CaptureToolbarButtonStyle}"
                     CommandTarget="{Binding ElementName=CaptureConnectionControl}"
                     Visibility="{Binding CaptureController.IsPortChangeInProgress, Converter={StaticResource booleanToVisibilityConverter}}"/>
             <Button x:Name="AnalyzeButton"
+                    Style="{DynamicResource CaptureToolbarButtonStyle}"
                     Command="{x:Static app:AppCommands.AnalyzeCaptures}"
                     CommandTarget="{Binding ElementName=CaptureConnectionControl}"
                     ToolTipService.ShowOnDisabled="True">Analyze Capture</Button>
             <Separator/>
-            <Button x:Name="ClearButton" Command="{x:Static app:AppCommands.ClearAllCaptures}" CommandTarget="{Binding ElementName=CaptureConnectionControl}">Clear Capture</Button>
-            <Separator/>
-            <Grid VerticalAlignment="Center" Margin="4,0,0,0">
-                <CheckBox x:Name="AutoScrollButton" Content="Auto Scroll" IsChecked="{Binding AutoScroll, ElementName=CaptureConnectionControl}"/>
+            <Button x:Name="ClearButton" Style="{DynamicResource CaptureToolbarButtonStyle}"
+                    Command="{x:Static app:AppCommands.ClearAllCaptures}" CommandTarget="{Binding ElementName=CaptureConnectionControl}">Clear Capture</Button>
+            <!-- The original look keeps Auto Scroll at the end of the toolbar. -->
+            <Separator Visibility="{app:Look New=Collapsed, Original=Visible}"/>
+            <Grid VerticalAlignment="Center" Margin="4,0,0,0" Visibility="{app:Look New=Collapsed, Original=Visible}">
+                <CheckBox x:Name="ToolbarAutoScrollButton" Content="Auto Scroll" IsChecked="{Binding AutoScroll, ElementName=CaptureConnectionControl}"/>
             </Grid>
         </ToolBar>
 
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Background="{DynamicResource PanelBackgroundBrush}">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock x:Name="FiltersText" FontWeight="Bold" Margin="20,0" Text="Filters"/>
-                <app:CheckBoxFilters x:Name="StatusFilters" FilterDesc="Status" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.StatusFilterList}"/>
-                <app:CheckBoxFilters x:Name="HostFilters"   FilterDesc="Host"   FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.HostFilterList}"/>
-                <app:CheckBoxFilters x:Name="MethodFilters" FilterDesc="Method" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.MethodFilterList}"/>
+        <!-- When the traffic pane is too narrow for the filters, the new look folds them into a Filters button that
+             lists them in a popup. -->
+        <app:FilterOverflowHost x:Name="FiltersHost" Grid.Row="1" Margin="{DynamicResource TrafficFiltersMargin}"
+                                IsOverflowEnabled="{app:Look New=True, Original=False}">
+            <Grid x:Name="FiltersPanel" Background="{DynamicResource PanelBackgroundBrush}"
+                  HorizontalAlignment="{app:Look New=Stretch, Original=Left}" VerticalAlignment="{app:Look New=Stretch, Original=Center}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="{app:Look New=*, Original=Auto}"/>
+                    <ColumnDefinition Width="{app:Look New=*, Original=Auto}"/>
+                    <ColumnDefinition Width="{app:Look New=*, Original=Auto}"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="FiltersText" Style="{DynamicResource FilterLabelStyle}" Margin="{app:Look New='0,0,12,0', Original='20,0'}" Text="Filters"
+                           app:FilterOverflowHost.IsInlineOnly="True"/>
+                <app:CheckBoxFilters x:Name="StatusFilters" Grid.Column="1" FilterDesc="Status" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.StatusFilterList}"/>
+                <app:CheckBoxFilters x:Name="HostFilters"   Grid.Column="2" FilterDesc="Host"   FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.HostFilterList}"/>
+                <app:CheckBoxFilters x:Name="MethodFilters" Grid.Column="3" FilterDesc="Method" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.MethodFilterList}"/>
                 <!-- The process filter only hides rows; the proxy still forwards and records every session. -->
-                <ToggleButton x:Name="ProcessFilterButton" Height="20" Padding="6,0" Margin="0,0,10,0" VerticalAlignment="Center"
+                <ToggleButton x:Name="ProcessFilterButton" Grid.Column="4" Style="{DynamicResource FilterToggleButtonStyle}" HorizontalAlignment="Left"
                               IsChecked="{Binding IsOpen, ElementName=ProcessFilterPopup, Mode=TwoWay}" Content="Process"/>
-                <Popup x:Name="ProcessFilterPopup" PlacementTarget="{Binding ElementName=ProcessFilterButton}" Placement="Bottom"
+                <Popup x:Name="ProcessFilterPopup" Grid.Column="4" PlacementTarget="{Binding ElementName=ProcessFilterButton}" Placement="Bottom"
                        StaysOpen="False" AllowsTransparency="False">
+                    <!-- Tab stays inside the open popup; Esc closes it and returns to the Process button. -->
                     <Border Background="{DynamicResource WindowBackgroundBrush}" BorderBrush="{DynamicResource BorderBrush}"
                             TextElement.Foreground="{DynamicResource PrimaryForegroundBrush}"
+                            KeyboardNavigation.TabNavigation="Cycle"
                             BorderThickness="1" Padding="8">
                         <StackPanel Width="340">
                             <TextBlock x:Name="ProcessIncludeLabel" Text="Show only" FontWeight="SemiBold"/>
-                            <TextBox x:Name="ProcessIncludeText" Margin="0,2,0,6" Padding="2"/>
+                            <TextBox x:Name="ProcessIncludeText" Margin="0,2,0,6" Padding="2"
+                                     AutomationProperties.LabeledBy="{Binding ElementName=ProcessIncludeLabel}"/>
                             <TextBlock x:Name="ProcessExcludeLabel" Text="Hide" FontWeight="SemiBold"/>
-                            <TextBox x:Name="ProcessExcludeText" Margin="0,2,0,6" Padding="2"/>
+                            <TextBox x:Name="ProcessExcludeText" Margin="0,2,0,6" Padding="2"
+                                     AutomationProperties.LabeledBy="{Binding ElementName=ProcessExcludeLabel}"/>
                             <TextBlock x:Name="ProcessFilterHelp" TextWrapping="Wrap" Margin="0,0,0,6"/>
                             <TextBlock x:Name="ProcessFilterError" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,6"
-                                       Visibility="Collapsed"/>
+                                       app:LiveRegion.Mode="Assertive" Visibility="Collapsed"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button x:Name="HideSvchostButton" Padding="8,2" Margin="0,0,6,0" Click="HideSvchost_Click">Hide svchost.exe</Button>
                                 <Button x:Name="ApplyProcessFilterButton" Padding="8,2" Click="ApplyProcessFilter_Click">Apply</Button>
@@ -146,24 +148,38 @@
                         </StackPanel>
                     </Border>
                 </Popup>
-                <TextBlock x:Name="ProcessFilterIndicator" VerticalAlignment="Center" Margin="0,0,6,0" Visibility="Collapsed"/>
-                <Button x:Name="ShowAllProcessesButton" Height="20" Padding="6,0" VerticalAlignment="Center" Visibility="Collapsed"
-                        Click="ShowAllProcesses_Click">Show all processes</Button>
-            </StackPanel>
-        </StackPanel>
+                <!-- The process filter's summary and Show all: in the new look, on a line of their own under the filters. -->
+                <TextBlock x:Name="ProcessFilterIndicator" Grid.Column="5" VerticalAlignment="Center" Margin="{app:Look New='0,0,8,0', Original='0,0,6,0'}" Visibility="Collapsed"
+                           Style="{DynamicResource FilterSummaryTextStyle}" app:FilterOverflowHost.IsSummary="True"/>
+                <Button x:Name="ShowAllProcessesButton" Grid.Column="6" Height="{app:Look New=24, Original=20}" Padding="{app:Look New='12,0', Original='6,0'}" VerticalAlignment="Center" Visibility="Collapsed"
+                        HorizontalAlignment="Left" app:FilterOverflowHost.IsSummary="True" Click="ShowAllProcesses_Click">Show all processes</Button>
+            </Grid>
+        </app:FilterOverflowHost>
+
+        <!-- The traffic overview sums up the rows the table shows; selecting a status class or a host sets the filters
+             above. The original look has none. -->
+        <app:TrafficOverview x:Name="OverviewStrip" Grid.Row="2" Visibility="{app:Look New=Visible, Original=Collapsed}"
+                             ItemsSource="{Binding ItemsSource, ElementName=ConnectionList}"
+                             IsCapturing="{Binding CaptureController.IsRunning, Mode=OneWay}"
+                             FilterRequested="TrafficOverview_FilterRequested"/>
 
         <!-- Timeline -->
-        <local:CaptureTimelineView x:Name="TimelineView" Grid.Row="2"
+        <Grid Grid.Row="3" Margin="{DynamicResource TrafficPaneMargin}">
+            <local:CaptureTimelineView x:Name="TimelineView"
                                    ItemsSource="{Binding CaptureController.ProxyConnections, Mode=OneWay}"
                                    IsCaptureRunning="{Binding CaptureController.IsRunning, Mode=OneWay}"
                                    HostListPolicy="{Binding CaptureController.HostListPolicy, Mode=OneWay}"
                                    ProcessFilter="{Binding CaptureController.ProcessFilter, Mode=OneWay}"
-                                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"/>
+                                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"
+                                   AutoScroll="{Binding AutoScroll, ElementName=CaptureConnectionControl}"/>
+        </Grid>
 
-        <GridSplitter Grid.Row="3" Height="4" HorizontalAlignment="Stretch" VerticalAlignment="Center" ResizeDirection="Rows"/>
+        <GridSplitter x:Name="TimelineSplitter" Grid.Row="4" Height="{app:Look New=8, Original=4}" Margin="{DynamicResource TrafficPaneMargin}" HorizontalAlignment="Stretch" VerticalAlignment="Center" ResizeDirection="Rows"/>
 
         <!-- The code-behind gives the grid its own view of CaptureController.ProxyConnections. -->
-        <DataGrid x:Name="ConnectionList" Grid.Row="4"
+        <DataGrid x:Name="ConnectionList" Grid.Row="5" Margin="{DynamicResource TrafficTableMargin}"
+                  ColumnHeaderStyle="{DynamicResource TrafficGridHeaderStyle}"
+                  app:ColumnSummary.IsEnabled="True"
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   d:ItemsSource="{d:SampleData}" 
                   SelectedItem="{Binding CaptureController.SelectedConnectionModel}"
@@ -175,12 +191,12 @@
                 <KeyBinding Key="Delete" Modifiers="Shift" Command="{x:Static local:WebServiceProxyCommands.DeleteUnselectedSessions}"/>
             </DataGrid.InputBindings>
             <DataGrid.Columns>
-                <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="30"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="STATUS" Binding="{Binding Status}"        Width="50"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="METHOD" Binding="{Binding Method}"        Width="70"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="SCHEME" Binding="{Binding Scheme}"        Width="70"  HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="HOST"   Binding="{Binding Host}"          Width="200" HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
-                <DataGridTextColumn Header="PROCESS" Width="140" SortMemberPath="ClientProcess.Name" HeaderStyle="{StaticResource CenterGridHeaderStyle}">
+                <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="{app:Look New=44, Original=30}" MinWidth="{app:Look New=44, Original=30}"/>
+                <DataGridTextColumn Header="STATUS" Binding="{Binding Status}"        Width="{app:Look New=80, Original=50}" MinWidth="{app:Look New=80, Original=50}"/>
+                <DataGridTextColumn Header="METHOD" Binding="{Binding Method}"        Width="{app:Look New=88, Original=70}" MinWidth="{app:Look New=88, Original=70}"/>
+                <DataGridTextColumn Header="SCHEME" Binding="{Binding Scheme}"        Width="{app:Look New=88, Original=70}" MinWidth="{app:Look New=88, Original=70}"/>
+                <DataGridTextColumn Header="HOST"   Binding="{Binding Host}"          Width="{app:Look New=162, Original=200}" MinWidth="100"/>
+                <DataGridTextColumn Header="PROCESS" Width="{app:Look New=112, Original=140}" MinWidth="100" SortMemberPath="ClientProcess.Name">
                     <DataGridTextColumn.Binding>
                         <MultiBinding Converter="{StaticResource processDisplayConverter}" Mode="OneWay">
                             <Binding Path="ClientProcess" />
@@ -188,13 +204,19 @@
                         </MultiBinding>
                     </DataGridTextColumn.Binding>
                 </DataGridTextColumn>
-                <DataGridTextColumn Header="PATH"   Binding="{Binding Path}"          Width="*"   HeaderStyle="{StaticResource CenterGridHeaderStyle}"/>
+                <DataGridTextColumn Header="PATH"   Binding="{Binding Path}"          Width="*" MinWidth="120"/>
             </DataGrid.Columns>
             <DataGrid.RowStyle>
                 <Style TargetType="DataGridRow">
                     <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
                     <Setter Property="ContextMenu" Value="{StaticResource HostListRowMenu}"/>
+                    <!-- The new look outlines the selected row; the original look has no outline resources. -->
+                    <Setter Property="BorderBrush" Value="Transparent"/>
+                    <Setter Property="BorderThickness" Value="{DynamicResource TableRowBorderThickness}"/>
                     <Style.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="BorderBrush" Value="{DynamicResource TableSelectionBorderBrush}"/>
+                        </Trigger>
                         <DataTrigger Binding="{Binding Method}" Value="CONNECT">
                             <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
                         </DataTrigger>
@@ -209,19 +231,21 @@
             </DataGrid.RowStyle>
         </DataGrid>
 
-        <GridSplitter Grid.Column="1" Grid.RowSpan="63" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
+        <GridSplitter x:Name="InspectorSplitter" Grid.Row="{app:Look New=1, Original=0}" Grid.Column="1" Grid.RowSpan="{app:Look New=5, Original=63}" Width="{app:Look New=12, Original=4}"
+                      Style="{DynamicResource ColumnSplitterStyle}" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
 
-        <TabControl Grid.Row="0" Grid.Column="2" Grid.RowSpan="5">
-            <TabItem x:Name="ReqestResponseTab" Header="Request/Response">
+        <TabControl Grid.Row="{app:Look New=1, Original=0}" Grid.Column="2" Grid.RowSpan="{app:Look New=5, Original=6}"
+                    Margin="{DynamicResource InspectorPaneMargin}" Style="{DynamicResource InspectorTabControlStyle}">
+            <TabItem x:Name="ReqestResponseTab" Header="Request/Response" Style="{DynamicResource InspectorTabItemStyle}">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition/>
-                        <RowDefinition Height="4"/>
+                        <RowDefinition Height="{app:Look New=12, Original=4}"/>
                         <RowDefinition/>
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition/>
-                        <ColumnDefinition Width="300"/>
+                        <ColumnDefinition Width="{app:Look New=0, Original=300}"/>
                     </Grid.ColumnDefinitions>
 
                     <!--
@@ -233,9 +257,16 @@
                                                HeaderDictionary="{Binding SelectedItem.RequestHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.RequestBody, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyText="{Binding SelectedItem.RequestText, ElementName=ConnectionList, Mode=OneWay}"
-                                               />
+                                               >
+                        <local:RequestResponseView.HeaderContent>
+                            <!-- One wrapping line: the figure spaces keep each label with its value and each separator
+                                 with the item before it, so the details break only between items. -->
+                            <TextBlock TextWrapping="Wrap" VerticalAlignment="Center"
+                                       Visibility="{app:Look New=Visible, Original=Collapsed}"><Run Text="{x:Static local:CaptureConnectionView.RequestIdText}" FontSize="{DynamicResource MetadataFontSize}" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run Text="&#x2007;"/><Run Text="{Binding DataContext.CaptureController.SelectedConnectionModel.RequestNumber, RelativeSource={RelativeSource AncestorType=local:CaptureConnectionView}, Mode=OneWay}" d:Text="1000"/><Run Text="&#x2007;·" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run Text="&#x2002;"/><Run Text="{x:Static local:CaptureConnectionView.RequestTimeText}" FontSize="{DynamicResource MetadataFontSize}" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run Text="&#x2007;"/><Run Text="{Binding DataContext.CaptureController.SelectedConnectionModel.RequestTime, RelativeSource={RelativeSource AncestorType=local:CaptureConnectionView}, Mode=OneWay, StringFormat=HH:mm:ss.fff}" d:Text="12:34:56.789"/><Run Text="&#x2007;·" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run Text="&#x2002;"/><Run Text="{x:Static local:CaptureConnectionView.DurationText}" FontSize="{DynamicResource MetadataFontSize}" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run Text="&#x2007;"/><Run Text="{Binding DataContext.CaptureController.SelectedConnectionModel.Duration.TotalMilliseconds, RelativeSource={RelativeSource AncestorType=local:CaptureConnectionView}, Mode=OneWay, StringFormat='{}{0:F0} ms'}" d:Text="123 ms"/></TextBlock>
+                        </local:RequestResponseView.HeaderContent>
+                    </local:RequestResponseView>
 
-                    <GridSplitter Grid.Row="1" Grid.ColumnSpan="2" Height="4" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                    <GridSplitter x:Name="RequestResponseSplitter" Grid.Row="1" Grid.ColumnSpan="2" Height="{app:Look New=12, Original=4}" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
 
                     <!--
                     NOTE: someday we can get rid of the BodyText binding if the JsonConverter can be made into a MultiValueConverter like
@@ -248,7 +279,9 @@
                                                BodyText="{Binding SelectedItem.ResponseText, ElementName=ConnectionList, Mode=OneWay}"
                                                />
 
-                    <Grid Grid.Row="0" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch">
+                    <!-- The original look shows the request details over the top right of the request view. -->
+                    <Grid Grid.Row="0" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch"
+                          Visibility="{app:Look New=Collapsed, Original=Visible}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="150"/>
                             <ColumnDefinition/>
@@ -258,26 +291,27 @@
                             <RowDefinition/>
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Grid.Column="0">
-                                <Run x:Name="RequestIdLabel" Text="Request ID:" FontWeight="Bold"/>
+                                <Run Text="{x:Static local:CaptureConnectionView.RequestIdText}" FontWeight="Bold"/>
                                 <Run Text="{Binding SelectedItem.RequestNumber, ElementName=ConnectionList, Mode=OneWay}" d:Text="1000"/>
                         </TextBlock>
                         <TextBlock Grid.Row="0" Grid.Column="1">
-                                <Run x:Name="TimeLabel" Text="Time:" FontWeight="Bold"/>
+                                <Run Text="{x:Static local:CaptureConnectionView.RequestTimeText}" FontWeight="Bold"/>
                                 <Run Text="{Binding SelectedItem.RequestTime, ElementName=ConnectionList, Mode=OneWay, StringFormat=HH:mm:ss.fff}" d:Text="12:34:56.789"/>
                         </TextBlock>
                         <TextBlock Grid.Row="1" Grid.Column="1">
-                                <Run x:Name="DurationLabel" Text="Duration:" FontWeight="Bold"/>
+                                <Run Text="{x:Static local:CaptureConnectionView.DurationText}" FontWeight="Bold"/>
                                 <Run Text="{Binding SelectedItem.Duration.Milliseconds, ElementName=ConnectionList, Mode=OneWay, StringFormat='{}{0} ms'}" d:Text="123 ms"/>
                         </TextBlock>
                     </Grid>
+
                 </Grid>
             </TabItem>
-            <TabItem x:Name="WebSocketMessagesTab" Header="WebSockets">
+            <TabItem x:Name="WebSocketMessagesTab" Header="WebSockets" Style="{DynamicResource InspectorTabItemStyle}">
                 <local:WebSocketMessagesView
                     ItemsSource="{Binding CaptureController.WebSocketMessages}"
                     SelectedItem="{Binding CaptureController.SelectedWebSocketMessage, Mode=TwoWay}"/>
             </TabItem>
-            <TabItem x:Name="ScriptEditorTab" Header="Script Editor">
+            <TabItem x:Name="ScriptEditorTab" Header="Script Editor" Style="{DynamicResource InspectorTabItemStyle}">
                 <TabItem.HeaderTemplate>
                     <DataTemplate>
                         <TextBlock><Run Text="{Binding Mode=OneWay}"/><Run Text="{Binding DataContext.CaptureController.Scripts.ActiveCountText, RelativeSource={RelativeSource AncestorType=TabItem}, Mode=OneWay}"/></TextBlock>
@@ -285,10 +319,10 @@
                 </TabItem.HeaderTemplate>
                 <app:ScriptEditorView ScriptCollection="{Binding CaptureController.Scripts}" ScriptTypeCollection="{Binding CaptureController.ScriptTypes}" TabSize="4"/>
             </TabItem>
-            <TabItem x:Name="BlockListTab" Header="Block List">
+            <TabItem x:Name="BlockListTab" Header="Block List" Style="{DynamicResource InspectorTabItemStyle}">
                 <local:BlockListView BlockList="{Binding CaptureController.BlockList}"/>
             </TabItem>
-            <TabItem x:Name="BypassListTab" Header="Bypass List">
+            <TabItem x:Name="BypassListTab" Header="Bypass List" Style="{DynamicResource InspectorTabItemStyle}">
                 <local:BypassListView BypassList="{Binding CaptureController.BypassList}"/>
             </TabItem>
         </TabControl>

@@ -9,6 +9,10 @@
         Loaded="Window_Loaded"
         Closing="Window_Closing"
         Title="{StaticResource appName}"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        Foreground="{DynamicResource PrimaryForegroundBrush}"
+        FontSize="{DynamicResource BaseFontSize}"
+        UseLayoutRounding="{local:Look New=True, Original=False}"
         AllowDrop="True"
         Drop="Window_Drop"
         WindowStartupLocation="CenterScreen"
@@ -32,9 +36,49 @@
                         Executed="ChangeProxyPort_Executed" CanExecute="ChangeProxyPort_CanExecute"/>
         <CommandBinding Command="{x:Static local:AppCommands.ManageHostLists}" Executed="ManageHostLists_Executed"/>
     </Window.CommandBindings>
+    <Window.Resources>
+        <!-- A labeled on/off switch. It uses only colors both looks define, so it looks the same in either. -->
+        <Style x:Key="LookSwitchStyle" TargetType="ToggleButton">
+            <Setter Property="Foreground" Value="{DynamicResource MenuForegroundBrush}"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Root" Background="Transparent" BorderBrush="Transparent" BorderThickness="1"
+                                CornerRadius="3" Padding="6,1" SnapsToDevicePixels="True">
+                            <StackPanel Orientation="Horizontal">
+                                <ContentPresenter VerticalAlignment="Center" Margin="0,0,6,0" RecognizesAccessKey="True"/>
+                                <Grid Width="26" Height="14" VerticalAlignment="Center">
+                                    <Border x:Name="Track" CornerRadius="7" BorderThickness="1"
+                                            BorderBrush="{TemplateBinding Foreground}" Background="Transparent"/>
+                                    <Ellipse x:Name="Knob" Width="8" Height="8" Margin="3,0" HorizontalAlignment="Left"
+                                             Fill="{TemplateBinding Foreground}"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource ActiveSelectionBrush}"/>
+                                <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource ActiveSelectionBrush}"/>
+                                <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource ActiveSelectionForegroundBrush}"/>
+                                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Root" Property="BorderBrush"
+                                        Value="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="20"/>
+            <RowDefinition Height="{local:Look New=Auto, Original=20}"/>
             <RowDefinition/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -43,7 +87,14 @@
             <ColumnDefinition Width="119*"/>
         </Grid.ColumnDefinitions>
 
-        <Menu Grid.Column="0" x:Name="MainMenuBar" Height="20" VerticalAlignment="Center" HorizontalContentAlignment="Left" VerticalContentAlignment="Top" Grid.ColumnSpan="2">
+        <Grid Grid.ColumnSpan="2" Background="{DynamicResource MenuBackgroundBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+        <!-- The menu spans the row so its background and border run under the switch on the right. -->
+        <Menu Grid.Column="0" Grid.ColumnSpan="2" x:Name="MainMenuBar" Style="{DynamicResource MainMenuBarStyle}"
+              VerticalAlignment="Center" HorizontalContentAlignment="Left">
             <MenuItem x:Name="FileMenu" HorizontalAlignment="Left" Header="_File">
                 <MenuItem x:Name="FileNewCapture"     Header="_New Capture..."   Command="New"/>
                 <MenuItem x:Name="FileLoadCaptures"   Header="_Load Captures..." Command="Open"/>
@@ -59,7 +110,20 @@
             <MenuItem x:Name="EditMenu" HorizontalAlignment="Left" Header="_Edit">
                 <MenuItem x:Name="ViewClearCaptures" Command="{x:Static local:AppCommands.ClearAllCaptures}" />
                 <Separator />
-                <MenuItem x:Name="ToggleDarkMode" Header="_Dark Mode" IsCheckable="True" Click="ToggleDarkMode_Click"/>
+                <MenuItem x:Name="ToggleDarkMode" Header="_Dark Mode" IsCheckable="True" Click="SelectTheme_Click"
+                          Visibility="{local:Look New=Collapsed, Original=Visible}"/>
+                <MenuItem x:Name="AppearanceMenu" Header="_Appearance" Visibility="{local:Look New=Visible, Original=Collapsed}">
+                    <MenuItem x:Name="LightThemeMenu" Header="_Light" Tag="Light" IsCheckable="True" Click="SelectTheme_Click"/>
+                    <MenuItem x:Name="DarkThemeMenu" Header="_Dark" Tag="Dark" IsCheckable="True" Click="SelectTheme_Click"/>
+                    <Separator/>
+                    <!-- Comfort view gives the new look room; off, the new look is data-dense. The original look keeps
+                         its own spacing, so the item is unavailable there. -->
+                    <MenuItem x:Name="ComfortViewMenu" Header="_Comfort view" IsCheckable="True" Click="ComfortView_Click"
+                              IsEnabled="{local:Look New=True, Original=False}" ToolTipService.ShowOnDisabled="True"
+                              ToolTip="{local:Look New={x:Static local:MainWindow.ComfortViewTooltip}, Original={x:Static local:MainWindow.ComfortViewNewLookOnlyTooltip}}"/>
+                </MenuItem>
+                <!-- Shown while Windows high contrast sets the colors; the theme chosen above returns once it is off. -->
+                <MenuItem x:Name="HighContrastThemeNote" IsEnabled="False" Visibility="Collapsed"/>
                 <Separator />
                 <MenuItem x:Name="EditPreferences" Command="{x:Static local:AppCommands.Preferences}"/>
             </MenuItem>
@@ -86,20 +150,31 @@
                 <MenuItem x:Name="ViewGDKXInfo" Command="{x:Static local:AppCommands.ViewGDKXInfo}" />
             </MenuItem>
         </Menu>
+            <!-- Compares the redesign with the original look; it stays in the same place in both. -->
+            <ToggleButton x:Name="NewLookToggle" Grid.Column="1" Style="{DynamicResource LookSwitchStyle}"
+                          Margin="0,0,12,0" VerticalAlignment="Center"
+                          Checked="NewLookToggle_Changed" Unchecked="NewLookToggle_Changed"/>
+        </Grid>
+
 
         <Grid Grid.Row="1" Grid.Column="0" x:Name="MainClientArea" Grid.ColumnSpan="2">
             <Grid.RowDefinitions>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="4"/>
-                <RowDefinition Height="200"/>
+                <RowDefinition Height="{local:Look New=1, Original=4}"/>
+                <RowDefinition Height="{local:Look New=174, Original=200}"/>
             </Grid.RowDefinitions>
 
+            <!-- Capture content and analysis share one flat surface; only the divider line separates them. -->
+            <Border Grid.Row="1" Grid.RowSpan="2" Background="{DynamicResource PanelBackgroundBrush}"/>
             <local:AllCaptureDevicesTabControl x:Name="AllCaptureDevicesPanel" Grid.Row="0" DeviceTabClosed="AllCaptureDevicesPanel_TabClosed"/>
-            <GridSplitter Grid.Row="1" Grid.Column="0" Height="4" ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+            <!-- In the new look the divider row is a hairline; the splitter overhangs it so it stays easy to grab. -->
+            <GridSplitter x:Name="AnalysisSplitter" Grid.Row="1" Grid.Column="0" Style="{DynamicResource PaneSplitterStyle}" Panel.ZIndex="1"
+                          Height="{local:Look New=13, Original=4}" Margin="{local:Look New='0,-6', Original='0'}"
+                          ResizeDirection="Rows" HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
             <local:CaptureAnalysisControl x:Name="CaptureErrorsPanel" Grid.Row="2" AnalysisTabAdded="CaptureErrorsPanel_TabAdded" AnalysisTabClosed="CaptureErrorsPanel_TabClosed"/>
         </Grid>
 
-        <StatusBar Grid.Row="2" Grid.Column="0" x:Name="MainStatusBar" MinHeight="20" Grid.ColumnSpan="2">
+        <StatusBar Grid.Row="2" Grid.Column="0" x:Name="MainStatusBar" Style="{DynamicResource MainStatusBarStyle}" Grid.ColumnSpan="2">
             <StatusBarItem HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                 <Grid x:Name="StatusBarPanels">
                     <Grid.ColumnDefinitions>
@@ -107,9 +182,9 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock x:Name="StatusBar1" Margin="0,0,16,0" Text="{Binding StatusBarText1}"/>
+                    <TextBlock x:Name="StatusBar1" Margin="0,0,16,0" Text="{Binding StatusBarText1}" local:LiveRegion.Mode="Polite"/>
                     <TextBlock x:Name="StatusBar2" Grid.Column="1" Margin="0,0,16,0" Text="{Binding StatusBarText2}"/>
-                    <TextBlock x:Name="StatusBar3" Grid.Column="2" Text="{Binding StatusBarText3}"
+                    <TextBlock x:Name="StatusBar3" Grid.Column="2" Text="{Binding StatusBarText3}" local:LiveRegion.Mode="Polite"
                                ToolTip="{Binding StatusBarText3}" TextTrimming="CharacterEllipsis"/>
                 </Grid>
             </StatusBarItem>

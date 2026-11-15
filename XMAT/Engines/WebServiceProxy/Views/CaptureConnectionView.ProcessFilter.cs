@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using XMAT.Operations;
 using XMAT.Operations.Captures;
@@ -212,6 +213,7 @@ namespace XMAT.WebServiceCapture
             var visibility = active ? Visibility.Visible : Visibility.Collapsed;
             ProcessFilterIndicator.Visibility = visibility;
             ShowAllProcessesButton.Visibility = visibility;
+            UpdateActiveFilterCount();
         }
 
         private void SetProcessFilter(ProcessFilterSpec spec)
@@ -299,6 +301,27 @@ namespace XMAT.WebServiceCapture
             {
                 e.Handled = true;
                 ApplyProcessEditor();
+            }
+        }
+
+        private void ProcessFilterPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape)
+            {
+                e.Handled = true;
+                ProcessFilterPopup.IsOpen = false;
+            }
+        }
+
+        // When the popup closes with focus inside it, focus would be left in a hidden window; give it back to the
+        // Process button. A click elsewhere keeps the focus it moved.
+        private void ReturnFocusFromProcessFilter()
+        {
+            if (Keyboard.FocusedElement is not DependencyObject focused ||
+                (ProcessFilterPopup.Child is { } content &&
+                    (ReferenceEquals(focused, content) || (focused is Visual visual && content.IsAncestorOf(visual)))))
+            {
+                ProcessFilterButton.Focus();
             }
         }
 

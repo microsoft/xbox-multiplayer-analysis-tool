@@ -1,0 +1,32 @@
+<!-- The new look's data-dense spacing, shown while Comfort view (Edit > Appearance) is off. Each value replaces the
+     App.xaml resource with the same key; type sizes, colors and corners stay the same. The original look keeps its
+     own spacing. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+    <Thickness x:Key="PanelPadding">8</Thickness>
+    <Thickness x:Key="TabStripPadding">8,4,8,0</Thickness>
+    <Thickness x:Key="TabPadding">8,0</Thickness>
+    <Thickness x:Key="ButtonPadding">8,3</Thickness>
+    <Thickness x:Key="TextAreaPadding">8</Thickness>
+    <Thickness x:Key="HeadingBottomSpacing">0,0,0,4</Thickness>
+    <Thickness x:Key="SectionBottomSpacing">0,0,0,8</Thickness>
+    <Thickness x:Key="InspectorContentPadding">0,8,0,0</Thickness>
+    <Thickness x:Key="TabContentPadding">0,4,0,0</Thickness>
+    <Thickness x:Key="TrafficFiltersMargin">4,8,4,4</Thickness>
+    <Thickness x:Key="TrafficOverviewMargin">4,4,4,4</Thickness>
+    <Thickness x:Key="TrafficOverviewHiddenMargin">4,0,4,2</Thickness>
+    <Thickness x:Key="TrafficPaneMargin">4,0,4,0</Thickness>
+    <Thickness x:Key="TrafficTableMargin">4,0,4,8</Thickness>
+    <Thickness x:Key="InspectorPaneMargin">4,8,4,8</Thickness>
+    <!-- Headers are 28px and rows 20px with their outline. Header text still lines up with the cells' text. -->
+    <sys:Double x:Key="TableHeaderMinHeight">28</sys:Double>
+    <sys:Double x:Key="TableRowMinHeight">18</sys:Double>
+    <Thickness x:Key="TableHeaderPadding">5,0,2,0</Thickness>
+    <Thickness x:Key="TableCellPadding">2,0</Thickness>
+    <sys:Double x:Key="ControlMinHeight">24</sys:Double>
+    <sys:Double x:Key="TabMinHeight">28</sys:Double>
+    <Thickness x:Key="ToolbarActionPadding">8,0</Thickness>
+    <!-- Menu rows; group headers and notes stay 28px. -->
+    <sys:Double x:Key="MenuItemHeight">28</sys:Double>
+</ResourceDictionary>
