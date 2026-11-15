@@ -1,0 +1,93 @@
+<!-- The design system window's own styles: the list of pages, and the sections and captioned examples a page is made
+     of. The window merges this dictionary with the new look's resources, so these styles use its roles and sizes. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:ds="clr-namespace:XMAT.DesignSystem">
+
+    <!-- A page in the list: a hover fill, and for the page shown, the panel color with an accent bar at its start, as
+         in What's new. -->
+    <Style x:Key="DesignSystemPageItemStyle" TargetType="ListBoxItem">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Root" Background="Transparent" BorderBrush="Transparent" BorderThickness="1"
+                            CornerRadius="4" Margin="0,0,0,2" Padding="12,7,10,7" SnapsToDevicePixels="True">
+                        <Grid>
+                            <Border x:Name="Bar" Width="3" Margin="-12,0,0,0" HorizontalAlignment="Left"
+                                    CornerRadius="1.5" Background="{DynamicResource AccentFillBrush}"
+                                    Visibility="Collapsed"/>
+                            <ContentPresenter/>
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+                            <Setter TargetName="Bar" Property="Visibility" Value="Visible"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Root" Property="BorderBrush"
+                                    Value="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A section: its title, what the variant is for, the style it uses, and its examples on a panel, side by side
+         and wrapping. -->
+    <Style TargetType="ds:StorySection">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="ItemsPanel">
+            <Setter.Value>
+                <ItemsPanelTemplate>
+                    <WrapPanel/>
+                </ItemsPanelTemplate>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ds:StorySection">
+                    <StackPanel Margin="0,0,0,32">
+                        <TextBlock Text="{TemplateBinding Title}" Style="{DynamicResource SectionTitleStyle}"/>
+                        <TextBlock Text="{TemplateBinding Description}" Margin="0,4,0,0" MaxWidth="720"
+                                   HorizontalAlignment="Left" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <TextBlock Text="{TemplateBinding StyleName}" Margin="0,4,0,0" FontFamily="Consolas"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <Border Margin="0,12,0,0" Padding="20,20,0,4" CornerRadius="8" BorderThickness="1"
+                                Background="{DynamicResource SurfacePanelBrush}"
+                                BorderBrush="{DynamicResource BorderDefaultBrush}">
+                            <ItemsPresenter/>
+                        </Border>
+                    </StackPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- An example, with the state it shows written under it. -->
+    <Style TargetType="ds:StoryExample">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Margin" Value="0,0,32,16"/>
+        <Setter Property="VerticalAlignment" Value="Top"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ds:StoryExample">
+                    <StackPanel>
+                        <ContentPresenter HorizontalAlignment="Left"/>
+                        <TextBlock Text="{TemplateBinding Caption}" Margin="0,8,0,0"
+                                   FontSize="{DynamicResource MetadataFontSize}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </StackPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

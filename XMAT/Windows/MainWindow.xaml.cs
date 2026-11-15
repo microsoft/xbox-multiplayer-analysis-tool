@@ -88,6 +88,7 @@ namespace XMAT
             HelpMenu.Header = Localization.GetLocalizedString("HELP_MENU");
             CollectLogs.Header = Localization.GetLocalizedString("COLLECT_LOGS");
             ViewGDKXInfo.Header = Localization.GetLocalizedString("GDKX_INFO");
+            DesignSystemMenu.Header = Localization.GetLocalizedString("DESIGN_SYSTEM_MENU");
             ActionsMenu.Header = Localization.GetLocalizedString("ACTIONS_MENU");
             ChangeProxyPort.Header = Localization.GetLocalizedString("PROXY_PORT_CHANGE");
             ChangeProxyPort.ToolTip = Localization.GetLocalizedString("PROXY_PORT_CHANGE_TOOLTIP");
@@ -789,6 +790,8 @@ namespace XMAT
         }
 
         private void WhatsNew_Click(object sender, RoutedEventArgs e) => new WhatsNewWindow { Owner = this }.ShowDialog();
+
+        private void DesignSystem_Click(object sender, RoutedEventArgs e) => DesignSystemWindow.ShowFor(this);
 
         // The item is checkable, so its check mark already shows the new setting. The new look's views follow at once.
         private void ComfortView_Click(object sender, RoutedEventArgs e)

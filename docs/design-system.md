@@ -141,3 +141,46 @@ files of their own as they are worked on.
   `StyleFileTests` checks this.
 - A new component gets its own file in `XMAT/Styles`. Merge it in `NewLook.xaml`, and add it to
   `XMAT.Tests/NewLookMarkup.cs` so tests can read its styles.
+
+## The design system window
+
+**Help > Design system** opens a window with a page for each component: what it is for, its style file, and examples
+of it in the states it can be set to, such as disabled, checked or running. Hover, press and keyboard focus show
+live. The settings above a page preview the components in Light or Dark, in a Windows contrast theme, and with
+Comfort view on or off; they change the window only, not the app.
+
+Pages are XAML files in [`XMAT/DesignSystem/Stories`](../XMAT/DesignSystem/Stories). To add one:
+
+1. Create `<Component>Story.xaml` with `ds:Story` as its root, setting `Title`, `Summary` and `StyleFile`.
+2. Add a `ds:StorySection` for each variant, with a `Title`, a `Description` and the `StyleName` it uses, holding a
+   `ds:StoryExample` for each state, with a `Caption`. Build examples the way views do, so a page shows how to use
+   the component.
+3. Take the new look's resources with `DynamicResource`. A page loads before it joins the window, so a
+   `StaticResource` would find the app's resources, which may be the original look's.
+4. Add the page to `XMAT/DesignSystem/StoryCatalog.cs`. `DesignSystemWindowTests` checks that every page names its
+   style file and shows its examples.
+5. Run the design system tests. `StoryCoverageTests` asks for the styles the page now shows to be removed from
+   `XMAT.Tests/DesignSystem/UncoveredStyles.txt`, and `ReferenceImageTests` asks for the page's pictures; create them
+   as below.
+
+### Checks
+
+- **Every style is on a page.** `StoryCoverageTests` opens every page, with its menus and dropdowns open, and fails
+  when a style of the new look appears on none. Styles that no page shows yet are listed in
+  `XMAT.Tests/DesignSystem/UncoveredStyles.txt`; the list only shrinks, because a new style comes with its example.
+- **Pictures of every page.** `ReferenceImageTests` keeps pictures of each page in Light, in Dark with Comfort view
+  off, and in the Night sky contrast theme, and of the open context menu, in
+  [`XMAT.Tests/DesignSystem/Reference`](../XMAT.Tests/DesignSystem/Reference). Pages are rendered on their own, at 96
+  DPI, 100% text size and without animations, so the pictures don't depend on the display. When a component changes,
+  its pictures fail, and the test writes what it rendered and a picture of the differences, in magenta, to
+  `XMAT.Tests/TestResults/DesignSystem`. When the change is intended, update the pictures and commit them with it, so
+  review shows the before and after:
+
+  ```powershell
+  $env:XMAT_REFERENCE_WRITE = "1"
+  dotnet test XMAT.Tests\XMAT.Tests.csproj -c Debug -p:Platform=x64 --filter "FullyQualifiedName~ReferenceImageTests"
+  Remove-Item Env:XMAT_REFERENCE_WRITE
+  ```
+
+  If pictures differ on a machine for reasons outside XMAT, such as another version of Windows' fonts, set
+  `XMAT_REFERENCE_IMAGES=report` to report the differences without failing.

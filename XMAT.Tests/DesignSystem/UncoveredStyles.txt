@@ -1,0 +1,77 @@
+# Styles of the new look that no design system page shows yet, as "file: key". This list only shrinks: a new style
+# comes with an example on its component's page (docs/design-system.md), and when a page starts showing a style,
+# StoryCoverageTests asks for its line to be removed.
+Looks/NewLook.xaml: ColumnHeaderGripperStyle
+Looks/NewLook.xaml: ColumnSplitterStyle
+Looks/NewLook.xaml: FilterLabelStyle
+Looks/NewLook.xaml: FilterSummaryTextStyle
+Looks/NewLook.xaml: InspectorTreeViewStyle
+Looks/NewLook.xaml: MainStatusBarStyle
+Looks/NewLook.xaml: MessageGridHeaderStyle
+Looks/NewLook.xaml: NoticeTextStyle
+Looks/NewLook.xaml: PacketGridHeaderStyle
+Looks/NewLook.xaml: PaneSplitterStyle
+Looks/NewLook.xaml: PaneTitleStyle
+Looks/NewLook.xaml: TimelineHeaderStyle
+Looks/NewLook.xaml: TimelineWellStyle
+Looks/NewLook.xaml: TrafficGridHeaderStyle
+Looks/NewLook.xaml: {x:Type DataGridCell}
+Looks/NewLook.xaml: {x:Type DataGridColumnHeader}
+Looks/NewLook.xaml: {x:Type DataGridRowHeader}
+Looks/NewLook.xaml: {x:Type DataGridRow}
+Looks/NewLook.xaml: {x:Type DataGrid}
+Looks/NewLook.xaml: {x:Type GridSplitter}
+Looks/NewLook.xaml: {x:Type GroupBox}
+Looks/NewLook.xaml: {x:Type Label}
+Looks/NewLook.xaml: {x:Type ListBox}
+Looks/NewLook.xaml: {x:Type Separator}
+Looks/NewLook.xaml: {x:Type StatusBar}
+Looks/NewLook.xaml: {x:Type TextBlock}
+Looks/NewLook.xaml: {x:Type ToolTip}
+Looks/NewLook.xaml: {x:Type TreeViewItem}
+Looks/NewLook.xaml: {x:Type TreeView}
+Looks/NewLook.xaml: {x:Type UserControl}
+Looks/NewLook.xaml: {x:Type Window}
+Styles/AnalysisCharts.xaml: CallRateAxisStyle
+Styles/AnalysisCharts.xaml: CallRateBadgeStyle
+Styles/AnalysisCharts.xaml: CallRateCellTextStyle
+Styles/AnalysisCharts.xaml: CallRateChartStyle
+Styles/AnalysisCharts.xaml: CallRateDetailTextStyle
+Styles/AnalysisCharts.xaml: CallRateFirstSegmentStyle
+Styles/AnalysisCharts.xaml: CallRateFocusVisualStyle
+Styles/AnalysisCharts.xaml: CallRateHeaderBandStyle
+Styles/AnalysisCharts.xaml: CallRateHeaderDividerStyle
+Styles/AnalysisCharts.xaml: CallRateHeaderStyle
+Styles/AnalysisCharts.xaml: CallRateHeaderTextStyle
+Styles/AnalysisCharts.xaml: CallRateLastSegmentStyle
+Styles/AnalysisCharts.xaml: CallRateLimitLabelStyle
+Styles/AnalysisCharts.xaml: CallRateRowStyle
+Styles/AnalysisCharts.xaml: CallRateSegmentStyle
+Styles/AnalysisCharts.xaml: CallRateTableStyle
+Styles/AnalysisCharts.xaml: CallRateTipStyle
+Styles/AnalysisCharts.xaml: CallRateTitleStyle
+Styles/DataViz.xaml: {x:Type ColumnSummaryButton}
+Styles/DataViz.xaml: {x:Type ColumnSummaryView}
+Styles/Motion.xaml: SkeletonPillStyle
+Styles/Motion.xaml: {x:Type SkeletonBlock}
+Styles/Toolbar.xaml: {x:Type ToolBarTray}
+Styles/TrafficOverview.xaml: TrafficOverviewCellsStyle
+Styles/TrafficOverview.xaml: TrafficOverviewDividerStyle
+Styles/TrafficOverview.xaml: TrafficOverviewFocusVisualStyle
+Styles/TrafficOverview.xaml: TrafficOverviewHideButtonStyle
+Styles/TrafficOverview.xaml: TrafficOverviewHostItemStyle
+Styles/TrafficOverview.xaml: TrafficOverviewHostsLabelStyle
+Styles/TrafficOverview.xaml: TrafficOverviewLabelRowStyle
+Styles/TrafficOverview.xaml: TrafficOverviewLabelStyle
+Styles/TrafficOverview.xaml: TrafficOverviewLegendItemStyle
+Styles/TrafficOverview.xaml: TrafficOverviewLegendStyle
+Styles/TrafficOverview.xaml: TrafficOverviewRateStyle
+Styles/TrafficOverview.xaml: TrafficOverviewShowButtonStyle
+Styles/TrafficOverview.xaml: TrafficOverviewSparklineStyle
+Styles/TrafficOverview.xaml: TrafficOverviewStatusBarStyle
+Styles/TrafficOverview.xaml: TrafficOverviewStatusTextStyle
+Styles/TrafficOverview.xaml: TrafficOverviewStripStyle
+Styles/TrafficOverview.xaml: TrafficOverviewTextItemStyle
+Styles/TrafficOverview.xaml: TrafficOverviewTextSeparatorStyle
+Styles/TrafficOverview.xaml: TrafficOverviewTotalStyle
+Styles/TrafficOverview.xaml: {x:Type TrafficOverview}

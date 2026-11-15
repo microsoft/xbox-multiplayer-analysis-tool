@@ -324,6 +324,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Capture viewers (`view.capture-viewers`) | (none) | GUI only. Presentation: filters, timeline and the request, response, WebSocket and packet views |
 | Comfort view (`view.comfort`) | (none) | GUI only. Presentation: spacing only |
 | Control templates (`view.controls`) | (none) | GUI only. Presentation: scroll bar commands inside control templates |
+| Design system (`view.design-system`) | (none) | GUI only. Presentation: shows the new look's components in each state |
 | Display language (`view.language`) | (none) | GUI only. Presentation: the command line emits stable codes and English diagnostics |
 | New look switch (`view.look`) | (none) | GUI only. Presentation: switches between the redesigned and the original appearance |
 | Main window (`view.main-window`) | (none) | GUI only. Presentation: hosts the GUI adapters of every capability |

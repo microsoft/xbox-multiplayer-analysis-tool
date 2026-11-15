@@ -1,0 +1,89 @@
+<ds:Story x:Class="XMAT.DesignSystem.ButtonsStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          Title="Buttons"
+          Summary="Buttons start an action. The standard button is outlined on the surface; icon buttons hold one glyph; toggle buttons stay pressed while their option is on."
+          StyleFile="Styles/Buttons.xaml">
+    <StackPanel>
+        <ds:StorySection Title="Standard button" StyleName="Button (default style)"
+                         Description="For actions in dialogs and panels, such as Save in the host list manager.">
+            <ds:StoryExample Caption="Rest">
+                <Button Content="Save"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <Button Content="Save" IsEnabled="False"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Long label">
+                <Button Content="Export root certificate to desktop"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Icon button" StyleName="SoftIconButtonStyle"
+                         Description="A 24px button with one glyph, such as New capture at the start of the capture tabs. Give it a tooltip and an accessible name that say what it does.">
+            <ds:StoryExample Caption="Rest">
+                <Button Style="{DynamicResource SoftIconButtonStyle}" ToolTip="New capture"
+                        AutomationProperties.Name="New capture">
+                    <Path Width="10" Height="10" Stretch="Uniform" Data="M 0,7 L 14,7 M 7,0 L 7,14"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                </Button>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <Button Style="{DynamicResource SoftIconButtonStyle}" IsEnabled="False"
+                        AutomationProperties.Name="New capture">
+                    <Path Width="10" Height="10" Stretch="Uniform" Data="M 0,7 L 14,7 M 7,0 L 7,14"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                </Button>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Tab close button" StyleName="TabCloseButtonStyle"
+                         Description="The quiet close glyph on capture and analysis tabs. Its 24px target fills on hover.">
+            <ds:StoryExample Caption="Rest">
+                <Button Style="{DynamicResource TabCloseButtonStyle}" Content="&#xE894;"
+                        FontFamily="Segoe MDL2 Assets" ToolTip="Close tab" AutomationProperties.Name="Close tab"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Toggle button" StyleName="ToggleButton (default style)"
+                         Description="An option that stays on while the button is pressed. On, it takes the soft accent fill and an accent outline.">
+            <ds:StoryExample Caption="Off">
+                <ToggleButton Content="Wrap lines"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="On">
+                <ToggleButton Content="Wrap lines" IsChecked="True"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <ToggleButton Content="Wrap lines" IsEnabled="False"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Filter toggle" StyleName="FilterToggleButtonStyle"
+                         Description="A toggle among the filter dropdowns, with their corners and height, such as Process in the traffic filters. It is on while its popup is open.">
+            <ds:StoryExample Caption="Off">
+                <ToggleButton Style="{DynamicResource FilterToggleButtonStyle}" Content="Process"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="On">
+                <ToggleButton Style="{DynamicResource FilterToggleButtonStyle}" Content="Process" IsChecked="True"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Filters button" StyleName="FilterOverflowButtonStyle, FilterOverflowPopupStyle"
+                         Description="When the traffic pane is too narrow for its filters, they fold into this button, and its popup lists them. An accent dot shows that a filter is on.">
+            <ds:StoryExample x:Name="NoFilterExample" Caption="No filter on"/>
+            <ds:StoryExample x:Name="ActiveFilterExample" Caption="A filter on"/>
+            <ds:StoryExample Caption="Its popup">
+                <Border Style="{DynamicResource FilterOverflowPopupStyle}">
+                    <StackPanel>
+                        <ToggleButton Style="{DynamicResource FilterToggleButtonStyle}" Content="Status"
+                                      HorizontalAlignment="Left"/>
+                        <ToggleButton Style="{DynamicResource FilterToggleButtonStyle}" Content="Process"
+                                      HorizontalAlignment="Left" Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Border>
+            </ds:StoryExample>
+        </ds:StorySection>
+    </StackPanel>
+</ds:Story>

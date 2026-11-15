@@ -1,0 +1,65 @@
+<Window x:Class="XMAT.DesignSystemWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="1180" Height="820" MinWidth="760" MinHeight="480"
+        WindowStartupLocation="CenterOwner" UseLayoutRounding="True"
+        Background="{DynamicResource SurfaceCanvasBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}"
+        FontSize="{DynamicResource BaseFontSize}">
+    <!-- The window's resources are its own copy of the new look (DesignSystemWindow.xaml.cs), so the preview
+         settings change this window only. -->
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="240"/>
+            <ColumnDefinition/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Pages: one per component; selecting one shows it. -->
+        <DockPanel Margin="16,20,8,16">
+            <TextBlock x:Name="Heading" DockPanel.Dock="Top" Margin="12,0,0,4" FontSize="18" FontWeight="SemiBold"
+                       AutomationProperties.HeadingLevel="Level1"/>
+            <TextBlock x:Name="Subheading" DockPanel.Dock="Top" Margin="12,0,0,14" TextWrapping="Wrap"
+                       Foreground="{DynamicResource TextSecondaryBrush}"/>
+            <ListBox x:Name="PageList" ItemContainerStyle="{DynamicResource DesignSystemPageItemStyle}"
+                     Background="Transparent" BorderThickness="0" Padding="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     SelectionChanged="PageList_SelectionChanged">
+                <ListBox.Resources>
+                    <!-- The new look's scroll viewers take the panel color; the list sits on the window's. -->
+                    <Style TargetType="ScrollViewer">
+                        <Setter Property="Background" Value="Transparent"/>
+                    </Style>
+                </ListBox.Resources>
+            </ListBox>
+        </DockPanel>
+
+        <!-- The page: its component, what it is for and its style file, the preview settings, then its examples. -->
+        <DockPanel Grid.Column="1" Margin="8,20,0,0">
+            <StackPanel DockPanel.Dock="Top" Margin="0,0,24,0">
+                <TextBlock x:Name="PageTitle" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"
+                           AutomationProperties.HeadingLevel="Level2"/>
+                <TextBlock x:Name="PageSummary" Margin="0,6,0,0" MaxWidth="720" HorizontalAlignment="Left"
+                           TextWrapping="Wrap"/>
+                <TextBlock x:Name="PageStyleFile" Margin="0,6,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                <WrapPanel x:Name="PreviewSettings" Margin="0,16,0,12">
+                    <TextBlock x:Name="ThemeLabel" Margin="0,0,12,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <RadioButton x:Name="LightTheme" GroupName="PreviewTheme" Margin="0,0,16,0"
+                                 VerticalAlignment="Center" Checked="Theme_Checked"/>
+                    <RadioButton x:Name="DarkTheme" GroupName="PreviewTheme" Margin="0,0,32,0"
+                                 VerticalAlignment="Center" Checked="Theme_Checked"/>
+                    <TextBlock x:Name="ContrastLabel" Margin="0,0,12,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <ComboBox x:Name="ContrastChoice" MinWidth="128" Margin="0,0,32,0" VerticalAlignment="Center"
+                              ToolTipService.ShowOnDisabled="True" SelectionChanged="ContrastChoice_SelectionChanged"/>
+                    <CheckBox x:Name="ComfortViewChoice" VerticalAlignment="Center"
+                              Checked="ComfortViewChoice_Changed" Unchecked="ComfortViewChoice_Changed"/>
+                </WrapPanel>
+            </StackPanel>
+            <ScrollViewer x:Name="PageScroller" Background="Transparent" Focusable="False" Padding="0,8,24,8"
+                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ContentControl x:Name="PageHost" Focusable="False"/>
+            </ScrollViewer>
+        </DockPanel>
+    </Grid>
+</Window>

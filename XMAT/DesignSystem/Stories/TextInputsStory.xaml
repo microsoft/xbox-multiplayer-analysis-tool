@@ -1,0 +1,60 @@
+<ds:Story x:Class="XMAT.DesignSystem.TextInputsStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          Title="Text boxes and dropdowns"
+          Summary="Text boxes take a typed value, such as a host or a port; read-only text areas show request and response text in the inspector. Dropdowns choose one value from a list."
+          StyleFile="Styles/Inputs.xaml">
+    <StackPanel>
+        <ds:StorySection Title="Text box" StyleName="TextBox (default style)"
+                         Description="One line of typed text, with 3px corners. Read only, it can still be selected and copied.">
+            <ds:StoryExample Caption="Empty">
+                <TextBox Width="220" AutomationProperties.Name="Host"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="With text">
+                <TextBox Width="220" Text="api.example.com" AutomationProperties.Name="Host"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Read only">
+                <TextBox Width="220" Text="api.example.com" IsReadOnly="True" AutomationProperties.Name="Host"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <TextBox Width="220" Text="api.example.com" IsEnabled="False" AutomationProperties.Name="Host"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Inspector text" StyleName="InspectorTextBoxStyle, in RecessedSurfaceStyle"
+                         Description="Request and response text in the inspector: read only, in Consolas, in a recessed well that scrolls.">
+            <ds:StoryExample Caption="Headers of a request">
+                <ContentControl Style="{DynamicResource RecessedSurfaceStyle}" Width="460" Height="132">
+                    <ScrollViewer>
+                        <TextBox Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True"
+                                 TextWrapping="Wrap" FontFamily="Consolas" AutomationProperties.Name="Request headers"
+                                 Text="GET https://api.example.com/sessions/42 HTTP/1.1&#x0a;Host: api.example.com&#x0a;Accept: application/json&#x0a;User-Agent: XboxServicesAPI/2024.06&#x0a;x-xbl-contract-version: 107"/>
+                    </ScrollViewer>
+                </ContentControl>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Dropdown" StyleName="ComboBox (default style), ComboBoxItem (default style)"
+                         Description="Chooses one value from a list. An editable dropdown also takes typed text. Open one to see its items.">
+            <ds:StoryExample Caption="A value chosen">
+                <ComboBox x:Name="ChosenDropdown" Width="180" SelectedIndex="0" AutomationProperties.Name="Timeline view">
+                    <ComboBoxItem Content="Waterfall"/>
+                    <ComboBoxItem Content="By Host"/>
+                    <ComboBoxItem Content="Volume"/>
+                </ComboBox>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Editable">
+                <ComboBox Width="180" IsEditable="True" Text="api.example.com" AutomationProperties.Name="Host">
+                    <ComboBoxItem Content="api.example.com"/>
+                    <ComboBoxItem Content="title.mgt.xboxlive.com"/>
+                </ComboBox>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <ComboBox Width="180" SelectedIndex="0" IsEnabled="False" AutomationProperties.Name="Timeline view">
+                    <ComboBoxItem Content="Waterfall"/>
+                </ComboBox>
+            </ds:StoryExample>
+        </ds:StorySection>
+    </StackPanel>
+</ds:Story>

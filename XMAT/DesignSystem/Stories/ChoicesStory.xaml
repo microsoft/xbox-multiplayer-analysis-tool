@@ -1,0 +1,43 @@
+<ds:Story x:Class="XMAT.DesignSystem.ChoicesStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          Title="Check boxes and radio buttons"
+          Summary="Check boxes turn an option on or off, such as Auto Scroll above the timeline. Radio buttons choose one option from a few shown together, such as the timeline's views."
+          StyleFile="Styles/Inputs.xaml">
+    <StackPanel>
+        <ds:StorySection Title="Check box" StyleName="CheckBox (default style)"
+                         Description="An option on or off.">
+            <ds:StoryExample Caption="Off">
+                <CheckBox Content="Auto Scroll"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="On">
+                <CheckBox Content="Auto Scroll" IsChecked="True"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled, off">
+                <CheckBox Content="Auto Scroll" IsEnabled="False"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled, on">
+                <CheckBox Content="Auto Scroll" IsChecked="True" IsEnabled="False"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Radio buttons" StyleName="RadioButton (default style)"
+                         Description="One choice from a few options shown side by side.">
+            <ds:StoryExample Caption="One chosen">
+                <StackPanel Orientation="Horizontal">
+                    <RadioButton Content="Waterfall" GroupName="StoryTimelineView" IsChecked="True" Margin="0,0,16,0"/>
+                    <RadioButton Content="By Host" GroupName="StoryTimelineView" Margin="0,0,16,0"/>
+                    <RadioButton Content="Volume" GroupName="StoryTimelineView"/>
+                </StackPanel>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Disabled">
+                <StackPanel Orientation="Horizontal">
+                    <RadioButton Content="Waterfall" GroupName="StoryDisabledView" IsChecked="True" IsEnabled="False"
+                                 Margin="0,0,16,0"/>
+                    <RadioButton Content="By Host" GroupName="StoryDisabledView" IsEnabled="False"/>
+                </StackPanel>
+            </ds:StoryExample>
+        </ds:StorySection>
+    </StackPanel>
+</ds:Story>
