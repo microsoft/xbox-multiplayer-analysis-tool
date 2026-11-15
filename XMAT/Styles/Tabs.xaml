@@ -1,0 +1,367 @@
+<!-- Tabs in the new look: the capture tabs in their recessed strip, the inspector and format tabs, and the More
+     buttons that end a tab row whose tabs don't all fit; their menu is in Styles/Menus.xaml. Looks/NewLook.xaml
+     merges this dictionary. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:XMAT">
+
+    <!-- The capture tab strip is a recessed band; the selected tab joins the content surface below it. -->
+    <Style x:Key="CaptureTabStripStyle" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource SurfaceStripBrush}"/>
+        <Setter Property="Padding" Value="{DynamicResource TabStripPadding}"/>
+    </Style>
+
+    <Style TargetType="TabControl">
+        <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="Padding" Value="{DynamicResource TabContentPadding}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabControl">
+                    <Grid SnapsToDevicePixels="True" ClipToBounds="True"
+                          KeyboardNavigation.TabNavigation="Local">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TabPanel x:Name="HeaderPanel" Grid.Row="0"
+                                  IsItemsHost="True" Margin="0,0,0,-1"
+                                  Panel.ZIndex="1" Background="Transparent"
+                                  KeyboardNavigation.TabIndex="1"/>
+                        <Border x:Name="ContentPanel" Grid.Row="1"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{DynamicResource BorderSubtleBrush}"
+                                BorderThickness="0"
+                                KeyboardNavigation.DirectionalNavigation="Contained"
+                                KeyboardNavigation.TabIndex="2"
+                                KeyboardNavigation.TabNavigation="Local">
+                            <ContentPresenter x:Name="PART_SelectedContentHost"
+                                              ContentSource="SelectedContent"
+                                              Margin="{TemplateBinding Padding}"
+                                              SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                        </Border>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Capture tabs: rounded top corners in a recessed strip, separated only by a small gap. Inactive tabs sit
+         behind, with a soft inner shadow at their base; the selected tab joins the content surface below. -->
+    <!-- Tabs show a focus outline only when focus comes from the keyboard, not after a click. -->
+    <Style x:Key="TabFocusVisualStyle">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Margin="2" BorderThickness="1" CornerRadius="{DynamicResource ControlCornerRadius}"
+                            BorderBrush="{DynamicResource TextPrimaryBrush}" SnapsToDevicePixels="True"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Tab typography is set on the label only: a tab's own font settings would flow into its content. Each
+         label keeps the width of its semibold, selected form, so selecting a tab never resizes it. -->
+    <Style TargetType="TabItem">
+        <Setter Property="MinHeight" Value="{DynamicResource TabMinHeight}"/>
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource TabFocusVisualStyle}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabItem">
+                    <!-- Tab panels clip a tab's own margin, so the 2px gap between tabs is part of the template. -->
+                    <Grid Margin="0,0,2,0">
+                        <Border x:Name="Border"
+                                Background="{DynamicResource SurfaceCanvasBrush}"
+                                CornerRadius="{DynamicResource TabCornerRadius}"
+                                SnapsToDevicePixels="True"/>
+                        <Border x:Name="InsetShadow"
+                                Background="{DynamicResource TabItemInsetShadowBrush}"
+                                CornerRadius="{DynamicResource TabCornerRadius}"
+                                IsHitTestVisible="False"/>
+                        <!-- The selected tab joins its content, so it needs no edge of its own. High Contrast,
+                             where every tab shares the window color, gives it a highlight top edge. -->
+                        <Border x:Name="SelectionIndicator" BorderThickness="0,2,0,0"
+                                BorderBrush="{DynamicResource TabItemSelectedEdgeBrush}"
+                                CornerRadius="{DynamicResource TabCornerRadius}"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                        <Border x:Name="HoverOutline" BorderThickness="1"
+                                BorderBrush="{DynamicResource HoverOutlineBrush}"
+                                CornerRadius="{DynamicResource TabCornerRadius}"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                        <local:TabHeaderSizer x:Name="HeaderSizer"
+                                              Margin="{DynamicResource TabPadding}"
+                                              IsSelected="{TemplateBinding IsSelected}"
+                                              NormalFontSize="{DynamicResource BaseFontSize}"
+                                              SelectedFontSize="{DynamicResource BaseFontSize}">
+                            <ContentPresenter x:Name="ContentSite"
+                                              ContentSource="Header"
+                                              TextElement.Foreground="{DynamicResource TextPrimaryBrush}"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </local:TabHeaderSizer>
+
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="InsetShadow" Property="Opacity" Value="0.4"/>
+                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Border" Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+                            <Setter TargetName="InsetShadow" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="SelectionIndicator" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="ContentSite" Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+                        </Trigger>
+
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Inspector tabs: quiet labels the same size as the toolbar's buttons; the selected tab is semibold, with
+         an accent underline. Each tab keeps the width of its semibold label, so switching tabs never moves
+         anything. Hairlines as tall as the toolbar's dividers separate the tabs. -->
+    <Style x:Key="InspectorTabItemStyle" TargetType="{x:Type TabItem}"
+           BasedOn="{StaticResource {x:Type TabItem}}">
+        <Setter Property="MinHeight" Value="{DynamicResource ControlMinHeight}"/>
+        <Setter Property="Padding" Value="{DynamicResource TabPadding}"/>
+        <Setter Property="Margin" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type TabItem}">
+                    <Grid Background="Transparent">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="HoverSurface" Background="Transparent"
+                                Padding="{TemplateBinding Padding}">
+                            <local:TabHeaderSizer x:Name="HeaderSizer" IsSelected="{TemplateBinding IsSelected}"
+                                                  NormalFontSize="{DynamicResource BaseFontSize}"
+                                                  SelectedFontSize="{DynamicResource BaseFontSize}">
+                                <ContentPresenter x:Name="HeaderSite" ContentSource="Header" RecognizesAccessKey="True"
+                                                  TextElement.Foreground="{DynamicResource TextSecondaryBrush}"
+                                                  HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <!-- Labels take the state colors set here, not the app-wide TextBlock color. -->
+                                    <ContentPresenter.Resources>
+                                        <Style TargetType="TextBlock"/>
+                                    </ContentPresenter.Resources>
+                                </ContentPresenter>
+                            </local:TabHeaderSizer>
+                        </Border>
+                        <Border x:Name="SelectionIndicator" Height="2"
+                                VerticalAlignment="Bottom" Visibility="Collapsed"
+                                Background="{DynamicResource AccentBrush}"
+                                IsHitTestVisible="False"/>
+                        <Border x:Name="HoverOutline" BorderThickness="1" Visibility="Collapsed"
+                                BorderBrush="{DynamicResource HoverOutlineBrush}" IsHitTestVisible="False"/>
+                        <Border x:Name="Separator" Grid.Column="1" Width="1" Height="20" Margin="3,0"
+                                VerticalAlignment="Center" Background="{DynamicResource BorderDefaultBrush}"
+                                IsHitTestVisible="False"/>
+
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="HeaderSite" Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="HeaderSite" Property="TextElement.Foreground" Value="{DynamicResource TextHeadingBrush}"/>
+                            <Setter TargetName="SelectionIndicator" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="HeaderSite" Property="TextElement.Foreground" Value="{DynamicResource TextDisabledBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Format tabs (Headers, Body, JSON): the selected tab takes the well's color and joins the well. -->
+    <Style x:Key="FormatTabItemStyle" TargetType="{x:Type TabItem}"
+           BasedOn="{StaticResource {x:Type TabItem}}">
+        <Setter Property="MinHeight" Value="{DynamicResource ControlMinHeight}"/>
+        <Setter Property="Padding" Value="{DynamicResource TabPadding}"/>
+        <Setter Property="Margin" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type TabItem}">
+                    <Grid>
+                        <Border x:Name="TabSurface" Background="Transparent"
+                                CornerRadius="{DynamicResource TabCornerRadius}"
+                                Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <local:TabHeaderSizer x:Name="HeaderSizer" IsSelected="{TemplateBinding IsSelected}"
+                                                  NormalFontSize="{DynamicResource BaseFontSize}"
+                                                  SelectedFontSize="{DynamicResource BaseFontSize}">
+                                <ContentPresenter x:Name="HeaderSite" ContentSource="Header" RecognizesAccessKey="True"
+                                                  TextElement.Foreground="{DynamicResource TextSecondaryBrush}"
+                                                  HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <ContentPresenter.Resources>
+                                        <Style TargetType="TextBlock"/>
+                                    </ContentPresenter.Resources>
+                                </ContentPresenter>
+                            </local:TabHeaderSizer>
+                        </Border>
+                        <!-- No edge on the selected tab, which joins the well, except in High Contrast. -->
+                        <Border x:Name="SelectionIndicator" BorderThickness="0,2,0,0"
+                                BorderBrush="{DynamicResource TabItemSelectedEdgeBrush}"
+                                CornerRadius="{DynamicResource TabCornerRadius}"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                        <Border x:Name="HoverOutline" BorderThickness="1"
+                                BorderBrush="{DynamicResource HoverOutlineBrush}"
+                                CornerRadius="{DynamicResource TabCornerRadius}"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="HeaderSite" Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="TabSurface" Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>
+                            <Setter TargetName="SelectionIndicator" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="HeaderSite" Property="TextElement.Foreground" Value="{DynamicResource TextHeadingBrush}"/>
+                        </Trigger>
+
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="HeaderSite" Property="TextElement.Foreground" Value="{DynamicResource TextDisabledBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The More button ends a tab row whose tabs don't all fit. It reads like an inactive tab, with a chevron
+         for its menu. -->
+    <Style x:Key="InspectorOverflowButtonStyle" TargetType="ToggleButton">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+        <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
+        <Setter Property="Padding" Value="{DynamicResource TabPadding}"/>
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource TabFocusVisualStyle}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border Background="Transparent" Padding="{TemplateBinding Padding}">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <ContentPresenter VerticalAlignment="Center">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock"/>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                            <Path Data="M0.5,0.5 L4.5,4.5 L8.5,0.5" Width="9" Height="5" Margin="6,1,0,0"
+                                  VerticalAlignment="Center" Stroke="{TemplateBinding Foreground}"
+                                  StrokeThickness="1.25" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"/>
+                        </StackPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource TextHeadingBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- More at the end of the capture tab row reads like an inactive capture tab, with a chevron for its menu. -->
+    <Style x:Key="CaptureOverflowButtonStyle" TargetType="ToggleButton">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
+        <Setter Property="Padding" Value="{DynamicResource TabPadding}"/>
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource TabFocusVisualStyle}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Grid>
+                        <Border Background="{DynamicResource SurfaceCanvasBrush}"
+                                CornerRadius="{DynamicResource TabCornerRadius}" SnapsToDevicePixels="True"/>
+                        <Border x:Name="InsetShadow" Background="{DynamicResource TabItemInsetShadowBrush}"
+                                CornerRadius="{DynamicResource TabCornerRadius}" IsHitTestVisible="False"/>
+                        <Border x:Name="HoverOutline" BorderThickness="1"
+                                BorderBrush="{DynamicResource HoverOutlineBrush}"
+                                CornerRadius="{DynamicResource TabCornerRadius}"
+                                Visibility="Collapsed" IsHitTestVisible="False"/>
+                        <StackPanel Orientation="Horizontal" Margin="{TemplateBinding Padding}"
+                                    VerticalAlignment="Center">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                            <Path Data="M0.5,0.5 L4.5,4.5 L8.5,0.5" Width="9" Height="5" Margin="6,1,0,0"
+                                  VerticalAlignment="Center" Stroke="{TemplateBinding Foreground}"
+                                  StrokeThickness="1.25" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"/>
+                        </StackPanel>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="InsetShadow" Property="Opacity" Value="0.4"/>
+                            <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="InsetShadow" Property="Opacity" Value="0.4"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Inspector, format and analysis tabs sit in one row that never scrolls or wraps. When the tabs don't fit,
+         their labels shrink first; tabs that still don't fit move to a More menu at the end of the row. The
+         selected tab always stays in the row. -->
+    <Style x:Key="InspectorTabControlStyle" TargetType="{x:Type TabControl}"
+           BasedOn="{StaticResource {x:Type TabControl}}">
+        <Setter Property="ItemContainerStyle" Value="{StaticResource InspectorTabItemStyle}"/>
+        <Setter Property="Padding" Value="{DynamicResource InspectorContentPadding}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type TabControl}">
+                    <Grid SnapsToDevicePixels="True" KeyboardNavigation.TabNavigation="Local">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <local:OverflowTabPanel x:Name="HeaderPanel" Grid.Row="0" IsItemsHost="True"
+                                                KeyboardNavigation.TabIndex="1"
+                                                OverflowButtonWidth="{Binding ActualWidth, ElementName=MoreButton}"/>
+                        <!-- A canvas measures the button at its full width, so the row can keep exactly that much
+                             room for it. -->
+                        <Canvas Grid.Row="0" KeyboardNavigation.TabIndex="2">
+                            <local:TabOverflowButton x:Name="MoreButton" Visibility="Hidden"
+                                                     OverflowPanel="{Binding ElementName=HeaderPanel}"
+                                                     Canvas.Left="{Binding OverflowButtonOffset, ElementName=HeaderPanel}"
+                                                     Height="{Binding ActualHeight, ElementName=HeaderPanel}"
+                                                     Style="{DynamicResource InspectorOverflowButtonStyle}"/>
+                        </Canvas>
+                        <Border x:Name="ContentPanel" Grid.Row="1" Background="Transparent"
+                                Padding="{TemplateBinding Padding}" BorderThickness="0"
+                                KeyboardNavigation.TabNavigation="Local">
+                            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"
+                                              SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger SourceName="HeaderPanel" Property="local:OverflowTabPanel.HasOverflow" Value="True">
+                            <Setter TargetName="MoreButton" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="FormatTabControlStyle" TargetType="{x:Type TabControl}"
+           BasedOn="{StaticResource InspectorTabControlStyle}">
+        <Setter Property="ItemContainerStyle" Value="{StaticResource FormatTabItemStyle}"/>
+        <Setter Property="Padding" Value="0"/>
+    </Style>
+</ResourceDictionary>

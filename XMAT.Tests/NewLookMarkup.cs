@@ -7,13 +7,22 @@ using XMAT.Tests.HeadlessParity;
 
 namespace XMAT.Tests
 {
-    // The new look's own resources as one document: Looks/NewLook.xaml and the component style files it merges, in
-    // merge order, as if they were one dictionary. Tests that take single styles parse them from here, so moving a
-    // style between these files doesn't change what they find. The other dictionaries Looks/NewLook.xaml merges
-    // (themes, strings, spacing, motion, menus' surfaces and the charts) are loaded by the tests that need them.
+    // The new look's own resources as one document: the component style files Looks/NewLook.xaml merges, then
+    // Looks/NewLook.xaml itself, so every style comes after the styles it is based on. Tests that take single styles
+    // parse them from here, so moving a style between these files doesn't change what they find. The other
+    // dictionaries Looks/NewLook.xaml merges (themes, strings, spacing, motion and the charts) are loaded by the tests
+    // that need them.
     internal static class NewLookMarkup
     {
-        internal static readonly string[] Files = { "Looks/NewLook.xaml" };
+        internal static readonly string[] Files =
+        {
+            "Styles/Menus.xaml",
+            "Styles/Buttons.xaml",
+            "Styles/Toolbar.xaml",
+            "Styles/Inputs.xaml",
+            "Styles/Tabs.xaml",
+            "Looks/NewLook.xaml",
+        };
 
         private static readonly XNamespace Presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
 

@@ -1,8 +1,9 @@
 # Design system
 
 XMAT's views take their colors from a small set of named roles, so that every view looks consistent in the Light,
-Dark and High Contrast themes and a color can be changed in one place. Tests in `XMAT.Tests/DesignSystem` and
-`XMAT.Tests/HighContrastThemeTests.cs` check the rules on this page.
+Dark and High Contrast themes and a color can be changed in one place. Their controls take their styles from one file
+per component. Tests in `XMAT.Tests/DesignSystem` and `XMAT.Tests/HighContrastThemeTests.cs` check the rules on this
+page.
 
 ## Colors
 
@@ -112,3 +113,31 @@ both looks use roles, and the original themes define those roles in their origin
 use three old names, `MenuBackgroundBrush`, `AltRowBackgroundBrush` and `CapturePendingForegroundBrush`, and
 `IssueBadge` uses the original issue colors in the original look. `ColorRoleTests` lists every remaining use; the list
 only shrinks. Remove them, and the original themes, with the original look.
+
+## Components
+
+The new look's resources start in [`XMAT/Looks/NewLook.xaml`](../XMAT/Looks/NewLook.xaml), which `App.xaml` merges. It
+holds the corner, spacing and type size values every view shares, and merges one style file per component from
+`XMAT/Styles`:
+
+| File | Styles |
+| --- | --- |
+| `Buttons.xaml` | Buttons, icon buttons, the tab close button, toggle buttons and the filter toggles |
+| `Toolbar.xaml` | The capture toolbar, its Start/Stop capture button and the recording indicator |
+| `Inputs.xaml` | Text boxes, dropdowns, check boxes and radio buttons |
+| `Tabs.xaml` | Capture, inspector and format tabs, and the More buttons that end a tab row |
+| `Menus.xaml` | Menu bars, dropdowns, context menus and the More menu |
+| `TrafficOverview.xaml`, `AnalysisCharts.xaml`, `DataViz.xaml` | The traffic overview, the call rate charts, and the column summaries a table's column headers open |
+| `Spacing.xaml`, `Motion.xaml` | The 4px spacing grid, and animation durations and curves |
+
+Tables, scroll bars, tree views, tooltips, the status bar and text styles are still in `NewLook.xaml`; they move to
+files of their own as they are worked on.
+
+### Rules
+
+- A style file takes `StaticResource` values, `BasedOn` included, only from itself or from a dictionary it merges, so
+  it loads on its own. Keep a style in the same file as the style it is based on. Take theme colors, spacing and type
+  sizes with `DynamicResource`; a file whose storyboards use `Motion.xaml`'s values merges `Motion.xaml`.
+  `StyleFileTests` checks this.
+- A new component gets its own file in `XMAT/Styles`. Merge it in `NewLook.xaml`, and add it to
+  `XMAT.Tests/NewLookMarkup.cs` so tests can read its styles.
