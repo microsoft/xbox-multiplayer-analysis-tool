@@ -33,6 +33,7 @@ namespace XMAT.Operations.Capabilities
         private const string HostListManagerXaml = "Engines/WebServiceProxy/Windows/HostListManagerWindow.xaml";
         private const string ExportProgressXaml = "Windows/ExportProgressWindow.xaml";
         private const string TrafficOverviewXaml = "Controls/TrafficOverview.xaml";
+        private const string WhatsNewXaml = "Windows/WhatsNewWindow.xaml";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string DeviceTabsPrefix = "XMAT.AllCaptureDevicesTabControl.";
@@ -328,6 +329,15 @@ namespace XMAT.Operations.Capabilities
                 {
                     Click(MainWindowXaml, "ComfortView_Click"),
                     Preference("XMAT.Models.AppPreferencesModel", "ComfortView"),
+                }),
+            Capability.GuiOnly(
+                "view.whats-new", "What's new", "Presentation: describes the new look's changes",
+                gui: new[]
+                {
+                    Click(MainWindowXaml, "WhatsNew_Click"),
+                    Window("XMAT.WhatsNewWindow"),
+                    Click(WhatsNewXaml, "Back_Click"),
+                    Click(WhatsNewXaml, "Next_Click"),
                 }),
             Capability.GuiOnly(
                 "view.language", "Display language",

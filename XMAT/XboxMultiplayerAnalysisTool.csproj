@@ -54,6 +54,7 @@
     <Resource Include="Resources\html\xlta\*.html" />
     <Resource Include="Resources\html\xlta\*.css" />
     <Resource Include="Resources\html\xlta\*.js" />
+    <Resource Include="Resources\WhatsNew\*.png" />
   </ItemGroup>
   
   <ItemGroup>

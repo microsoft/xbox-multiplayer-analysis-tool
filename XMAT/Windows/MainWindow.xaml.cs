@@ -108,6 +108,8 @@ namespace XMAT
         // Comfort view's tooltip in the new look, and in the original look, where the item is unavailable.
         public static string ComfortViewTooltip => Localization.GetLocalizedString("COMFORT_VIEW_TOOLTIP");
 
+        public static string WhatsNewText => Localization.GetLocalizedString("WHATS_NEW_BUTTON");
+
         public static string ComfortViewNewLookOnlyTooltip =>
             Localization.GetLocalizedString("COMFORT_VIEW_NEW_LOOK_ONLY");
 
@@ -788,6 +790,8 @@ namespace XMAT
         }
 
         // The item is checkable, so its check mark already shows the new setting. The new look's views follow at once.
+        private void WhatsNew_Click(object sender, RoutedEventArgs e) => new WhatsNewWindow { Owner = this }.ShowDialog();
+
         private void ComfortView_Click(object sender, RoutedEventArgs e)
         {
             bool comfortView = ComfortViewMenu.IsChecked;

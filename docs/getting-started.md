@@ -142,6 +142,11 @@ at the right of the menu row. XMAT remembers this setting too. The original
 appearance offers **Edit > Dark Mode** for light and dark themes and keeps its own
 spacing, since Comfort view applies to the new look.
 
+The sparkle button beside **New look** opens **What's new**, which shows the
+redesign's changes a page at a time, with a picture of each and where to find it.
+Use **Back** and **Next**, the arrow keys or the list of topics to move between
+pages.
+
 ## Keyboard and screen readers
 
 - **Ctrl+F4** or **Ctrl+W** closes the selected capture or analysis tab.

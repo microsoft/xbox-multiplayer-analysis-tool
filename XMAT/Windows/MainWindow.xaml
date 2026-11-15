@@ -75,6 +75,32 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- An icon button in the switch's colors, so it too looks the same in either look: two sparkles. -->
+        <Style x:Key="WhatsNewButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root" Background="Transparent" BorderBrush="Transparent" BorderThickness="1"
+                                CornerRadius="3" Padding="5,1" SnapsToDevicePixels="True">
+                            <Path Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center"
+                                  Fill="{TemplateBinding Foreground}"
+                                  Data="M6.5,3 C7.1,7.6 8.4,8.9 13,9.5 C8.4,10.1 7.1,11.4 6.5,16 C5.9,11.4 4.6,10.1 0,9.5 C4.6,8.9 5.9,7.6 6.5,3 Z M13,0 C13.3,2 13.9,2.7 16,3 C13.9,3.3 13.3,4 13,6 C12.7,4 12.1,3.3 10,3 C12.1,2.7 12.7,2 13,0 Z"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Root" Property="BorderBrush"
+                                        Value="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
@@ -150,10 +176,16 @@
                 <MenuItem x:Name="ViewGDKXInfo" Command="{x:Static local:AppCommands.ViewGDKXInfo}" />
             </MenuItem>
         </Menu>
-            <!-- Compares the redesign with the original look; it stays in the same place in both. -->
-            <ToggleButton x:Name="NewLookToggle" Grid.Column="1" Style="{DynamicResource LookSwitchStyle}"
-                          Margin="0,0,12,0" VerticalAlignment="Center"
-                          Checked="NewLookToggle_Changed" Unchecked="NewLookToggle_Changed"/>
+            <!-- What's new and the switch that compares the redesign with the original look stay in the same place in
+                 both looks. -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center">
+                <Button x:Name="WhatsNewButton" Style="{DynamicResource WhatsNewButtonStyle}" Margin="0,0,4,0"
+                        VerticalAlignment="Center" Click="WhatsNew_Click"
+                        ToolTip="{x:Static local:MainWindow.WhatsNewText}"
+                        AutomationProperties.Name="{x:Static local:MainWindow.WhatsNewText}"/>
+                <ToggleButton x:Name="NewLookToggle" Style="{DynamicResource LookSwitchStyle}" VerticalAlignment="Center"
+                              Checked="NewLookToggle_Changed" Unchecked="NewLookToggle_Changed"/>
+            </StackPanel>
         </Grid>
 
 

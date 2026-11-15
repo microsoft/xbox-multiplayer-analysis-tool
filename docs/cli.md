@@ -330,5 +330,6 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Preferences window (`view.preferences-editor`) | (none) | GUI only. Presentation: edits saved GUI preferences; headless runs take per-run options instead |
 | Script editor (`view.script-editor`) | (none) | GUI only. Presentation: editor buffer, save, revert and error navigation; headless scripts are files |
 | Appearance themes (`view.theme`) | (none) | GUI only. Presentation: colors only |
+| What's new (`view.whats-new`) | (none) | GUI only. Presentation: describes the new look's changes |
 | Choose the PC address a console sends traffic to (`xbox.source-address`) | (not available yet) | Planned (S7, XMAT-021) |
 <!-- xmat-capabilities:end -->
