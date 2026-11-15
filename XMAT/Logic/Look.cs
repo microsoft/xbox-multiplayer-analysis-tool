@@ -39,7 +39,7 @@ namespace XMAT
     // Chooses a property value for the new or the original look, for example
     // Margin="{app:Look New='0,0,12,0', Original='20,0'}". Text values are converted to the property's type, and the
     // value follows LookState when the look changes. Use it on element properties, not on Setter values; resources
-    // that differ by look are defined under the same key in App.xaml and Looks/OriginalLook.xaml instead.
+    // that differ by look are defined under the same key in Looks/NewLook.xaml and Looks/OriginalLook.xaml instead.
     [MarkupExtensionReturnType(typeof(object))]
     public sealed class LookExtension : MarkupExtension
     {

@@ -473,12 +473,11 @@ namespace XMAT.Tests
             Source = new Uri($"pack://application:,,,/XboxMultiplayerAnalysisTool;component/Themes/{name}Theme.xaml")
         };
 
-        // App.xaml resources chosen by key, or by target type for implicit styles, parsed into one dictionary.
+        // The new look's resources chosen by key, or by target type for implicit styles, parsed into one dictionary.
         internal static ResourceDictionary AppResources(params string[] names)
         {
-            using var stream = typeof(AccessibilityTests).Assembly.GetManifestResourceStream("XMAT.Tests.App.xaml");
-            var document = XDocument.Load(stream);
-            var source = document.Descendants(Presentation + "ResourceDictionary").First();
+            var document = NewLookMarkup.Document;
+            var source = document.Root;
             var dictionary = new XElement(Presentation + "ResourceDictionary", source.Elements()
                 .Where(element => names.Contains((string)element.Attribute(Xaml + "Key") ?? (string)element.Attribute("TargetType")))
                 .Select(element => new XElement(element)));

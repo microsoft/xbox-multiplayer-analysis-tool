@@ -201,7 +201,7 @@ namespace XMAT.Tests
                 window.Height = 720;
                 window.Resources.Remove("TextPrimaryBrush");
                 window.Resources.Remove("TextSecondaryBrush");
-                var toolbarStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                var toolbarStyle = NewLookMarkup.Document.Descendants(Presentation + "Style")
                     .Single(style => (string)style.Attribute("TargetType") == "ToolBar");
                 window.Resources[typeof(ToolBar)] = Parse<Style>(toolbarStyle);
                 window.Resources.MergedDictionaries.Add(AccessibilityTests.AppResources("RecordingIndicatorStyle"));
@@ -318,7 +318,7 @@ namespace XMAT.Tests
             {
                 var dictionary = Theme(theme);
                 window.Resources.MergedDictionaries.Add(dictionary);
-                var style = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                var style = NewLookMarkup.Document.Descendants(Presentation + "Style")
                     .Single(element => (string)element.Attribute("TargetType") == "GridSplitter" &&
                         element.Attribute(Xaml + "Key") == null);
                 var splitter = new DraggableGridSplitter
@@ -364,7 +364,7 @@ namespace XMAT.Tests
                 window.Resources.Remove("TextPrimaryBrush");
                 window.Resources.Remove("TextSecondaryBrush");
                 window.Height = 650;
-                var gridStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                var gridStyle = NewLookMarkup.Document.Descendants(Presentation + "Style")
                     .Single(style => (string)style.Attribute("TargetType") == "DataGrid");
                 window.Resources[typeof(DataGrid)] = Parse<Style>(gridStyle);
                 var controller = Proxy(9000);
@@ -436,7 +436,7 @@ namespace XMAT.Tests
                 window.Width = 1200;
                 window.Height = 650;
                 window.Resources.MergedDictionaries.Add(Theme(theme));
-                var gridStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                var gridStyle = NewLookMarkup.Document.Descendants(Presentation + "Style")
                     .Single(style => (string)style.Attribute("TargetType") == "DataGrid");
                 window.Resources[typeof(DataGrid)] = Parse<Style>(gridStyle);
                 var controller = Proxy(9000);
@@ -484,7 +484,7 @@ namespace XMAT.Tests
                 window.Resources.Remove("TextPrimaryBrush");
                 window.Resources.Remove("TextSecondaryBrush");
                 window.Resources.MergedDictionaries.Add(Theme(theme));
-                var tabStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                var tabStyle = NewLookMarkup.Document.Descendants(Presentation + "Style")
                     .Single(style => (string)style.Attribute("TargetType") == "TabItem");
                 window.Resources[typeof(TabItem)] = Parse<Style>(tabStyle);
                 var model = new CaptureAppModel();
@@ -546,7 +546,7 @@ namespace XMAT.Tests
                 window.Resources.MergedDictionaries.Add(Theme(theme));
                 foreach (var target in new[] { "TabControl", "TabItem" })
                 {
-                    var source = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                    var source = NewLookMarkup.Document.Descendants(Presentation + "Style")
                         .Single(style => (string)style.Attribute("TargetType") == target);
                     var style = Parse<Style>(source);
                     window.Resources[style.TargetType] = style;
@@ -601,7 +601,7 @@ namespace XMAT.Tests
             _application.Run(window =>
             {
                 window.Resources.MergedDictionaries.Add(Theme(theme));
-                var comboStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
+                var comboStyle = NewLookMarkup.Document.Descendants(Presentation + "Style")
                     .Single(style => (string)style.Attribute("TargetType") == "ComboBox");
                 window.Resources[typeof(ComboBox)] = Parse<Style>(comboStyle);
                 var combo = new ComboBox
@@ -697,7 +697,7 @@ namespace XMAT.Tests
                 };
                 Assert.All(dense.Keys.Cast<object>(), key =>
                 {
-                    Assert.True(window.Resources.Contains(key), $"App.xaml must define {key} for Comfort view.");
+                    Assert.True(window.Resources.Contains(key), $"The new look must define {key} for Comfort view.");
                     Assert.True(dense[key] is Thickness or double, $"{key}: Comfort view changes spacing only.");
                     Assert.DoesNotContain((string)key, TextScale.FontSizeKeys);
                 });
@@ -1225,12 +1225,12 @@ namespace XMAT.Tests
 
         internal static void AddButtonStyles(ResourceDictionary resources)
         {
-            // App.xaml merges the menus' surface and labels, which its menu styles build on.
+            // The new look merges the menus' surface and labels, which its menu styles build on.
             resources.MergedDictionaries.Add(new ResourceDictionary
             {
                 Source = new Uri("pack://application:,,,/XboxMultiplayerAnalysisTool;component/Styles/Menus.xaml")
             });
-            var dictionary = ProductMarkup("App.xaml").Descendants(Presentation + "ResourceDictionary").First();
+            var dictionary = NewLookMarkup.Document.Root;
             foreach (var primitive in dictionary.Elements()
                 .Where(element => element.Name == Presentation + "CornerRadius" ||
                     element.Name == Presentation + "Thickness" ||

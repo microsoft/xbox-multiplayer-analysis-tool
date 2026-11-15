@@ -456,7 +456,7 @@ namespace XMAT.Tests
             var view = new CaptureConnectionView { AutoScroll = false };
             var grid = (DataGrid)view.FindName("ConnectionList");
             grid.IsSynchronizedWithCurrentItem = false;
-            // As App.xaml's table style does.
+            // As the new look's table style does.
             DataGridSortMenu.SetIsEnabled(grid, true);
             view.DataContext = new TestCaptureContext(controller, "Test device", readOnly: false, DeviceType.Unknown);
             CaptureProcessFilterViewTests.ShowCaptureView(window, view);

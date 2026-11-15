@@ -1,6 +1,6 @@
-<!-- Styles for the call rate charts in the analysis results (CallRateView), in the new look only: App.xaml merges this
-     dictionary, and the original look's resources leave it out, as that look doesn't show the charts. Colors are theme
-     brushes taken by resource reference, so the light, dark and high contrast themes all apply. -->
+<!-- Styles for the call rate charts in the analysis results (CallRateView), in the new look only: Looks/NewLook.xaml
+     merges this dictionary, and the original look's resources leave it out, as that look doesn't show the charts. Colors
+     are theme brushes taken by resource reference, so the light, dark and high contrast themes all apply. -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:controls="clr-namespace:XMAT.XboxLiveCaptureAnalysis.ReportViews.Controls">

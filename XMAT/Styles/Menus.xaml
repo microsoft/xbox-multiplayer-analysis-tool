@@ -1,6 +1,6 @@
 <!-- Menus in the new look: the surface that context menus, the More menu and the main menu's dropdowns share, and the
-     group headers and notes that context menus are labeled with. App.xaml merges it, and its MenuItem style lays out the
-     rows. The original look keeps its own menus. -->
+     group headers and notes that context menus are labeled with. Looks/NewLook.xaml merges it, and its MenuItem style
+     lays out the rows. The original look keeps its own menus. -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:local="clr-namespace:XMAT">
@@ -19,7 +19,8 @@
 
     <!-- The surface: 8px corners, a 1px border and 4px of padding, 220 to 320px wide, on a soft shadow (MenuShadow). The
          margin leaves 24px at the sides, 16px above and 32px below for the shadow; popups place the surface itself, not
-         its margin, where a menu opens. App.xaml's MenuItem template gives dropdowns and submenus the same surface. -->
+         its margin, where a menu opens. The new look's MenuItem template gives dropdowns and submenus the same
+         surface. -->
     <Style x:Key="ContextMenuSurfaceStyle" TargetType="ContextMenu">
         <Setter Property="Background" Value="{DynamicResource SurfaceCanvasBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>

@@ -1,6 +1,6 @@
 <!-- The new look's data-dense spacing, shown while Comfort view (Edit > Appearance) is off. Each value replaces the
-     App.xaml resource with the same key; type sizes, colors and corners stay the same. The original look keeps its
-     own spacing. -->
+     Looks/NewLook.xaml resource with the same key; type sizes, colors and corners stay the same. The original look
+     keeps its own spacing. -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">

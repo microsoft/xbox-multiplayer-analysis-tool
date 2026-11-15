@@ -37,8 +37,6 @@ namespace XMAT
         private bool _isCloseInProgress;
         private bool _closeConfirmed;
 
-        private const string OriginalLookUri =
-            "pack://application:,,,/XboxMultiplayerAnalysisTool;component/Looks/OriginalLook.xaml";
         private ResourceDictionary _newLookResources;
         private ResourceDictionary _originalLookResources;
 
@@ -132,15 +130,16 @@ namespace XMAT
             CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
         }
 
-        // Shows the redesigned resources (App.xaml) or the original ones, so the two can be compared. Views take
-        // the layout values that differ from LookState, so open captures keep their data, selection and filters.
+        // Shows the redesigned resources (Looks/NewLook.xaml, which App.xaml merges) or the original ones, so the two
+        // can be compared. Views take the layout values that differ from LookState, so open captures keep their data,
+        // selection and filters.
         private void SetLook(bool newLook, string theme)
         {
             var app = Application.Current;
             _newLookResources ??= app.Resources;
             var resources = newLook
                 ? _newLookResources
-                : _originalLookResources ??= new ResourceDictionary { Source = new Uri(OriginalLookUri) };
+                : _originalLookResources ??= ThemeManager.CreateLook(newLook: false);
             LookState.Current.IsNewLook = newLook;
             // The look's resources get the theme before they are shown, in one swap: views that resolved resources
             // against one theme can miss a later theme change, and would show a mix of the two.
@@ -789,9 +788,9 @@ namespace XMAT
             CaptureAppSettings.Serialize(CaptureAppModel.AppModel);
         }
 
-        // The item is checkable, so its check mark already shows the new setting. The new look's views follow at once.
         private void WhatsNew_Click(object sender, RoutedEventArgs e) => new WhatsNewWindow { Owner = this }.ShowDialog();
 
+        // The item is checkable, so its check mark already shows the new setting. The new look's views follow at once.
         private void ComfortView_Click(object sender, RoutedEventArgs e)
         {
             bool comfortView = ComfortViewMenu.IsChecked;

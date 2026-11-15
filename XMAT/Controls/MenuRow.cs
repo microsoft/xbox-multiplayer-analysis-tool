@@ -7,7 +7,7 @@ using System.Windows.Automation;
 
 namespace XMAT
 {
-    // What a menu row shows besides its label in the new look, where App.xaml's MenuItem template draws them: a Segoe
+    // What a menu row shows besides its label in the new look, where the new look's MenuItem template draws them: a Segoe
     // MDL2 Assets glyph in the icon lane, and a description on a second line, which assistive technology reads as the
     // row's help text.
     public static class MenuRow

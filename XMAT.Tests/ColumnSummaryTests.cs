@@ -540,7 +540,7 @@ namespace XMAT.Tests
         }
 
         // The traffic table with six requests: Status 200 three times, 404 twice and one without a status, over hosts
-        // a.test (3), b.test (2) and c.test (1), from Game.exe and Tool.exe. Its headers are the new look's, from App.xaml.
+        // a.test (3), b.test (2) and c.test (1), from Game.exe and Tool.exe. Its headers are the new look's.
         private void RunWithSummaries(
             Action<CaptureConnectionView, WebServiceDeviceCaptureController, DataGrid, ColumnSummaryPopup> test)
         {

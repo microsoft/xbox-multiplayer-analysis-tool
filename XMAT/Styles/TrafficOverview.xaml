@@ -13,8 +13,8 @@
     <sys:Double x:Key="TrafficOverviewTotalFontSize">16</sys:Double>
 
     <!-- Inset like the filters above it and the timeline below it: 4px below the filters, 8px above the timeline, or
-         tighter with Comfort view off (TrafficOverviewMargin in App.xaml and Looks/DenseSpacing.xaml). Hidden, its Show
-         overview button takes a slim row. -->
+         tighter with Comfort view off (TrafficOverviewMargin in Looks/NewLook.xaml and Looks/DenseSpacing.xaml).
+         Hidden, its Show overview button takes a slim row. -->
     <Style TargetType="local:TrafficOverview">
         <Setter Property="Margin" Value="{DynamicResource TrafficOverviewMargin}"/>
         <Style.Triggers>
@@ -338,5 +338,6 @@
         </Setter>
     </Style>
 
-    <!-- The parts' tooltips, such as "4xx: 63 requests (5%). Select to filter.", are the app's tooltips (App.xaml). -->
+    <!-- The parts' tooltips, such as "4xx: 63 requests (5%). Select to filter.", are the app's tooltips
+         (Looks/NewLook.xaml). -->
 </ResourceDictionary>

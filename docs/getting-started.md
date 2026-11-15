@@ -69,7 +69,7 @@ then launch
 Close that development instance before rebuilding. Use a saved capture to review
 tables and inspectors without generating live traffic; see [Capture files](capture-files.md).
 
-Shared corner radii, spacing and type sizes live in `XMAT\App.xaml`; theme
+Shared corner radii, spacing and type sizes live in `XMAT\Looks\NewLook.xaml`; theme
 colors live in `XMAT\Themes`. Use the heading, section, and text-area tokens for
 their respective spacing rather than adding equal padding to every container.
 Selected tabs join their content surface without a divider; inspector text areas

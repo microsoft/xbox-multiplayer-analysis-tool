@@ -10,8 +10,9 @@ using System.Windows;
 
 namespace XMAT
 {
-    // Comfort view (Edit > Appearance) gives the new look the spacing App.xaml defines. Turned off, the tighter values
-    // in Looks/DenseSpacing.xaml replace it, for the data-dense view. The original look keeps its own spacing.
+    // Comfort view (Edit > Appearance) gives the new look the spacing Looks/NewLook.xaml defines. Turned off, the
+    // tighter values in Looks/DenseSpacing.xaml replace it, for the data-dense view. The original look keeps its own
+    // spacing.
     internal static class ComfortView
     {
         private const string DenseSpacingUri =
@@ -23,7 +24,7 @@ namespace XMAT
 
         // Gives RESOURCES, the new look's, Comfort view's spacing when ON is true and the dense spacing otherwise.
         // Views take the spacing as dynamic resources, so open views follow at once. A dictionary's own resources take
-        // precedence over its merged dictionaries, so DenseSpacing's values replace App.xaml's rather than merge in.
+        // precedence over its merged dictionaries, so DenseSpacing's values replace the new look's rather than merge in.
         internal static void Apply(ResourceDictionary resources, bool on)
         {
             var dense = new ResourceDictionary { Source = new Uri(DenseSpacingUri) };
