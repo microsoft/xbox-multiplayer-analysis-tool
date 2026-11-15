@@ -663,8 +663,8 @@ namespace XMAT.Tests
                     manager.Show();
                     WpfTestHost.Pump();
 
-                    Assert.Same(manager.FindResource("WindowBackgroundBrush"), manager.Background);
-                    Assert.Same(manager.FindResource("PrimaryForegroundBrush"), manager.Foreground);
+                    Assert.Same(manager.FindResource("SurfaceCanvasBrush"), manager.Background);
+                    Assert.Same(manager.FindResource("TextPrimaryBrush"), manager.Foreground);
                 }
                 finally
                 {

@@ -44,8 +44,8 @@ namespace XMAT.Tests
 
             _application.Run(window =>
             {
-                window.Resources.Remove("PrimaryForegroundBrush");
-                window.Resources.Remove("SecondaryForegroundBrush");
+                window.Resources.Remove("TextPrimaryBrush");
+                window.Resources.Remove("TextSecondaryBrush");
                 window.Resources.MergedDictionaries.Add(Theme("Dark"));
                 window.Resources.MergedDictionaries.Add(AppResources("SelectionForegroundConverter", "DataGridCell"));
                 var grid = new DataGrid

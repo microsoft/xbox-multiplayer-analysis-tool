@@ -103,6 +103,7 @@ proxy can lose access to Xbox services.
 | Analyze or export captures from scripts or CI without the GUI | [Command line](docs/cli.md) |
 | Capture and analyze packets from a console or PC | [Network capture](docs/network-capture.md) |
 | Recover from proxy problems or collect diagnostic logs | [Troubleshooting](docs/troubleshooting.md) |
+| Change XMAT's colors or color a new view | [Design system](docs/design-system.md) |
 
 ## Support and contributing
 

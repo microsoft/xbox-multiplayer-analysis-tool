@@ -13,8 +13,8 @@
     <SolidColorBrush x:Key="SecondaryForegroundBrush"       Color="#FF9B9B9B"/>
     <SolidColorBrush x:Key="DisabledForegroundBrush"        Color="#FF808080"/>
     <SolidColorBrush x:Key="CapturePendingForegroundBrush"  Color="#FFFFC000"/>
-    <SolidColorBrush x:Key="CaptureErrorForegroundBrush"    Color="#FFFF8080"/>
-    <SolidColorBrush x:Key="WarningForegroundBrush"         Color="DarkOrange"/>
+    <SolidColorBrush x:Key="ErrorTextBrush"                 Color="#FFFF8080"/>
+    <SolidColorBrush x:Key="WarningTextBrush"               Color="DarkOrange"/>
 
     <!-- Borders -->
     <SolidColorBrush x:Key="BorderBrush"                    Color="#FF3F3F46"/>
@@ -38,7 +38,6 @@
     <SolidColorBrush x:Key="ToolBarForegroundBrush"         Color="#FFD4D4D4"/>
 
     <!-- Tab / header -->
-    <SolidColorBrush x:Key="TabPanelBackgroundBrush"        Color="Transparent"/>
     <SolidColorBrush x:Key="TabItemBackgroundBrush"         Color="#FF1E1E1E"/>
     <SolidColorBrush x:Key="TabItemSelectedBackgroundBrush" Color="#FF2D2D30"/>
     <SolidColorBrush x:Key="TabItemForegroundBrush"         Color="#FF9B9B9B"/>
@@ -58,7 +57,6 @@
     <!-- DataGrid -->
     <SolidColorBrush x:Key="DataGridHeaderBackgroundBrush"  Color="#FF333337"/>
     <SolidColorBrush x:Key="DataGridHeaderForegroundBrush"  Color="#FFD4D4D4"/>
-    <SolidColorBrush x:Key="DataGridGridLinesBrush"         Color="#FF3F3F46"/>
 
     <!-- GridSplitter -->
     <SolidColorBrush x:Key="GridSplitterBrush"              Color="#FF3F3F46"/>
@@ -72,16 +70,16 @@
 
     <!-- Timeline bars by response status with white labels, and analysis issue counts by level in the theme's text
          color, as the original look showed them -->
-    <SolidColorBrush x:Key="TimelineBarNoStatusBrush" Color="#FF686868"/>
-    <SolidColorBrush x:Key="TimelineBarNoStatusForegroundBrush" Color="White"/>
-    <SolidColorBrush x:Key="TimelineBarSuccessBrush" Color="#FF4CAF50"/>
-    <SolidColorBrush x:Key="TimelineBarSuccessForegroundBrush" Color="White"/>
-    <SolidColorBrush x:Key="TimelineBarRedirectBrush" Color="#FF2196F3"/>
-    <SolidColorBrush x:Key="TimelineBarRedirectForegroundBrush" Color="White"/>
-    <SolidColorBrush x:Key="TimelineBarClientErrorBrush" Color="#FFFF9800"/>
-    <SolidColorBrush x:Key="TimelineBarClientErrorForegroundBrush" Color="White"/>
-    <SolidColorBrush x:Key="TimelineBarServerErrorBrush" Color="#FFF44336"/>
-    <SolidColorBrush x:Key="TimelineBarServerErrorForegroundBrush" Color="White"/>
+    <SolidColorBrush x:Key="NeutralFillBrush" Color="#FF686868"/>
+    <SolidColorBrush x:Key="NeutralOnFillBrush" Color="White"/>
+    <SolidColorBrush x:Key="SuccessFillBrush" Color="#FF4CAF50"/>
+    <SolidColorBrush x:Key="SuccessOnFillBrush" Color="White"/>
+    <SolidColorBrush x:Key="InfoFillBrush" Color="#FF2196F3"/>
+    <SolidColorBrush x:Key="InfoOnFillBrush" Color="White"/>
+    <SolidColorBrush x:Key="WarningFillBrush" Color="#FFFF9800"/>
+    <SolidColorBrush x:Key="WarningOnFillBrush" Color="White"/>
+    <SolidColorBrush x:Key="ErrorFillBrush" Color="#FFF44336"/>
+    <SolidColorBrush x:Key="ErrorOnFillBrush" Color="White"/>
     <SolidColorBrush x:Key="IssueErrorBackgroundBrush" Color="Red"/>
     <SolidColorBrush x:Key="IssueErrorForegroundBrush" Color="#FFD4D4D4"/>
     <SolidColorBrush x:Key="IssueWarningBackgroundBrush" Color="Orange"/>
@@ -111,5 +109,18 @@
     <SolidColorBrush x:Key="{x:Static SystemColors.InfoBrushKey}" Color="#FF2D2D30"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.InfoTextBrushKey}" Color="#FFD4D4D4"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.ScrollBarBrushKey}" Color="#FF1E1E1E"/>
+
+    <!-- Roles that views shared with the new look use, each in the original color of the name it replaces:
+         SurfaceCanvas is WindowBackground, SurfacePanel PanelBackground, SurfaceHover ButtonHoverBackground,
+         TextPrimary PrimaryForeground, TextSecondary SecondaryForeground, BorderDefault BorderBrush, AccentFill
+         ActiveSelection and AccentOnFill ActiveSelectionForeground. Remove these with the original look. -->
+    <SolidColorBrush x:Key="SurfaceCanvasBrush" Color="#FF1E1E1E"/>
+    <SolidColorBrush x:Key="SurfacePanelBrush" Color="#FF252526"/>
+    <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#FF505058"/>
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#FFD4D4D4"/>
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#FF9B9B9B"/>
+    <SolidColorBrush x:Key="BorderDefaultBrush" Color="#FF3F3F46"/>
+    <SolidColorBrush x:Key="AccentFillBrush" Color="#FF264F78"/>
+    <SolidColorBrush x:Key="AccentOnFillBrush" Color="#FFFFFFFF"/>
 
 </ResourceDictionary>

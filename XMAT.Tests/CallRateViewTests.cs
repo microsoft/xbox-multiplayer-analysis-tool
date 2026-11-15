@@ -55,9 +55,9 @@ namespace XMAT.Tests
 
                     CallRateChart statsWrite = Chart(view, "statswrite.xboxlive.com");
                     CallRateChart profile = Chart(view, "profile.xboxlive.com");
-                    Assert.Same(profile.FindResource("PrimaryForegroundBrush"), profile.Stroke);
-                    Assert.Same(profile.FindResource("CaptureErrorForegroundBrush"), profile.OverLimitStroke);
-                    Assert.Same(profile.FindResource("SecondaryForegroundBrush"), profile.GuideBrush);
+                    Assert.Same(profile.FindResource("TextPrimaryBrush"), profile.Stroke);
+                    Assert.Same(profile.FindResource("ErrorTextBrush"), profile.OverLimitStroke);
+                    Assert.Same(profile.FindResource("TextSecondaryBrush"), profile.GuideBrush);
                     Assert.True(profile.Plot.Line.IsFrozen && profile.Plot.OverLimit.IsFrozen && profile.Plot.Shade.IsFrozen);
                     Assert.False(profile.Plot.OverLimit.Bounds.IsEmpty);
                     Assert.False(profile.Plot.Shade.Bounds.IsEmpty);
@@ -169,13 +169,13 @@ namespace XMAT.Tests
 
         private static ContentControl Badge(Grid row) => Descendants(row).OfType<ContentControl>().Single();
 
-        // The badge names its count and level in its level's colors, and screen readers read the same text.
-        private static void AssertBadge(Grid row, string text, string level)
+        // The badge names its count and level in its level's status colors, and screen readers read the same text.
+        private static void AssertBadge(Grid row, string text, string role)
         {
             ContentControl badge = Badge(row);
             Assert.Equal(text, badge.Content);
-            Assert.Same(badge.FindResource($"Issue{level}BackgroundBrush"), badge.Background);
-            Assert.Same(badge.FindResource($"Issue{level}ForegroundBrush"), badge.Foreground);
+            Assert.Same(badge.FindResource($"{role}SoftBrush"), badge.Background);
+            Assert.Same(badge.FindResource($"{role}TextBrush"), badge.Foreground);
             Assert.Equal(text, AutomationProperties.GetName(badge));
             TextBlock shown = Descendants(badge).OfType<TextBlock>().Single();
             Assert.Equal(text, UIElementAutomationPeer.CreatePeerForElement(shown).GetName());

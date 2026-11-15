@@ -20,7 +20,7 @@
         <!-- Filled for the right-clicked or focused row when it opens. -->
         <ContextMenu x:Key="HostListRowMenu"
                      Background="{DynamicResource MenuBackgroundBrush}"
-                     Foreground="{DynamicResource MenuForegroundBrush}"/>
+                     Foreground="{DynamicResource TextPrimaryBrush}"/>
     </UserControl.Resources>
     <UserControl.CommandBindings>
         <CommandBinding Command="{x:Static local:WebServiceProxyCommands.ChangePort}" Executed="ChangePort_Executed" CanExecute="ChangePort_CanExecute"/>
@@ -105,7 +105,7 @@
              lists them in a popup. -->
         <app:FilterOverflowHost x:Name="FiltersHost" Grid.Row="1" Margin="{DynamicResource TrafficFiltersMargin}"
                                 IsOverflowEnabled="{app:Look New=True, Original=False}">
-            <Grid x:Name="FiltersPanel" Background="{DynamicResource PanelBackgroundBrush}"
+            <Grid x:Name="FiltersPanel" Background="{DynamicResource SurfacePanelBrush}"
                   HorizontalAlignment="{app:Look New=Stretch, Original=Left}" VerticalAlignment="{app:Look New=Stretch, Original=Center}">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -127,8 +127,8 @@
                 <Popup x:Name="ProcessFilterPopup" Grid.Column="4" PlacementTarget="{Binding ElementName=ProcessFilterButton}" Placement="Bottom"
                        StaysOpen="False" AllowsTransparency="False">
                     <!-- Tab stays inside the open popup; Esc closes it and returns to the Process button. -->
-                    <Border Background="{DynamicResource WindowBackgroundBrush}" BorderBrush="{DynamicResource BorderBrush}"
-                            TextElement.Foreground="{DynamicResource PrimaryForegroundBrush}"
+                    <Border Background="{DynamicResource SurfaceCanvasBrush}" BorderBrush="{DynamicResource BorderDefaultBrush}"
+                            TextElement.Foreground="{DynamicResource TextPrimaryBrush}"
                             KeyboardNavigation.TabNavigation="Cycle"
                             BorderThickness="1" Padding="8">
                         <StackPanel Width="340">
@@ -208,23 +208,23 @@
             </DataGrid.Columns>
             <DataGrid.RowStyle>
                 <Style TargetType="DataGridRow">
-                    <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
                     <Setter Property="ContextMenu" Value="{StaticResource HostListRowMenu}"/>
                     <!-- The new look outlines the selected row; the original look has no outline resources. -->
                     <Setter Property="BorderBrush" Value="Transparent"/>
                     <Setter Property="BorderThickness" Value="{DynamicResource TableRowBorderThickness}"/>
                     <Style.Triggers>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter Property="BorderBrush" Value="{DynamicResource TableSelectionBorderBrush}"/>
+                            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                         </Trigger>
                         <DataTrigger Binding="{Binding Method}" Value="CONNECT">
-                            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding Status}" Value="">
                             <Setter Property="Foreground" Value="{DynamicResource CapturePendingForegroundBrush}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding Status, Converter={StaticResource proxyStatusIsErrorConverter}}" Value="True">
-                            <Setter Property="Foreground" Value="{DynamicResource CaptureErrorForegroundBrush}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource ErrorTextBrush}"/>
                         </DataTrigger>
                     </Style.Triggers>
                 </Style>
@@ -262,7 +262,7 @@
                             <!-- One wrapping line: the figure spaces keep each label with its value and each separator
                                  with the item before it, so the details break only between items. -->
                             <TextBlock TextWrapping="Wrap" VerticalAlignment="Center"
-                                       Visibility="{app:Look New=Visible, Original=Collapsed}"><Run Text="{x:Static local:CaptureConnectionView.RequestIdText}" FontSize="{DynamicResource MetadataFontSize}" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run Text="&#x2007;"/><Run Text="{Binding DataContext.CaptureController.SelectedConnectionModel.RequestNumber, RelativeSource={RelativeSource AncestorType=local:CaptureConnectionView}, Mode=OneWay}" d:Text="1000"/><Run Text="&#x2007;·" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run Text="&#x2002;"/><Run Text="{x:Static local:CaptureConnectionView.RequestTimeText}" FontSize="{DynamicResource MetadataFontSize}" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run Text="&#x2007;"/><Run Text="{Binding DataContext.CaptureController.SelectedConnectionModel.RequestTime, RelativeSource={RelativeSource AncestorType=local:CaptureConnectionView}, Mode=OneWay, StringFormat=HH:mm:ss.fff}" d:Text="12:34:56.789"/><Run Text="&#x2007;·" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run Text="&#x2002;"/><Run Text="{x:Static local:CaptureConnectionView.DurationText}" FontSize="{DynamicResource MetadataFontSize}" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run Text="&#x2007;"/><Run Text="{Binding DataContext.CaptureController.SelectedConnectionModel.Duration.TotalMilliseconds, RelativeSource={RelativeSource AncestorType=local:CaptureConnectionView}, Mode=OneWay, StringFormat='{}{0:F0} ms'}" d:Text="123 ms"/></TextBlock>
+                                       Visibility="{app:Look New=Visible, Original=Collapsed}"><Run Text="{x:Static local:CaptureConnectionView.RequestIdText}" FontSize="{DynamicResource MetadataFontSize}" Foreground="{DynamicResource TextSecondaryBrush}"/><Run Text="&#x2007;"/><Run Text="{Binding DataContext.CaptureController.SelectedConnectionModel.RequestNumber, RelativeSource={RelativeSource AncestorType=local:CaptureConnectionView}, Mode=OneWay}" d:Text="1000"/><Run Text="&#x2007;·" Foreground="{DynamicResource TextSecondaryBrush}"/><Run Text="&#x2002;"/><Run Text="{x:Static local:CaptureConnectionView.RequestTimeText}" FontSize="{DynamicResource MetadataFontSize}" Foreground="{DynamicResource TextSecondaryBrush}"/><Run Text="&#x2007;"/><Run Text="{Binding DataContext.CaptureController.SelectedConnectionModel.RequestTime, RelativeSource={RelativeSource AncestorType=local:CaptureConnectionView}, Mode=OneWay, StringFormat=HH:mm:ss.fff}" d:Text="12:34:56.789"/><Run Text="&#x2007;·" Foreground="{DynamicResource TextSecondaryBrush}"/><Run Text="&#x2002;"/><Run Text="{x:Static local:CaptureConnectionView.DurationText}" FontSize="{DynamicResource MetadataFontSize}" Foreground="{DynamicResource TextSecondaryBrush}"/><Run Text="&#x2007;"/><Run Text="{Binding DataContext.CaptureController.SelectedConnectionModel.Duration.TotalMilliseconds, RelativeSource={RelativeSource AncestorType=local:CaptureConnectionView}, Mode=OneWay, StringFormat='{}{0:F0} ms'}" d:Text="123 ms"/></TextBlock>
                         </local:RequestResponseView.HeaderContent>
                     </local:RequestResponseView>
 

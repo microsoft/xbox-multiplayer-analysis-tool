@@ -15,7 +15,7 @@
     <Style x:Key="CallRateTitleStyle" TargetType="TextBlock">
         <Setter Property="FontSize" Value="{DynamicResource PaneTitleFontSize}"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
-        <Setter Property="Foreground" Value="{DynamicResource HeadingForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextHeadingBrush}"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
         <Setter Property="Margin" Value="0,0,16,0"/>
         <Setter Property="AutomationProperties.HeadingLevel" Value="Level3"/>
@@ -27,7 +27,7 @@
             <Setter.Value>
                 <ControlTemplate>
                     <Border Margin="2" BorderThickness="1" CornerRadius="2" SnapsToDevicePixels="True"
-                            BorderBrush="{DynamicResource PrimaryForegroundBrush}"/>
+                            BorderBrush="{DynamicResource TextPrimaryBrush}"/>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -36,9 +36,9 @@
     <!-- The window switch: two joined segments, the chosen one in the accent like a checked toggle. Tag holds a
          segment's corner radius. -->
     <Style x:Key="CallRateSegmentStyle" TargetType="RadioButton">
-        <Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}"/>
-        <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfaceControlBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextControlBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderControlBrush}"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
         <Setter Property="Padding" Value="12,0"/>
         <Setter Property="MinHeight" Value="28"/>
@@ -57,11 +57,11 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonPressedBackgroundBrush}"/>
-                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource TabSelectionIndicatorBrush}"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -100,20 +100,20 @@
 
     <!-- The table: a recessed well with a header band, like the analysis tables, and taller rows that fit a chart. -->
     <Style x:Key="CallRateTableStyle" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource TextAreaBackgroundBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>
         <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
     </Style>
 
     <Style x:Key="CallRateHeaderBandStyle" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource DataGridHeaderBackgroundBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfaceHeaderBrush}"/>
         <Setter Property="CornerRadius" Value="4,4,0,0"/>
         <Setter Property="MinHeight" Value="{DynamicResource TableHeaderMinHeight}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
     </Style>
 
     <Style x:Key="CallRateHeaderTextStyle" TargetType="TextBlock">
-        <Setter Property="Foreground" Value="{DynamicResource DataGridHeaderForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
         <Setter Property="Margin" Value="7,0,4,0"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
@@ -135,7 +135,7 @@
     </Style>
 
     <Style x:Key="CallRateCellTextStyle" TargetType="TextBlock">
-        <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
         <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
@@ -143,7 +143,7 @@
 
     <!-- The limits' own description, under the endpoint when it has more than one set; empty, it takes no room. -->
     <Style x:Key="CallRateDetailTextStyle" TargetType="TextBlock">
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="FontSize" Value="{DynamicResource MetadataFontSize}"/>
         <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
         <Style.Triggers>
@@ -163,7 +163,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ContentControl">
                     <TextBlock Text="{TemplateBinding Content}" FontSize="{DynamicResource BaseFontSize}"
-                               Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+                               Foreground="{DynamicResource TextSecondaryBrush}"/>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -189,33 +189,33 @@
          over the limit in the error color, thicker and shaded. Keyed, since an implicit style wouldn't reach a chart
          in a data template from a window's resources. The charts and their axis take their column's width. -->
     <Style x:Key="CallRateChartStyle" TargetType="controls:CallRateChart">
-        <Setter Property="Stroke" Value="{DynamicResource PrimaryForegroundBrush}"/>
-        <Setter Property="OverLimitStroke" Value="{DynamicResource CaptureErrorForegroundBrush}"/>
-        <Setter Property="GuideBrush" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Stroke" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="OverLimitStroke" Value="{DynamicResource ErrorTextBrush}"/>
+        <Setter Property="GuideBrush" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="PlotHeight" Value="32"/>
     </Style>
 
     <Style x:Key="CallRateLimitLabelStyle" TargetType="controls:CallRateLimitLabel">
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="FontSize" Value="{DynamicResource MetadataFontSize}"/>
         <Setter Property="PlotHeight" Value="32"/>
     </Style>
 
     <Style x:Key="CallRateAxisStyle" TargetType="controls:CallRateAxis">
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="FontSize" Value="{DynamicResource MetadataFontSize}"/>
     </Style>
 
     <!-- The hover readout, raised over the rows. -->
     <Style x:Key="CallRateTipStyle" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}"/>
         <Setter Property="Padding" Value="8,3"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="TextElement.FontSize" Value="{DynamicResource BaseFontSize}"/>
-        <Setter Property="TextElement.Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="Effect">
             <Setter.Value>
                 <DropShadowEffect BlurRadius="12" ShadowDepth="4" Direction="270" Color="Black" Opacity="0.12"/>

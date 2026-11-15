@@ -164,8 +164,8 @@ namespace XMAT.Tests
         {
             _application.Run(window =>
             {
-                window.Resources.Remove("PrimaryForegroundBrush");
-                window.Resources.Remove("SecondaryForegroundBrush");
+                window.Resources.Remove("TextPrimaryBrush");
+                window.Resources.Remove("TextSecondaryBrush");
                 window.Resources.MergedDictionaries.Add(Theme(theme));
                 var scripts = new Scripting.ScriptCollection(typeof(WebServiceCaptureScriptableEventType));
                 foreach (var script in scripts)
@@ -199,8 +199,8 @@ namespace XMAT.Tests
             {
                 window.Width = 1280;
                 window.Height = 720;
-                window.Resources.Remove("PrimaryForegroundBrush");
-                window.Resources.Remove("SecondaryForegroundBrush");
+                window.Resources.Remove("TextPrimaryBrush");
+                window.Resources.Remove("TextSecondaryBrush");
                 var toolbarStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
                     .Single(style => (string)style.Attribute("TargetType") == "ToolBar");
                 window.Resources[typeof(ToolBar)] = Parse<Style>(toolbarStyle);
@@ -289,7 +289,7 @@ namespace XMAT.Tests
                 view.DataContext = new Context(Proxy(9001, true)) { IsReadOnly = true };
                 WpfTestHost.Pump();
                 Assert.False(start.IsEnabled);
-                Assert.Equal(((SolidColorBrush)view.FindResource("DisabledForegroundBrush")).Color,
+                Assert.Equal(((SolidColorBrush)view.FindResource("TextDisabledBrush")).Color,
                     Assert.IsType<SolidColorBrush>(start.Foreground).Color);
                 Assert.All(Descendants(start).OfType<TextBlock>(),
                     text => Assert.Equal(start.Foreground, text.Foreground));
@@ -339,13 +339,13 @@ namespace XMAT.Tests
                 splitter.SetDragging(true);
                 WpfTestHost.Pump();
                 Assert.Equal(1, line.Opacity);
-                Assert.Equal(((SolidColorBrush)dictionary["GridSplitterBrush"]).Color,
+                Assert.Equal(((SolidColorBrush)dictionary["BorderControlBrush"]).Color,
                     Assert.IsType<SolidColorBrush>(line.Background).Color);
                 window.Resources.MergedDictionaries.Remove(dictionary);
                 dictionary = Theme(theme == "Dark" ? "Light" : "Dark");
                 window.Resources.MergedDictionaries.Add(dictionary);
                 WpfTestHost.Pump();
-                Assert.Equal(((SolidColorBrush)dictionary["GridSplitterBrush"]).Color,
+                Assert.Equal(((SolidColorBrush)dictionary["BorderControlBrush"]).Color,
                     Assert.IsType<SolidColorBrush>(line.Background).Color);
 
                 splitter.SetDragging(false);
@@ -361,8 +361,8 @@ namespace XMAT.Tests
         {
             _application.Run(window =>
             {
-                window.Resources.Remove("PrimaryForegroundBrush");
-                window.Resources.Remove("SecondaryForegroundBrush");
+                window.Resources.Remove("TextPrimaryBrush");
+                window.Resources.Remove("TextSecondaryBrush");
                 window.Height = 650;
                 var gridStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
                     .Single(style => (string)style.Attribute("TargetType") == "DataGrid");
@@ -481,8 +481,8 @@ namespace XMAT.Tests
             {
                 window.Width = 720;
                 window.Height = 500;
-                window.Resources.Remove("PrimaryForegroundBrush");
-                window.Resources.Remove("SecondaryForegroundBrush");
+                window.Resources.Remove("TextPrimaryBrush");
+                window.Resources.Remove("TextSecondaryBrush");
                 window.Resources.MergedDictionaries.Add(Theme(theme));
                 var tabStyle = ProductMarkup("App.xaml").Descendants(Presentation + "Style")
                     .Single(style => (string)style.Attribute("TargetType") == "TabItem");
@@ -542,7 +542,7 @@ namespace XMAT.Tests
             {
                 window.Width = width;
                 window.Height = 720;
-                window.Resources.Remove("PrimaryForegroundBrush");
+                window.Resources.Remove("TextPrimaryBrush");
                 window.Resources.MergedDictionaries.Add(Theme(theme));
                 foreach (var target in new[] { "TabControl", "TabItem" })
                 {
@@ -581,7 +581,7 @@ namespace XMAT.Tests
                     .Single(control => control.Style == request.FindResource("RecessedSurfaceStyle"));
                 Assert.DoesNotContain(Descendants(well).OfType<Border>(), border => border.Background is LinearGradientBrush);
                 Assert.True(Luminance(((SolidColorBrush)well.Background).Color) <
-                    Luminance(((SolidColorBrush)request.FindResource("PanelBackgroundBrush")).Color));
+                    Luminance(((SolidColorBrush)request.FindResource("SurfacePanelBrush")).Color));
                 Assert.True(Contrast(text.Foreground, well.Background) >= 4.5);
                 var insideText = text.TransformToAncestor(well).Transform(
                     new Point(text.ActualWidth - 2, text.ActualHeight - 2));
@@ -614,7 +614,7 @@ namespace XMAT.Tests
                 var field = Assert.IsType<SolidColorBrush>(combo.Background).Color;
                 // A field reads as a field by its outline: a soft edge with a strong bottom line at 3:1 or more, while
                 // its fill may match the panel around it.
-                var panel = ((SolidColorBrush)window.FindResource("PanelBackgroundBrush")).Color;
+                var panel = ((SolidColorBrush)window.FindResource("SurfacePanelBrush")).Color;
                 var outline = Assert.IsType<LinearGradientBrush>(combo.BorderBrush);
                 Assert.Contains(outline.GradientStops, stop => ColorContrast(stop.Color, panel) >= 3);
                 var besideLabel = label.TransformToAncestor(combo)
@@ -629,12 +629,12 @@ namespace XMAT.Tests
             _application.Run(window =>
             {
                 var previous = ThemeManager.CurrentTheme;
-                window.Resources.Remove("PrimaryForegroundBrush");
-                window.Resources.Remove("SecondaryForegroundBrush");
+                window.Resources.Remove("TextPrimaryBrush");
+                window.Resources.Remove("TextSecondaryBrush");
                 var panel = new Border();
-                panel.SetResourceReference(Border.BackgroundProperty, "PanelBackgroundBrush");
+                panel.SetResourceReference(Border.BackgroundProperty, "SurfacePanelBrush");
                 var text = new TextBlock { Text = "Theme preview" };
-                text.SetResourceReference(TextBlock.ForegroundProperty, "PrimaryForegroundBrush");
+                text.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
                 panel.Child = text;
                 WpfTestHost.Show(window, panel);
                 try
@@ -648,7 +648,7 @@ namespace XMAT.Tests
                         WpfTestHost.Pump();
                         var expected = Theme(name);
                         Assert.Equal(name, ThemeManager.CurrentTheme);
-                        Assert.Equal(((SolidColorBrush)expected["PanelBackgroundBrush"]).Color,
+                        Assert.Equal(((SolidColorBrush)expected["SurfacePanelBrush"]).Color,
                             Assert.IsType<SolidColorBrush>(panel.Background).Color);
                         Assert.True(Contrast(text.Foreground, panel.Background) >= 4.5);
                         foreach (var key in new[] { SystemColors.WindowBrushKey, SystemColors.HighlightBrushKey,
@@ -657,8 +657,8 @@ namespace XMAT.Tests
                             Assert.Equal(((SolidColorBrush)expected[key]).Color,
                                 Assert.IsType<SolidColorBrush>(Application.Current.Resources[key]).Color);
                         }
-                        Assert.True(Contrast((Brush)expected["ActiveSelectionForegroundBrush"],
-                            (Brush)expected["ActiveSelectionBrush"]) >= 4.5);
+                        Assert.True(Contrast((Brush)expected["AccentOnFillBrush"],
+                            (Brush)expected["AccentFillBrush"]) >= 4.5);
                         Assert.Single(Application.Current.Resources.MergedDictionaries,
                             dictionary => dictionary.Source?.OriginalString.EndsWith("Theme.xaml", StringComparison.Ordinal) == true);
                     }
@@ -776,6 +776,8 @@ namespace XMAT.Tests
         {
             _application.Run(window =>
             {
+                window.Resources.Remove("TextPrimaryBrush");
+                window.Resources.Remove("TextSecondaryBrush");
                 AddButtonStyles(window.Resources);
                 var secondContent = new TextBlock { Text = "Second capture" };
                 var first = new TabItem { Header = "First", Content = new TextBlock { Text = "First capture" } };
@@ -841,13 +843,12 @@ namespace XMAT.Tests
         }
 
         [Theory]
-        [InlineData("PrimaryForegroundBrush", "PanelBackgroundBrush")]
-        [InlineData("ButtonForegroundBrush", "ButtonBackgroundBrush")]
-        [InlineData("ButtonForegroundBrush", "ButtonHoverBackgroundBrush")]
-        [InlineData("ButtonForegroundBrush", "ButtonPressedBackgroundBrush")]
-        [InlineData("TextBoxForegroundBrush", "TextBoxBackgroundBrush")]
-        [InlineData("StatusBarForegroundBrush", "StatusBarBackgroundBrush")]
-        [InlineData("PrimaryForegroundBrush", "StatusBarBackgroundBrush")]
+        [InlineData("TextPrimaryBrush", "SurfacePanelBrush")]
+        [InlineData("TextControlBrush", "SurfaceControlBrush")]
+        [InlineData("TextControlBrush", "SurfaceHoverBrush")]
+        [InlineData("TextControlBrush", "AccentSoftBrush")]
+        [InlineData("TextSecondaryBrush", "SurfaceCanvasBrush")]
+        [InlineData("TextPrimaryBrush", "SurfaceCanvasBrush")]
         public void DarkTheme_TextMeetsMinimumContrast(string foreground, string background)
         {
             _application.Run(_ =>
@@ -891,7 +892,7 @@ namespace XMAT.Tests
                 Assert.Same(window.FindResource("FormatTabControlStyle"), tabs.Style);
                 Assert.Equal(28, headers.MinHeight);
                 Assert.Equal(new Thickness(), tabs.Padding);
-                var well = (Brush)window.FindResource("TextAreaBackgroundBrush");
+                var well = (Brush)window.FindResource("SurfaceWellBrush");
                 var formatWidths = new[] { headers.ActualWidth, body.ActualWidth, json.ActualWidth };
                 foreach (var selected in new[] { headers, body, json })
                 {
@@ -976,10 +977,10 @@ namespace XMAT.Tests
                 inspector.SelectedIndex = 0;
                 WpfTestHost.Pump();
 
-                Assert.Equal(Of("HeadingForegroundBrush"), ColorOf(Label(inspector, "Request/Response")));
-                Assert.Equal(Of("SecondaryForegroundBrush"), ColorOf(Label(inspector, "WebSockets")));
-                Assert.Equal(Of("DataGridHeaderForegroundBrush"), ColorOf(Label(grid, "Status")));
-                Assert.Equal(Of("StatusBarForegroundBrush"), ColorOf(Label(statusBar, "Capture stopped")));
+                Assert.Equal(Of("TextHeadingBrush"), ColorOf(Label(inspector, "Request/Response")));
+                Assert.Equal(Of("TextSecondaryBrush"), ColorOf(Label(inspector, "WebSockets")));
+                Assert.Equal(Of("TextSecondaryBrush"), ColorOf(Label(grid, "Status")));
+                Assert.Equal(Of("TextSecondaryBrush"), ColorOf(Label(statusBar, "Capture stopped")));
 
                 // Tooltips take the menu surface, so their text reads in both themes.
                 var tip = new ToolTip
@@ -994,10 +995,10 @@ namespace XMAT.Tests
                 WpfTestHost.Pump();
                 try
                 {
-                    Assert.Equal(((SolidColorBrush)tip.FindResource("MenuBackgroundBrush")).Color,
+                    Assert.Equal(((SolidColorBrush)tip.FindResource("SurfaceCanvasBrush")).Color,
                         Assert.IsType<SolidColorBrush>(tip.Background).Color);
                     var tipLabel = Label(tip, "Resize the column");
-                    Assert.Equal(((SolidColorBrush)tip.FindResource("MenuForegroundBrush")).Color, ColorOf(tipLabel));
+                    Assert.Equal(((SolidColorBrush)tip.FindResource("TextPrimaryBrush")).Color, ColorOf(tipLabel));
                     Assert.True(Contrast(tipLabel.Foreground, tip.Background) >= 4.5, "Tooltip text must meet 4.5:1 contrast.");
                 }
                 finally
@@ -1139,15 +1140,16 @@ namespace XMAT.Tests
                     button.IsEnabled = false;
                 }
                 WpfTestHost.Pump();
-                var gray = ((SolidColorBrush)window.FindResource("DisabledForegroundBrush")).Color;
+                var gray = ((SolidColorBrush)window.FindResource("TextDisabledBrush")).Color;
                 foreach (var button in buttons)
                 {
                     Assert.Equal(gray, ((SolidColorBrush)button.Foreground).Color);
                     Assert.All(Descendants(button).OfType<TextBlock>(),
                         label => Assert.Equal(gray, ((SolidColorBrush)label.Foreground).Color));
                 }
-                Assert.Equal(gray.R, gray.G);
-                Assert.Equal(gray.G, gray.B);
+                // A gray from the palette: its slight cool tint stays under 0.01 chroma, which reads as neutral.
+                Assert.True(DesignSystem.PaletteGenerator.OkLch($"#{gray.R:X2}{gray.G:X2}{gray.B:X2}").C < 0.01,
+                    $"Disabled text {gray} must be gray.");
                 Assert.Equal(gray, ((SolidColorBrush)action.Foreground).Color);
                 window.Resources.MergedDictionaries.Remove(dictionary);
                 window.Resources.MergedDictionaries.Add(Theme(theme == "Dark" ? "Light" : "Dark"));
@@ -1155,7 +1157,7 @@ namespace XMAT.Tests
                 foreach (var button in buttons)
                 {
                     Assert.Equal(
-                        ((SolidColorBrush)window.FindResource("DisabledForegroundBrush")).Color,
+                        ((SolidColorBrush)window.FindResource("TextDisabledBrush")).Color,
                         ((SolidColorBrush)button.Foreground).Color);
                     button.IsEnabled = true;
                 }

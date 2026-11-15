@@ -201,7 +201,7 @@ namespace XMAT.Tests
                 Assert.Equal(row.ActualHeight + 4, showAll.TranslatePoint(new Point(), host).Y, 1);
                 Assert.Equal(24, showAll.ActualHeight);
                 Assert.Equal(12, indicator.FontSize);
-                Assert.Same(indicator.FindResource("SecondaryForegroundBrush"), indicator.Foreground);
+                Assert.Same(indicator.FindResource("TextSecondaryBrush"), indicator.Foreground);
 
                 Click(showAll);
 

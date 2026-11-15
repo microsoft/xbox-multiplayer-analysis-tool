@@ -19,7 +19,7 @@
         </Grid.RowDefinitions>
 
         <!-- Each filter keeps its label; the second filter moves to a new line when the pane is narrow. -->
-        <WrapPanel Grid.Row="0" Orientation="Horizontal" Background="{DynamicResource PanelBackgroundBrush}"
+        <WrapPanel Grid.Row="0" Orientation="Horizontal" Background="{DynamicResource SurfacePanelBrush}"
                    Margin="{app:Look New='0,0,0,8', Original='0'}">
             <StackPanel Orientation="Horizontal" Margin="{app:Look New='0,0,16,0', Original='0'}">
                 <TextBlock x:Name="DirectionLabel" Text="Direction" Style="{DynamicResource FilterLabelStyle}"
@@ -89,7 +89,7 @@
                 </Grid.RowDefinitions>
                 <TextBlock x:Name="PayloadNotice" Grid.Row="0" Style="{DynamicResource NoticeTextStyle}"
                            Text="{Binding SelectedItem.PayloadNotice, ElementName=MessagesGrid}"
-                           Foreground="{DynamicResource WarningForegroundBrush}"
+                           Foreground="{DynamicResource WarningTextBrush}"
                            Margin="{app:Look New='0,0,0,8', Original='6'}"/>
                 <TabControl Grid.Row="1" Style="{DynamicResource FormatTabControlStyle}">
                     <TabItem Header="Text" Style="{DynamicResource FormatTabItemStyle}">

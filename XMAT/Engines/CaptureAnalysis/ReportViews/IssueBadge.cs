@@ -22,7 +22,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
         public static readonly DependencyProperty CountProperty = DependencyProperty.RegisterAttached(
             "Count", typeof(ValidationIssueCount), typeof(IssueBadge), new PropertyMetadata(null, OnCountChanged));
 
-        // Bound to LookState, so the text follows the look without the state holding on to the element.
+        // Bound to LookState, so the colors and text follow the look without the state holding on to the element.
         private static readonly DependencyProperty IsNewLookProperty = DependencyProperty.RegisterAttached(
             "IsNewLook", typeof(bool), typeof(IssueBadge), new PropertyMetadata(true, OnIsNewLookChanged));
 
@@ -40,38 +40,63 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         private static void OnLevelChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
         {
+            FollowLook(element);
+            ShowLevel(element);
+        }
+
+        private static void ShowLevel(DependencyObject element)
+        {
             DependencyProperty background = element is TextBlock ? TextBlock.BackgroundProperty : Control.BackgroundProperty;
             DependencyProperty foreground = element is TextBlock ? TextBlock.ForegroundProperty : Control.ForegroundProperty;
-            if (e.NewValue is not ViolationLevel level || element is not FrameworkElement target)
+            if (GetLevel(element) is not ViolationLevel level || element is not FrameworkElement target)
             {
                 element.ClearValue(background);
                 element.ClearValue(foreground);
                 return;
             }
 
-            (string backgroundKey, string foregroundKey) = level switch
-            {
-                ViolationLevel.Error => ("IssueErrorBackgroundBrush", "IssueErrorForegroundBrush"),
-                ViolationLevel.Warning => ("IssueWarningBackgroundBrush", "IssueWarningForegroundBrush"),
-                _ => ("IssueInfoBackgroundBrush", "IssueInfoForegroundBrush")
-            };
+            // The original look's themes keep their own issue colors; remove them with the original look.
+            (string backgroundKey, string foregroundKey) = (bool)element.GetValue(IsNewLookProperty)
+                ? level switch
+                {
+                    ViolationLevel.Error => ("ErrorSoftBrush", "ErrorTextBrush"),
+                    ViolationLevel.Warning => ("WarningSoftBrush", "WarningTextBrush"),
+                    _ => ("SuccessSoftBrush", "SuccessTextBrush")
+                }
+                : level switch
+                {
+                    ViolationLevel.Error => ("IssueErrorBackgroundBrush", "IssueErrorForegroundBrush"),
+                    ViolationLevel.Warning => ("IssueWarningBackgroundBrush", "IssueWarningForegroundBrush"),
+                    _ => ("IssueInfoBackgroundBrush", "IssueInfoForegroundBrush")
+                };
             target.SetResourceReference(background, backgroundKey);
             target.SetResourceReference(foreground, foregroundKey);
         }
 
         private static void OnCountChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
         {
+            FollowLook(element);
+            SetLevel(element, (e.NewValue as ValidationIssueCount)?.IssueLevel);
+            ShowCount(element);
+        }
+
+        private static void FollowLook(DependencyObject element)
+        {
             if (!BindingOperations.IsDataBound(element, IsNewLookProperty))
             {
                 BindingOperations.SetBinding(element, IsNewLookProperty,
                     new Binding(nameof(LookState.IsNewLook)) { Source = LookState.Current, Mode = BindingMode.OneWay });
             }
-            SetLevel(element, (e.NewValue as ValidationIssueCount)?.IssueLevel);
-            ShowCount(element);
         }
 
-        private static void OnIsNewLookChanged(DependencyObject element, DependencyPropertyChangedEventArgs e) =>
-            ShowCount(element);
+        private static void OnIsNewLookChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
+        {
+            ShowLevel(element);
+            if (GetCount(element) != null)
+            {
+                ShowCount(element);
+            }
+        }
 
         private static void ShowCount(DependencyObject element)
         {

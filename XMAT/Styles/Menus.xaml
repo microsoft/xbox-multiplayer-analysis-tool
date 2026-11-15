@@ -11,7 +11,7 @@
             <Setter.Value>
                 <ControlTemplate>
                     <Border BorderThickness="1" CornerRadius="4" SnapsToDevicePixels="True"
-                            BorderBrush="{DynamicResource PrimaryForegroundBrush}"/>
+                            BorderBrush="{DynamicResource TextPrimaryBrush}"/>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -21,9 +21,9 @@
          margin leaves 24px at the sides, 16px above and 32px below for the shadow; popups place the surface itself, not
          its margin, where a menu opens. App.xaml's MenuItem template gives dropdowns and submenus the same surface. -->
     <Style x:Key="ContextMenuSurfaceStyle" TargetType="ContextMenu">
-        <Setter Property="Background" Value="{DynamicResource MenuBackgroundBrush}"/>
-        <Setter Property="Foreground" Value="{DynamicResource MenuForegroundBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfaceCanvasBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Padding" Value="4"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
@@ -56,7 +56,7 @@
         <Setter Property="Padding" Value="12,0"/>
         <Setter Property="MinHeight" Value="28"/>
         <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Template">
@@ -92,7 +92,7 @@
         <Setter Property="Padding" Value="12,6"/>
         <Setter Property="MinHeight" Value="28"/>
         <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Template">

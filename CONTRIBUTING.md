@@ -115,6 +115,12 @@ packaging, and run a smoke command from the assembled artifact in `.github/workf
   `XMAT.Tests/HeadlessParity/HeadlessBans.cs`, needs a reviewer's explicit approval and the reason in the pull
   request.
 
+# Design System
+
+Views and styles take their colors from the roles in [docs/design-system.md](docs/design-system.md), such as
+`TextPrimaryBrush`, never from color values. The page explains how to choose a role, change a base color and add a
+role; the tests in `XMAT.Tests/DesignSystem` check the rules.
+
 # Coding Standards
 
 This project utilized the standard [C# coding conventions](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions).

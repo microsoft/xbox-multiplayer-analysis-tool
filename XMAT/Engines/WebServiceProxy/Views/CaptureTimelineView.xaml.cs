@@ -49,11 +49,11 @@ namespace XMAT.WebServiceCapture
         // Bar and label colors from the theme by status: none or unrecognized, 2xx, 3xx, 4xx, and 5xx or above.
         private static readonly (string Bar, string Label)[] StatusResourceKeys =
         {
-            ("TimelineBarNoStatusBrush", "TimelineBarNoStatusForegroundBrush"),
-            ("TimelineBarSuccessBrush", "TimelineBarSuccessForegroundBrush"),
-            ("TimelineBarRedirectBrush", "TimelineBarRedirectForegroundBrush"),
-            ("TimelineBarClientErrorBrush", "TimelineBarClientErrorForegroundBrush"),
-            ("TimelineBarServerErrorBrush", "TimelineBarServerErrorForegroundBrush")
+            ("NeutralFillBrush", "NeutralOnFillBrush"),
+            ("SuccessFillBrush", "SuccessOnFillBrush"),
+            ("InfoFillBrush", "InfoOnFillBrush"),
+            ("WarningFillBrush", "WarningOnFillBrush"),
+            ("ErrorFillBrush", "ErrorOnFillBrush")
         };
 
         public static readonly DependencyProperty ItemsSourceProperty =
@@ -168,7 +168,7 @@ namespace XMAT.WebServiceCapture
             AutoScrollButton.Content = Localization.GetLocalizedString("WEBCAP_AUTOSCROLL");
             VolumeChart.StepClicked = VolumeStepClicked;
             _hostListMenu.SetResourceReference(Control.BackgroundProperty, "MenuBackgroundBrush");
-            _hostListMenu.SetResourceReference(Control.ForegroundProperty, "MenuForegroundBrush");
+            _hostListMenu.SetResourceReference(Control.ForegroundProperty, "TextPrimaryBrush");
             Loaded += ViewLoaded;
             Unloaded += ViewUnloaded;
             IsVisibleChanged += ViewVisibilityChanged;
@@ -667,7 +667,7 @@ namespace XMAT.WebServiceCapture
             if (index == _hostLabels.Count)
             {
                 var label = new TextBlock { FontWeight = FontWeights.SemiBold, FontSize = 11, ContextMenu = _hostListMenu };
-                label.SetResourceReference(TextBlock.ForegroundProperty, "PrimaryForegroundBrush");
+                label.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
                 _hostLabels.Add(label);
                 TimelineCanvas.Children.Add(label);
             }
@@ -709,10 +709,10 @@ namespace XMAT.WebServiceCapture
                 {
                     StrokeThickness = 1
                 };
-                tick.SetResourceReference(Shape.StrokeProperty, "SecondaryForegroundBrush");
+                tick.SetResourceReference(Shape.StrokeProperty, "TextSecondaryBrush");
                 var label = new TextBlock();
                 label.SetResourceReference(TextBlock.FontSizeProperty, "TimelineAxisFontSize");
-                label.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryForegroundBrush");
+                label.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
                 _axis.Add(new AxisVisual(tick, label));
                 TimeAxisCanvas.Children.Add(tick);
                 TimeAxisCanvas.Children.Add(label);

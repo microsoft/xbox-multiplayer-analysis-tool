@@ -12,7 +12,7 @@
         <local:BodyConverter x:Key="BodyConverter"/>
         <local:JsonConverter x:Key="JsonConverter"/>
     </UserControl.Resources>
-    <DockPanel Background="{DynamicResource PanelBackgroundBrush}">
+    <DockPanel Background="{DynamicResource SurfacePanelBrush}">
         <!-- The title's details sit at its right when they fit, and wrap below it when the pane is narrow. -->
         <app:ReflowPanel DockPanel.Dock="Top" Margin="{DynamicResource HeadingBottomSpacing}"
                          Spacing="{app:Look New=16, Original=0}" StackedSpacing="2">

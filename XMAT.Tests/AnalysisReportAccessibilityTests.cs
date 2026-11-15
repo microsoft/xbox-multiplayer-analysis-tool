@@ -54,15 +54,17 @@ namespace XMAT.Tests
                     Assert.Equal(name, errors.ToolTip);
                     Assert.Equal(threeErrors, UIElementAutomationPeer.CreatePeerForElement(detail).GetName());
                     Assert.DoesNotContain("NO_IMPL_", name + Localization.GetLocalizedString("LTA_ISSUE_COUNT_NONE"));
-                    foreach (var (element, level) in new (FrameworkElement, string)[]
-                        { (errors, "Error"), (warning, "Warning"), (none, "Info"), (detail, "Error") })
+                    // The new look colors each level with its status role; Info counts are good news.
+                    foreach (var (element, role) in new (FrameworkElement, string)[]
+                        { (errors, "Error"), (warning, "Warning"), (none, "Success"), (detail, "Error") })
                     {
-                        Assert.Same(element.FindResource($"Issue{level}BackgroundBrush"),
+                        Assert.Same(element.FindResource($"{role}SoftBrush"),
                             element is TextBlock text ? text.Background : ((Control)element).Background);
-                        Assert.Same(element.FindResource($"Issue{level}ForegroundBrush"),
+                        Assert.Same(element.FindResource($"{role}TextBrush"),
                             element is TextBlock label ? label.Foreground : ((Control)element).Foreground);
                     }
 
+                    // The original look keeps its issue colors.
                     LookState.Current.IsNewLook = false;
                     window.Resources["IssueErrorBackgroundBrush"] = Brushes.Purple;
                     WpfTestHost.Pump();
@@ -128,11 +130,12 @@ namespace XMAT.Tests
                 var network = new NetworkTraceAnalysisView { DataContext = new { AnalysisData = analysis } };
                 WpfTestHost.Show(window, network);
                 Assert.Equal("Packets sent by source", AssertNamed(Descendants(network).OfType<DataGrid>().Single()));
-                foreach (var (check, level) in new[] { ("Packets over the MTU", "Error"), ("Duplicate packets", "Info") })
+                // Info checks are good news, so the new look gives them the success colors.
+                foreach (var (check, role) in new[] { ("Packets over the MTU", "Error"), ("Duplicate packets", "Success") })
                 {
                     TextBlock text = Descendants(network).OfType<TextBlock>().Single(block => block.Text == check);
-                    Assert.Same(text.FindResource($"Issue{level}BackgroundBrush"), text.Background);
-                    Assert.Same(text.FindResource($"Issue{level}ForegroundBrush"), text.Foreground);
+                    Assert.Same(text.FindResource($"{role}SoftBrush"), text.Background);
+                    Assert.Same(text.FindResource($"{role}TextBrush"), text.Foreground);
                 }
             });
         }

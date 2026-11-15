@@ -13,7 +13,7 @@
         <!-- Filled for the right-clicked or focused summary row when it opens. -->
         <ContextMenu x:Key="HostListRowMenu"
                      Background="{DynamicResource MenuBackgroundBrush}"
-                     Foreground="{DynamicResource MenuForegroundBrush}"/>
+                     Foreground="{DynamicResource TextPrimaryBrush}"/>
     </UserControl.Resources>
     <UserControl.CommandBindings>
         <CommandBinding Command="{x:Static logic:CaptureAnalysisCommands.GoToId}" Executed="GoToEndpoint_Id" CanExecute="GoToId_CanExecute"/>

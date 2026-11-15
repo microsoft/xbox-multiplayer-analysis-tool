@@ -46,11 +46,11 @@
                 <Border x:Name="AnalysisSkeleton" HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True"
                         Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=TabControl}}"
                         Padding="{DynamicResource TextAreaPadding}" CornerRadius="{DynamicResource ControlCornerRadius}"
-                        Background="{DynamicResource TextAreaBackgroundBrush}"
+                        Background="{DynamicResource SurfaceWellBrush}"
                         Visibility="{Binding ShowsSkeleton, RelativeSource={RelativeSource AncestorType=local:CaptureAnalysisControl}, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <StackPanel>
                         <TextBlock x:Name="AnalysisSkeletonLabel" Margin="0,0,0,12" local:LiveRegion.Mode="Polite"
-                                   Foreground="{DynamicResource SecondaryForegroundBrush}">
+                                   Foreground="{DynamicResource TextSecondaryBrush}">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Style.Triggers>
@@ -116,7 +116,7 @@
         </TextBlock>
         <!-- The new look replaces the empty results area with guidance in a well; the original look keeps the empty tabs. -->
         <Border x:Name="AnalysisEmptyState" Grid.Row="1" Padding="{DynamicResource EmptyStatePadding}"
-                Background="{DynamicResource TextAreaBackgroundBrush}" CornerRadius="{DynamicResource ControlCornerRadius}">
+                Background="{DynamicResource SurfaceWellBrush}" CornerRadius="{DynamicResource ControlCornerRadius}">
             <Border.Style>
                 <Style TargetType="Border">
                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -134,7 +134,7 @@
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="320">
             <TextBlock x:Name="AnalysisEmptyMessage" Text="{Binding AnalysisEmptyStateText}" TextAlignment="Center"
                        local:LiveRegion.Mode="Polite"
-                       Foreground="{DynamicResource SecondaryForegroundBrush}" TextWrapping="Wrap"/>
+                       Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
             <Button x:Name="AnalyzeEmptyCaptureButton" HorizontalAlignment="Center" Margin="0,12,0,0"
                     Command="{x:Static local:AppCommands.AnalyzeCaptures}"
                     CommandTarget="{Binding RelativeSource={RelativeSource AncestorType=Window}}"

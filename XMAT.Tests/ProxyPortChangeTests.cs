@@ -580,7 +580,7 @@ namespace XMAT.Tests
                 Assert.NotNull(dialog.FindName("ApplyButton"));
                 Assert.NotNull(dialog.FindName("LaterButton"));
                 Assert.NotNull(dialog.FindName("CancelButton"));
-                Assert.Equal(Application.Current.FindResource("WindowBackgroundBrush"), dialog.Background);
+                Assert.Equal(Application.Current.FindResource("SurfaceCanvasBrush"), dialog.Background);
                 dialog.Close();
             });
         }

@@ -9,8 +9,8 @@
         Loaded="Window_Loaded"
         Closing="Window_Closing"
         Title="{StaticResource appName}"
-        Background="{DynamicResource WindowBackgroundBrush}"
-        Foreground="{DynamicResource PrimaryForegroundBrush}"
+        Background="{DynamicResource SurfaceCanvasBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}"
         FontSize="{DynamicResource BaseFontSize}"
         UseLayoutRounding="{local:Look New=True, Original=False}"
         AllowDrop="True"
@@ -39,7 +39,7 @@
     <Window.Resources>
         <!-- A labeled on/off switch. It uses only colors both looks define, so it looks the same in either. -->
         <Style x:Key="LookSwitchStyle" TargetType="ToggleButton">
-            <Setter Property="Foreground" Value="{DynamicResource MenuForegroundBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -58,13 +58,13 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource ActiveSelectionBrush}"/>
-                                <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource ActiveSelectionBrush}"/>
-                                <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource ActiveSelectionForegroundBrush}"/>
+                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource AccentFillBrush}"/>
+                                <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource AccentFillBrush}"/>
+                                <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource AccentOnFillBrush}"/>
                                 <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
                                 <Setter TargetName="Root" Property="BorderBrush"
@@ -165,7 +165,7 @@
             </Grid.RowDefinitions>
 
             <!-- Capture content and analysis share one flat surface; only the divider line separates them. -->
-            <Border Grid.Row="1" Grid.RowSpan="2" Background="{DynamicResource PanelBackgroundBrush}"/>
+            <Border Grid.Row="1" Grid.RowSpan="2" Background="{DynamicResource SurfacePanelBrush}"/>
             <local:AllCaptureDevicesTabControl x:Name="AllCaptureDevicesPanel" Grid.Row="0" DeviceTabClosed="AllCaptureDevicesPanel_TabClosed"/>
             <!-- In the new look the divider row is a hairline; the splitter overhangs it so it stays easy to grab. -->
             <GridSplitter x:Name="AnalysisSplitter" Grid.Row="1" Grid.Column="0" Style="{DynamicResource PaneSplitterStyle}" Panel.ZIndex="1"

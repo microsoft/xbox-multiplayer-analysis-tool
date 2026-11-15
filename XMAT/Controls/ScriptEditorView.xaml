@@ -21,12 +21,12 @@
 
     <!-- The actions sit in a footer at the bottom of the tab, so they are always in view. The editor and the type
          reference fill the room above it; when the tab is too short for everything, only that part scrolls. -->
-    <Grid Background="{DynamicResource PanelBackgroundBrush}">
+    <Grid Background="{DynamicResource SurfacePanelBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-    <ScrollViewer x:Name="ScriptScroller" Margin="{DynamicResource SectionBottomSpacing}" Background="{DynamicResource PanelBackgroundBrush}" Focusable="False"
+    <ScrollViewer x:Name="ScriptScroller" Margin="{DynamicResource SectionBottomSpacing}" Background="{DynamicResource SurfacePanelBrush}" Focusable="False"
                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <Grid>
         <Grid.RowDefinitions>
@@ -110,7 +110,7 @@
                                             <Condition Binding="{Binding IsNewLook, Source={x:Static local:LookState.Current}}" Value="True"/>
                                             <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource Self}}" Value="True"/>
                                         </MultiDataTrigger.Conditions>
-                                        <Setter Property="BorderBrush" Value="{DynamicResource TableSelectionBorderBrush}"/>
+                                        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                                     </MultiDataTrigger>
                                 </Style.Triggers>
                             </Style>

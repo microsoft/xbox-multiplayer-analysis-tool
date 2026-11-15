@@ -108,7 +108,7 @@
         </Style>
 
         <Style x:Key="HelpTextStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
 
@@ -141,7 +141,7 @@
              heading's baseline. -->
         <Style x:Key="ListCountStyle" TargetType="TextBlock">
             <Setter Property="Visibility" Value="Collapsed"/>
-            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
             <Setter Property="VerticalAlignment" Value="Top"/>
             <Setter Property="Margin">
                 <Setter.Value>
@@ -191,7 +191,7 @@
              accessible name. -->
         <Style x:Key="EntryHintStyle" TargetType="TextBlock">
             <Setter Property="Visibility" Value="Collapsed"/>
-            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
             <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="Margin" Value="{StaticResource FieldTextInset}"/>
@@ -262,7 +262,7 @@
         <Style x:Key="EntryItemStyle" TargetType="ListBoxItem">
             <Setter Property="MinHeight" Value="{DynamicResource ListRowHeight}"/>
             <Setter Property="Padding" Value="{DynamicResource RowInset}"/>
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
             <Setter Property="FocusVisualStyle" Value="{DynamicResource ItemFocusVisualStyle}"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -283,12 +283,12 @@
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
                                 <Setter TargetName="Outline" Property="BorderBrush" Value="{DynamicResource HoverOutlineBrush}"/>
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="Row" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
-                                <Setter TargetName="Outline" Property="BorderBrush" Value="{DynamicResource TableSelectionBorderBrush}"/>
+                                <Setter TargetName="Outline" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                                 <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
                             </Trigger>
                             <MultiTrigger>
@@ -307,9 +307,9 @@
 
         <!-- The list takes the app's list colors in the original look; in the new look its rows draw on the well. -->
         <Style x:Key="EntryListStyle" TargetType="ListBox">
-            <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}"/>
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
                     <Setter Property="Background" Value="Transparent"/>
@@ -388,7 +388,7 @@
              starts 8 px below, indented to the heading's text. -->
         <Style x:Key="DisclosureStyle" TargetType="Expander">
             <Setter Property="Focusable" Value="False"/>
-            <Setter Property="Foreground" Value="{DynamicResource HeadingForegroundBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextHeadingBrush}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Expander">
@@ -408,7 +408,7 @@
                                             <Grid>
                                                 <Border x:Name="FocusRing" Margin="-3,-1" BorderThickness="1" Visibility="Collapsed"
                                                         CornerRadius="{DynamicResource InputCornerRadius}"
-                                                        BorderBrush="{DynamicResource PrimaryForegroundBrush}"/>
+                                                        BorderBrush="{DynamicResource TextPrimaryBrush}"/>
                                                 <TextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}"
                                                            FontSize="{DynamicResource BaseFontSize}" FontWeight="SemiBold"
                                                            Foreground="{TemplateBinding Foreground}"/>
@@ -464,8 +464,8 @@
         <!-- An example pattern: monospace text in a chip on the theme's recessed surface, 6 px from its sides and 2 px from
              its top and bottom. Like a well, its 1 px edge shows only in high contrast. -->
         <Style x:Key="CodeChipStyle" TargetType="Border">
-            <Setter Property="Background" Value="{DynamicResource TextAreaBackgroundBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource TextAreaBorderBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderWellBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="CornerRadius" Value="{DynamicResource InputCornerRadius}"/>
             <Setter Property="Padding" Value="5,1"/>
@@ -474,14 +474,14 @@
 
         <Style x:Key="CodeTextStyle" TargetType="TextBlock">
             <Setter Property="FontFamily" Value="Consolas"/>
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
 
         <!-- Code within a sentence, such as a pattern in a matching rule. -->
         <Style x:Key="InlineCodeStyle" TargetType="Run">
             <Setter Property="FontFamily" Value="Consolas"/>
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         </Style>
 
         <Style x:Key="ExampleTextStyle" TargetType="TextBlock" BasedOn="{StaticResource ReadingTextStyle}">
@@ -568,10 +568,10 @@
             <DockPanel Style="{StaticResource ErrorLineStyle}">
                 <Grid Style="{StaticResource ErrorIconStyle}">
                     <Canvas Width="12" Height="12" VerticalAlignment="Center">
-                        <Ellipse Width="12" Height="12" Fill="{DynamicResource CaptureErrorForegroundBrush}"/>
-                        <Path Data="M6,3 L6,6.75" Stroke="{DynamicResource PanelBackgroundBrush}" StrokeThickness="1.25"
+                        <Ellipse Width="12" Height="12" Fill="{DynamicResource ErrorTextBrush}"/>
+                        <Path Data="M6,3 L6,6.75" Stroke="{DynamicResource SurfacePanelBrush}" StrokeThickness="1.25"
                               StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                        <Path Fill="{DynamicResource PanelBackgroundBrush}">
+                        <Path Fill="{DynamicResource SurfacePanelBrush}">
                             <Path.Data>
                                 <EllipseGeometry Center="6,8.75" RadiusX="0.75" RadiusY="0.75"/>
                             </Path.Data>

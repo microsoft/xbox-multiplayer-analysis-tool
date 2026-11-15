@@ -60,10 +60,10 @@
             </Canvas>
         </ScrollViewer>
         <local:CaptureVolumeChart x:Name="VolumeChart" Visibility="Collapsed"
-                                  LineBrush="{DynamicResource TabSelectionIndicatorBrush}"
-                                  GridLineBrush="{DynamicResource DataGridGridLinesBrush}"
-                                  BaselineBrush="{DynamicResource SurfaceBorderBrush}"
-                                  LabelBrush="{DynamicResource SecondaryForegroundBrush}"
+                                  LineBrush="{DynamicResource AccentBrush}"
+                                  GridLineBrush="{DynamicResource BorderSubtleBrush}"
+                                  BaselineBrush="{DynamicResource BorderSubtleBrush}"
+                                  LabelBrush="{DynamicResource TextSecondaryBrush}"
                                   AxisFontSize="{DynamicResource TimelineAxisFontSize}"
                                   ReadoutFontSize="{DynamicResource BaseFontSize}"/>
         </Grid>

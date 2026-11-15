@@ -25,7 +25,7 @@
     </Style>
 
     <Style x:Key="TrafficOverviewStripStyle" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource TextAreaBackgroundBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>
         <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}"/>
         <Setter Property="MinHeight" Value="56"/>
     </Style>
@@ -41,7 +41,7 @@
     <!-- Labels: Requests, Status, Busiest hosts. -->
     <Style x:Key="TrafficOverviewLabelStyle" TargetType="TextBlock">
         <Setter Property="FontSize" Value="{DynamicResource TrafficOverviewLabelFontSize}"/>
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="VerticalAlignment" Value="Bottom"/>
     </Style>
 
@@ -60,7 +60,7 @@
 
     <Style x:Key="TrafficOverviewRateStyle" TargetType="TextBlock">
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="VerticalAlignment" Value="Bottom"/>
         <Setter Property="Margin" Value="12,0,0,0"/>
     </Style>
@@ -68,7 +68,7 @@
     <Style x:Key="TrafficOverviewTotalStyle" TargetType="TextBlock">
         <Setter Property="FontSize" Value="{DynamicResource TrafficOverviewTotalFontSize}"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
-        <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
         <Setter Property="Margin" Value="0,0,10,0"/>
     </Style>
@@ -76,7 +76,7 @@
     <Style x:Key="TrafficOverviewSparklineStyle" TargetType="local:TrafficSparkline">
         <Setter Property="Width" Value="140"/>
         <Setter Property="Height" Value="28"/>
-        <Setter Property="LineBrush" Value="{DynamicResource TabSelectionIndicatorBrush}"/>
+        <Setter Property="LineBrush" Value="{DynamicResource AccentBrush}"/>
         <Setter Property="IsHitTestVisible" Value="False"/>
     </Style>
 
@@ -85,7 +85,7 @@
         <Setter Property="Height" Value="40"/>
         <Setter Property="Margin" Value="12,0"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
-        <Setter Property="Background" Value="{DynamicResource SurfaceBorderBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource BorderSubtleBrush}"/>
     </Style>
 
     <!-- The status bar, 4px below its label and above its legend. Its tooltip opens 23px below it, 4px under the legend
@@ -96,13 +96,13 @@
         <Setter Property="Margin" Value="0,4"/>
         <Setter Property="HorizontalAlignment" Value="Left"/>
         <Setter Property="ToolTipOffset" Value="23"/>
-        <Setter Property="SuccessBrush" Value="{DynamicResource TimelineBarSuccessBrush}"/>
-        <Setter Property="RedirectBrush" Value="{DynamicResource TimelineBarRedirectBrush}"/>
-        <Setter Property="ClientErrorBrush" Value="{DynamicResource TimelineBarClientErrorBrush}"/>
-        <Setter Property="ServerErrorBrush" Value="{DynamicResource TimelineBarServerErrorBrush}"/>
-        <Setter Property="NoStatusBrush" Value="{DynamicResource TimelineBarNoStatusBrush}"/>
-        <Setter Property="TrackBrush" Value="{DynamicResource SurfaceBorderBrush}"/>
-        <Setter Property="OutlineBrush" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="SuccessBrush" Value="{DynamicResource SuccessFillBrush}"/>
+        <Setter Property="RedirectBrush" Value="{DynamicResource InfoFillBrush}"/>
+        <Setter Property="ClientErrorBrush" Value="{DynamicResource WarningFillBrush}"/>
+        <Setter Property="ServerErrorBrush" Value="{DynamicResource ErrorFillBrush}"/>
+        <Setter Property="NoStatusBrush" Value="{DynamicResource NeutralFillBrush}"/>
+        <Setter Property="TrackBrush" Value="{DynamicResource BorderSubtleBrush}"/>
+        <Setter Property="OutlineBrush" Value="{DynamicResource TextPrimaryBrush}"/>
     </Style>
 
     <!-- Parts show a keyboard focus outline just outside them. -->
@@ -111,7 +111,7 @@
             <Setter.Value>
                 <ControlTemplate>
                     <Border Margin="-2,-1" BorderThickness="1" CornerRadius="2"
-                            BorderBrush="{DynamicResource PrimaryForegroundBrush}" SnapsToDevicePixels="True"/>
+                            BorderBrush="{DynamicResource TextPrimaryBrush}" SnapsToDevicePixels="True"/>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -126,7 +126,7 @@
     <Style x:Key="TrafficOverviewLegendItemStyle" TargetType="ContentControl">
         <Setter Property="Margin" Value="0,0,6,0"/>
         <Setter Property="FontSize" Value="{DynamicResource TrafficOverviewLabelFontSize}"/>
-        <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="FocusVisualStyle" Value="{DynamicResource TrafficOverviewFocusVisualStyle}"/>
         <Setter Property="Template">
             <Setter.Value>
@@ -135,9 +135,9 @@
                         <Border x:Name="Hover" Margin="-2,0" CornerRadius="2"/>
                         <StackPanel Orientation="Horizontal">
                             <Border x:Name="Swatch" Width="8" Height="8" CornerRadius="2" Margin="0,0,4,0"
-                                    VerticalAlignment="Center" Background="{DynamicResource TimelineBarSuccessBrush}"/>
+                                    VerticalAlignment="Center" Background="{DynamicResource SuccessFillBrush}"/>
                             <TextBlock Foreground="{TemplateBinding Foreground}" VerticalAlignment="Center"><Run
-                                Text="{Binding Label, Mode=OneWay}" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run
+                                Text="{Binding Label, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}"/><Run
                                 Text=" "/><Run Text="{Binding CountText, Mode=OneWay}"/></TextBlock>
                         </StackPanel>
                         <Border x:Name="HoverOutline" Margin="-2,0" CornerRadius="2" BorderThickness="1"
@@ -145,23 +145,23 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <DataTrigger Binding="{Binding StatusClass}" Value="Redirect">
-                            <Setter TargetName="Swatch" Property="Background" Value="{DynamicResource TimelineBarRedirectBrush}"/>
+                            <Setter TargetName="Swatch" Property="Background" Value="{DynamicResource InfoFillBrush}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding StatusClass}" Value="ClientError">
-                            <Setter TargetName="Swatch" Property="Background" Value="{DynamicResource TimelineBarClientErrorBrush}"/>
+                            <Setter TargetName="Swatch" Property="Background" Value="{DynamicResource WarningFillBrush}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding StatusClass}" Value="ServerError">
-                            <Setter TargetName="Swatch" Property="Background" Value="{DynamicResource TimelineBarServerErrorBrush}"/>
+                            <Setter TargetName="Swatch" Property="Background" Value="{DynamicResource ErrorFillBrush}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding StatusClass}" Value="None">
-                            <Setter TargetName="Swatch" Property="Background" Value="{DynamicResource TimelineBarNoStatusBrush}"/>
+                            <Setter TargetName="Swatch" Property="Background" Value="{DynamicResource NeutralFillBrush}"/>
                         </DataTrigger>
                         <MultiTrigger>
                             <MultiTrigger.Conditions>
                                 <Condition Property="IsMouseOver" Value="True"/>
                                 <Condition Property="Focusable" Value="True"/>
                             </MultiTrigger.Conditions>
-                            <Setter TargetName="Hover" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                            <Setter TargetName="Hover" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
                             <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
                             <Setter Property="Cursor" Value="Hand"/>
                         </MultiTrigger>
@@ -187,13 +187,13 @@
     <Style x:Key="TrafficOverviewTextSeparatorStyle" TargetType="TextBlock">
         <Setter Property="Text" Value=" · "/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
 
     <Style x:Key="TrafficOverviewTextItemStyle" TargetType="ContentControl">
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
-        <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="FocusVisualStyle" Value="{DynamicResource TrafficOverviewFocusVisualStyle}"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
         <Setter Property="Template">
@@ -202,7 +202,7 @@
                     <Grid>
                         <Border x:Name="Hover" Margin="-2,0" CornerRadius="2"/>
                         <TextBlock Foreground="{TemplateBinding Foreground}"><Run
-                            Text="{Binding Label, Mode=OneWay}" Foreground="{DynamicResource SecondaryForegroundBrush}"/><Run
+                            Text="{Binding Label, Mode=OneWay}" Foreground="{DynamicResource TextSecondaryBrush}"/><Run
                             Text=" "/><Run Text="{Binding CountText, Mode=OneWay}"/></TextBlock>
                         <Border x:Name="HoverOutline" Margin="-2,0" CornerRadius="2" BorderThickness="1"
                                 BorderBrush="{DynamicResource HoverOutlineBrush}" Visibility="Collapsed" IsHitTestVisible="False"/>
@@ -213,7 +213,7 @@
                                 <Condition Property="IsMouseOver" Value="True"/>
                                 <Condition Property="Focusable" Value="True"/>
                             </MultiTrigger.Conditions>
-                            <Setter TargetName="Hover" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                            <Setter TargetName="Hover" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
                             <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
                             <Setter Property="Cursor" Value="Hand"/>
                         </MultiTrigger>
@@ -226,7 +226,7 @@
     <!-- A busiest host: its name, a 4px bar against the busiest host and its count, in columns the three rows share. -->
     <Style x:Key="TrafficOverviewHostItemStyle" TargetType="Button">
         <Setter Property="FontSize" Value="{DynamicResource TrafficOverviewLabelFontSize}"/>
-        <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="FocusVisualStyle" Value="{DynamicResource TrafficOverviewFocusVisualStyle}"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
@@ -257,7 +257,7 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Hover" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                            <Setter TargetName="Hover" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
                             <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
@@ -273,7 +273,7 @@
         <Setter Property="Margin" Value="0,4,4,0"/>
         <Setter Property="HorizontalAlignment" Value="Right"/>
         <Setter Property="VerticalAlignment" Value="Top"/>
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="FocusVisualStyle" Value="{DynamicResource TrafficOverviewFocusVisualStyle}"/>
         <Setter Property="Template">
             <Setter.Value>
@@ -288,11 +288,11 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
                             <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonPressedBackgroundBrush}"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -305,7 +305,7 @@
         <Setter Property="HorizontalAlignment" Value="Right"/>
         <Setter Property="Padding" Value="6,2"/>
         <Setter Property="FontSize" Value="{DynamicResource TrafficOverviewLabelFontSize}"/>
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="FocusVisualStyle" Value="{DynamicResource TrafficOverviewFocusVisualStyle}"/>
         <Setter Property="Template">
             <Setter.Value>
@@ -326,11 +326,11 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
                             <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonPressedBackgroundBrush}"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

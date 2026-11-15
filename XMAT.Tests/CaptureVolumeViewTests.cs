@@ -70,7 +70,7 @@ namespace XMAT.Tests
                     Assert.Equal("3 requests \u00B7 peak 2 per second", chart.Readout);
                     Assert.Equal(0, VisualTreeHelper.GetChildrenCount(chart));
 
-                    window.Resources["TabSelectionIndicatorBrush"] = Brushes.Purple;
+                    window.Resources["AccentBrush"] = Brushes.Purple;
                     window.Resources["TimelineAxisFontSize"] = 20.0;
                     WpfTestHost.Pump();
                     Assert.Equal(20, chart.AxisFontSize);

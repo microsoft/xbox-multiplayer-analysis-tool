@@ -7,8 +7,8 @@
         Width="720" Height="560" MinWidth="480" MinHeight="360"
         WindowStartupLocation="CenterOwner"
         UseLayoutRounding="{app:Look New=True, Original=False}"
-        Background="{DynamicResource WindowBackgroundBrush}"
-        Foreground="{DynamicResource PrimaryForegroundBrush}"
+        Background="{DynamicResource SurfaceCanvasBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}"
         FontSize="{DynamicResource BaseFontSize}">
   <!-- The new look snaps the window's layout to whole pixels, as the main window does, so its hairlines stay sharp. -->
   <Window.Resources>
@@ -21,7 +21,7 @@
     <Style x:Key="SurfaceStyle" TargetType="Grid">
       <Style.Triggers>
         <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
-          <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}"/>
+          <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
         </DataTrigger>
       </Style.Triggers>
     </Style>
@@ -42,7 +42,7 @@
       <Setter Property="Margin" Value="{DynamicResource BulletGap}"/>
     </Style>
     <Style x:Key="FactTextStyle" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
       <Setter Property="TextWrapping" Value="Wrap"/>
       <Setter Property="LineHeight" Value="{DynamicResource TextLineHeight}"/>
     </Style>
@@ -85,7 +85,7 @@
         <RowDefinition Height="*"/>
       </Grid.RowDefinitions>
       <TextBlock x:Name="IntroText" TextWrapping="Wrap" Margin="0,0,0,8"
-                 Foreground="{DynamicResource PrimaryForegroundBrush}"
+                 Foreground="{DynamicResource TextPrimaryBrush}"
                  Visibility="{app:Look New=Collapsed, Original=Visible}"/>
       <!-- The new look states the scope in a lead sentence, then lists what applies to both lists, 16 px above the
            tabs. Each list's description then keeps only what the list does. -->
@@ -122,7 +122,7 @@
       </TabControl>
     </Grid>
 
-    <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="{app:Look New='0,1,0,0', Original=0}"
+    <Border Grid.Row="1" BorderBrush="{DynamicResource BorderDefaultBrush}" BorderThickness="{app:Look New='0,1,0,0', Original=0}"
             Style="{StaticResource FooterStyle}">
       <Border Style="{StaticResource CloseHostStyle}">
         <Button x:Name="CloseButton" MinWidth="{app:Look New={StaticResource CloseButtonMinWidth}, Original=90}"

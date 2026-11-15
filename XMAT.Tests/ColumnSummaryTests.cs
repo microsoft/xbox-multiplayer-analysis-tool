@@ -256,7 +256,7 @@ namespace XMAT.Tests
             {
                 long[] order = Visible(grid);
                 ColumnSummaryButton host = Icon(grid, grid.Columns[4]);
-                Assert.Equal(ColorOf(host, "SecondaryForegroundBrush"), GlyphColor(host));
+                Assert.Equal(ColorOf(host, "TextSecondaryBrush"), GlyphColor(host));
 
                 // A press and release on the icon are the icon's alone: they are handled before they reach its header,
                 // which would otherwise sort, resize or move the column.
@@ -277,7 +277,7 @@ namespace XMAT.Tests
                 Assert.True(popup.IsOpen);
                 Assert.Same(grid.Columns[4], popup.Column);
                 Assert.True(host.IsSummaryOpen);
-                Assert.Equal(ColorOf(host, "TabSelectionIndicatorBrush"), GlyphColor(host));
+                Assert.Equal(ColorOf(host, "AccentBrush"), GlyphColor(host));
                 Assert.Equal("a.test", Assert.IsType<ColumnSummaryRow>(Assert.IsType<ListBoxItem>(Keyboard.FocusedElement).DataContext).Label);
                 // Pressing the icon again takes focus back to it and leaves the summary open, so that the click closes it.
                 host.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.MouseDownEvent });
@@ -331,7 +331,7 @@ namespace XMAT.Tests
                 Assert.True(before.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
                 Assert.True(icons[0].IsKeyboardFocused);
                 Assert.Equal(Visibility.Visible, Part(icons[0], "FocusRing").Visibility);
-                Assert.Equal(ColorOf(icons[0], "PrimaryForegroundBrush"), GlyphColor(icons[0]));
+                Assert.Equal(ColorOf(icons[0], "TextPrimaryBrush"), GlyphColor(icons[0]));
 
                 Press(icons[0], Key.Left);
                 Assert.True(icons[0].IsKeyboardFocused);
@@ -390,7 +390,7 @@ namespace XMAT.Tests
                 // Its status bars take the timeline's colors, and No status has no value in the Status filter.
                 var bar = (Border)Item(popup, "404").Template.FindName("Bar", Item(popup, "404"));
                 Assert.Equal(
-                    ((SolidColorBrush)Application.Current.FindResource("TimelineBarClientErrorBrush")).Color,
+                    ((SolidColorBrush)Application.Current.FindResource("WarningFillBrush")).Color,
                     ((SolidColorBrush)bar.Background).Color);
                 Assert.False(Row(popup, "No status").CanSelect);
                 Click(Item(popup, "404"));

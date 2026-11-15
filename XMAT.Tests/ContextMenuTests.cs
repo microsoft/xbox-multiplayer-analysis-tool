@@ -339,7 +339,7 @@ namespace XMAT.Tests
                     Source = new Uri($"pack://application:,,,/XboxMultiplayerAnalysisTool;component/Themes/{theme}Theme.xaml")
                 });
                 var shadow = new MenuShadow();
-                shadow.SetResourceReference(Border.BackgroundProperty, "MenuBackgroundBrush");
+                shadow.SetResourceReference(Border.BackgroundProperty, "SurfaceCanvasBrush");
                 WpfTestHost.Show(window, shadow);
 
                 var effect = Assert.IsType<DropShadowEffect>(shadow.Effect);

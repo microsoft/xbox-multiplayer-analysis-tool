@@ -1,0 +1,19 @@
+{
+  "description": "The base colors that XMAT's color palette (Palette.xaml) is generated from. Each base color becomes a ramp of steps from light to dark and is itself one of the steps (baseStep). To change a color, edit it here and regenerate Palette.xaml as docs/design-system.md describes; don't edit Palette.xaml by hand.",
+  "colors": [
+    { "name": "Blue", "base": "#0078D4", "baseStep": 8, "hueLight": 243, "hueDark": 256, "vivid": 0.85 },
+    { "name": "Green", "base": "#107C10", "baseStep": 9, "hueLight": 146, "hueDark": 143, "vivid": 0.85 },
+    { "name": "Amber", "base": "#9D5D00", "baseStep": 9, "hueLight": 88, "hueDark": 62, "vivid": 2.0 },
+    { "name": "Red", "base": "#C42B1C", "baseStep": 8, "hueLight": 17, "hueDark": 29, "vivid": 0.95 }
+  ],
+  "gray": {
+    "steps": [ 1.00, 0.97, 0.945, 0.92, 0.86, 0.80, 0.72, 0.615, 0.545, 0.45, 0.40, 0.36, 0.322, 0.285, 0.255, 0.19 ],
+    "hue": 286,
+    "tintDark": 0.010
+  },
+  "colorSteps": [ 0.97, 0.94, 0.90, 0.86, 0.80, 0.73, 0.66, 0.58, 0.52, 0.47, 0.42, 0.37 ],
+  "chroma": [
+    [ 0.97, 0.030 ], [ 0.94, 0.045 ], [ 0.90, 0.065 ], [ 0.86, 0.085 ], [ 0.80, 0.115 ], [ 0.73, 0.140 ],
+    [ 0.66, 0.155 ], [ 0.58, 0.165 ], [ 0.52, 0.165 ], [ 0.47, 0.150 ], [ 0.42, 0.115 ], [ 0.37, 0.065 ]
+  ]
+}

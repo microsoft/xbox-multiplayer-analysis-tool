@@ -12,7 +12,7 @@
         <Setter Property="Width" Value="20"/>
         <Setter Property="Height" Value="20"/>
         <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Template">
@@ -25,19 +25,19 @@
                         <Border x:Name="HoverOutline" BorderThickness="1" CornerRadius="3" Visibility="Collapsed"
                                 BorderBrush="{DynamicResource HoverOutlineBrush}"/>
                         <Border x:Name="FocusRing" BorderThickness="1" CornerRadius="3" Visibility="Collapsed"
-                                BorderBrush="{DynamicResource TabSelectionIndicatorBrush}"/>
+                                BorderBrush="{DynamicResource AccentBrush}"/>
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
                             <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsFocusVisible" Value="True">
-                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
                             <Setter TargetName="FocusRing" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsSummaryOpen" Value="True">
-                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource TabSelectionIndicatorBrush}"/>
+                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -53,7 +53,7 @@
          with the table's selected row is filled with the highlight and marked by an accent bar at its left. -->
     <Style TargetType="local:ColumnSummaryView">
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
-        <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="UseLayoutRounding" Value="True"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Template">
@@ -61,7 +61,7 @@
                 <ControlTemplate TargetType="local:ColumnSummaryView">
                     <Border x:Name="PART_Surface" Margin="12,4,12,16" Padding="0,12"
                             Width="{TemplateBinding SurfaceWidth}" HorizontalAlignment="Left" VerticalAlignment="Top"
-                            Background="{DynamicResource PanelBackgroundBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                            Background="{DynamicResource SurfacePanelBrush}" BorderBrush="{DynamicResource BorderDefaultBrush}"
                             BorderThickness="1" CornerRadius="{DynamicResource ControlCornerRadius}">
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="12" ShadowDepth="4" Direction="270" Color="Black"
@@ -75,10 +75,10 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="{Binding Title}" FontSize="{DynamicResource SectionTitleFontSize}" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource HeadingForegroundBrush}" TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource TextHeadingBrush}" TextTrimming="CharacterEllipsis"
                                            VerticalAlignment="Center"/>
                                 <TextBlock Grid.Column="1" Margin="12,0,0,1" VerticalAlignment="Bottom" Text="{Binding Totals}"
-                                           Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+                                           Foreground="{DynamicResource TextSecondaryBrush}"/>
                             </Grid>
                             <ListBox x:Name="PART_Values" ItemsSource="{Binding Rows}" Focusable="False"
                                      AutomationProperties.Name="{Binding AccessibleName}" AutomationProperties.HelpText="{Binding Hint}">
@@ -94,7 +94,7 @@
                                 </ListBox.ItemsPanel>
                                 <ListBox.ItemContainerStyle>
                                     <Style TargetType="ListBoxItem">
-                                        <Setter Property="Foreground" Value="{DynamicResource PrimaryForegroundBrush}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
                                         <Setter Property="FocusVisualStyle" Value="{DynamicResource ItemFocusVisualStyle}"/>
                                         <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
                                         <Setter Property="AutomationProperties.ItemStatus" Value="{Binding ItemStatus}"/>
@@ -126,30 +126,30 @@
                                                                        TextAlignment="Right" VerticalAlignment="Center"/>
                                                             <TextBlock x:Name="Percent" Grid.Column="3" Text="{Binding PercentText}"
                                                                        TextAlignment="Right" VerticalAlignment="Center"
-                                                                       Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+                                                                       Foreground="{DynamicResource TextSecondaryBrush}"/>
                                                         </Grid>
                                                         <Border x:Name="Marker" Width="2" HorizontalAlignment="Left" Visibility="Collapsed"
-                                                                Background="{DynamicResource TabSelectionIndicatorBrush}"/>
+                                                                Background="{DynamicResource AccentBrush}"/>
                                                     </Grid>
                                                     <ControlTemplate.Triggers>
                                                         <DataTrigger Binding="{Binding Bar}" Value="NoStatus">
-                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource TimelineBarNoStatusBrush}"/>
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource NeutralFillBrush}"/>
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding Bar}" Value="Success">
-                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource TimelineBarSuccessBrush}"/>
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource SuccessFillBrush}"/>
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding Bar}" Value="Redirect">
-                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource TimelineBarRedirectBrush}"/>
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource InfoFillBrush}"/>
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding Bar}" Value="ClientError">
-                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource TimelineBarClientErrorBrush}"/>
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource WarningFillBrush}"/>
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding Bar}" Value="ServerError">
-                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource TimelineBarServerErrorBrush}"/>
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource ErrorFillBrush}"/>
                                                         </DataTrigger>
                                                         <!-- The rest of the values. -->
                                                         <DataTrigger Binding="{Binding IsMore}" Value="True">
-                                                            <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+                                                            <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
                                                         </DataTrigger>
                                                         <!-- Only a value that filters the table responds to the pointer. -->
                                                         <MultiDataTrigger>
@@ -157,7 +157,7 @@
                                                                 <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True"/>
                                                                 <Condition Binding="{Binding CanSelect}" Value="True"/>
                                                             </MultiDataTrigger.Conditions>
-                                                            <Setter TargetName="Fill" Property="Background" Value="{DynamicResource ButtonHoverBackgroundBrush}"/>
+                                                            <Setter TargetName="Fill" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
                                                             <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
                                                         </MultiDataTrigger>
                                                         <!-- The value of the table's selected row; a neutral bar takes the accent color. -->
@@ -170,7 +170,7 @@
                                                                 <Condition Binding="{Binding IsCurrent}" Value="True"/>
                                                                 <Condition Binding="{Binding Bar}" Value="Neutral"/>
                                                             </MultiDataTrigger.Conditions>
-                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource TabSelectionIndicatorBrush}"/>
+                                                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource AccentBrush}"/>
                                                         </MultiDataTrigger>
                                                         <!-- High contrast fills that row with the system highlight, so everything on it takes the
                                                              highlight text color. -->
@@ -192,9 +192,9 @@
                                     </Style>
                                 </ListBox.ItemContainerStyle>
                             </ListBox>
-                            <Border Height="1" Margin="0,8" Background="{DynamicResource SurfaceBorderBrush}"/>
+                            <Border Height="1" Margin="0,8" Background="{DynamicResource BorderSubtleBrush}"/>
                             <TextBlock Margin="12,0" Text="{Binding Hint}" TextWrapping="Wrap"
-                                       Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+                                       Foreground="{DynamicResource TextSecondaryBrush}"/>
                         </StackPanel>
                     </Border>
                     <ControlTemplate.Triggers>

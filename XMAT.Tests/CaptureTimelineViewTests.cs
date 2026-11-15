@@ -361,8 +361,8 @@ namespace XMAT.Tests
                 ((RadioButton)view.FindName("ByHostMode")).IsChecked = true;
                 WpfTestHost.Pump();
                 var label = Assert.Single(Canvas(view, "TimelineCanvas").Children.OfType<TextBlock>());
-                window.Resources["PrimaryForegroundBrush"] = Brushes.Blue;
-                window.Resources["SecondaryForegroundBrush"] = Brushes.Red;
+                window.Resources["TextPrimaryBrush"] = Brushes.Blue;
+                window.Resources["TextSecondaryBrush"] = Brushes.Red;
                 WpfTestHost.Pump();
 
                 Assert.Same(Brushes.Blue, label.Foreground);
@@ -385,7 +385,7 @@ namespace XMAT.Tests
             {
                 var statuses = new Dictionary<string, string>
                 {
-                    [""] = "NoStatus", ["204"] = "Success", ["302"] = "Redirect", ["404"] = "ClientError", ["503"] = "ServerError"
+                    [""] = "Neutral", ["204"] = "Success", ["302"] = "Info", ["404"] = "Warning", ["503"] = "Error"
                 };
                 var view = new CaptureTimelineView
                 {
@@ -398,11 +398,11 @@ namespace XMAT.Tests
                 foreach (Border bar in Bars(view))
                 {
                     string status = statuses[((ProxyConnectionModel)bar.Tag).Status];
-                    Assert.Same(view.FindResource($"TimelineBar{status}Brush"), bar.Background);
-                    Assert.Same(view.FindResource($"TimelineBar{status}ForegroundBrush"), ((TextBlock)bar.Child).Foreground);
+                    Assert.Same(view.FindResource($"{status}FillBrush"), bar.Background);
+                    Assert.Same(view.FindResource($"{status}OnFillBrush"), ((TextBlock)bar.Child).Foreground);
                 }
-                window.Resources["TimelineBarServerErrorBrush"] = Brushes.Purple;
-                window.Resources["TimelineBarServerErrorForegroundBrush"] = Brushes.Yellow;
+                window.Resources["ErrorFillBrush"] = Brushes.Purple;
+                window.Resources["ErrorOnFillBrush"] = Brushes.Yellow;
                 WpfTestHost.Pump();
 
                 Border serverError = Bars(view).Single(bar => ((ProxyConnectionModel)bar.Tag).Status == "503");

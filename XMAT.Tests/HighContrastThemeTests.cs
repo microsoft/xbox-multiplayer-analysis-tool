@@ -13,7 +13,10 @@ namespace XMAT.Tests
         private static readonly string[] ThemeFiles =
             { "LightTheme", "DarkTheme", "Original/LightTheme", "Original/DarkTheme" };
 
-        private static readonly string[] TimelineStatuses = { "NoStatus", "Success", "Redirect", "ClientError", "ServerError" };
+        private static readonly string[] Statuses = { "Neutral", "Success", "Info", "Warning", "Error" };
+
+        // The status role that colors each analysis issue level in the new look: Info counts are good news.
+        private static readonly string[] IssueRoles = { "Error", "Warning", "Success" };
 
         private static readonly string[] IssueLevels = { "Error", "Warning", "Info" };
 
@@ -108,14 +111,27 @@ namespace XMAT.Tests
                 // Button triggers change only the fill, so text must stay legible on the hover and pressed fills.
                 var pairs = new List<(string Text, string Background)>
                 {
+                    ("TextPrimaryBrush", "SurfacePanelBrush"),
+                    ("TextControlBrush", "SurfaceHoverBrush"),
+                    ("TextControlBrush", "AccentSoftBrush"),
+                    ("AccentOnFillBrush", "AccentFillBrush"),
+                    ("AccentOnFillBrush", "CaptureActionHoverBrush")
+                };
+                pairs.AddRange(Statuses.Select(status => ($"{status}OnFillBrush", $"{status}FillBrush")));
+                pairs.AddRange(IssueRoles.SelectMany(role => new[]
+                {
+                    ($"{role}TextBrush", $"{role}SoftBrush"),
+                    ($"{role}TextBrush", "SurfaceHoverBrush")
+                }));
+
+                // The original look's names; remove these with the original look.
+                pairs.AddRange(new[]
+                {
                     ("PrimaryForegroundBrush", "PanelBackgroundBrush"),
                     ("ButtonForegroundBrush", "ButtonHoverBackgroundBrush"),
                     ("ButtonForegroundBrush", "ButtonPressedBackgroundBrush"),
-                    ("ActiveSelectionForegroundBrush", "ActiveSelectionBrush"),
-                    ("CaptureActionForegroundBrush", "CaptureActionHoverBrush")
-                };
-                pairs.AddRange(TimelineStatuses.Select(status =>
-                    ($"TimelineBar{status}ForegroundBrush", $"TimelineBar{status}Brush")));
+                    ("ActiveSelectionForegroundBrush", "ActiveSelectionBrush")
+                });
                 pairs.AddRange(IssueLevels.SelectMany(level => new[]
                 {
                     ($"Issue{level}ForegroundBrush", $"Issue{level}BackgroundBrush"),
@@ -126,9 +142,9 @@ namespace XMAT.Tests
                     double contrast = ContrastRatio(Find(text), Find(background));
                     Assert.True(contrast >= 4.5, $"{name}: {text} on {background} is {contrast:F2}:1");
                 }
-                foreach (string status in TimelineStatuses)
+                foreach (string status in Statuses)
                 {
-                    double contrast = ContrastRatio(Find($"TimelineBar{status}Brush"), Find("TextAreaBackgroundBrush"));
+                    double contrast = ContrastRatio(Find($"{status}FillBrush"), Find("SurfaceWellBrush"));
                     Assert.True(contrast >= 3, $"{name}: {status} bar on the timeline is {contrast:F2}:1");
                 }
             });
@@ -143,22 +159,21 @@ namespace XMAT.Tests
             {
                 var theme = Theme(name);
                 Brush Find(string key) => (Brush)theme[key];
-                foreach (string status in TimelineStatuses)
+                foreach (string status in Statuses)
                 {
-                    AssertContrast(name, Find($"TimelineBar{status}ForegroundBrush"), Find($"TimelineBar{status}Brush"), 4.5);
-                    AssertContrast(name, Find($"TimelineBar{status}Brush"), Find("TextAreaBackgroundBrush"), 3);
+                    AssertContrast(name, Find($"{status}OnFillBrush"), Find($"{status}FillBrush"), 4.5);
+                    AssertContrast(name, Find($"{status}FillBrush"), Find("SurfaceWellBrush"), 3);
                 }
-                foreach (string level in IssueLevels)
+                foreach (string role in IssueRoles)
                 {
-                    foreach (string background in new[]
-                        { $"Issue{level}BackgroundBrush", "ButtonHoverBackgroundBrush", "ButtonPressedBackgroundBrush" })
+                    foreach (string background in new[] { $"{role}SoftBrush", "SurfaceHoverBrush", "AccentSoftBrush" })
                     {
-                        AssertContrast(name, Find($"Issue{level}ForegroundBrush"), Find(background), 4.5);
+                        AssertContrast(name, Find($"{role}TextBrush"), Find(background), 4.5);
                     }
                 }
                 foreach (string expander in new[] { "ExpanderHeaderBrush", "ExpanderSubHeaderBrush", "ExpanderDetailBrush" })
                 {
-                    AssertContrast(name, Find("PrimaryForegroundBrush"), Find(expander), 4.5);
+                    AssertContrast(name, Find("TextPrimaryBrush"), Find(expander), 4.5);
                 }
             });
         }
@@ -184,8 +199,8 @@ namespace XMAT.Tests
         // Shows WINDOW in the high contrast theme with PALETTE standing in for a contrast theme's system colors.
         private static void UseHighContrastTheme(Window window, Color[] palette)
         {
-            window.Resources.Remove("PrimaryForegroundBrush");
-            window.Resources.Remove("SecondaryForegroundBrush");
+            window.Resources.Remove("TextPrimaryBrush");
+            window.Resources.Remove("TextSecondaryBrush");
             window.Resources.MergedDictionaries.Add(Theme("HighContrastTheme"));
             for (int index = 0; index < PaletteKeys.Length; index++)
             {

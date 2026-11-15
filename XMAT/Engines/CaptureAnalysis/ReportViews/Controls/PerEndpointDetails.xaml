@@ -13,7 +13,7 @@
             <StackPanel x:Name="EndpointHeader" Orientation="Horizontal" Background="Transparent">
                 <StackPanel.ContextMenu>
                     <ContextMenu Background="{DynamicResource MenuBackgroundBrush}"
-                                 Foreground="{DynamicResource MenuForegroundBrush}"/>
+                                 Foreground="{DynamicResource TextPrimaryBrush}"/>
                 </StackPanel.ContextMenu>
                 <TextBlock Text="{Binding DisplayName}" />
             </StackPanel>
