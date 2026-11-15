@@ -56,10 +56,6 @@ namespace XMAT
             nameof(OverflowButtonWidth), typeof(double), typeof(OverflowTabPanel),
             new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsMeasure));
 
-        // Set on a tab control, usually by its style, to style the More button in the control's template.
-        public static readonly DependencyProperty OverflowButtonStyleProperty = DependencyProperty.RegisterAttached(
-            "OverflowButtonStyle", typeof(Style), typeof(OverflowTabPanel), new FrameworkPropertyMetadata(null));
-
         private readonly List<UIElement> _overflowItems = new();
 
         // The rows that Wraps lays out, and the height they share.
@@ -109,12 +105,6 @@ namespace XMAT
         public static bool GetIsCompact(DependencyObject element) => (bool)element.GetValue(IsCompactProperty);
 
         public static bool GetIsOverflowItem(DependencyObject element) => (bool)element.GetValue(IsOverflowItemProperty);
-
-        public static Style GetOverflowButtonStyle(DependencyObject element) =>
-            (Style)element.GetValue(OverflowButtonStyleProperty);
-
-        public static void SetOverflowButtonStyle(DependencyObject element, Style value) =>
-            element.SetValue(OverflowButtonStyleProperty, value);
 
         protected override Size MeasureOverride(Size availableSize)
         {

@@ -53,6 +53,8 @@ namespace XMAT.Tests
                 WpfTestHost.Pump();
                 Assert.True(panel.HasOverflow);
                 Assert.Equal(Visibility.Visible, more.Visibility);
+                // More reads like an inactive tab, with a chevron for its menu.
+                Assert.Same(tabs.FindResource("InspectorOverflowButtonStyle"), more.Style);
                 var inRow = Items(tabs).Where(tab => !OverflowTabPanel.GetIsOverflowItem(tab)).ToList();
                 var outOfRow = Items(tabs).Where(tab => OverflowTabPanel.GetIsOverflowItem(tab)).ToList();
                 Assert.Contains(Items(tabs)[0], inRow);

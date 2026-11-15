@@ -1617,11 +1617,6 @@
                 </Setter>
             </Style>
 
-            <Style x:Key="FormatOverflowButtonStyle" TargetType="ToggleButton"
-                   BasedOn="{StaticResource InspectorOverflowButtonStyle}">
-                <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
-            </Style>
-
             <!-- More at the end of the capture tab row reads like an inactive capture tab, with a chevron for its menu. -->
             <Style x:Key="CaptureOverflowButtonStyle" TargetType="ToggleButton">
                 <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
@@ -1674,7 +1669,6 @@
                 <Setter Property="ItemContainerStyle" Value="{StaticResource InspectorTabItemStyle}"/>
                 <Setter Property="Padding" Value="{DynamicResource InspectorContentPadding}"/>
                 <Setter Property="BorderThickness" Value="0"/>
-                <Setter Property="local:OverflowTabPanel.OverflowButtonStyle" Value="{DynamicResource InspectorOverflowButtonStyle}"/>
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="{x:Type TabControl}">
@@ -1693,7 +1687,7 @@
                                                              OverflowPanel="{Binding ElementName=HeaderPanel}"
                                                              Canvas.Left="{Binding OverflowButtonOffset, ElementName=HeaderPanel}"
                                                              Height="{Binding ActualHeight, ElementName=HeaderPanel}"
-                                                             Style="{Binding (local:OverflowTabPanel.OverflowButtonStyle), RelativeSource={RelativeSource TemplatedParent}}"/>
+                                                             Style="{DynamicResource InspectorOverflowButtonStyle}"/>
                                 </Canvas>
                                 <Border x:Name="ContentPanel" Grid.Row="1" Background="Transparent"
                                         Padding="{TemplateBinding Padding}" BorderThickness="0"
@@ -1716,7 +1710,6 @@
                    BasedOn="{StaticResource InspectorTabControlStyle}">
                 <Setter Property="ItemContainerStyle" Value="{StaticResource FormatTabItemStyle}"/>
                 <Setter Property="Padding" Value="0"/>
-                <Setter Property="local:OverflowTabPanel.OverflowButtonStyle" Value="{DynamicResource FormatOverflowButtonStyle}"/>
             </Style>
 
             <Style TargetType="DataGridColumnHeader">
