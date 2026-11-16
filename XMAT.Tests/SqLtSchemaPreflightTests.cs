@@ -190,7 +190,9 @@ namespace XMAT.Tests
         [InlineData("ResponseTrailers INTEGER")]
         [InlineData("ResponseBodyTruncatedAt TEXT")]
         [InlineData("ResponseBodyTruncatedAt")]
-        public void Preflight_RejectsMistypedKnownOptionalResponseColumns(string wrongDeclaration)
+        [InlineData("HeadersUninspectable TEXT")]
+        [InlineData("HeadersUninspectable")]
+        public void Preflight_RejectsMistypedKnownOptionalResponseAndHeaderColumns(string wrongDeclaration)
         {
             using var directory = new TestDirectory();
             string path = HostileSqliteSchemas.CreateOrdinaryCapture(

@@ -1787,6 +1787,49 @@ namespace XMAT.Tests
             return response;
         }
 
+        // A capture table holds live sessions beside imported ones, as XMAT's does. A live session is recorded with no
+        // known header loss, and adding it changes no other row: an imported session from an archive that doesn't record
+        // its header history keeps an unknown one, and one whose header lines the import left out stays uninspectable even
+        // though its archive says that nothing was lost.
+        [Fact]
+        public async Task LiveSessions_RecordNoKnownHeaderLoss_AndLeaveImportedHistoriesAsTheyAre()
+        {
+            await using var capture = new ProxiedCapture();
+            foreach ((bool malformedLine, string history) in new[] { (false, (string)null), (true, "0") })
+            {
+                ProxyConnectionModel imported = ImportedFrame(malformedLine, history);
+                capture.Table.AddRow(imported.ToDataTableValues("imported", capture.Table));
+            }
+
+            await capture.RequestAsync("/live");
+
+            Assert.Equal(
+                new object[] { -1L, 1L, 0L },
+                capture.Table.Dataset.DataRecords.Select(row =>
+                    ((IRawDataRecord)row).TryReadRaw("HeadersUninspectable", out object stored) ? stored : null));
+        }
+
+        // One frame of a Fiddler archive, imported: a GET whose request may have a malformed header line, with the given
+        // x-xmat-headers-uninspectable flag or none.
+        private static ProxyConnectionModel ImportedFrame(bool malformedLine, string history)
+        {
+            var flags = new List<KeyValuePair<string, string>>
+            {
+                new("x-clientip", Operations.Analysis.ProcessCaptures.SazClientIp),
+            };
+            if (history != null)
+            {
+                flags.Add(new("x-xmat-headers-uninspectable", history));
+            }
+            using var request = new MemoryStream(System.Text.Encoding.ASCII.GetBytes(
+                "GET / HTTP/1.1\r\nHost: example.test\r\n" + (malformedLine ? "x session-token: value\r\n" : "") + "\r\n"));
+            using var metadata = new MemoryStream(
+                System.Text.Encoding.UTF8.GetBytes(Operations.Analysis.ProcessCaptures.Metadata(1, flags)));
+            using var response = new MemoryStream(
+                System.Text.Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"));
+            return FiddlerSazHandler.FromFiddlerFrame(1, request, metadata, response);
+        }
+
         // A controller attached to a real proxy that is not listening, with a capture table of its own: the proxy's raise
         // methods run the controller's handlers as they do for live traffic.
         private sealed class ProxiedCapture : IAsyncDisposable
@@ -1819,6 +1862,7 @@ namespace XMAT.Tests
 
             internal WebServiceProxy Proxy { get; }
             internal WebServiceDeviceCaptureController Controller { get; }
+            internal IDataTable Table => _table;
             internal IDataRecord Row => Assert.Single(_table.Dataset.DataRecords);
             internal IReadOnlyCollection<string> Warnings => Logged(LogLevel.WARN);
             internal IReadOnlyCollection<string> Errors => Logged(LogLevel.ERROR);
@@ -2020,29 +2064,29 @@ namespace XMAT.Tests
             WebServiceCaptureMethod.TableName,
             WebProxyCaptureSchema.CreateFields());
 
-        private static long AddConnectionRow(IDataTable table, long requestNumber, long connectionId) => table.AddRow(
-            "test-console",
-            requestNumber,
-            connectionId,
-            "2026-11-03T20:00:00.0000000Z",
-            string.Empty,
-            "https",
-            "example.test",
-            "443",
-            "GET",
-            "/",
-            string.Empty,
-            "GET / HTTP/1.1",
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            "test-console",
-            string.Empty,
-            0L,
-            string.Empty,
-            string.Empty,
-            string.Empty,
-            0L);
+        // A row given by column name; every other column of the current schema gets its default.
+        private static long AddConnectionRow(IDataTable table, long requestNumber, long connectionId)
+        {
+            var values = new Dictionary<string, object>(StringComparer.Ordinal)
+            {
+                [WebServiceCaptureMethod.FieldKey_DeviceName] = "test-console",
+                [WebServiceCaptureMethod.FieldKey_RequestNumber] = requestNumber,
+                [WebServiceCaptureMethod.FieldKey_ConnectionId] = connectionId,
+                [WebServiceCaptureMethod.FieldKey_RequestTimestamp] = "2026-11-03T20:00:00.0000000Z",
+                [WebServiceCaptureMethod.FieldKey_RequestScheme] = "https",
+                [WebServiceCaptureMethod.FieldKey_RequestHost] = "example.test",
+                [WebServiceCaptureMethod.FieldKey_RequestPort] = "443",
+                [WebServiceCaptureMethod.FieldKey_RequestMethod] = "GET",
+                [WebServiceCaptureMethod.FieldKey_RequestPath] = "/",
+                [WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders] = "GET / HTTP/1.1",
+                [WebServiceCaptureMethod.FieldKey_ClientIP] = "test-console",
+            };
+            return table.AddRow(WebProxyCaptureSchema.Fields
+                .Select(field => values.TryGetValue(field.Name, out object value)
+                    ? value
+                    : field.ValueType == typeof(long) ? 0L : string.Empty)
+                .ToArray());
+        }
 
         private static void SetPrivateField(object target, string name, object value)
         {

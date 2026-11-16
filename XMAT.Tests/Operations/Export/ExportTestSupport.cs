@@ -148,6 +148,7 @@ namespace XMAT.Tests.Operations.Export
                 [WebProxyCaptureSchema.ClientProcessStatus] = "local",
                 [WebProxyCaptureSchema.ResponseTrailers] = string.Empty,
                 [WebProxyCaptureSchema.ResponseBodyTruncatedAt] = 0L,
+                ["HeadersUninspectable"] = 0L,
             };
         }
 

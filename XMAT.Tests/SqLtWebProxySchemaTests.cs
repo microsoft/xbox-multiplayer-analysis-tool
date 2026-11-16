@@ -28,7 +28,7 @@ namespace XMAT.Tests
                 BindingFlags.NonPublic).Invoke(method, null);
 
             IFieldDefinition[] fields = method.WebProxyConnectionsTable.Dataset.FieldDefs.ToArray();
-            Assert.Equal(22, fields.Length);
+            Assert.Equal(23, fields.Length);
             Assert.Collection(
                 fields.Skip(16),
                 field => AssertField(field, WebProxyCaptureSchema.ClientProcessName, FieldValueType.String),
@@ -36,7 +36,8 @@ namespace XMAT.Tests
                 field => AssertField(field, WebProxyCaptureSchema.ClientProcessStartTime, FieldValueType.String),
                 field => AssertField(field, WebProxyCaptureSchema.ClientProcessStatus, FieldValueType.String),
                 field => AssertField(field, WebProxyCaptureSchema.ResponseTrailers, FieldValueType.String),
-                field => AssertField(field, WebProxyCaptureSchema.ResponseBodyTruncatedAt, FieldValueType.Integer));
+                field => AssertField(field, WebProxyCaptureSchema.ResponseBodyTruncatedAt, FieldValueType.Integer),
+                field => AssertField(field, "HeadersUninspectable", FieldValueType.Integer));
         }
 
         private static void AssertField(IFieldDefinition field, string name, FieldValueType type)

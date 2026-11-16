@@ -1189,6 +1189,16 @@ namespace XMAT.Tests
                 Assert.Equal(
                     "{\"ok\":true}",
                     Encoding.ASCII.GetString(record.ResponseBody));
+                // The text keeps only valid fields; the capture's row marks the session whose lines the import left out.
+                Assert.All(
+                    (record.RequestLineAndHeaders + record.ResponseLineAndHeaders)
+                        .Split("\r\n")
+                        .Where(line => line.Length != 0 && !line.StartsWith("POST ", StringComparison.Ordinal) &&
+                            !line.StartsWith("HTTP/", StringComparison.Ordinal)),
+                    line => Assert.Contains(": ", line, StringComparison.Ordinal));
+                Assert.True(((IRawDataRecord)Assert.Single(RowsForDevice(table, controller.DeviceName)))
+                    .TryReadRaw("HeadersUninspectable", out object uninspectable));
+                Assert.Equal(1L, uninspectable);
                 Assert.Equal(
                     Localization.GetLocalizedString(
                         "WEBCAP_IMPORT_SKIPPED_DATA_NOTICE"),
@@ -2423,31 +2433,34 @@ namespace XMAT.Tests
             string responseBody,
             long requestNumber = 1)
         {
-            return new object[]
+            var values = new Dictionary<string, object>(StringComparer.Ordinal)
             {
-                deviceName,
-                requestNumber,
-                requestNumber,
-                "2026-01-01T00:00:00.0000000Z",
-                "2026-01-01T00:00:00.1000000Z",
-                "https",
-                host,
-                "443",
-                "GET",
-                requestPath,
-                "200",
-                $"GET https://{host}{requestPath} HTTP/1.1\r\nHost: {host}\r\n\r\n",
-                string.Empty,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n",
-                Convert.ToBase64String(Encoding.UTF8.GetBytes(responseBody)),
-                "10.0.0.1",
-                string.Empty,
-                0L,
-                string.Empty,
-                string.Empty,
-                string.Empty,
-                0L
+                [WebServiceCaptureMethod.FieldKey_DeviceName] = deviceName,
+                [WebServiceCaptureMethod.FieldKey_RequestNumber] = requestNumber,
+                [WebServiceCaptureMethod.FieldKey_ConnectionId] = requestNumber,
+                [WebServiceCaptureMethod.FieldKey_RequestTimestamp] = "2026-01-01T00:00:00.0000000Z",
+                [WebServiceCaptureMethod.FieldKey_ResponseTimestamp] = "2026-01-01T00:00:00.1000000Z",
+                [WebServiceCaptureMethod.FieldKey_RequestScheme] = "https",
+                [WebServiceCaptureMethod.FieldKey_RequestHost] = host,
+                [WebServiceCaptureMethod.FieldKey_RequestPort] = "443",
+                [WebServiceCaptureMethod.FieldKey_RequestMethod] = "GET",
+                [WebServiceCaptureMethod.FieldKey_RequestPath] = requestPath,
+                [WebServiceCaptureMethod.FieldKey_RequestStatus] = "200",
+                [WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders] =
+                    $"GET https://{host}{requestPath} HTTP/1.1\r\nHost: {host}\r\n\r\n",
+                [WebServiceCaptureMethod.FieldKey_RequestBody] = string.Empty,
+                [WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders] =
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n",
+                [WebServiceCaptureMethod.FieldKey_ResponseBody] =
+                    Convert.ToBase64String(Encoding.UTF8.GetBytes(responseBody)),
+                [WebServiceCaptureMethod.FieldKey_ClientIP] = "10.0.0.1",
             };
+            // Every other column of the current schema gets its default.
+            return WebProxyCaptureSchema.Fields
+                .Select(field => values.TryGetValue(field.Name, out object value)
+                    ? value
+                    : field.ValueType == typeof(long) ? 0L : string.Empty)
+                .ToArray();
         }
 
         private static void AssertCaptureRow(

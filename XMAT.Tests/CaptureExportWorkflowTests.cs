@@ -326,6 +326,105 @@ namespace XMAT.Tests
             Assert.DoesNotContain("NO_IMPL_", message, StringComparison.Ordinal);
         }
 
+        // Sessions loaded from a capture saved before XMAT recorded header history have an unknown history. The consent to
+        // a sanitized archive warns with the number of them that the selection exports, from the snapshot's metadata
+        // alone, and the completion message reports how many the archive holds. The sessions that the selection leaves
+        // out count in neither, and the export still succeeds.
+        [Fact]
+        public async Task SanitizedExport_WarnsOfUnknownHeaderHistoryBeforeAndAfterWriting()
+        {
+            Localization.LoadLanguage("en-us");
+            using var directory = new CliTestDirectory();
+            using var database = new SqLtReadonlyDatabase(ProcessCaptures.WriteXmatcap(
+                directory.Root, "legacy.xmatcap", ProcessCaptures.MixedSessions, legacy: true));
+            var controller = new WebServiceDeviceCaptureController(ProcessCaptures.Device, DeviceType.LocalPC, true);
+            controller.LoadCaptureDataset(database.TableByName(WebServiceCaptureMethod.TableName).Dataset);
+            var app = new CaptureAppModel();
+            ICaptureDeviceContext tab = Tab(app, ProcessCaptures.Device, controller);
+            var dialogs = new Dialogs
+            {
+                Destination = new(Path.Join(directory.Root, "legacy.saz"), CaptureExportFormat.SanitizedSaz, false),
+            };
+
+            await CaptureExportWorkflow.For(dialogs).RunAsync(
+                app, tab, Selection(process: ProcessFilterTestSupport.Spec(new[] { "Game.exe" })), sanitizedOnly: false);
+
+            Assert.Equal(
+                new[] { "confirm " + ProcessCaptures.Device, "destination", "consent", "progress", "result" },
+                dialogs.Calls);
+            Assert.Equal(4L, dialogs.UnknownHeaderProvenanceSessions);
+            Assert.Equal(OperationOutcome.Succeeded, dialogs.Result.Outcome);
+            Assert.Equal(4, SazArchive.UnknownHeaderProvenanceSessions(dialogs.Result.Value.Sanitization));
+            Assert.Equal(
+                "export.sanitization.header-provenance-unknown",
+                Assert.Single(dialogs.Result.Diagnostics).Code);
+            Assert.Contains(
+                "Header history is unknown for 4 exported sessions. Earlier processing may have discarded context needed " +
+                    "to recognize secrets. Sanitization inspected the data available; review the archive before sharing.",
+                MainWindow.ExportResultMessage(dialogs.Result),
+                StringComparison.Ordinal);
+        }
+
+        // The consent to a sanitized archive first warns how many of the sessions to export have an unknown header history,
+        // and is the usual question alone when none has.
+        [Fact]
+        public void SanitizedConsent_WarnsFirstOfUnknownHeaderHistory()
+        {
+            Localization.LoadLanguage("en-us");
+            MethodInfo consent = typeof(MainWindow).GetMethod(
+                "SanitizedExportConfirmation", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.NotNull(consent);
+
+            var none = (string)consent.Invoke(null, new object[] { 0L });
+            var some = (string)consent.Invoke(null, new object[] { 3L });
+
+            string question = Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM");
+            Assert.Equal(question, none);
+            Assert.StartsWith(
+                "Header history is unknown for 3 of the sessions to export. Earlier processing may have discarded context " +
+                    "needed to recognize secrets.",
+                some,
+                StringComparison.Ordinal);
+            Assert.EndsWith(question, some, StringComparison.Ordinal);
+        }
+
+        // The completion message reports a sanitized archive's sessions whose header history is unknown only when the
+        // archive was published, also when cleanup failed afterwards; a failed or cancelled export never claims that
+        // sessions were exported.
+        [Theory]
+        [InlineData(null, true)]
+        [InlineData("export.cleanup.failed", true)]
+        [InlineData(CaptureExportErrorCodes.WriteFailed, false)]
+        [InlineData("export.cancelled", false)]
+        public void ResultMessage_ReportsUnknownHeaderHistoryOnlyForAPublishedArchive(string code, bool published)
+        {
+            Localization.LoadLanguage("en-us");
+            var sanitization = new SanitizedExportSummary { Sessions = 3 };
+            SazArchive.SetUnknownHeaderProvenanceSessions(sanitization, 2);
+            var value = new ExportCaptureResult(
+                CaptureExportFormat.SanitizedSaz, Selection(), new CaptureExportCounts(3, 3, 3, 3, published ? 3 : 0, 0, 0, 0),
+                null, null, sanitization, "records", null, published ? 1L : null, published ? "sha256" : null, published,
+                published ? true : null);
+            OperationResult<ExportCaptureResult> result = code switch
+            {
+                null => OperationResult<ExportCaptureResult>.Success(value),
+                "export.cancelled" => new OperationResult<ExportCaptureResult>(
+                    OperationOutcome.Cancelled,
+                    value,
+                    new[] { new OperationDiagnostic(code, OperationDiagnosticSeverity.Info, "Operation text.") }),
+                _ => new OperationResult<ExportCaptureResult>(
+                    code == "export.cleanup.failed" ? OperationOutcome.CleanupFailed : OperationOutcome.Failed,
+                    value,
+                    new[] { new OperationDiagnostic(code, OperationDiagnosticSeverity.Error, "Operation text.") }),
+            };
+
+            string message = MainWindow.ExportResultMessage(result);
+
+            Assert.Equal(
+                published,
+                message.Contains("Header history is unknown for 2 exported sessions.", StringComparison.Ordinal));
+        }
+
         private static ICaptureDeviceContext Tab(CaptureAppModel app, string name, IDeviceCaptureController controller = null)
         {
             var tab = new TestCaptureContext(controller, name, readOnly: false, DeviceType.LocalPC);
@@ -432,6 +531,7 @@ namespace XMAT.Tests
             internal bool Consent { get; init; } = true;
             internal bool AllowUnprotected { get; init; }
             internal CaptureExportCounts Counts { get; private set; }
+            internal long? UnknownHeaderProvenanceSessions { get; private set; }
             internal OperationResult<ExportCaptureResult> Result { get; private set; }
 
             public Task ShowBusyAsync() => Record("busy", Task.CompletedTask);
@@ -447,6 +547,13 @@ namespace XMAT.Tests
                     Task.FromResult(Destinations.Count > 0 ? Destinations.Dequeue() : Destination));
 
             public Task<bool> ConfirmSanitizedAsync() => Record("consent", Task.FromResult(Consent));
+
+            // The consent with the number of sessions to export whose header history is unknown, which it keeps.
+            public Task<bool> ConfirmSanitizedAsync(long unknownHeaderProvenanceSessions)
+            {
+                UnknownHeaderProvenanceSessions = unknownHeaderProvenanceSessions;
+                return Record("consent", Task.FromResult(Consent));
+            }
 
             public Task<bool> ConfirmUnprotectedAsync(string path) =>
                 Record("unprotected " + path, Task.FromResult(AllowUnprotected));

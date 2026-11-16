@@ -991,6 +991,7 @@ namespace XMAT.Operations.Analysis
                         model.ClientIP ?? string.Empty,
                     [WebProxyCaptureSchema.ResponseTrailers] = model.ResponseTrailers ?? string.Empty,
                     [WebProxyCaptureSchema.ResponseBodyTruncatedAt] = model.ResponseBodyTruncatedAt,
+                    [WebProxyCaptureSchema.HeadersUninspectable] = (long)model.HeaderProvenance,
                 };
                 foreach (IFieldValue field in ClientProcessRecordCodec.ToFields(model.ClientProcess))
                 {

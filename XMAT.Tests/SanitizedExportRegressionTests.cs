@@ -467,6 +467,66 @@ namespace XMAT.Tests
             }
         }
 
+        // Response trailers are inspected under the export's cancellation, which reaches the export as cancellation
+        // rather than as an opaque session.
+        [Fact]
+        public void CancellationWhileInspectingTrailers_PropagatesInsteadOfMakingTheSessionOpaque()
+        {
+            using var cancellation = new CancellationTokenSource();
+            var sanitizer = new SazSanitizer(cancellation.Token);
+            var inspectTrailers = typeof(SazSanitizer).GetMethod("InspectTrailers", BindingFlags.Instance | BindingFlags.NonPublic);
+            cancellation.Cancel();
+
+            var exception = Assert.Throws<TargetInvocationException>(() => inspectTrailers.Invoke(sanitizer,
+                new object[] { "x-checksum: abc123\r\nx-session-token: CANCELLED-CANARY\r\n", 1024L * 1024 }));
+
+            Assert.IsAssignableFrom<OperationCanceledException>(exception.InnerException);
+            Assert.False((bool)typeof(SazSanitizer).GetProperty("OpaqueSession",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(sanitizer));
+        }
+
+        // Rendering a chunked body checks its trailer section too: a section that can't be read through, or a line that
+        // isn't a valid field, makes the session opaque even when only rendering reaches it. A valid section is checked
+        // without learning its values or counting them as redactions.
+        [Theory]
+        [InlineData("valid")]
+        [InlineData("long-line")]
+        [InlineData("trailing-data")]
+        [InlineData("no-final-crlf")]
+        [InlineData("unterminated-line")]
+        [InlineData("malformed-field")]
+        [InlineData("invalid-value")]
+        public void RenderingAChunkedTrailerSection_ChecksItWithoutCountingItsValues(string shape)
+        {
+            var sanitizer = new SazSanitizer();
+            var headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n";
+            var section = shape switch
+            {
+                "valid" => "0\r\nx-session-token: RENDER-CANARY\r\n\r\n",
+                "long-line" => "0\r\nx-padding: " + new string('a', 9000) + "\r\n\r\n",
+                "trailing-data" => "0\r\n\r\nextra",
+                "no-final-crlf" => "0\r\nx-session-token: RENDER-CANARY\r\n",
+                "unterminated-line" => "0\r\nx-session-token: RENDER-CANARY",
+                "malformed-field" => "0\r\nx session token: RENDER-CANARY\r\n\r\n",
+                _ => "0\r\nx-session-token: RENDER-CANARY\u007F\r\n\r\n",
+            };
+            var body = Encoding.Latin1.GetBytes("18\r\n{\"keep\":\"public-marker\"}\r\n" + section);
+            var inspect = typeof(SazSanitizer).GetMethod("InspectMessage", BindingFlags.Instance | BindingFlags.NonPublic);
+            var render = typeof(SazSanitizer).GetMethod("RenderMessage", BindingFlags.Instance | BindingFlags.NonPublic);
+            var inspection = inspect.Invoke(sanitizer, new object[] { headers, Array.Empty<byte>(), false, "GET" });
+
+            var result = (SanitizedHttpMessage)render.Invoke(sanitizer,
+                new object[] { headers, body, false, "GET", inspection });
+
+            Assert.Equal(shape != "valid", (bool)typeof(SazSanitizer).GetProperty("OpaqueSession",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(sanitizer));
+            if (shape == "valid")
+            {
+                Assert.Contains("public-marker", Encoding.UTF8.GetString(result.Body));
+                Assert.Equal(0, sanitizer.Summary.RedactedValues);
+            }
+        }
+
         private static string Request(string type, string extra = "") =>
             "POST / HTTP/1.1\r\nContent-Type: " + type + "\r\n" + extra + "\r\n";
     }

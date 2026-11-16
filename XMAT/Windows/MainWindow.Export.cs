@@ -65,13 +65,21 @@ namespace XMAT
             return Task.FromResult(new CaptureExportDestination(dialog.FileName, format, File.Exists(dialog.FileName)));
         }
 
-        Task<bool> ICaptureExportDialogService.ConfirmSanitizedAsync() =>
+        Task<bool> ICaptureExportDialogService.ConfirmSanitizedAsync(long unknownHeaderProvenanceSessions) =>
             Task.FromResult(MessageBox.Show(
                 this,
-                Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM"),
+                SanitizedExportConfirmation(unknownHeaderProvenanceSessions),
                 Localization.GetLocalizedString("EXPORT_SANITIZED_TITLE"),
                 MessageBoxButton.OKCancel,
                 MessageBoxImage.Warning) == MessageBoxResult.OK);
+
+        // The consent to a sanitized archive, which first warns, from the sessions' stored metadata, how many of the sessions
+        // to export have an unknown header history.
+        internal static string SanitizedExportConfirmation(long unknownHeaderProvenanceSessions) =>
+            unknownHeaderProvenanceSessions == 0
+                ? Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM")
+                : Localization.GetLocalizedString("SANITIZED_EXPORT_UNKNOWN_HEADER_HISTORY", unknownHeaderProvenanceSessions) +
+                    Environment.NewLine + Environment.NewLine + Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM");
 
         Task<bool> ICaptureExportDialogService.ConfirmUnprotectedAsync(string path) =>
             Task.FromResult(MessageBox.Show(
@@ -143,6 +151,11 @@ namespace XMAT
                 {
                     lines.Add(Localization.GetLocalizedString(
                         "EXPORT_SANITIZED_SUMMARY", sanitized.RedactedValues, sanitized.OmittedBodies, sanitized.OmittedHeaders));
+                    if (sanitized.UnknownHeaderProvenanceSessions != 0)
+                    {
+                        lines.Add(Localization.GetLocalizedString(
+                            "EXPORT_SANITIZED_UNKNOWN_HEADER_HISTORY", sanitized.UnknownHeaderProvenanceSessions));
+                    }
                 }
 
                 if (value.OutputProtected == false)

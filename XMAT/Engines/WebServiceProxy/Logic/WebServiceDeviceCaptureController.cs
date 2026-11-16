@@ -416,7 +416,8 @@ namespace XMAT.WebServiceCapture
                             process,
                             responseHeaders,
                             responseTimestamp,
-                            version);
+                            version,
+                            model.HeaderProvenance);
                         sessions.Add(session);
                         frozen.Add(
                             key,
@@ -2202,6 +2203,10 @@ namespace XMAT.WebServiceCapture
                                 [WebServiceCaptureMethod
                                     .FieldKey_ClientIP] =
                                     connectionEvent.ClientIP,
+                                // XMAT reads a live session's headers itself, so it records no known loss.
+                                [WebProxyCaptureSchema
+                                    .HeadersUninspectable] =
+                                    (long)HeaderProvenance.NoKnownLoss,
                             },
                             connectionEvent
                                 .ProcessContext,
@@ -2454,6 +2459,10 @@ namespace XMAT.WebServiceCapture
                                 [WebServiceCaptureMethod
                                     .FieldKey_ClientIP] =
                                     DeviceName,
+                                // XMAT reads a live session's headers itself, so it records no known loss.
+                                [WebProxyCaptureSchema
+                                    .HeadersUninspectable] =
+                                    (long)HeaderProvenance.NoKnownLoss,
                             },
                             requestEvent.ProcessContext,
                             requestEvent.Request

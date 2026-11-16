@@ -734,6 +734,7 @@ namespace XMAT.Cli
                 writer.WriteNumber("redactedValues", sanitization.RedactedValues);
                 writer.WriteNumber("omittedBodies", sanitization.OmittedBodies);
                 writer.WriteNumber("omittedHeaders", sanitization.OmittedHeaders);
+                writer.WriteNumber("unknownHeaderProvenanceSessions", sanitization.UnknownHeaderProvenanceSessions);
                 writer.WriteEndObject();
             }
 

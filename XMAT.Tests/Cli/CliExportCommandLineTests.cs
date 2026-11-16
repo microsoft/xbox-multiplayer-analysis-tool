@@ -196,7 +196,7 @@ namespace XMAT.Tests.Cli
             Assert.Equal("d1", device.GetProperty("id").GetString());
             Assert.Equal(new long[] { 10, 6, 6, 5, 4, 1, 1, 1 }, Counts(device));
             Assert.Equal(
-                "{\"redactedValues\":3,\"omittedBodies\":1,\"omittedHeaders\":2}",
+                "{\"redactedValues\":3,\"omittedBodies\":1,\"omittedHeaders\":2,\"unknownHeaderProvenanceSessions\":0}",
                 Compact(block.GetProperty("sanitization")));
             Assert.Equal("{\"published\":true,\"bytes\":2048,\"sha256\":\"cd34\"}", Compact(block.GetProperty("output")));
             Assert.Empty(root.GetProperty("artifacts").EnumerateArray());
@@ -208,9 +208,54 @@ namespace XMAT.Tests.Cli
             Assert.Equal("{\"published\":false,\"bytes\":null,\"sha256\":null}", Compact(pending.GetProperty("output")));
         }
 
+        // A sanitized export of a capture saved before XMAT recorded header history succeeds (exit code 0) and reports one
+        // warning, on standard error too, with the number of sessions it wrote, which the JSON's sanitization block counts
+        // as well; the sessions that --process left out don't count. An ordinary export of the capture reports none.
+        [Fact]
+        public async Task Export_WarnsOnceOfUnknownHeaderHistoryAndStillSucceeds()
+        {
+            using var directory = new CliTestDirectory();
+            string input = ProcessCaptures.WriteXmatcap(
+                directory.Root, "legacy.xmatcap", ProcessCaptures.MixedSessions, legacy: true);
+
+            (int exitCode, JsonElement json, string error) = await RunAsync(
+                "export", input, "--out", Path.Join(directory.Root, "s.saz"), "--format", "sanitized-saz",
+                "--process", "Game.exe");
+            (int ordinaryExitCode, JsonElement ordinary, _) = await RunAsync(
+                "export", input, "--out", Path.Join(directory.Root, "o.saz"));
+
+            Assert.Equal((CliExitCodes.Success, "succeeded"), (exitCode, json.GetProperty("status").GetString()));
+            JsonElement warning = Assert.Single(json.GetProperty("warnings").EnumerateArray());
+            Assert.Equal("export.sanitization.header-provenance-unknown", warning.GetProperty("code").GetString());
+            Assert.StartsWith(
+                "Header history is unknown for 4 exported sessions.",
+                warning.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            JsonElement export = json.GetProperty("export");
+            Assert.Equal(4, export.GetProperty("counts").GetProperty("exported").GetInt64());
+            Assert.Equal(4, export.GetProperty("sanitization").GetProperty("unknownHeaderProvenanceSessions").GetInt64());
+            Assert.Contains(
+                "xmat: warning export.sanitization.header-provenance-unknown: Header history is unknown for 4 exported " +
+                    "sessions.",
+                error,
+                StringComparison.Ordinal);
+            Assert.Equal(CliExitCodes.Success, ordinaryExitCode);
+            Assert.Empty(ordinary.GetProperty("warnings").EnumerateArray());
+        }
+
         // The eight counts of an export block or one of its devices, in their documented order.
         internal static long[] Counts(JsonElement element) =>
             CountNames.Select(name => element.GetProperty(name).GetInt64()).ToArray();
+
+        // Runs xmat in process: its exit code, the JSON document on standard output and the text on standard error.
+        private static async Task<(int ExitCode, JsonElement Json, string Error)> RunAsync(params string[] args)
+        {
+            using var stdout = new MemoryStream();
+            using var stderr = new StringWriter();
+            int exitCode = await CliApplication.RunAsync(args, new CliConsole(stdout, stderr));
+            using JsonDocument document = JsonDocument.Parse(stdout.ToArray());
+            return (exitCode, document.RootElement.Clone(), stderr.ToString());
+        }
 
         private static CliRequest Request(params string[] options)
         {

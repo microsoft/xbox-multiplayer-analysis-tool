@@ -59,10 +59,12 @@ namespace XMAT.Tests.Operations.Analysis
 
         internal static IReadOnlyList<long> MixedGameRowIds { get; } = new long[] { 1, 2, 4, 8 };
 
+        // legacy leaves out the HeadersUninspectable column, as captures saved before XMAT recorded header history do.
         internal static string WriteXmatcap(
             string directory,
             string fileName,
-            IReadOnlyList<ProcessSession> sessions)
+            IReadOnlyList<ProcessSession> sessions,
+            bool legacy = false)
         {
             Directory.CreateDirectory(directory);
             string path = Path.Join(directory, fileName);
@@ -73,10 +75,12 @@ namespace XMAT.Tests.Operations.Analysis
                 new Field<long>("DeviceType"),
                 new Field<string>("DeviceName"),
                 new Field<long>("CaptureType"));
-            // The current capture schema; each row below lists its values in the schema's column order.
-            IDataTable captures = database.CreateTable(
-                WebServiceCaptureMethod.TableName,
-                WebProxyCaptureSchema.CreateFields());
+            // The current capture schema; each row below gives its values by column name, and a column it doesn't name
+            // gets its default.
+            IField[] fields = WebProxyCaptureSchema.CreateFields()
+                .Where(field => !legacy || field.Name != WebProxyCaptureSchema.HeadersUninspectable)
+                .ToArray();
+            IDataTable captures = database.CreateTable(WebServiceCaptureMethod.TableName, fields);
 
             foreach (string device in sessions.Select(session => session.Device).Distinct(StringComparer.Ordinal))
             {
@@ -100,29 +104,37 @@ namespace XMAT.Tests.Operations.Analysis
                 }
                 DateTime started = StartUtc.AddSeconds(number);
                 bool responded = session.HttpStatus.Length != 0;
-                captures.AddRow(
-                    session.Device,
-                    number,
-                    number,
-                    ProxyConnectionModel.ToDateTimeString(started),
-                    responded ? ProxyConnectionModel.ToDateTimeString(started.AddMilliseconds(25)) : string.Empty,
-                    "https",
-                    message.Host,
-                    "443",
-                    message.Method,
-                    message.PathAndQuery,
-                    session.HttpStatus,
-                    message.RequestHeaders,
-                    Convert.ToBase64String(message.RequestBody),
-                    responded ? message.ResponseHeaders : string.Empty,
-                    responded ? Convert.ToBase64String(message.ResponseBody) : string.Empty,
-                    ClientIp,
-                    session.ProcessName ?? string.Empty,
-                    session.ProcessId,
-                    session.StartTimeUtc ?? string.Empty,
-                    session.Status ?? string.Empty,
-                    string.Empty,
-                    0L);
+                var values = new Dictionary<string, object>(StringComparer.Ordinal)
+                {
+                    [WebServiceCaptureMethod.FieldKey_DeviceName] = session.Device,
+                    [WebServiceCaptureMethod.FieldKey_RequestNumber] = number,
+                    [WebServiceCaptureMethod.FieldKey_ConnectionId] = number,
+                    [WebServiceCaptureMethod.FieldKey_RequestTimestamp] = ProxyConnectionModel.ToDateTimeString(started),
+                    [WebServiceCaptureMethod.FieldKey_ResponseTimestamp] =
+                        responded ? ProxyConnectionModel.ToDateTimeString(started.AddMilliseconds(25)) : string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_RequestScheme] = "https",
+                    [WebServiceCaptureMethod.FieldKey_RequestHost] = message.Host,
+                    [WebServiceCaptureMethod.FieldKey_RequestPort] = "443",
+                    [WebServiceCaptureMethod.FieldKey_RequestMethod] = message.Method,
+                    [WebServiceCaptureMethod.FieldKey_RequestPath] = message.PathAndQuery,
+                    [WebServiceCaptureMethod.FieldKey_RequestStatus] = session.HttpStatus,
+                    [WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders] = message.RequestHeaders + "\r\n",
+                    [WebServiceCaptureMethod.FieldKey_RequestBody] = Convert.ToBase64String(message.RequestBody),
+                    [WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders] =
+                        responded ? message.ResponseHeaders + "\r\n" : string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_ResponseBody] =
+                        responded ? Convert.ToBase64String(message.ResponseBody) : string.Empty,
+                    [WebServiceCaptureMethod.FieldKey_ClientIP] = ClientIp,
+                    [WebProxyCaptureSchema.ClientProcessName] = session.ProcessName ?? string.Empty,
+                    [WebProxyCaptureSchema.ClientProcessId] = session.ProcessId,
+                    [WebProxyCaptureSchema.ClientProcessStartTime] = session.StartTimeUtc ?? string.Empty,
+                    [WebProxyCaptureSchema.ClientProcessStatus] = session.Status ?? string.Empty,
+                };
+                captures.AddRow(fields
+                    .Select(field => values.TryGetValue(field.Name, out object value)
+                        ? value
+                        : field.ValueType == typeof(long) ? 0L : string.Empty)
+                    .ToArray());
             }
 
             database.SaveToFile(path);

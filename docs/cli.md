@@ -106,20 +106,27 @@ reservation-time storage failure.
   column may be NULL, which counts nothing; a NULL in a known column is rejected (`analysis.input.malformed`).
   WebProxyConnections may also hold, among its extra columns, the optional client process columns that XMAT writes
   (`ClientProcessName` TEXT, `ClientProcessId` INTEGER, `ClientProcessStartTime` TEXT and `ClientProcessStatus` TEXT;
-  see [Capture files](capture-files.md#process-information)) and its optional response columns (`ResponseTrailers`
-  TEXT and `ResponseBodyTruncatedAt` INTEGER; see [Capture files](capture-files.md#streamed-responses)). One of them
-  spelled or typed otherwise is rejected (`analysis.input.schema`), but a NULL or unreadable value in them is read as
-  missing, never rejected: a session without usable process information counts as unknown, as in a capture saved
-  without these columns, and one without response columns has no trailers and a complete body. A Fiddler
+  see [Capture files](capture-files.md#process-information)), its optional response columns (`ResponseTrailers`
+  TEXT and `ResponseBodyTruncatedAt` INTEGER; see [Capture files](capture-files.md#streamed-responses)) and
+  `HeadersUninspectable` INTEGER, which records each session's header history (see
+  [Capture files](capture-files.md#header-history)). One of them
+  spelled or typed otherwise is rejected (`analysis.input.schema`), but a NULL or unreadable value in them is never
+  rejected. In the process and response columns it is read as missing: a session without usable process information
+  counts as unknown, as in a capture saved without these columns, and one without response columns has no trailers and
+  a complete body. In `HeadersUninspectable`, `-1` is an unknown history, `0` no known loss, and NULL or any other value
+  uninspectable; a capture saved without the column has an unknown history. A Fiddler
   archive whose directory records are missing, inconsistent or span several disks is rejected too
   (`analysis.input.malformed`); single-disk ZIP64 archives are supported. These limits bound the capture data that
   xmat reads, not its exact memory use, and how many calls fit depends on the data: typical Xbox Live traffic stores
   about 5.6 KB per call, so about 45,000 calls fit in the default 256 MiB. For a capture that only these limits
   refuse, raise them, up to their maximums, or use the GUI; the GUI applies the header and schema checks too, but they
   do not bound how much memory it uses. HTTP bodies are analyzed as stored: compressed or chunked bodies are never
-  decoded. A malformed HTTP header line in a Fiddler archive is skipped instead of refusing the archive, and the run
-  reports the warning `analysis.input.malformed-header` once. Header lines are read as Latin-1, and a header name may
-  contain an apostrophe, as HTTP allows. The header limits cover the sanitized exports that were
+  decoded. A Fiddler archive's start lines and headers are read as Latin-1, one character per byte, or as UTF-8 for a
+  message whose XMAT encoding flag says so (see [Capture files](capture-files.md)); a header name may contain an
+  apostrophe, as HTTP allows. A malformed HTTP header line in a Fiddler archive is skipped instead of refusing the
+  archive, and its session's header history is uninspectable, so `--format sanitized-saz` leaves it out; the XMAT
+  captures and Fiddler archives that `xmat export` writes keep each session's header history. The run reports the
+  warning `analysis.input.malformed-header` once. The header limits cover the sanitized exports that were
   tested, not every archive that can be written: XMAT can record messages whose headers exceed them and export them in a
   plain or sanitized Fiddler archive; xmat refuses such an archive (`analysis.input.limit`) and the GUI does not import
   it, rather than truncating it. A request whose request line, other than a `CONNECT`'s, names an absolute `http`,
@@ -190,7 +197,8 @@ reservation-time storage failure.
   extension, and one that does not agree with it is a usage error. It reads `INPUT` with `analyze`'s reader and
   limits and never changes it, but equal limits do not mean equal codes: the reader's diagnostics keep their
   `analysis.*` codes, except that an input over a limit is `export.input.limit`, and session data that cannot be
-  exported is `export.input.invalid-http` (an HTTP message that a sanitized archive cannot rewrite) or
+  exported is `export.input.invalid-http` (an HTTP message that a sanitized archive cannot rewrite, or start-line or
+  header text that a Fiddler archive can store neither as Latin-1 nor as UTF-8, such as an unpaired surrogate) or
   `export.input.invalid-body` (a stored body or value that is not valid data), all with exit code 3. A sanitized
   archive needs a capture whose text format is known: an unmarked XMAT capture is refused before anything is written
   (`capture.text.ambiguous-export`, exit code 3); export a copy marked with `xmat mark-capture-text` instead. An
@@ -217,6 +225,16 @@ reservation-time storage failure.
   publishes nothing (`export.no-eligible-rows`, exit code 3). An `.xmatcap` export also publishes nothing
   (`export.write.failed`, exit code 6) when its staged file, in the folder next to `FILE`, would have a path longer
   than Windows' 260-character limit; choose a shorter folder. `.saz` outputs are not affected.
+- A sanitized archive's sessions whose header history is unknown, such as those of a Fiddler archive from another tool
+  or of a capture saved before XMAT recorded the history (see
+  [Capture files](capture-files.md#sessions-with-an-unknown-header-history)), are sanitized from the data that is
+  stored, and a published archive that holds any reports the warning `export.sanitization.header-provenance-unknown`
+  once, on standard error too: "Header history is unknown for N exported sessions. Earlier processing may have
+  discarded context needed to recognize secrets. Sanitization inspected the data available; review the archive before
+  sharing." N counts the exported sessions, not those that the selectors left out or that were skipped, and so does
+  `sanitization.unknownHeaderProvenanceSessions` in the JSON output. The warning doesn't change the exit code, so an
+  export that otherwise succeeds exits with code 0. A run that publishes nothing never reports it, and ordinary exports
+  carry each session's header history without it.
 - Exact rule evaluation has one work and live-memory budget shared across all selected devices, consoles, endpoints
   and rules, and never samples, truncates or publishes partial findings. Analysis uses safety budgets, not a fixed
   duration limit. In testing, one regular 1 Hz polling key completed at 75 minutes but exceeded the budget at
@@ -744,7 +762,8 @@ An abridged result:
 ```
 
 `status` is `succeeded`, `findingsFound`, `mismatchFound`, `requestsFailed`, `cancelled` or `failed`. `warnings` and
-`errors` hold stable codes, such as `analysis.input.not-found`, with fixed messages, and `artifacts` lists what was
+`errors` hold stable codes, such as `analysis.input.not-found`, with fixed messages
+(`export.sanitization.header-provenance-unknown` also states a count), and `artifacts` lists what was
 published. `analyze` publishes only when the run completes successfully: status `succeeded`, or `findingsFound` with
 `--fail-on findings`; otherwise `artifacts` is empty. `replay` and `compose` publish once every request was sent,
 whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFailed`). Once its command line is valid, `analyze` reports the effective input limits in `limits`, even when it fails,
@@ -766,7 +785,8 @@ the command provides); and `--version` reports `version`.
 not given) and `matchNone`; `processFilter` as for `analyze`; `counts` with `total`, `matched` (by the filters),
 `selected`, `eligible`, `exported`, `unavailable`, `skippedIncomplete` and `noRecordedResponse` (sessions without a
 recorded response, part of `skippedIncomplete`), and the same counts per device in `devices`; `sanitization`
-(`redactedValues`, `omittedBodies`, `omittedHeaders`) for a sanitized archive; and `output` (`published`, `bytes`,
+(`redactedValues`, `omittedBodies`, `omittedHeaders` and `unknownHeaderProvenanceSessions`, the exported sessions whose
+header history is unknown) for a sanitized archive; and `output` (`published`, `bytes`,
 `sha256`). Fields that the run did not reach are `null`.
 
 Instead of the analysis fields, `replay` and `compose` report `options` (`repeat`, `parallel`, `timeoutSeconds`,

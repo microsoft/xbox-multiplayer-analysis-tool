@@ -80,6 +80,11 @@ namespace XMAT.WebServiceCapture.Models
         // The response body bytes the capture kept when it passed the capture limit; 0 when it is complete.
         public long ResponseBodyTruncatedAt { get; private set; }
 
+        // What is known about this session's header history (see HeaderProvenance): no known loss for what XMAT captured,
+        // unknown for a capture or archive that doesn't record it, and uninspectable when an import left header lines out
+        // or couldn't trust their encoding, so a sanitized export leaves the pair out (see SazSanitizer).
+        internal HeaderProvenance HeaderProvenance { get; private set; }
+
         // Notes about the captured response: still streaming, and where the capture truncated its body.
         public string ResponseCaptureNotice
         {
@@ -250,6 +255,7 @@ namespace XMAT.WebServiceCapture.Models
             RawRequestWrite = model.RawRequestWrite;
             ResponseTrailers = model.ResponseTrailers;
             ResponseBodyTruncatedAt = model.ResponseBodyTruncatedAt;
+            HeaderProvenance = model.HeaderProvenance;
             ClientProcess = model.ClientProcess;
             IsProcessResolving = model.IsProcessResolving;
 
@@ -397,6 +403,11 @@ namespace XMAT.WebServiceCapture.Models
             ResponseBodyTruncatedAt = Math.Max(truncatedAt, 0);
         }
 
+        internal void SetHeaderProvenance(HeaderProvenance provenance)
+        {
+            HeaderProvenance = provenance;
+        }
+
         // Megabytes of 1,048,576 bytes, as the capture limit counts them.
         private static string FormatSize(long bytes)
         {
@@ -497,6 +508,7 @@ namespace XMAT.WebServiceCapture.Models
                         ClientIP,
                     [WebProxyCaptureSchema.ResponseTrailers] = ResponseTrailers,
                     [WebProxyCaptureSchema.ResponseBodyTruncatedAt] = ResponseBodyTruncatedAt,
+                    [WebProxyCaptureSchema.HeadersUninspectable] = (long)HeaderProvenance,
                 },
                 ClientProcess);
         }
@@ -625,6 +637,7 @@ namespace XMAT.WebServiceCapture.Models
 
             ResponseTrailers = WebProxyCaptureSchema.ReadResponseTrailers(dataRecord);
             ResponseBodyTruncatedAt = WebProxyCaptureSchema.ReadResponseBodyTruncatedAt(dataRecord);
+            HeaderProvenance = WebProxyCaptureSchema.ReadHeaderProvenance(dataRecord);
 
             ClientProcessInfo process = ClientProcessRecordCodec.Read(dataRecord);
             if (ClientProcess.Status != ClientProcessStatus.NotRecorded && process != ClientProcess)

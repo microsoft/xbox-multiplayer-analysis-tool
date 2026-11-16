@@ -10,6 +10,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Text.Unicode;
 using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
@@ -65,6 +66,27 @@ namespace XMAT.WebServiceCapture
         // sanitized archive never carries the trailers, whose values can hold secrets.
         private const string ResponseTrailersFlag = "x-xmat-response-trailers";
         private const string ResponseBodyTruncatedAtFlag = "x-xmat-response-body-truncated-at";
+
+        // A session's header history (ProxyConnectionModel.HeaderProvenance) as "-1" (unknown), "0" (no known loss) or "1"
+        // (uninspectable), which both archives carry so that a later import keeps it. An archive without the flag, such
+        // as Fiddler's or an older XMAT's, has an unknown history; any other value, or values that disagree, read as
+        // uninspectable, and header lines that the import itself leaves out always make the session uninspectable.
+        private const string HeadersUninspectableFlag = "x-xmat-headers-uninspectable";
+
+        // "utf-8" when the export wrote that message's start line and headers as UTF-8 because Latin-1 can't hold one of
+        // their characters; without the flag they are Latin-1. The flags describe the archive's bytes, which an XMAT import
+        // reads back as the same text, not how a device sent the message.
+        private const string RequestHeaderEncodingFlag = "x-xmat-request-header-encoding";
+        private const string ResponseHeaderEncodingFlag = "x-xmat-response-header-encoding";
+        private const string Utf8HeaderEncoding = "utf-8";
+        private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+
+        private enum HeaderEncodingHint
+        {
+            Latin1,
+            Utf8,
+            Unusable,
+        }
 
         enum EntryType
         {
@@ -168,23 +190,76 @@ namespace XMAT.WebServiceCapture
             // REQUEST NUMBER & ID
             Int64 id = Convert.ToInt64(frameId);
 
+            // The frame metadata (###_m.xml) says how the export wrote each message's start line and headers, so it is read
+            // first. Metadata that isn't XML fails the frame below, where it always has; until then the messages are
+            // read as Latin-1.
+            string metadataText = null;
+            XDocument xmldata = null;
+            if (metadataStream != null)
+            {
+                RewindIfSeekable(metadataStream);
+                using (var mFile = new StreamReader(
+                    metadataStream,
+                    Encoding.UTF8,
+                    true,
+                    1024,
+                    true))
+                {
+                    metadataText = mFile.ReadToEnd();
+                }
+                xmldata = TryParseXml(metadataText);
+            }
+            HeaderEncodingHint requestEncoding = ReadHeaderEncoding(xmldata, RequestHeaderEncodingFlag);
+            HeaderEncodingHint responseEncoding = ReadHeaderEncoding(xmldata, ResponseHeaderEncodingFlag);
+            // An encoding that XMAT doesn't write, or flags that disagree, can't be trusted: that message is read as
+            // Latin-1, which keeps its bytes, and the session is uninspectable like one whose header lines were left out.
+            bool headersLost = requestEncoding == HeaderEncodingHint.Unusable ||
+                responseEncoding == HeaderEncodingHint.Unusable;
+
             // Read the client part of the frame (###_c.txt)
             if (requestStream != null)
             {
                 RewindIfSeekable(requestStream);
-                using (var cFile = new BinaryReader(requestStream, Encoding.ASCII, true))
+                using (var cFile = new BinaryReader(requestStream, Encoding.Latin1, true))
                 {
                     var requestHeaderBytes = 0;
                     var firstLine = ReadHeaderLine(
                         cFile,
                         ref requestHeaderBytes);
+                    if (!string.IsNullOrEmpty(firstLine) && firstLine.IndexOf(' ') < 0)
+                    {
+                        return null;
+                    }
+
+                    SazHeaderFields reqHeaders = ReadHeaders(
+                        cFile,
+                        ref requestHeaderBytes,
+                        ref skippedMalformedHeaderLines);
+                    string host = reqHeaders["Host"];
+
+                    // REQUEST BODY
+                    requestBody = cFile.ReadToEnd();
+
+                    // REQUEST HEADERS, as the export wrote them
+                    requestHeaders = $"{firstLine}\r\n{reqHeaders}";
+                    if (requestEncoding == HeaderEncodingHint.Utf8)
+                    {
+                        if (TryDecodeUtf8(requestHeaders, out string decoded))
+                        {
+                            // The first line and the Host value are whole characters of that text, so they decode too.
+                            requestHeaders = decoded;
+                            _ = TryDecodeUtf8(firstLine, out firstLine);
+                            _ = TryDecodeUtf8(host, out host);
+                        }
+                        else
+                        {
+                            headersLost = true;
+                        }
+                    }
+                    hostAndPort = host;
 
                     if (!string.IsNullOrEmpty(firstLine))
                     {
-                        if (firstLine.IndexOf(' ') < 0)
-                        {
-                            return null;
-                        }
                         var firstLineSplit = firstLine.Split(' ');
 
                         // METHOD
@@ -199,21 +274,9 @@ namespace XMAT.WebServiceCapture
                         {
                             call = target.PathAndQuery;
                             scheme = target.Scheme;
+                            hostAndPort = targetAuthority ?? host;
                         }
                     }
-
-                    SazHeaderFields reqHeaders = ReadHeaders(
-                        cFile,
-                        ref requestHeaderBytes,
-                        ref skippedMalformedHeaderLines);
-
-                    hostAndPort = targetAuthority ?? reqHeaders["Host"];
-
-                    // REQUEST BODY
-                    requestBody = cFile.ReadToEnd();
-
-                    // REQUEST HEADERS
-                    requestHeaders = $"{firstLine}\r\n{reqHeaders}";
                 }
             }
 
@@ -221,7 +284,7 @@ namespace XMAT.WebServiceCapture
             if (responseStream != null)
             {
                 RewindIfSeekable(responseStream);
-                using (var sFile = new BinaryReader(responseStream, Encoding.ASCII, true))
+                using (var sFile = new BinaryReader(responseStream, Encoding.Latin1, true))
                 {
                     var responseHeaderBytes = 0;
                     var firstLine = ReadHeaderLine(
@@ -250,138 +313,147 @@ namespace XMAT.WebServiceCapture
                     // RESPONSE BODY
                     responseBody = sFile.ReadToEnd();
 
-                    // RESPONSE HEADERS
+                    // RESPONSE HEADERS, as the export wrote them
                     responseHeaders = $"{firstLine}\r\n{headers}";
+                    if (responseEncoding == HeaderEncodingHint.Utf8)
+                    {
+                        if (TryDecodeUtf8(responseHeaders, out string decoded))
+                        {
+                            responseHeaders = decoded;
+                        }
+                        else
+                        {
+                            headersLost = true;
+                        }
+                    }
                 }
             }
 
-            // Read the frame metadata (###_m.xml)
+            // Apply the frame metadata (###_m.xml)
             ClientProcessInfo clientProcess = ClientProcessInfo.NotRecorded;
             long requestNumber = id;
             long connectionId = id;
             string responseTrailers = string.Empty;
             long responseBodyTruncatedAt = 0;
-            if (metadataStream != null)
+            // Header lines this import left out could hold a secret that the other message echoes.
+            headersLost |= skippedMalformedHeaderLines > 0;
+            var provenanceFlags = new List<string>();
+            if (metadataText != null)
             {
-                RewindIfSeekable(metadataStream);
-                using (var mFile = new StreamReader(
-                    metadataStream,
-                    Encoding.UTF8,
-                    true,
-                    1024,
-                    true))
+                // Metadata that couldn't be read as XML above fails the frame here.
+                xmldata ??= XDocument.Parse(metadataText);
+
+                XElement sessionTimers = xmldata.Element("Session").Element("SessionTimers");
+
+                // Each timer is an instant: one with Z or an offset is exact, and one without, as XMAT's own export
+                // writes for a time of unspecified kind, is this machine's local time. The duration is the time between
+                // the two instants, whatever their offsets, and the request time is the first one in local time. A
+                // timer that was never set, or that names no instant this machine can show as a local time (ParseTimer),
+                // is no time: the request time stays unknown, and the duration zero.
+                DateTimeOffset? begin = ParseTimer((string)sessionTimers.Attribute("ClientBeginRequest"));
+                DateTimeOffset? done = ParseTimer((string)sessionTimers.Attribute("ClientDoneResponse"));
+                if (begin != null)
                 {
-                    string rawData = mFile.ReadToEnd();
-                    XDocument xmldata = XDocument.Parse(rawData);
-
-                    XElement sessionTimers = xmldata.Element("Session").Element("SessionTimers");
-
-                    // Each timer is an instant: one with Z or an offset is exact, and one without, as XMAT's own export
-                    // writes for a time of unspecified kind, is this machine's local time. The duration is the time between
-                    // the two instants, whatever their offsets, and the request time is the first one in local time. A
-                    // timer that was never set, or that names no instant this machine can show as a local time (ParseTimer),
-                    // is no time: the request time stays unknown, and the duration zero.
-                    DateTimeOffset? begin = ParseTimer((string)sessionTimers.Attribute("ClientBeginRequest"));
-                    DateTimeOffset? done = ParseTimer((string)sessionTimers.Attribute("ClientDoneResponse"));
-                    if (begin != null)
-                    {
-                        requestTime = begin.Value.LocalDateTime;
-                    }
-
-                    if (begin != null && done != null)
-                    {
-                        duration = done.Value.UtcDateTime - begin.Value.UtcDateTime;
-                    }
-
-                    var sessionFlags = xmldata.Element("Session").Element("SessionFlags");
-
-                    var clientIPRead = false;
-                    string processInfo = null;
-                    string processStartTime = null;
-                    string processStatus = null;
-                    var xmatFlags = new Dictionary<string, string>(StringComparer.Ordinal);
-                    foreach (var flag in sessionFlags.Descendants())
-                    {
-                        var flagName = (string)flag.Attribute("N");
-                        if (flagName == "x-clientip")
-                        {
-                            if (!clientIPRead)
-                            {
-                                // CLIENT IP, as written, except that an IPv4 address written in its IPv6 form
-                                // (::ffff:a.b.c.d) is kept as IPv4.
-                                clientIP = (string)flag.Attribute("V") ??
-                                    throw new FormatException("x-clientip has no value");
-                                if (IPAddress.TryParse(clientIP, out IPAddress address) && address.IsIPv4MappedToIPv6)
-                                {
-                                    clientIP = address.MapToIPv4().ToString();
-                                }
-                                clientIPRead = true;
-                            }
-                        }
-                        else if (string.Equals(flagName, ProcessInfoFlag, StringComparison.OrdinalIgnoreCase))
-                        {
-                            processInfo ??= (string)flag.Attribute("V") ?? string.Empty;
-                        }
-                        else if (string.Equals(flagName, ProcessStartTimeFlag, StringComparison.OrdinalIgnoreCase))
-                        {
-                            processStartTime ??= (string)flag.Attribute("V");
-                        }
-                        else if (string.Equals(flagName, ProcessStatusFlag, StringComparison.OrdinalIgnoreCase))
-                        {
-                            processStatus ??= (string)flag.Attribute("V");
-                        }
-                        else if (flagName != null)
-                        {
-                            xmatFlags.TryAdd(flagName, (string)flag.Attribute("V"));
-                        }
-                    }
-
-                    // XMAT's flags restore its exact values. The file is untrusted: a missing or invalid flag leaves its
-                    // field as Fiddler's data gives it.
-                    if (TryReadPositive(xmatFlags.GetValueOrDefault(RequestNumberFlag), out long exactNumber))
-                    {
-                        requestNumber = exactNumber;
-                    }
-                    if (TryReadPositive(xmatFlags.GetValueOrDefault(ConnectionIdFlag), out long exactConnection))
-                    {
-                        connectionId = exactConnection;
-                    }
-                    // XMAT's flags keep full ticks where Fiddler's timers keep five digits of a second; the duration
-                    // is the time between the instants that the flags, or the timers without them, name.
-                    bool exactStartRead = TryReadTimestamp(
-                        xmatFlags.GetValueOrDefault(RequestTimestampFlag), out DateTime exactStart);
-                    bool exactEndRead = TryReadTimestamp(
-                        xmatFlags.GetValueOrDefault(ResponseTimestampFlag), out DateTime exactEnd);
-                    if (exactStartRead)
-                    {
-                        requestTime = exactStart;
-                    }
-                    if (exactStartRead || exactEndRead)
-                    {
-                        DateTime? start = exactStartRead ? exactStart.ToUniversalTime() : begin?.UtcDateTime;
-                        DateTime? end = exactEndRead ? exactEnd.ToUniversalTime() : done?.UtcDateTime;
-                        if (start != null && end != null)
-                        {
-                            duration = end.Value - start.Value;
-                        }
-                    }
-                    string exactScheme = xmatFlags.GetValueOrDefault(SchemeFlag);
-                    scheme = Uri.CheckSchemeName(exactScheme) ? exactScheme : scheme;
-                    string exactPath = xmatFlags.GetValueOrDefault(RequestPathFlag);
-                    call = string.IsNullOrEmpty(exactPath) ? call : exactPath;
-                    string exactClientIp = xmatFlags.GetValueOrDefault(ClientIpFlag);
-                    clientIP = string.IsNullOrEmpty(exactClientIp) ? clientIP : exactClientIp;
-                    if (TryReadPositive(xmatFlags.GetValueOrDefault(ResponseBodyTruncatedAtFlag), out long truncatedAt))
-                    {
-                        responseBodyTruncatedAt = truncatedAt;
-                    }
-                    if (TryReadTrailers(xmatFlags.GetValueOrDefault(ResponseTrailersFlag), out string trailers))
-                    {
-                        responseTrailers = trailers;
-                    }
-
-                    clientProcess = ReadClientProcess(processInfo, processStartTime, processStatus);
+                    requestTime = begin.Value.LocalDateTime;
                 }
+
+                if (begin != null && done != null)
+                {
+                    duration = done.Value.UtcDateTime - begin.Value.UtcDateTime;
+                }
+
+                var sessionFlags = xmldata.Element("Session").Element("SessionFlags");
+
+                var clientIPRead = false;
+                string processInfo = null;
+                string processStartTime = null;
+                string processStatus = null;
+                var xmatFlags = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var flag in sessionFlags.Descendants())
+                {
+                    var flagName = (string)flag.Attribute("N");
+                    if (flagName == "x-clientip")
+                    {
+                        if (!clientIPRead)
+                        {
+                            // CLIENT IP, as written, except that an IPv4 address written in its IPv6 form
+                            // (::ffff:a.b.c.d) is kept as IPv4.
+                            clientIP = (string)flag.Attribute("V") ??
+                                throw new FormatException("x-clientip has no value");
+                            if (IPAddress.TryParse(clientIP, out IPAddress address) && address.IsIPv4MappedToIPv6)
+                            {
+                                clientIP = address.MapToIPv4().ToString();
+                            }
+                            clientIPRead = true;
+                        }
+                    }
+                    else if (string.Equals(flagName, ProcessInfoFlag, StringComparison.OrdinalIgnoreCase))
+                    {
+                        processInfo ??= (string)flag.Attribute("V") ?? string.Empty;
+                    }
+                    else if (string.Equals(flagName, ProcessStartTimeFlag, StringComparison.OrdinalIgnoreCase))
+                    {
+                        processStartTime ??= (string)flag.Attribute("V");
+                    }
+                    else if (string.Equals(flagName, ProcessStatusFlag, StringComparison.OrdinalIgnoreCase))
+                    {
+                        processStatus ??= (string)flag.Attribute("V");
+                    }
+                    else if (string.Equals(flagName, HeadersUninspectableFlag, StringComparison.OrdinalIgnoreCase))
+                    {
+                        provenanceFlags.Add((string)flag.Attribute("V"));
+                    }
+                    else if (flagName != null)
+                    {
+                        xmatFlags.TryAdd(flagName, (string)flag.Attribute("V"));
+                    }
+                }
+
+                // XMAT's flags restore its exact values. The file is untrusted: a missing or invalid flag leaves its
+                // field as Fiddler's data gives it, except malformed trailers, which are kept (see TryReadTrailers).
+                if (TryReadPositive(xmatFlags.GetValueOrDefault(RequestNumberFlag), out long exactNumber))
+                {
+                    requestNumber = exactNumber;
+                }
+                if (TryReadPositive(xmatFlags.GetValueOrDefault(ConnectionIdFlag), out long exactConnection))
+                {
+                    connectionId = exactConnection;
+                }
+                // XMAT's flags keep full ticks where Fiddler's timers keep five digits of a second; the duration
+                // is the time between the instants that the flags, or the timers without them, name.
+                bool exactStartRead = TryReadTimestamp(
+                    xmatFlags.GetValueOrDefault(RequestTimestampFlag), out DateTime exactStart);
+                bool exactEndRead = TryReadTimestamp(
+                    xmatFlags.GetValueOrDefault(ResponseTimestampFlag), out DateTime exactEnd);
+                if (exactStartRead)
+                {
+                    requestTime = exactStart;
+                }
+                if (exactStartRead || exactEndRead)
+                {
+                    DateTime? start = exactStartRead ? exactStart.ToUniversalTime() : begin?.UtcDateTime;
+                    DateTime? end = exactEndRead ? exactEnd.ToUniversalTime() : done?.UtcDateTime;
+                    if (start != null && end != null)
+                    {
+                        duration = end.Value - start.Value;
+                    }
+                }
+                string exactScheme = xmatFlags.GetValueOrDefault(SchemeFlag);
+                scheme = Uri.CheckSchemeName(exactScheme) ? exactScheme : scheme;
+                string exactPath = xmatFlags.GetValueOrDefault(RequestPathFlag);
+                call = string.IsNullOrEmpty(exactPath) ? call : exactPath;
+                string exactClientIp = xmatFlags.GetValueOrDefault(ClientIpFlag);
+                clientIP = string.IsNullOrEmpty(exactClientIp) ? clientIP : exactClientIp;
+                if (TryReadPositive(xmatFlags.GetValueOrDefault(ResponseBodyTruncatedAtFlag), out long truncatedAt))
+                {
+                    responseBodyTruncatedAt = truncatedAt;
+                }
+                if (TryReadTrailers(xmatFlags.GetValueOrDefault(ResponseTrailersFlag), out string trailers))
+                {
+                    responseTrailers = trailers;
+                }
+
+                clientProcess = ReadClientProcess(processInfo, processStartTime, processStatus);
             }
 
             ProxyConnectionModel model = new(
@@ -401,8 +473,33 @@ namespace XMAT.WebServiceCapture
             model.SetImportedIdentity(requestNumber, connectionId);
             model.SetClientProcess(clientProcess);
             model.SetResponseCaptureDetails(responseTrailers, responseBodyTruncatedAt);
+            // What the archive carries never clears what this import observed, and an archive that carries nothing leaves
+            // the history unknown even when every line read here was valid.
+            model.SetHeaderProvenance(WebProxyCaptureSchema.Combine(
+                headersLost ? HeaderProvenance.Uninspectable : HeaderProvenance.NoKnownLoss,
+                ReadHeaderProvenance(provenanceFlags)));
 
             return model;
+        }
+
+        // The x-xmat-headers-uninspectable flags of a frame: none is an unknown history; one value, or repeats of it, is
+        // "-1", "0" or "1" exactly; anything else is uninspectable.
+        private static HeaderProvenance ReadHeaderProvenance(IReadOnlyList<string> values)
+        {
+            if (values.Count == 0)
+            {
+                return HeaderProvenance.Unknown;
+            }
+            if (values.Any(value => value != values[0]))
+            {
+                return HeaderProvenance.Uninspectable;
+            }
+            return values[0] switch
+            {
+                "-1" => HeaderProvenance.Unknown,
+                "0" => HeaderProvenance.NoKnownLoss,
+                _ => HeaderProvenance.Uninspectable,
+            };
         }
 
         // Fiddler's x-ProcessInfo holds "name:pid". A last ':' starts the id only when a positive number follows it, so a
@@ -460,13 +557,14 @@ namespace XMAT.WebServiceCapture
         private static bool TryReadPositive(string value, out long number) =>
             long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out number) && number > 0;
 
-        // Trailer lines as XMAT writes them ("name: value\r\n"); a flag with any malformed line is ignored.
+        // Trailer lines as XMAT writes them ("name: value\r\n"). A flag with a malformed line is kept as it is: it may
+        // still hold a secret, which a sanitized export can then fail closed on instead of never seeing.
         private static bool TryReadTrailers(string value, out string trailers)
         {
             string[] lines = TrailerLines(value);
-            trailers = lines.Length != 0 && lines.All(IsValidHeaderLine)
-                ? string.Concat(lines.Select(line => line + "\r\n"))
-                : string.Empty;
+            trailers = lines.Length == 0
+                ? string.Empty
+                : lines.All(IsValidHeaderLine) ? string.Concat(lines.Select(line => line + "\r\n")) : value;
             return trailers.Length != 0;
         }
 
@@ -557,6 +655,59 @@ namespace XMAT.WebServiceCapture
                 host = null;
                 return false;
             }
+        }
+
+        private static XDocument TryParseXml(string text)
+        {
+            try
+            {
+                return XDocument.Parse(text);
+            }
+            catch (XmlException)
+            {
+                return null;
+            }
+        }
+
+        // How the export wrote one message's start line and headers: Latin-1 without the flag, and UTF-8 when every such
+        // flag says utf-8 (in any case). Any other value, or flags that disagree, can't be trusted.
+        private static HeaderEncodingHint ReadHeaderEncoding(XDocument metadata, string flagName)
+        {
+            HeaderEncodingHint hint = HeaderEncodingHint.Latin1;
+            IEnumerable<XElement> flags = metadata?.Element("Session")?.Element("SessionFlags")?.Descendants() ??
+                Enumerable.Empty<XElement>();
+            foreach (XElement flag in flags)
+            {
+                if (!string.Equals((string)flag.Attribute("N"), flagName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                HeaderEncodingHint declared =
+                    string.Equals((string)flag.Attribute("V"), Utf8HeaderEncoding, StringComparison.OrdinalIgnoreCase)
+                        ? HeaderEncodingHint.Utf8
+                        : HeaderEncodingHint.Unusable;
+                hint = hint == HeaderEncodingHint.Latin1 || hint == declared ? declared : HeaderEncodingHint.Unusable;
+            }
+            return hint;
+        }
+
+        // Text read one character per byte, so that header syntax was checked on its bytes, decoded as the UTF-8 those
+        // bytes are. Bytes that aren't valid UTF-8 are never replaced: the text stays as it was, which loses nothing, and
+        // the result is false.
+        private static bool TryDecodeUtf8(string latin1, out string text)
+        {
+            text = latin1;
+            if (string.IsNullOrEmpty(latin1))
+            {
+                return true;
+            }
+            byte[] bytes = Encoding.Latin1.GetBytes(latin1);
+            if (!Utf8.IsValid(bytes))
+            {
+                return false;
+            }
+            text = Encoding.UTF8.GetString(bytes);
+            return true;
         }
 
         public static ProxyConnectionsCollection ImportSazFile(
@@ -1014,6 +1165,10 @@ namespace XMAT.WebServiceCapture
                     ResponseBodyTruncatedAtFlag,
                     Number(values, WebProxyCaptureSchema.ResponseBodyTruncatedAt));
                 string responseTrailers = Text(values, WebProxyCaptureSchema.ResponseTrailers);
+                HeaderProvenance headerProvenance = WebProxyCaptureSchema.HeaderProvenanceOf(values);
+                // Either archive carries the session's header history, so an import keeps it.
+                metadata.SessionFlags[HeadersUninspectableFlag] =
+                    ((long)headerProvenance).ToString(CultureInfo.InvariantCulture);
 
                 SanitizedHttpMessage request;
                 SanitizedHttpMessage? response;
@@ -1023,7 +1178,8 @@ namespace XMAT.WebServiceCapture
                     try
                     {
                         (request, response) = _sanitizer.SanitizeSession(
-                            requestHeaders, requestBody, responseHeaders, responseBody, method);
+                            requestHeaders, requestBody, responseHeaders, responseBody, method, responseTrailers,
+                            headerProvenance);
                     }
                     catch (InvalidDataException ex)
                     {
@@ -1039,8 +1195,6 @@ namespace XMAT.WebServiceCapture
                     {
                         _sanitizer.Summary.RedactedValues++;
                     }
-                    // Trailers are never written; each one left out counts as an omitted header.
-                    _sanitizer.Summary.OmittedHeaders += TrailerLines(responseTrailers).Length;
                     if (request.BodyOmitted)
                     {
                         metadata.SessionFlags["x-xmat-request-body-omitted"] = "uninspectable";
@@ -1062,19 +1216,38 @@ namespace XMAT.WebServiceCapture
                     metadata.SetExact(ResponseTrailersFlag, responseTrailers);
                 }
 
+                byte[] requestHeaderBytes = HeaderBytes(request.Headers, out bool requestUtf8);
+                byte[] responseHeaderBytes = null;
+                var responseUtf8 = false;
+                if (response is { } answered)
+                {
+                    responseHeaderBytes = HeaderBytes(answered.Headers, out responseUtf8);
+                }
+                if (requestUtf8)
+                {
+                    metadata.SessionFlags[RequestHeaderEncodingFlag] = Utf8HeaderEncoding;
+                }
+                if (responseUtf8)
+                {
+                    metadata.SessionFlags[ResponseHeaderEncodingFlag] = Utf8HeaderEncoding;
+                }
                 string frame = (++_rows).ToString(_frameFormat, CultureInfo.InvariantCulture);
                 Writing(() =>
                 {
-                    AddEntry(_archive, EntryType.Request, frame, request.Headers, request.Body, cancellationToken);
+                    AddEntry(_archive, EntryType.Request, frame, requestHeaderBytes, request.Body, cancellationToken);
                     AddMetaEntry(_archive, frame, metadata, cancellationToken);
                     if (response is { } written)
                     {
-                        AddEntry(_archive, EntryType.Response, frame, written.Headers, written.Body, cancellationToken);
+                        AddEntry(_archive, EntryType.Response, frame, responseHeaderBytes, written.Body, cancellationToken);
                     }
                 });
                 if (_sanitized)
                 {
                     _sanitizer.Summary.Sessions++;
+                    if (headerProvenance == HeaderProvenance.Unknown)
+                    {
+                        _sanitizer.Summary.UnknownHeaderProvenanceSessions++;
+                    }
                 }
             }
 
@@ -1147,13 +1320,35 @@ namespace XMAT.WebServiceCapture
             s.Write(xmlTextBytes);
         }
 
-        private static void AddEntry(ZipArchive archive, EntryType entryType, string frame, string headers, byte[] body,
+        // A message's start line and headers as the archive stores them: Latin-1, one byte per character, when every
+        // character has such a byte, and otherwise UTF-8 without a byte order mark, which the caller records in the
+        // message's encoding flag so that an import reads back the same text. Nothing is replaced: text that UTF-8 can't
+        // encode either, such as an unpaired surrogate, fails the export with a coded input error that names no captured
+        // value.
+        private static byte[] HeaderBytes(string headers, out bool utf8)
+        {
+            string text = headers ?? string.Empty;
+            utf8 = text.AsSpan().ContainsAnyExceptInRange('\u0000', '\u00FF');
+            if (!utf8)
+            {
+                return Encoding.Latin1.GetBytes(text);
+            }
+            try
+            {
+                return StrictUtf8.GetBytes(text);
+            }
+            catch (EncoderFallbackException)
+            {
+                throw new CaptureExportException(CaptureExportErrorCodes.InvalidHttp, OperationOutcome.InvalidInput);
+            }
+        }
+
+        private static void AddEntry(ZipArchive archive, EntryType entryType, string frame, byte[] headerBytes, byte[] body,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             ZipArchiveEntry entry = archive.CreateEntry($"raw/{frame}{EntryTypeMap[entryType]}");
             using Stream s = entry.Open();
-            var headerBytes = Encoding.ASCII.GetBytes(headers ?? string.Empty);
             s.Write(headerBytes);
             ReadOnlySpan<byte> bodySpan = body;
             for (var offset = 0; offset < bodySpan.Length; offset += 8192)
