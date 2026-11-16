@@ -76,6 +76,8 @@ namespace XMAT.NetworkTraceCaptureAnalysis
                     new NetworkTraceAnalyzerResultsModel
                     {
                         Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PCBP"),
+                        Measure = NetworkTraceMeasure.Packets,
+                        GroupedBy = NetworkTraceGrouping.Protocol,
                         Values =
                             from packet in selectedItems
                             orderby packet.Protocol
@@ -91,6 +93,8 @@ namespace XMAT.NetworkTraceCaptureAnalysis
                     new NetworkTraceAnalyzerResultsModel
                     {
                         Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PSBS"),
+                        Measure = NetworkTraceMeasure.Packets,
+                        GroupedBy = NetworkTraceGrouping.Source,
                         Values =
                             from packet in selectedItems
                             orderby packet.SourceIpv4Address
@@ -107,6 +111,8 @@ namespace XMAT.NetworkTraceCaptureAnalysis
                     new NetworkTraceAnalyzerResultsModel
                     {
                         Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PRBS"),
+                        Measure = NetworkTraceMeasure.Packets,
+                        GroupedBy = NetworkTraceGrouping.Source,
                         Values =
                             from packet in selectedItems
                             orderby packet.SourceIpv4Address
@@ -123,6 +129,8 @@ namespace XMAT.NetworkTraceCaptureAnalysis
                     new NetworkTraceAnalyzerResultsModel
                     {
                         Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_BSBS"),
+                        Measure = NetworkTraceMeasure.Bytes,
+                        GroupedBy = NetworkTraceGrouping.Source,
                         Values =
                             from packet in selectedItems
                             orderby packet.SourceIpv4Address
@@ -139,6 +147,8 @@ namespace XMAT.NetworkTraceCaptureAnalysis
                     new NetworkTraceAnalyzerResultsModel
                     {
                         Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_BRBS"),
+                        Measure = NetworkTraceMeasure.Bytes,
+                        GroupedBy = NetworkTraceGrouping.Source,
                         Values =
                             from packet in selectedItems
                             orderby packet.SourceIpv4Address
@@ -155,6 +165,8 @@ namespace XMAT.NetworkTraceCaptureAnalysis
                     new NetworkTraceAnalyzerResultsModel
                     {
                         Topic = Localization.GetLocalizedString("NETCAP_ANALYSIS_RESULT_PLBS"),
+                        Measure = NetworkTraceMeasure.AverageBytes,
+                        GroupedBy = NetworkTraceGrouping.Source,
                         Values =
                              from packet in selectedItems
                              orderby packet.SourceIpv4Address

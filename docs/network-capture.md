@@ -57,6 +57,14 @@ The report includes packet-send statistics by source. It flags UDP packets excee
 the recommended Xbox MTU (1384), sending more than 20 packets in a second, and
 duplicate packets within a second. Detected issues have a red background.
 
+With **New look** on, the report starts with these checks: each count is green when
+the check found nothing and red when it found packets, beside the number of packets
+scanned. Each list follows as a histogram, largest values first, with bars, counts
+and each value's share of the total; averages, such as the average packet length,
+have no shares. A list of more than seven values shows the six largest and the rest
+in one row; select **Show all** to list every value. The histograms fill the pane in
+columns, so a wide pane shows several side by side.
+
 ## Recover from capture errors
 
 If console network capture fails, reboot the console before retrying. A trace may

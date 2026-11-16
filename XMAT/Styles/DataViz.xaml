@@ -207,4 +207,148 @@
             </Setter.Value>
         </Setter>
     </Style>
+
+    <!-- Histogram (HistogramView): a titled list of values in a report, such as the network analysis's packets by
+         source. The title, with the totals under it, so histograms side by side start their rows at the same height;
+         then a row per value in a column summary's lanes: its label, a neutral bar against the longest bar, its amount
+         and its share. The rest of the values share a row with a secondary label, and Show all, under the rows,
+         lists every value. In a shared size scope (Grid.IsSharedSizeScope), histograms share their label and amount
+         lanes, so a report's bars line up. A row reads as one sentence to screen readers; Tab enters the rows once and
+         the arrow keys move between them. -->
+    <Style TargetType="local:HistogramView">
+        <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+        <Setter Property="UseLayoutRounding" Value="True"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="local:HistogramView">
+                    <StackPanel>
+                        <StackPanel x:Name="Header" Margin="0,0,0,6">
+                            <TextBlock x:Name="Title" Text="{Binding Title}" TextWrapping="Wrap"
+                                       FontSize="{DynamicResource SectionTitleFontSize}" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextHeadingBrush}" AutomationProperties.HeadingLevel="Level3"/>
+                            <TextBlock x:Name="Totals" Text="{Binding Totals}" Margin="0,2,0,0" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        </StackPanel>
+                        <ItemsControl x:Name="PART_Rows" ItemsSource="{TemplateBinding ShownRows}" Focusable="False"
+                                      AutomationProperties.Name="{Binding AccessibleName}"
+                                      KeyboardNavigation.TabNavigation="Once"
+                                      KeyboardNavigation.DirectionalNavigation="Contained">
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="Focusable" Value="True"/>
+                                    <Setter Property="FocusVisualStyle" Value="{DynamicResource ItemFocusVisualStyle}"/>
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid MinHeight="24">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="{Binding LabelLaneWidth, RelativeSource={RelativeSource AncestorType=local:HistogramView}}"
+                                                              SharedSizeGroup="HistogramLabelLane"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="{Binding AmountLaneWidth, RelativeSource={RelativeSource AncestorType=local:HistogramView}}"
+                                                              SharedSizeGroup="HistogramAmountLane"/>
+                                            <ColumnDefinition Width="{Binding ShareLaneWidth, RelativeSource={RelativeSource AncestorType=local:HistogramView}}"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="Label" Text="{Binding Label}" TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center"/>
+                                        <Grid Grid.Column="1" Height="8" VerticalAlignment="Center">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="{Binding BarWidth}" MinWidth="2"/>
+                                                <ColumnDefinition Width="{Binding BarRemainder}"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border x:Name="Bar" CornerRadius="2"
+                                                    Background="{DynamicResource ColumnHeaderDividerBrush}"/>
+                                        </Grid>
+                                        <TextBlock x:Name="Amount" Grid.Column="2" Text="{Binding AmountText}"
+                                                   TextAlignment="Right" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="Share" Grid.Column="3" Text="{Binding ShareText}"
+                                                   TextAlignment="Right" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                    </Grid>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsMore}" Value="True">
+                                            <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <!-- A histogram without values says so on the line of its first row. -->
+                        <TextBlock x:Name="Empty" Text="{Binding EmptyText}" MinHeight="24" Padding="0,4"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" Visibility="Collapsed"/>
+                        <!-- Show all, and once chosen Show fewer: secondary text and a chevron, lined up with the
+                             labels, with the hover fill and outline of the app's quiet buttons. -->
+                        <ToggleButton x:Name="PART_ShowAll" HorizontalAlignment="Left" Margin="-6,4,0,0"
+                                      IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}">
+                            <ToggleButton.Style>
+                                <Style TargetType="ToggleButton">
+                                    <Setter Property="Content" Value="{Binding ShowAllText}"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+                                    <Setter Property="Padding" Value="6,0"/>
+                                    <Setter Property="MinHeight" Value="24"/>
+                                    <Setter Property="FocusVisualStyle" Value="{DynamicResource ItemFocusVisualStyle}"/>
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ToggleButton">
+                                                <Grid>
+                                                    <Border x:Name="Bd" Background="Transparent" Padding="{TemplateBinding Padding}"
+                                                            CornerRadius="{DynamicResource ControlCornerRadius}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                                                                       VerticalAlignment="Center"/>
+                                                            <Path x:Name="Chevron" Data="M0.5,0.5 L4.5,4.5 L8.5,0.5" Width="9" Height="5"
+                                                                  Margin="6,1,0,0" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.25"
+                                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                                                  VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                    <Border x:Name="HoverOutline" CornerRadius="{DynamicResource ControlCornerRadius}"
+                                                            BorderThickness="1" BorderBrush="{DynamicResource HoverOutlineBrush}"
+                                                            Visibility="Collapsed" IsHitTestVisible="False"/>
+                                                </Grid>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsChecked" Value="True">
+                                                        <Setter TargetName="Chevron" Property="RenderTransform">
+                                                            <Setter.Value>
+                                                                <RotateTransform Angle="180"/>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </Trigger>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
+                                                        <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsPressed" Value="True">
+                                                        <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CanShowAll}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter Property="Content" Value="{Binding ShowFewerText}"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ToggleButton.Style>
+                        </ToggleButton>
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsEmpty}" Value="True">
+                            <Setter TargetName="Empty" Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 </ResourceDictionary>

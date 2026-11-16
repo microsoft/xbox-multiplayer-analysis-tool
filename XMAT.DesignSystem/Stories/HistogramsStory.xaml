@@ -1,0 +1,43 @@
+<ds:Story x:Class="XMAT.DesignSystem.HistogramsStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          xmlns:local="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
+          Title="Histograms"
+          Summary="Histograms show how an amount is spread over the values in a report, such as the packets each source sent in a network capture's analysis. The largest values come first, each with a bar against the largest, in the lanes of a column summary. Histograms in a report share their lanes, so their bars line up."
+          StyleFile="Styles/DataViz.xaml">
+    <StackPanel>
+        <ds:StorySection Title="Counts" StyleName="HistogramView (default style)"
+                         Description="Amounts that add up, such as packets or bytes: the total and the number of values under the title, and each value's share of the total. Past seven values, the six largest show with the rest in one row, and Show all lists every value.">
+            <ds:StoryExample Caption="A few values">
+                <local:HistogramView x:Name="FewValues" Width="340"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="More than seven values">
+                <local:HistogramView x:Name="ManyValues" Width="340"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Show all">
+                <local:HistogramView x:Name="AllValues" Width="340" IsExpanded="True"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Averages" StyleName="HistogramView (default style)"
+                         Description="Amounts that don't add up, such as bytes per packet: what they measure in place of a total, and no shares or row for the rest. Past seven values, the six largest show, and Show all lists every value.">
+            <ds:StoryExample Caption="More than seven values">
+                <local:HistogramView x:Name="Averages" Width="340"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="No values">
+                <local:HistogramView x:Name="NoValues" Width="340"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="In a report" StyleName="HistogramView, in a Grid.IsSharedSizeScope"
+                         Description="Histograms in one shared size scope take the widest label and amount lanes among them, so their bars start and end at the same places, as in the network capture analysis.">
+            <ds:StoryExample Caption="Two histograms sharing their lanes">
+                <StackPanel Width="340" Grid.IsSharedSizeScope="True">
+                    <local:HistogramView x:Name="Protocols"/>
+                    <local:HistogramView x:Name="BytesSent" Margin="0,24,0,0"/>
+                </StackPanel>
+            </ds:StoryExample>
+        </ds:StorySection>
+    </StackPanel>
+</ds:Story>

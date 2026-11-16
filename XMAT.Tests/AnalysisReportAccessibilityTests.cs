@@ -127,25 +127,52 @@ namespace XMAT.Tests
                 });
                 analysis.NumericStats.Add(new NetworkTraceAnalyzerResultsDataModel { Name = "Packets over the MTU", Value = 3 });
                 analysis.NumericStats.Add(new NetworkTraceAnalyzerResultsDataModel { Name = "Duplicate packets", Value = 0 });
-                var network = new NetworkTraceAnalysisView { DataContext = new { AnalysisData = analysis } };
-                WpfTestHost.Show(window, network);
-                Assert.Equal("Packets sent by source", AssertNamed(Descendants(network).OfType<DataGrid>().Single()));
-                // Info checks are good news, so the new look gives them the success colors.
-                foreach (var (check, role) in new[] { ("Packets over the MTU", "Error"), ("Duplicate packets", "Success") })
+                bool newLook = LookState.Current.IsNewLook;
+                try
                 {
-                    TextBlock text = Descendants(network).OfType<TextBlock>().Single(block => block.Text == check);
-                    Assert.Same(text.FindResource($"{role}SoftBrush"), text.Background);
-                    Assert.Same(text.FindResource($"{role}TextBrush"), text.Foreground);
+                    LookState.Current.IsNewLook = true;
+                    ResourceDictionary look = ThemeManager.CreateLook(newLook: true);
+                    ThemeManager.LoadTheme(look, "Light", newLook: true, highContrast: false);
+                    window.Resources = look;
+                    var network = new NetworkTraceAnalysisView { DataContext = new { AnalysisData = analysis } };
+                    WpfTestHost.Show(window, network);
+                    Assert.StartsWith(
+                        "Packets sent by source", AssertNamed(Descendants(network).OfType<HistogramView>().Single().Rows));
+                    // Info checks are good news, so the new look gives their counts the success colors.
+                    foreach (var (check, role) in new[] { ("Packets over the MTU", "Error"), ("Duplicate packets", "Success") })
+                    {
+                        ContentControl count = CheckCount(network, check);
+                        Assert.Same(count.FindResource($"{role}SoftBrush"), count.Background);
+                        Assert.Same(count.FindResource($"{role}TextBrush"), count.Foreground);
+                    }
+
+                    // The original look keeps its table, named after the list.
+                    LookState.Current.IsNewLook = false;
+                    WpfTestHost.Pump();
+                    Assert.Equal("Packets sent by source", AssertNamed(Descendants(network).OfType<DataGrid>().Single()));
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = newLook;
                 }
             });
         }
 
-        private static string AssertNamed(DataGrid grid)
+        private static string AssertNamed(UIElement element)
         {
-            string name = UIElementAutomationPeer.CreatePeerForElement(grid).GetName();
+            string name = UIElementAutomationPeer.CreatePeerForElement(element).GetName();
             Assert.False(string.IsNullOrWhiteSpace(name));
             Assert.DoesNotContain("NO_IMPL_", name);
             return name;
+        }
+
+        // The count of the network analysis's check named CHECK, in the new look.
+        private static ContentControl CheckCount(NetworkTraceAnalysisView view, string check)
+        {
+            var checks = (ItemsControl)view.FindName("Checks");
+            object item = checks.Items.Cast<NetworkTraceAnalyzerResultsDataModel>().Single(stat => stat.Name == check);
+            var presenter = (ContentPresenter)checks.ItemContainerGenerator.ContainerFromItem(item);
+            return (ContentControl)presenter.ContentTemplate.FindName("Count", presenter);
         }
 
         // One endpoint: Batch Frequency found 3 errors, one with a call, and Repeated Calls 1 warning.

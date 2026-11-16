@@ -130,7 +130,7 @@ holds the corner, spacing and type size values every view shares, and merges one
 | `ChoiceCards.xaml`, `CaptureIcons.xaml` | Choice cards, such as the devices and capture types in New Capture, and the pictures on them |
 | `ScrollBars.xaml` | Scroll bars, with a thumb at least 24px long |
 | `Menus.xaml` | Menu bars, dropdowns, context menus and the More menu |
-| `TrafficOverview.xaml`, `AnalysisCharts.xaml`, `DataViz.xaml` | The traffic overview, the call rate charts, and the column summaries a table's column headers open |
+| `TrafficOverview.xaml`, `AnalysisCharts.xaml`, `DataViz.xaml` | The traffic overview, the call rate charts, the column summaries a table's column headers open, and the histograms in analysis reports |
 | `Spacing.xaml`, `Motion.xaml` | The 4px spacing grid, and animation durations and curves |
 
 Tables, tree views, tooltips, the status bar and text styles are still in `NewLook.xaml`; they move to

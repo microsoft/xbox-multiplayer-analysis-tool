@@ -94,6 +94,52 @@ namespace XMAT.Tests
             });
         }
 
+        // n columns of 320 need 352n - 32: as many as fit, never none.
+        [Theory]
+        [InlineData(300, 1)]
+        [InlineData(671, 1)]
+        [InlineData(672, 2)]
+        [InlineData(1023, 2)]
+        [InlineData(1024, 3)]
+        [InlineData(double.PositiveInfinity, 1)]
+        public void ColumnFlowPanel_FitsAsManyColumnsAsTheWidthHolds(double width, int columns) =>
+            Assert.Equal(columns, ColumnFlowPanel.ColumnsFor(width, 320, 32));
+
+        // The panel fills its width with equal columns, filled from the left in rows as tall as their tallest child,
+        // and its columns widen with the text size.
+        [Fact]
+        public void ColumnFlowPanel_FillsItsWidthWithEqualColumnsThatWidenWithTheTextSize()
+        {
+            _application.Run(window =>
+            {
+                var first = new Border { Height = 10 };
+                var second = new Border { Height = 30 };
+                var third = new Border { Height = 20 };
+                var panel = new ColumnFlowPanel
+                {
+                    ColumnMinWidth = 320, ColumnSpacing = 32, RowSpacing = 24, Children = { first, second, third }
+                };
+                System.Windows.Documents.TextElement.SetFontSize(panel, 12);
+                var host = new Border
+                {
+                    Width = 700, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+                    Child = panel
+                };
+                WpfTestHost.Show(window, host);
+
+                Assert.Equal(new Size(700, 74), panel.DesiredSize);
+                Assert.Equal(new Rect(0, 0, 334, 30), LayoutInformation.GetLayoutSlot(first));
+                Assert.Equal(new Rect(366, 0, 334, 30), LayoutInformation.GetLayoutSlot(second));
+                Assert.Equal(new Rect(0, 54, 334, 20), LayoutInformation.GetLayoutSlot(third));
+
+                // At 150% text, a column needs 480, so only one fits.
+                System.Windows.Documents.TextElement.SetFontSize(panel, 18);
+                WpfTestHost.Pump();
+                Assert.Equal(new Rect(0, 0, 700, 10), LayoutInformation.GetLayoutSlot(first));
+                Assert.Equal(new Rect(0, 88, 700, 20), LayoutInformation.GetLayoutSlot(third));
+            });
+        }
+
         [Fact]
         public void FlexFill_FillsTheRoomLeftAndScrollsThePageOnlyBelowItsMinimum()
         {

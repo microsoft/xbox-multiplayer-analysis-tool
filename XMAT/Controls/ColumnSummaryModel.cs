@@ -186,7 +186,7 @@ namespace XMAT
         }
 
         // COUNT as a whole percentage of TOTAL. Less than 1% is UnderOne, and a count short of the total stays below 100.
-        internal static (int Percent, bool UnderOne) Percent(int count, int total)
+        internal static (int Percent, bool UnderOne) Percent(long count, long total)
         {
             if (total <= 0 || count <= 0)
             {
@@ -294,10 +294,10 @@ namespace XMAT
         }
 
         // COUNT with its noun, singular or plural: "1 request", "1,284 requests".
-        internal static string Counted(int count, string singularKey, string pluralKey) =>
+        internal static string Counted(long count, string singularKey, string pluralKey) =>
             Localization.GetLocalizedString(count == 1 ? singularKey : pluralKey, Number(count));
 
-        internal static string Number(int count) => count.ToString("N0", CultureInfo.CurrentCulture);
+        internal static string Number(long count) => count.ToString("N0", CultureInfo.CurrentCulture);
 
         // Whether OTHER shows the same thing, so a refresh can keep this one.
         internal bool HasSameContent(ColumnSummaryModel other) =>
