@@ -14,7 +14,7 @@ Colors come in three layers:
 2. **The palette**, in [`XMAT/Themes/Palette.xaml`](../XMAT/Themes/Palette.xaml), generated from the base colors. Each
    base color becomes a ramp of steps from light to dark: `Gray1` (white) to `Gray16`, and `Blue1` to `Blue12`, and so
    on. Each base color is one of the steps of its ramp, such as `Blue8`.
-3. **Roles**, in `XMAT/Themes/LightTheme.xaml`, `DarkTheme.xaml` and `HighContrastTheme.xaml`: 38 named uses, such as
+3. **Roles**, in `XMAT/Themes/LightTheme.xaml`, `DarkTheme.xaml` and `HighContrastTheme.xaml`: 39 named uses, such as
    `TextPrimaryBrush` or `SurfacePanelBrush`. The Light and Dark themes give each role a palette step; the High
    Contrast theme gives it a Windows system color, so it follows the user's contrast theme.
 
@@ -36,6 +36,7 @@ Use `DynamicResource`, so the view follows theme changes.
 | `SurfaceHeaderBrush` | The header band of a table |
 | `SurfaceStripBrush` | The capture tab strip |
 | `SurfaceHoverBrush` | A hovered button or row |
+| `SurfaceSelectedBrush` | A chosen card, such as the device in New Capture. High Contrast keeps the window color and shows the choice with the highlight color |
 | `SurfaceControlBrush` | A button's face |
 | `TextPrimaryBrush` | Body text |
 | `TextSecondaryBrush` | Labels, captions, column headers and the status bar |
@@ -126,6 +127,7 @@ holds the corner, spacing and type size values every view shares, and merges one
 | `Toolbar.xaml` | The capture toolbar, its Start/Stop capture button and the recording indicator |
 | `Inputs.xaml` | Text boxes, dropdowns, check boxes and radio buttons |
 | `Tabs.xaml` | Capture, inspector and format tabs, and the More buttons that end a tab row |
+| `ChoiceCards.xaml`, `CaptureIcons.xaml` | Choice cards, such as the devices and capture types in New Capture, and the pictures on them |
 | `Menus.xaml` | Menu bars, dropdowns, context menus and the More menu |
 | `TrafficOverview.xaml`, `AnalysisCharts.xaml`, `DataViz.xaml` | The traffic overview, the call rate charts, and the column summaries a table's column headers open |
 | `Spacing.xaml`, `Motion.xaml` | The 4px spacing grid, and animation durations and curves |

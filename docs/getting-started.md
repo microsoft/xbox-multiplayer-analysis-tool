@@ -103,7 +103,7 @@ captures before analyzing.
 
 1. Start XMAT and click the **+** tab.
 2. Choose your console and the web proxy capture method, then click **Add capture**.
-   **Default Console** uses the designated default console without entering its IP address.
+   **Default Xbox console** uses the designated default console without entering its IP address.
 3. Check that the console is ready to reboot, then click **Enable Xbox Proxy**.
    Enabling proxying starts the local listener and reboots the kit.
 4. After the console restarts, launch an app that uses Xbox services.

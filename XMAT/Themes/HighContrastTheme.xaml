@@ -17,6 +17,8 @@
     <SolidColorBrush x:Key="SurfaceHeaderBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
     <SolidColorBrush x:Key="SurfaceStripBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
     <SolidColorBrush x:Key="SurfaceHoverBrush" Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}"/>
+    <!-- A chosen card keeps the window color: its outline and check, in the highlight color, show the choice. -->
+    <SolidColorBrush x:Key="SurfaceSelectedBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
     <SolidColorBrush x:Key="SurfaceControlBrush" Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}"/>
 
     <!-- Text -->

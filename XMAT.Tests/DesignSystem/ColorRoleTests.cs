@@ -9,7 +9,7 @@ using System.Xml.Linq;
 
 namespace XMAT.Tests.DesignSystem
 {
-    // The rails of XMAT's color system (docs/design-system.md): views and styles use the 38 roles, the new look's
+    // The rails of XMAT's color system (docs/design-system.md): views and styles use the 39 roles, the new look's
     // themes give each role a step of the generated palette, and the original look's names stay only where the
     // original look still needs them.
     public class ColorRoleTests
@@ -17,7 +17,7 @@ namespace XMAT.Tests.DesignSystem
         internal static readonly string[] Roles =
         {
             "SurfaceCanvasBrush", "SurfacePanelBrush", "SurfaceWellBrush", "SurfaceHeaderBrush", "SurfaceStripBrush",
-            "SurfaceHoverBrush", "SurfaceControlBrush",
+            "SurfaceHoverBrush", "SurfaceSelectedBrush", "SurfaceControlBrush",
             "TextPrimaryBrush", "TextSecondaryBrush", "TextDisabledBrush", "TextHeadingBrush", "TextControlBrush",
             "BorderSubtleBrush", "BorderDefaultBrush", "BorderControlBrush", "BorderStrongBrush", "BorderStrongHoverBrush",
             "BorderWellBrush",
@@ -168,7 +168,8 @@ namespace XMAT.Tests.DesignSystem
                 .SelectMany(surface => new[] { ("TextPrimaryBrush", surface), ("TextSecondaryBrush", surface) })
                 .Concat(new[]
                 {
-                    ("TextHeadingBrush", "SurfacePanelBrush"), ("TextControlBrush", "SurfaceControlBrush"),
+                    ("TextHeadingBrush", "SurfacePanelBrush"), ("TextHeadingBrush", "SurfaceSelectedBrush"),
+                    ("TextControlBrush", "SurfaceControlBrush"),
                     ("TextControlBrush", "SurfaceHoverBrush"), ("TextControlBrush", "AccentSoftBrush"),
                     ("AccentOnFillBrush", "AccentFillBrush")
                 })

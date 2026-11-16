@@ -329,11 +329,11 @@ namespace XMAT
                 return;
             }
 
-            AddDeviceWindow deviceSelector = new()
-            {
-                Owner = Application.Current.MainWindow
-            };
-            var confirmed = deviceSelector.ShowDialog();
+            // New Capture: the new look's cards, or the original look's dialog.
+            Window dialog = LookState.Current.IsNewLook ? new NewCaptureWindow() : new AddDeviceWindow();
+            dialog.Owner = Application.Current.MainWindow;
+            var confirmed = dialog.ShowDialog();
+            var deviceSelector = (INewCaptureDialog)dialog;
 
             if (confirmed ?? false)
             {

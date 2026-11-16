@@ -8,13 +8,15 @@
         <ResourceDictionary Source="Palette.xaml"/>
     </ResourceDictionary.MergedDictionaries>
 
-    <!-- Surfaces: window chrome, content panels, recessed wells, table headers, the capture tab strip, hover and buttons -->
+    <!-- Surfaces: window chrome, content panels, recessed wells, table headers, the capture tab strip, hover, a chosen
+         card and buttons -->
     <SolidColorBrush x:Key="SurfaceCanvasBrush" Color="{StaticResource Gray3}"/>
     <SolidColorBrush x:Key="SurfacePanelBrush" Color="{StaticResource Gray1}"/>
     <SolidColorBrush x:Key="SurfaceWellBrush" Color="{StaticResource Gray2}"/>
     <SolidColorBrush x:Key="SurfaceHeaderBrush" Color="{StaticResource Gray3}"/>
     <SolidColorBrush x:Key="SurfaceStripBrush" Color="{StaticResource Gray5}"/>
     <SolidColorBrush x:Key="SurfaceHoverBrush" Color="{StaticResource Gray4}"/>
+    <SolidColorBrush x:Key="SurfaceSelectedBrush" Color="{StaticResource Blue2}"/>
     <SolidColorBrush x:Key="SurfaceControlBrush" Color="{StaticResource Gray1}"/>
 
     <!-- Text -->

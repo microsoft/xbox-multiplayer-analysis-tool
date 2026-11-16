@@ -17,6 +17,7 @@ namespace XMAT.DesignSystem
             () => new ToolbarStory(),
             () => new TextInputsStory(),
             () => new ChoicesStory(),
+            () => new ChoiceCardsStory(),
             () => new TabsStory(),
             () => new MenusStory(),
         };

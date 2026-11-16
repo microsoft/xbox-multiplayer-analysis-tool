@@ -26,7 +26,6 @@ Looks/NewLook.xaml: {x:Type Label}
 Looks/NewLook.xaml: {x:Type ListBox}
 Looks/NewLook.xaml: {x:Type Separator}
 Looks/NewLook.xaml: {x:Type StatusBar}
-Looks/NewLook.xaml: {x:Type TextBlock}
 Looks/NewLook.xaml: {x:Type ToolTip}
 Looks/NewLook.xaml: {x:Type TreeViewItem}
 Looks/NewLook.xaml: {x:Type TreeView}

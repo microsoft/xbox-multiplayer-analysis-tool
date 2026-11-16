@@ -1,0 +1,62 @@
+<ds:Story x:Class="XMAT.DesignSystem.ChoiceCardsStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          xmlns:local="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
+          Title="Choice cards"
+          Summary="Choice cards choose one option from a few, when each option needs a sentence to explain it, such as the device and the capture type in New Capture. Cards with the same GroupName are one choice: Tab reaches the chosen card, and the arrow keys choose another. The pictures are in Styles/CaptureIcons.xaml."
+          StyleFile="Styles/ChoiceCards.xaml">
+    <StackPanel>
+        <ds:StorySection Title="Picture above" StyleName="ChoiceCard (default style)"
+                         Description="Cards side by side, each with a short description, such as New Capture's devices. Content, such as a field the option needs, shows under the text while the card is chosen.">
+            <ds:StoryExample Caption="Not chosen">
+                <local:ChoiceCard Width="216" GroupName="StoryDevice" Icon="{DynamicResource ThisPcPicture}"
+                                  Title="This PC"
+                                  Description="The Windows PC that runs XMAT. XMAT sets it up for you."/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Chosen, with the field it needs">
+                <local:ChoiceCard Width="216" GroupName="StoryDevice" IsChecked="True"
+                                  Icon="{DynamicResource ConsoleByAddressPicture}" Title="Xbox console by address"
+                                  Description="A dev kit at an IP address or hostname. Needs the Xbox GDK.">
+                    <StackPanel>
+                        <TextBlock Text="IP address or hostname" Margin="{DynamicResource HeadingDescriptionGap}"/>
+                        <TextBox Text="192.168.1.20" Padding="3,2.5,12,2.5" MinHeight="{DynamicResource ControlHeight}"
+                                 AutomationProperties.Name="IP address or hostname"/>
+                    </StackPanel>
+                </local:ChoiceCard>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Not available, with the reason">
+                <local:ChoiceCard Width="216" GroupName="StoryUnavailableDevice" IsEnabled="False"
+                                  Icon="{DynamicResource DefaultConsolePicture}" Title="Default Xbox console"
+                                  Description="The dev kit set as default in the Xbox tools. Needs the Xbox GDK."
+                                  Note="Not available. The Xbox GDK isn't installed on this PC."
+                                  NoteIcon="{DynamicResource InfoNoteIcon}"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Picture beside" StyleName="ChoiceCard, Orientation=&quot;Horizontal&quot;"
+                         Description="Wider cards with a note under the description, such as New Capture's capture types, where the note says what the option needs.">
+            <ds:StoryExample Caption="Chosen, with a note">
+                <local:ChoiceCard Width="330" GroupName="StoryCaptureType" Orientation="Horizontal" IsChecked="True"
+                                  Icon="{DynamicResource WebProxyPicture}" Title="Web Proxy"
+                                  Description="Web requests, responses and WebSocket messages, through XMAT's proxy."
+                                  Note="The console restarts when proxying is turned on or off."
+                                  NoteIcon="{DynamicResource RestartNoteIcon}"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Not chosen">
+                <local:ChoiceCard Width="330" GroupName="StoryCaptureType" Orientation="Horizontal"
+                                  Icon="{DynamicResource NetworkTracePicture}" Title="Network Trace"
+                                  Description="Packet-level traffic, like xbtrace netcap."
+                                  Note="XMAT downloads the trace from the console when you stop."
+                                  NoteIcon="{DynamicResource DownloadNoteIcon}"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Not available, with the reason">
+                <local:ChoiceCard Width="330" GroupName="StoryUnavailableCaptureType" Orientation="Horizontal"
+                                  IsEnabled="False" Icon="{DynamicResource NetworkTracePicture}" Title="Network Trace"
+                                  Description="Packet-level traffic, like xbtrace netcap."
+                                  Note="Not available for generic devices. Network Trace works with Xbox consoles and this PC."
+                                  NoteIcon="{DynamicResource InfoNoteIcon}"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+    </StackPanel>
+</ds:Story>

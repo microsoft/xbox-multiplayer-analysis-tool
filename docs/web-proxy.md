@@ -21,8 +21,8 @@ disabling proxying. Generic devices must support a certificate and manual proxy 
 ## Add a device
 
 1. Click the **+** tab and choose a device and the web proxy capture method.
-2. Select **Default Console** to use the designated default console without
-   entering its IP address, or specify another device.
+2. Select **Default Xbox console** to use the designated default console without
+   entering its IP address, or **Xbox console by address** to enter it.
 3. Click **Add capture**. A new device/capture tab opens with an empty connections list.
 
 ![Xbox development kit before proxying is enabled](../ReadmeImages/1.png)

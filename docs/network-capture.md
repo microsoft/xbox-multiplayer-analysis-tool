@@ -18,7 +18,7 @@ That workflow remains available and provides higher-fidelity data.
 
 ## Capture network data
 
-1. Click the **+** tab and select your console or Local PC.
+1. Click the **+** tab and select your console or **This PC**.
 2. Choose **Network Trace** and add the capture.
 3. In the **NetworkTrace** tab, click **Start Capture**.
 4. Reproduce the issue while XMAT shows **Trace Running**.

@@ -24,6 +24,7 @@ namespace XMAT.Operations.Capabilities
         private const string PreferencesXaml = "Windows/PreferencesWindow.xaml";
         private const string AnalyzerChoiceXaml = "Windows/CaptureAnalyzerWindow.xaml";
         private const string AddDeviceXaml = "Windows/AddDeviceWindow.xaml";
+        private const string NewCaptureXaml = "Windows/NewCaptureWindow.xaml";
         private const string DisableOnCloseXaml = "Windows/DisableDeviceOnCloseWindow.xaml";
         private const string SourceAddressXaml = "Engines/WebServiceProxy/Windows/SourceAddressWindow.xaml";
         private const string PortChangeXaml = "Engines/WebServiceProxy/Windows/ProxyPortChangeWindow.xaml";
@@ -140,6 +141,8 @@ namespace XMAT.Operations.Capabilities
                     WpfCommand("New", DeviceTabsXaml),
                     Window("XMAT.AddDeviceWindow"),
                     Click(AddDeviceXaml, "OkButton_Click"),
+                    Window("XMAT.NewCaptureWindow"),
+                    Click(NewCaptureXaml, "AddCapture_Click"),
                     EnumValue(CaptureTypeEnum, "WebProxy"),
                 }),
             Capability.Planned(

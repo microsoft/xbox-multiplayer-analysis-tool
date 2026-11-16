@@ -21,6 +21,7 @@ namespace XMAT.Tests
             "Styles/Toolbar.xaml",
             "Styles/Inputs.xaml",
             "Styles/Tabs.xaml",
+            "Styles/ChoiceCards.xaml",
             "Looks/NewLook.xaml",
         };
 
