@@ -34,8 +34,10 @@
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Tab continues past the toolbar's last button instead of cycling inside the toolbar. -->
-        <ToolBar Grid.Row="0" Grid.ColumnSpan="{app:Look New=3, Original=2}" ToolBarTray.IsLocked="True"
+        <!-- Tab continues past the toolbar's last button instead of cycling inside the toolbar. In the new look the
+             toolbar stays in the packets' column: spanning the packet data's star column from its Auto row would make
+             the Grid measure the packet table at infinite height, which builds a row for every packet. -->
+        <ToolBar Grid.Row="0" Grid.ColumnSpan="{app:Look New=1, Original=2}" ToolBarTray.IsLocked="True"
                  KeyboardNavigation.TabNavigation="Continue">
             <!-- The new look shares the web proxy capture's green start action; the original look keeps its toggle. -->
             <app:ActionToggleButton x:Name="StartStopButton" Style="{DynamicResource NetworkTraceStartStopButtonStyle}"
@@ -89,7 +91,9 @@
             </DataGrid.Columns>
         </DataGrid>
 
-        <GridSplitter x:Name="PacketSplitter" Grid.Row="{app:Look New=1, Original=2}" Grid.Column="1" Grid.RowSpan="{app:Look New=2, Original=63}" Width="{app:Look New=12, Original=4}" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
+        <!-- The new look's quiet divider between the packets and their data, as between the traffic and the inspector. -->
+        <GridSplitter x:Name="PacketSplitter" Grid.Row="{app:Look New=1, Original=2}" Grid.Column="1" Grid.RowSpan="{app:Look New=2, Original=63}" Width="{app:Look New=12, Original=4}"
+                      Style="{DynamicResource ColumnSplitterStyle}" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
 
         <TabControl x:Name="PacketEvent" Grid.Row="{app:Look New=1, Original=0}" Grid.RowSpan="{app:Look New=2, Original=3}" Grid.Column="2">
             <TabItem x:Name="PacketRawTextTab" Header="Packet Data">
