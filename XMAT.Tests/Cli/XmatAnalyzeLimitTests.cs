@@ -90,8 +90,8 @@ namespace XMAT.Tests.Cli
             CliAssert.ExitCode(3, smallInput);
             Assert.Equal(new[] { "analysis.input.too-large" }, smallInput.ErrorCodes());
             Assert.Equal(new[] { 32L, 256L, 128L, 100_000L }, Limits(smallInput.Json()));
-            Assert.False(Directory.Exists(Path.Combine(directory.Root, "lowered")));
-            Assert.False(Directory.Exists(Path.Combine(directory.Root, "small-input")));
+            Assert.False(Directory.Exists(Path.Join(directory.Root, "lowered")));
+            Assert.False(Directory.Exists(Path.Join(directory.Root, "small-input")));
             CliAssert.NoStagingFolders(directory.Root);
         }
 
