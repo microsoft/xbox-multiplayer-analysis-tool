@@ -392,10 +392,10 @@ namespace XMAT.Operations.Capabilities
                 "view.controls", "Control templates", "Presentation: scroll bar commands inside control templates",
                 gui: new[]
                 {
-                    WpfCommand("ScrollBar.PageUpCommand", "Looks/NewLook.xaml"),
-                    WpfCommand("ScrollBar.PageDownCommand", "Looks/NewLook.xaml"),
-                    WpfCommand("ScrollBar.PageLeftCommand", "Looks/NewLook.xaml"),
-                    WpfCommand("ScrollBar.PageRightCommand", "Looks/NewLook.xaml"),
+                    WpfCommand("ScrollBar.PageUpCommand", "Styles/ScrollBars.xaml"),
+                    WpfCommand("ScrollBar.PageDownCommand", "Styles/ScrollBars.xaml"),
+                    WpfCommand("ScrollBar.PageLeftCommand", "Styles/ScrollBars.xaml"),
+                    WpfCommand("ScrollBar.PageRightCommand", "Styles/ScrollBars.xaml"),
                     WpfCommand("ScrollBar.PageUpCommand", "Looks/OriginalLook.xaml"),
                     WpfCommand("ScrollBar.PageDownCommand", "Looks/OriginalLook.xaml"),
                     WpfCommand("ScrollBar.PageLeftCommand", "Looks/OriginalLook.xaml"),
