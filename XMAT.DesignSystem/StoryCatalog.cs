@@ -20,6 +20,7 @@ namespace XMAT.DesignSystem
             () => new ChoiceCardsStory(),
             () => new TabsStory(),
             () => new MenusStory(),
+            () => new ScrollBarsStory(),
         };
     }
 }

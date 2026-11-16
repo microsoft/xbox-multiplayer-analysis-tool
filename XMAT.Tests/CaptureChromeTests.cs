@@ -306,6 +306,41 @@ namespace XMAT.Tests
                     $"Button label '{text.Text}' ({text.Foreground}) must contrast with {background}."));
         }
 
+        // However long the content, a scroll bar's thumb in the new look is at least 24px long, so it stays easy to see and
+        // to grab.
+        [Theory]
+        [InlineData(Orientation.Vertical)]
+        [InlineData(Orientation.Horizontal)]
+        public void ScrollBarThumbs_AreAtLeast24pxLong(Orientation orientation)
+        {
+            _application.Run(window =>
+            {
+                ResourceDictionary look = ThemeManager.CreateLook(newLook: true);
+                ThemeManager.LoadTheme(look, "Light", newLook: true, highContrast: false);
+                window.Resources = look;
+                var bar = new ScrollBar
+                {
+                    Orientation = orientation,
+                    Maximum = 10000,
+                    ViewportSize = 10,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Top,
+                };
+                if (orientation == Orientation.Vertical)
+                {
+                    bar.Height = 160;
+                }
+                else
+                {
+                    bar.Width = 160;
+                }
+
+                WpfTestHost.Show(window, bar);
+                Thumb thumb = ((Track)bar.Template.FindName("PART_Track", bar)).Thumb;
+                Assert.Equal(24, orientation == Orientation.Vertical ? thumb.ActualHeight : thumb.ActualWidth);
+            });
+        }
+
         [Theory]
         [InlineData("Light", GridResizeDirection.Columns)]
         [InlineData("Light", GridResizeDirection.Rows)]

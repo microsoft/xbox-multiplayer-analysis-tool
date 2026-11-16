@@ -1,0 +1,32 @@
+<ds:Story x:Class="XMAT.DesignSystem.ScrollBarsStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          Title="Scroll bars"
+          Summary="Scroll bars show where a long table, list or text is scrolled to, such as the packet and traffic tables. The thumb's length shows how much of the content is in view, and it is never shorter than 24px, however long the content is."
+          StyleFile="Styles/ScrollBars.xaml">
+    <StackPanel>
+        <ds:StorySection Title="Vertical" StyleName="ScrollBar (default style)"
+                         Description="A rounded thumb on a clear 12px track, at the right of content taller than its pane.">
+            <ds:StoryExample Caption="Half in view">
+                <ScrollBar Orientation="Vertical" Height="160" Maximum="100" ViewportSize="100" Value="40"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Long content: the shortest thumb">
+                <ScrollBar Orientation="Vertical" Height="160" Maximum="10000" ViewportSize="10"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Scrolled to the end">
+                <ScrollBar Orientation="Vertical" Height="160" Maximum="10000" ViewportSize="10" Value="10000"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection Title="Horizontal" StyleName="ScrollBar, Orientation=&quot;Horizontal&quot;"
+                         Description="A rounded thumb on a clear 12px track, under content wider than its pane.">
+            <ds:StoryExample Caption="Half in view">
+                <ScrollBar Orientation="Horizontal" Width="240" Maximum="100" ViewportSize="100" Value="40"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Long content: the shortest thumb">
+                <ScrollBar Orientation="Horizontal" Width="240" Maximum="10000" ViewportSize="10"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+    </StackPanel>
+</ds:Story>
