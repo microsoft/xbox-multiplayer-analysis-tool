@@ -301,6 +301,54 @@ namespace XMAT.Tests
             });
         }
 
+        // The packet table summarizes the columns whose values repeat, protocols by name, and choosing a PID, TID,
+        // protocol or address sets that filter to the value alone, as in a web proxy capture's traffic table.
+        [Fact]
+        public void ColumnSummaries_CoverRepeatedValues_AndChoosingOneFiltersThePackets()
+        {
+            _application.Run(window =>
+            {
+                using var database = new SqLtDatabase();
+                database.Initialize();
+                NetworkTraceCaptureMethod.Method.Initialize(new CaptureAppModel { ActiveDatabase = database });
+                var controller = new NetworkTraceCaptureController("Test device", DeviceType.LocalPC)
+                {
+                    _networkTraceEngine = new TestTraceEngine
+                    {
+                        PacketOnDownload = NetBiosPacket,
+                        PacketCount = 2,
+                        OtherPacketsOnDownload = new[] { NetBiosPacket.Replace("\"processId\":4", "\"processId\":7", StringComparison.Ordinal) },
+                    }
+                };
+                controller.Initialize();
+                var view = new NetworkTraceCaptureView { DataContext = new TestCaptureDeviceContext(controller) };
+                WpfTestHost.Show(window, view);
+                NetworkTraceCommands.StartStopCapture.Execute(null, view);
+                NetworkTraceCommands.StartStopCapture.Execute(null, view);
+                WpfTestHost.Pump();
+
+                var grid = (DataGrid)view.FindName("PacketList");
+                Assert.Equal(
+                    new[] { "PROTO", "SRC IP", "DEST IP", "SRC MAC", "DEST MAC", "TYPE", "PID", "TID" },
+                    grid.Columns.Where(column => ColumnSummary.Describe(grid, column) != null).Select(column => (string)column.Header));
+                ColumnSummaryColumn protocol = ColumnSummary.Describe(grid, grid.Columns[1]);
+                Assert.Equal("UDP", protocol.ValueOf(grid.Items[0]));
+                Assert.Equal("3 packets", protocol.RowCountText(3));
+                Assert.Equal("Process ID", ColumnSummary.Title(grid.Columns[13]));
+
+                ColumnSummaryColumn processId = ColumnSummary.Describe(grid, grid.Columns[13]);
+                var seven = grid.Items.Cast<NetworkTracePacketDataModel>().Single(packet => packet.ProcessId == 7);
+                var entry = new ColumnSummaryValue("7", 1, seven);
+                Assert.True(processId.CanSelect(entry));
+                processId.Select(entry);
+                WpfTestHost.Pump();
+
+                Assert.True(((CheckBoxFilters)view.FindName("PidFilters")).IsFilterEnabled);
+                Assert.Equal(new[] { "7" }, controller.PidFilterList.Where(item => item.IsChecked).Select(item => item.Text));
+                Assert.Equal(new[] { seven }, grid.Items.Cast<NetworkTracePacketDataModel>());
+            });
+        }
+
         private static int Rows(System.Windows.DependencyObject parent)
         {
             int rows = 0;
@@ -420,6 +468,7 @@ namespace XMAT.Tests
             internal int SubscriberCount => EventRecordAvailable?.GetInvocationList().Length ?? 0;
             internal string PacketOnDownload { get; set; }
             internal int PacketCount { get; set; } = 1;
+            internal string[] OtherPacketsOnDownload { get; set; } = Array.Empty<string>();
 
             public event EventHandler<string> EventRecordAvailable;
 
@@ -434,6 +483,11 @@ namespace XMAT.Tests
                 for (int packet = 0; PacketOnDownload != null && packet < PacketCount; packet++)
                 {
                     EventRecordAvailable?.Invoke(this, PacketOnDownload);
+                }
+
+                foreach (string packet in OtherPacketsOnDownload)
+                {
+                    EventRecordAvailable?.Invoke(this, packet);
                 }
                 return PendingPhase == "download" ? PendingOperation : Task.CompletedTask;
             }

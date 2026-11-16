@@ -34,6 +34,13 @@ inspection.
 
 ![Captured packets available for filtering and inspection](../ReadmeImages/25.png)
 
+With **New look** on, the **PROTO**, **SRC IP**, **DEST IP**, **SRC MAC**, **DEST MAC**,
+**TYPE**, **PID** and **TID** column headers have an info icon at their right end. Select
+it to see how that column's values are spread over the packets the list shows, as in a
+[web proxy capture](web-proxy.md): the six most common values, largest first, with
+counts and percentages, then the rest in one row. Select a protocol, address, PID or TID
+to set that filter to the value; MAC addresses and the media type have no filter.
+
 Use **File > Save Captures** and **Load Captures** to save and reopen trace data.
 **Clear Captures** removes the current data set; **Start Capture** clears it and
 starts a new capture.

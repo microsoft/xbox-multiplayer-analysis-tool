@@ -38,7 +38,7 @@
              toolbar stays in the packets' column: spanning the packet data's star column from its Auto row would make
              the Grid measure the packet table at infinite height, which builds a row for every packet. -->
         <ToolBar Grid.Row="0" Grid.ColumnSpan="{app:Look New=1, Original=2}" ToolBarTray.IsLocked="True"
-                 KeyboardNavigation.TabNavigation="Continue">
+                 Margin="{DynamicResource SectionBottomSpacing}" KeyboardNavigation.TabNavigation="Continue">
             <!-- The new look shares the web proxy capture's green start action; the original look keeps its toggle. -->
             <app:ActionToggleButton x:Name="StartStopButton" Style="{DynamicResource NetworkTraceStartStopButtonStyle}"
                                     IsChecked="{Binding CaptureController.IsRunning, Mode=OneWay}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" Command="{x:Static logic:NetworkTraceCommands.StartStopCapture}" CommandParameter="{Binding IsChecked,RelativeSource={RelativeSource Self}}"/>
@@ -53,7 +53,10 @@
             <Separator/>
             <Button x:Name="ClearCapturesButton" Command="{x:Static app:AppCommands.ClearAllCaptures}" CommandTarget="{Binding ElementName=NetworkTraceCaptureControl}" IsEnabled="{Binding CaptureController.HaveTraces}">Clear Captures</Button>
         </ToolBar>
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Background="{DynamicResource SurfacePanelBrush}">
+        <!-- The filters, the packets and Packet Data take a web proxy capture's insets: the filters, its traffic table
+             and its inspector's. The original look's insets are 0. -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="{DynamicResource TrafficFiltersMargin}"
+                    Background="{DynamicResource SurfacePanelBrush}">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock x:Name="FiltersText" Style="{DynamicResource FilterLabelStyle}" Margin="{app:Look New='0,0,12,0', Original='20,0'}" Text="Filters"/>
                 <app:CheckBoxFilters x:Name="PidFilters" FilterDesc="PID" FiltersChanged="OnFiltersChanged" ItemsSource="{Binding CaptureController.PidFilterList}"/>
@@ -64,17 +67,21 @@
             </StackPanel>
         </StackPanel>
         <TextBlock Grid.Row="2" Grid.RowSpan="3" FontSize="{DynamicResource EmptyStateFontSize}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   Margin="{DynamicResource TrafficTableMargin}" HorizontalAlignment="Center" VerticalAlignment="Center"
                    Visibility="{Binding CaptureController.HaveNoTraces, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}"
                    Text="{Binding CaptureController.DeviceStatus, Mode=OneWay, Converter={StaticResource DeviceStatusConverter}}"/>
+        <!-- In the new look, a column's info icon shows how its values are spread over the packets (see
+             NetworkTraceCaptureView.ColumnSummary.cs). -->
         <DataGrid x:Name="PacketList" Grid.Row="2" Grid.RowSpan="3" ColumnHeaderStyle="{DynamicResource PacketGridHeaderStyle}"
+                  Margin="{DynamicResource TrafficTableMargin}" app:ColumnSummary.IsEnabled="True"
                   IsSynchronizedWithCurrentItem="True" IsReadOnly="True"
                   Visibility="{Binding CaptureController.HaveTraces, Mode=OneWay, Converter={StaticResource BooleanToVisibilityConverter}}"
                   ItemsSource="{Binding NetworkTracePackets, ElementName=NetworkTraceCaptureControl, Mode=OneWay}"
                   AutoGenerateColumns="False" GridLinesVisibility="None">
             <DataGrid.Columns>
+                <!-- In the new look, a column with a summary is wide enough for its name and its info icon. -->
                 <DataGridTextColumn Header="TIMESTAMP" Binding="{Binding Timestamp, StringFormat={}{0:HH:mm:ss.fffffff}}" Width="120"/>
-                <DataGridTextColumn Header="PROTO" Binding="{Binding Protocol, Mode=OneWay, Converter={StaticResource NetworkProtocolConverter}}" Width="62"/>
+                <DataGridTextColumn Header="PROTO" Binding="{Binding Protocol, Mode=OneWay, Converter={StaticResource NetworkProtocolConverter}}" Width="{app:Look New=84, Original=62}"/>
                 <DataGridTextColumn Header="S" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.StartOfPacket}}" Width="22"/>
                 <DataGridTextColumn Header="E" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.EndOfPacket}}" Width="22"/>
                 <DataGridTextColumn Header="F" Binding="{Binding Flags, Mode=OneWay, Converter={StaticResource PacketFlagsConverter},ConverterParameter={x:Static model:NetworkPacketFlags.Fragment}}" Width="22"/>
@@ -86,8 +93,8 @@
                 <DataGridTextColumn Header="SRC MAC" Binding="{Binding SourceMacAddress}" Width="110"/>
                 <DataGridTextColumn Header="DEST MAC" Binding="{Binding DestinationMacAddress}" Width="110"/>
                 <DataGridTextColumn Header="TYPE" Binding="{Binding MediaType}" Width="80"/>
-                <DataGridTextColumn Header="PID" Binding="{Binding ProcessId}" Width="40"/>
-                <DataGridTextColumn Header="TID" Binding="{Binding ThreadId}" Width="40"/>
+                <DataGridTextColumn Header="PID" Binding="{Binding ProcessId}" Width="{app:Look New=68, Original=40}"/>
+                <DataGridTextColumn Header="TID" Binding="{Binding ThreadId}" Width="{app:Look New=68, Original=40}"/>
             </DataGrid.Columns>
         </DataGrid>
 
@@ -95,14 +102,22 @@
         <GridSplitter x:Name="PacketSplitter" Grid.Row="{app:Look New=1, Original=2}" Grid.Column="1" Grid.RowSpan="{app:Look New=2, Original=63}" Width="{app:Look New=12, Original=4}"
                       Style="{DynamicResource ColumnSplitterStyle}" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
 
-        <TabControl x:Name="PacketEvent" Grid.Row="{app:Look New=1, Original=0}" Grid.RowSpan="{app:Look New=2, Original=3}" Grid.Column="2">
-            <TabItem x:Name="PacketRawTextTab" Header="Packet Data">
-                <!-- A read-only text box, so the keyboard can reach, scroll and select the packet data. It draws like
-                     the text it replaced. -->
-                <TextBox x:Name="PayloadRawText" IsReadOnly="True" IsReadOnlyCaretVisible="True" TextWrapping="Wrap"
-                         FontFamily="Consolas" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                         BorderThickness="0" Padding="0" Background="Transparent"
-                         Text="{Binding SelectedItem, ElementName=PacketList, Mode=OneWay, Converter={StaticResource NetworkPayloadConverter}}"/>
+        <TabControl x:Name="PacketEvent" Grid.Row="{app:Look New=1, Original=0}" Grid.RowSpan="{app:Look New=2, Original=3}" Grid.Column="2"
+                    Margin="{DynamicResource InspectorPaneMargin}" Style="{DynamicResource InspectorTabControlStyle}">
+            <TabItem x:Name="PacketRawTextTab" Header="Packet Data" Style="{DynamicResource InspectorTabItemStyle}">
+                <!-- A read-only text box, so the keyboard can reach, scroll and select the packet data. In the new look
+                     it sits in a recessed well, like the inspector's text; the original look draws it as before. -->
+                <ContentControl Style="{DynamicResource RecessedSurfaceStyle}">
+                    <ContentControl.Resources>
+                        <!-- No tab joins this well, so every corner is rounded. -->
+                        <CornerRadius x:Key="AttachedSurfaceCornerRadius">4</CornerRadius>
+                    </ContentControl.Resources>
+                    <TextBox x:Name="PayloadRawText" Style="{DynamicResource InspectorTextBoxStyle}" IsReadOnly="True"
+                             IsReadOnlyCaretVisible="True" TextWrapping="Wrap" FontFamily="Consolas"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                             BorderThickness="0" Padding="0" Background="Transparent"
+                             Text="{Binding SelectedItem, ElementName=PacketList, Mode=OneWay, Converter={StaticResource NetworkPayloadConverter}}"/>
+                </ContentControl>
             </TabItem>
         </TabControl>
 
