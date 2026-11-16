@@ -4,7 +4,8 @@
           xmlns:ds="clr-namespace:XMAT.DesignSystem"
           Title="Scroll bars"
           Summary="Scroll bars show where a long table, list or text is scrolled to, such as the packet and traffic tables. The thumb's length shows how much of the content is in view, and it is never shorter than 24px, however long the content is."
-          StyleFile="Styles/ScrollBars.xaml">
+          Section="Components"
+          DefinedIn="XMAT/Styles/ScrollBars.xaml">
     <StackPanel>
         <ds:StorySection Title="Vertical" StyleName="ScrollBar (default style)"
                          Description="A rounded thumb on a clear 12px track, at the right of content taller than its pane.">

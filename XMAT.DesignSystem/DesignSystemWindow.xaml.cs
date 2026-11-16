@@ -5,17 +5,19 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Threading;
 using Microsoft.Win32;
 
 namespace XMAT.DesignSystem
 {
-    // The design system: the new look's components in the states they can be set to, a page per component (the pages
-    // are in Stories). The window keeps the new look's resources itself, so its theme, contrast theme and Comfort view
-    // settings preview the components without changing XMAT's settings, which the tests share.
+    // The design system: the new look's foundations and components, a page each, under their sections (the pages are in
+    // Stories). The window keeps the new look's resources itself, so its theme, contrast theme and Comfort view
+    // settings preview the pages without changing XMAT's settings, which the tests share.
     public partial class DesignSystemWindow : Window
     {
         // The first choice of the contrast theme list.
@@ -45,7 +47,9 @@ namespace XMAT.DesignSystem
             UpdatePreviewChoices();
 
             _stories = StoryCatalog.Pages.Select(create => create()).ToList();
-            PageList.ItemsSource = _stories.Select(story => new PageEntry(story)).ToList();
+            var pages = new ListCollectionView(_stories.Select(story => new PageEntry(story)).ToList());
+            pages.GroupDescriptions.Add(new SectionGrouping());
+            PageList.ItemsSource = pages;
             PageList.SelectedIndex = 0;
             _ready = true;
 
@@ -99,7 +103,7 @@ namespace XMAT.DesignSystem
             PageList.ScrollIntoView(page);
             PageTitle.Text = page.Story.Title;
             PageSummary.Text = page.Story.Summary;
-            PageStyleFile.Text = $"Styles: XMAT/{page.Story.StyleFile}";
+            PageDefinedIn.Text = $"Defined in {string.Join(", ", page.Story.DefinedInFiles)}";
             PageHost.Content = page.Story;
             PageScroller.ScrollToTop();
         }
@@ -159,6 +163,14 @@ namespace XMAT.DesignSystem
             public string Title => Story.Title;
 
             public override string ToString() => Title;
+        }
+
+        // Groups the list of pages under their sections. StoryCatalog lists the pages section by section, so the list
+        // keeps their order.
+        private sealed class SectionGrouping : GroupDescription
+        {
+            public override object GroupNameFromItem(object item, int level, CultureInfo culture) =>
+                ((PageEntry)item).Story.Section;
         }
     }
 }

@@ -4,7 +4,8 @@
           xmlns:ds="clr-namespace:XMAT.DesignSystem"
           Title="Buttons"
           Summary="Buttons start an action. The standard button is outlined on the surface; icon buttons hold one glyph; toggle buttons stay pressed while their option is on."
-          StyleFile="Styles/Buttons.xaml">
+          Section="Components"
+          DefinedIn="XMAT/Styles/Buttons.xaml">
     <StackPanel>
         <ds:StorySection Title="Standard button" StyleName="Button (default style)"
                          Description="For actions in dialogs and panels, such as Save in the host list manager.">

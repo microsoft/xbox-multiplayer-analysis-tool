@@ -18,6 +18,12 @@ Colors come in three layers:
    `TextPrimaryBrush` or `SurfacePanelBrush`. The Light and Dark themes give each role a palette step; the High
    Contrast theme gives it a Windows system color, so it follows the user's contrast theme.
 
+The design system app's Color page shows all three layers, read from these files, with every role's value in each theme
+and the contrast of the text that must stay readable. The roles, the component colors and those pairs of text and
+surface are listed, with what each is for, in
+[`XMAT.DesignSystem/Foundations/ColorCatalog.cs`](../XMAT.DesignSystem/Foundations/ColorCatalog.cs); the design system
+tests check the themes against that list.
+
 Views and styles use roles, never palette steps or color values:
 
 ```xml
@@ -74,8 +80,10 @@ rules as roles.
   `#38FFFFFF`, are written as values.
 - The Light, Dark and High Contrast themes define every role, and the High Contrast theme defines every key of the
   other themes.
+- Every color the themes define is a role or a component color in `ColorCatalog`, with what it is for, so the Color
+  page shows it.
 - Text roles meet a 4.5:1 contrast ratio on every surface they appear on, and the status text and label roles on
-  their fills and soft backgrounds.
+  their fills and soft backgrounds. `ColorCatalog.ReadablePairs` lists the pairs.
 - `Palette.xaml` matches `Palette.json`.
 - Don't alias a key with `<StaticResource x:Key="..." ResourceKey="..."/>` in a theme file: WPF resolves such aliases
   in compiled dictionaries to the wrong resource. Define a brush on the same palette step instead.
@@ -104,8 +112,9 @@ Use an existing role when one fits. When a new use needs a color of its own:
 
 1. Add the role to `LightTheme.xaml` and `DarkTheme.xaml` as a palette step, and to `HighContrastTheme.xaml` as a
    system color, in the matching group.
-2. Add it to `Roles` in `XMAT.Tests/DesignSystem/ColorRoleTests.cs` and to the table on this page.
-3. If it is text, or a fill that holds text, add its contrast pairs to the tests.
+2. Add it, with what it is for, to its group in `XMAT.DesignSystem/Foundations/ColorCatalog.cs`, and to the table on
+   this page. A color for one component goes in `ComponentColorGroups` instead.
+3. If it is text, or a fill that holds text, add its pairs of text and surface to `ColorCatalog.ReadablePairs`.
 
 ### The original look
 
@@ -147,11 +156,12 @@ files of their own as they are worked on.
 
 ## The design system app
 
-The design system app, `XMAT.DesignSystem`, has a page for each component: what it is for, its style file, and
-examples of it in the states it can be set to, such as disabled, checked or running. Hover, press and keyboard focus
-show live. The settings above a page preview the components in Light or Dark, in a Windows contrast theme, and with
-Comfort view on or off. The app runs from source and isn't part of XMAT's release build. Run it from the repository
-root:
+The design system app, `XMAT.DesignSystem`, has a page for each foundation and component, listed under their sections:
+**Foundations**, such as color, read from the files that define them, and **Components**, with what each is for, the
+files that define it, and examples of it in the states it can be set to, such as disabled, checked or running. Hover,
+press and keyboard focus show live. The settings above a page preview it in Light or Dark, in a Windows contrast theme,
+and with Comfort view on or off. The app runs from source and isn't part of XMAT's release build. Run it from the
+repository root:
 
 ```powershell
 dotnet run --project XMAT.DesignSystem -p:Platform=x64
@@ -161,20 +171,26 @@ In Visual Studio, set `XMAT.DesignSystem` as the startup project.
 
 Pages are XAML files in [`XMAT.DesignSystem/Stories`](../XMAT.DesignSystem/Stories). To add one:
 
-1. Create `<Component>Story.xaml` with `ds:Story` as its root, setting `Title`, `Summary` and `StyleFile`.
+1. Create `<Name>Story.xaml` with `ds:Story` as its root, setting `Title`, `Summary`, its `Section` (`Foundations`,
+   `Components`, `Patterns` or `Layouts`) and `DefinedIn`: the files that define what it shows, relative to the
+   repository and separated by commas, such as `XMAT/Styles/Buttons.xaml`.
 2. Add a `ds:StorySection` for each variant, with a `Title`, a `Description` and the `StyleName` it uses, holding a
    `ds:StoryExample` for each state, with a `Caption`. Build examples the way views do, so a page shows how to use
-   the component. XMAT's controls are in `clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool`.
+   the component. XMAT's controls are in `clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool`. A foundation
+   page builds its examples from the files that define the foundation, as the Color page reads the themes, so it
+   can't fall behind them.
 3. Take the new look's resources with `DynamicResource`. A page loads before it joins the window that holds them, so
    a `StaticResource` wouldn't find them.
-4. Add the page to `XMAT.DesignSystem/StoryCatalog.cs`. `DesignSystemWindowTests` checks that every page names its
-   style file and shows its examples.
+4. Add the page to `XMAT.DesignSystem/StoryCatalog.cs`, with the other pages of its section. `DesignSystemWindowTests`
+   checks that every page is in a section, names files that exist and shows its examples.
 5. Run the design system tests. `StoryCoverageTests` asks for the styles the page now shows to be removed from
    `XMAT.Tests/DesignSystem/UncoveredStyles.txt`, and `ReferenceImageTests` asks for the page's pictures; create them
    as below.
 
 ### Checks
 
+- **Every color is on the Color page.** `ColorRoleTests` fails when a theme defines a color that `ColorCatalog`
+  doesn't list, when a theme misses one it lists, or when one of its pairs of text and surface drops below 4.5:1.
 - **Every style is on a page.** `StoryCoverageTests` opens every page, with its menus and dropdowns open, and fails
   when a style of the new look appears on none. Styles that no page shows yet are listed in
   `XMAT.Tests/DesignSystem/UncoveredStyles.txt`; the list only shrinks, because a new style comes with its example.

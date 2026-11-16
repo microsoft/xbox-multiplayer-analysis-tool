@@ -6,27 +6,16 @@ using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using XMAT.DesignSystem;
 
 namespace XMAT.Tests.DesignSystem
 {
-    // The rails of XMAT's color system (docs/design-system.md): views and styles use the 39 roles, the new look's
-    // themes give each role a step of the generated palette, and the original look's names stay only where the
-    // original look still needs them.
+    // The rails of XMAT's color system (docs/design-system.md): views and styles use the roles that the design system's
+    // ColorCatalog lists, the new look's themes give each role a step of the generated palette, and the original look's
+    // names stay only where the original look still needs them.
     public class ColorRoleTests
     {
-        internal static readonly string[] Roles =
-        {
-            "SurfaceCanvasBrush", "SurfacePanelBrush", "SurfaceWellBrush", "SurfaceHeaderBrush", "SurfaceStripBrush",
-            "SurfaceHoverBrush", "SurfaceSelectedBrush", "SurfaceControlBrush",
-            "TextPrimaryBrush", "TextSecondaryBrush", "TextDisabledBrush", "TextHeadingBrush", "TextControlBrush",
-            "BorderSubtleBrush", "BorderDefaultBrush", "BorderControlBrush", "BorderStrongBrush", "BorderStrongHoverBrush",
-            "BorderWellBrush",
-            "AccentBrush", "AccentFillBrush", "AccentOnFillBrush", "AccentSoftBrush",
-            "SuccessFillBrush", "SuccessOnFillBrush", "SuccessTextBrush", "SuccessSoftBrush",
-            "WarningFillBrush", "WarningOnFillBrush", "WarningTextBrush", "WarningSoftBrush",
-            "ErrorFillBrush", "ErrorOnFillBrush", "ErrorTextBrush", "ErrorSoftBrush",
-            "InfoFillBrush", "InfoOnFillBrush", "NeutralFillBrush", "NeutralOnFillBrush"
-        };
+        internal static readonly string[] Roles = ColorCatalog.Roles.Select(role => role.Key).ToArray();
 
         // Old names that views shared with the original look still use, and the role each stands in for in the new
         // look's themes. Remove them with the original look.
@@ -154,7 +143,7 @@ namespace XMAT.Tests.DesignSystem
             }
         }
 
-        // Text roles meet 4.5:1 on every surface they appear on, and control text on a control's fills.
+        // Text meets 4.5:1 on every surface it appears on, as the design system's ColorCatalog.ReadablePairs lists them.
         [Theory]
         [InlineData("LightTheme.xaml")]
         [InlineData("DarkTheme.xaml")]
@@ -164,26 +153,39 @@ namespace XMAT.Tests.DesignSystem
             Dictionary<string, string> colors = Colors(theme);
             string Hex(string role) => palette[Regex.Match(colors[role], @"^\{StaticResource (\w+)\}$").Groups[1].Value];
 
-            var pairs = Roles.Where(role => role.StartsWith("Surface", StringComparison.Ordinal))
-                .SelectMany(surface => new[] { ("TextPrimaryBrush", surface), ("TextSecondaryBrush", surface) })
-                .Concat(new[]
-                {
-                    ("TextHeadingBrush", "SurfacePanelBrush"), ("TextHeadingBrush", "SurfaceSelectedBrush"),
-                    ("TextControlBrush", "SurfaceControlBrush"),
-                    ("TextControlBrush", "SurfaceHoverBrush"), ("TextControlBrush", "AccentSoftBrush"),
-                    ("AccentOnFillBrush", "AccentFillBrush")
-                })
-                .Concat(new[] { "Success", "Warning", "Error" }.SelectMany(status => new[]
-                {
-                    ($"{status}TextBrush", $"{status}SoftBrush"), ($"{status}TextBrush", "SurfacePanelBrush"),
-                    ($"{status}TextBrush", "SurfaceWellBrush")
-                }));
-            foreach (var (text, surface) in pairs)
+            Assert.NotEmpty(ColorCatalog.ReadablePairs);
+            foreach (var (text, surface) in ColorCatalog.ReadablePairs)
             {
                 double contrast = Contrast(Hex(text), Hex(surface));
-                Assert.True(contrast >= 4.5, $"{theme}: {text} on {surface} is {contrast:F2}:1");
+                Assert.True(contrast >= ColorCatalog.ReadableContrast, $"{theme}: {text} on {surface} is {contrast:F2}:1");
             }
         }
+
+        // The design system lists every color the themes define, so its Color page shows them all: a new color is a
+        // role or a component color, with what it is for, before views use it. Each component color is in every theme.
+        [Fact]
+        public void EveryThemeColor_IsInTheDesignSystem()
+        {
+            HashSet<string> listed = Roles.Concat(ColorCatalog.ComponentColors.Select(color => color.Key))
+                .Concat(NewLookStandIns.Keys)
+                .ToHashSet();
+            foreach (string theme in new[] { "LightTheme.xaml", "DarkTheme.xaml", "HighContrastTheme.xaml" })
+            {
+                Dictionary<string, string> colors = Colors(theme);
+                Assert.Empty(colors.Keys.Except(listed).Except(HighContrastOnly(theme)).OrderBy(key => key));
+                Assert.Empty(ColorCatalog.ComponentColors.Select(color => color.Key).Except(colors.Keys));
+            }
+
+            Assert.DoesNotContain(Roles.GroupBy(role => role), group => group.Count() > 1);
+            Assert.All(ColorCatalog.Roles.Concat(ColorCatalog.ComponentColors),
+                role => Assert.False(string.IsNullOrWhiteSpace(role.Use), $"{role.Key} doesn't say what it is for."));
+        }
+
+        // The High Contrast theme also gives the original look's colors a system color, since both looks use it.
+        private static IEnumerable<string> HighContrastOnly(string theme) =>
+            theme == "HighContrastTheme.xaml"
+                ? Colors("Original/LightTheme.xaml").Keys.Concat(Colors("Original/DarkTheme.xaml").Keys)
+                : Enumerable.Empty<string>();
 
         private static XDocument Document(string theme) => XDocument.Load(Path.Combine(Themes, theme));
 

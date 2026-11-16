@@ -2,27 +2,40 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 
 namespace XMAT.DesignSystem
 {
-    // A page of the design system: one component of the new look, the style file that defines it, and examples of it
-    // in the states it can be set to. Pages are XAML files in XMAT.DesignSystem/Stories, so their examples read like
-    // the views that use the component; hover, press and keyboard focus show live. StoryCatalog lists the pages.
+    // A page of the design system: a foundation of the new look, such as its colors, or one of its components, with the
+    // files that define it and examples of it. Pages are XAML files in XMAT.DesignSystem/Stories, so their examples read
+    // like the views that use them; hover, press and keyboard focus show live. StoryCatalog lists the pages.
     public class Story : UserControl
     {
-        // The component's name: the page's title and its entry in the list of components.
+        // The sections of the design system, in the order the window lists them. Every page is in one.
+        internal static readonly string[] Sections = { "Foundations", "Components", "Patterns", "Layouts" };
+
+        // The page's name: its title and its entry in the list of pages.
         public string Title { get; set; }
 
-        // What the component is for and where XMAT shows it.
+        // What the page shows, what it is for and where XMAT uses it.
         public string Summary { get; set; }
 
-        // The file that defines the component's styles, relative to XMAT, such as Styles/Buttons.xaml.
-        public string StyleFile { get; set; }
+        // The section the page is listed under: one of Sections.
+        public string Section { get; set; }
+
+        // The files that define what the page shows, relative to the repository and separated by commas, such as
+        // XMAT/Styles/Buttons.xaml.
+        public string DefinedIn { get; set; }
+
+        internal IReadOnlyList<string> DefinedInFiles =>
+            (DefinedIn ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
-    // A group of examples on a page: a variant of the component, what it is for, and the style it uses.
+    // A group of examples on a page: a variant of a component, or a part of a foundation, what it is for, and the style
+    // or resources it uses.
     public class StorySection : ItemsControl
     {
         public static readonly DependencyProperty TitleProperty =
@@ -46,7 +59,8 @@ namespace XMAT.DesignSystem
             set => SetValue(DescriptionProperty, value);
         }
 
-        // The style's key, or for a control's default style its type, such as "Button (default style)".
+        // The style's key, or for a control's default style its type, such as "Button (default style)"; on a foundation
+        // page, the resource keys the section shows.
         public string StyleName
         {
             get => (string)GetValue(StyleNameProperty);

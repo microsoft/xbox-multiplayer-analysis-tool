@@ -5,7 +5,8 @@
           xmlns:local="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
           Title="Choice cards"
           Summary="Choice cards choose one option from a few, when each option needs a sentence to explain it, such as the device and the capture type in New Capture. Cards with the same GroupName are one choice: Tab reaches the chosen card, and the arrow keys choose another. The pictures are in Styles/CaptureIcons.xaml."
-          StyleFile="Styles/ChoiceCards.xaml">
+          Section="Components"
+          DefinedIn="XMAT/Styles/ChoiceCards.xaml">
     <StackPanel>
         <ds:StorySection Title="Picture above" StyleName="ChoiceCard (default style)"
                          Description="Cards side by side, each with a short description, such as New Capture's devices. Content, such as a field the option needs, shows under the text while the card is chosen.">

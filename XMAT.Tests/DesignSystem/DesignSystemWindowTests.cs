@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using XMAT.DesignSystem;
@@ -17,23 +18,29 @@ namespace XMAT.Tests.DesignSystem
         public DesignSystemWindowTests(CaptureUiApplicationFixture application) => _application = application;
 
         [Fact]
-        public void EveryPage_NamesAStyleFileAndShowsSectionsOfExamples()
+        public void EveryPage_SaysWhereItIsDefinedAndShowsSectionsOfExamples()
         {
             _application.Run(_ =>
             {
-                HashSet<string> productXaml = CapabilityDiscovery.ProductXaml().Select(xaml => xaml.Path).ToHashSet();
                 DesignSystemWindow window = Open("Light");
                 try
                 {
                     Assert.Equal(StoryCatalog.Pages.Count, window.Stories.Count);
+                    // The window lists the sections in order, each page under its own.
+                    List<string> pageSections = window.Stories.Select(story => story.Section).ToList();
+                    Assert.All(pageSections, section => Assert.Contains(section, Story.Sections));
+                    Assert.Equal(pageSections.OrderBy(section => Array.IndexOf(Story.Sections, section)), pageSections);
                     for (int index = 0; index < window.Stories.Count; index++)
                     {
                         window.ShowPage(index);
                         WpfTestHost.Pump();
                         Story story = window.ShownStory;
+                        Assert.Same(window.Stories[index], story);
                         Assert.False(string.IsNullOrWhiteSpace(story.Title));
                         Assert.False(string.IsNullOrWhiteSpace(story.Summary), story.Title);
-                        Assert.Contains(story.StyleFile, productXaml);
+                        Assert.NotEmpty(story.DefinedInFiles);
+                        Assert.All(story.DefinedInFiles, file => Assert.True(
+                            File.Exists(Path.Combine(RepositoryPaths.Root, file)), $"{story.Title}: {file} doesn't exist."));
                         List<StorySection> sections = Descendants(story).OfType<StorySection>().ToList();
                         Assert.NotEmpty(sections);
                         foreach (StorySection section in sections)

@@ -5,7 +5,8 @@
           xmlns:local="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
           Title="Tabs"
           Summary="Capture tabs hold the open captures; inspector tabs switch the views beside the traffic; format tabs show a request or response as headers, body or JSON. A row of tabs that doesn't fit ends in More, which lists the rest."
-          StyleFile="Styles/Tabs.xaml">
+          Section="Components"
+          DefinedIn="XMAT/Styles/Tabs.xaml">
     <ds:Story.Resources>
         <!-- The capture tab row as Controls/AllCaptureDevicesTabControl.xaml lays it out in the new look: New capture,
              the tabs in a recessed strip, and More when they don't fit, above the selected capture's surface. -->

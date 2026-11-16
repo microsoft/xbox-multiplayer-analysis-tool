@@ -5,7 +5,8 @@
           xmlns:local="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
           Title="Capture toolbar"
           Summary="The row of actions above a capture: Start or stop the capture, then text actions such as Analyze Capture, with short dividers between them. While a capture runs, the recording indicator shows beside the live view."
-          StyleFile="Styles/Toolbar.xaml">
+          Section="Components"
+          DefinedIn="XMAT/Styles/Toolbar.xaml">
     <StackPanel>
         <ds:StorySection Title="Toolbar" StyleName="ToolBar (default style)"
                          Description="A web proxy capture's toolbar before the capture starts.">

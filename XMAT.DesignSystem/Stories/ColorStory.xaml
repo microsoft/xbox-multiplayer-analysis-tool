@@ -1,0 +1,116 @@
+<ds:Story x:Class="XMAT.DesignSystem.ColorStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          Title="Color"
+          Summary="XMAT's colors come in three layers: five base colors, the palette they generate, and the roles that views and styles use. This page reads the theme files, so it shows the colors XMAT is built with. Change a color in the themes and it changes here and in XMAT. The design system tests check that every color the themes define is listed here, and that text stays readable."
+          Section="Foundations"
+          DefinedIn="XMAT/Themes/Palette.json, XMAT/Themes/LightTheme.xaml, XMAT/Themes/DarkTheme.xaml, XMAT/Themes/HighContrastTheme.xaml, XMAT.DesignSystem/Foundations/ColorCatalog.cs">
+    <ds:Story.Resources>
+        <ItemsPanelTemplate x:Key="WrapItemsPanel">
+            <WrapPanel/>
+        </ItemsPanelTemplate>
+
+        <!-- A step of a ramp: its color, its number and its value. The base color is outlined. -->
+        <DataTemplate x:Key="PaletteStepTemplate">
+            <StackPanel Width="46" Margin="0,0,2,8">
+                <Border x:Name="Swatch" Height="32" CornerRadius="3" BorderThickness="1" Background="{Binding Fill}"
+                        BorderBrush="{DynamicResource BorderDefaultBrush}" SnapsToDevicePixels="True"/>
+                <TextBlock Text="{Binding Number}" Margin="0,4,0,0" HorizontalAlignment="Center"/>
+                <TextBlock Text="{Binding Hex}" HorizontalAlignment="Center" FontSize="{DynamicResource MetadataFontSize}"
+                           Foreground="{DynamicResource TextSecondaryBrush}"/>
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsBase}" Value="True">
+                    <Setter TargetName="Swatch" Property="BorderThickness" Value="2"/>
+                    <Setter TargetName="Swatch" Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- A color in a theme, shown on that theme's panel color, so a clear or partly clear color shows as it does
+             in XMAT. -->
+        <DataTemplate x:Key="ThemeSwatchTemplate">
+            <Border Width="28" Height="28" Padding="4" CornerRadius="4" BorderThickness="1" SnapsToDevicePixels="True"
+                    Background="{Binding Panel}" BorderBrush="{Binding Edge}" ToolTip="{Binding Name}">
+                <Border CornerRadius="2" Background="{Binding Fill}"/>
+            </Border>
+        </DataTemplate>
+
+        <!-- A role or component color: its Light and Dark colors, its name, what it's for and each theme's value. -->
+        <DataTemplate x:Key="ColorRowTemplate">
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Top" Margin="0,2,12,0">
+                    <ContentPresenter Content="{Binding Light}" ContentTemplate="{StaticResource ThemeSwatchTemplate}"
+                                      Margin="0,0,4,0"/>
+                    <ContentPresenter Content="{Binding Dark}" ContentTemplate="{StaticResource ThemeSwatchTemplate}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Binding Key}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding Use}" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding Values}" Margin="0,2,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <!-- Text on a surface in one theme, and their contrast. -->
+        <DataTemplate x:Key="ContrastSampleTemplate">
+            <StackPanel Orientation="Horizontal">
+                <Border Width="40" Height="24" CornerRadius="3" BorderThickness="1" SnapsToDevicePixels="True"
+                        Background="{Binding Surface}" BorderBrush="{Binding Edge}">
+                    <TextBlock Text="Aa" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="{Binding Text}"/>
+                </Border>
+                <TextBlock Text="{Binding Ratio}" Width="56" Margin="8,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:Key="ReadablePairTemplate">
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="LightSample"/>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="DarkSample"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <ContentPresenter Content="{Binding Light}" ContentTemplate="{StaticResource ContrastSampleTemplate}"
+                                  Margin="0,0,12,0"/>
+                <ContentPresenter Grid.Column="1" Content="{Binding Dark}"
+                                  ContentTemplate="{StaticResource ContrastSampleTemplate}" Margin="0,0,12,0"/>
+                <TextBlock Grid.Column="2" Text="{Binding Pair}" VerticalAlignment="Center" TextWrapping="Wrap"/>
+            </Grid>
+        </DataTemplate>
+
+        <!-- The column names above the pairs. -->
+        <DataTemplate x:Key="ReadablePairHeaderTemplate">
+            <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="LightSample"/>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="DarkSample"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Light" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                <TextBlock Grid.Column="1" Text="Dark" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                <TextBlock Grid.Column="2" Text="Text on surface" Foreground="{DynamicResource TextSecondaryBrush}"/>
+            </Grid>
+        </DataTemplate>
+    </ds:Story.Resources>
+
+    <StackPanel>
+        <ds:StorySection x:Name="PaletteSection" Title="Palette"
+                         Description="Five base colors generate the palette. Each becomes a ramp of steps from lightest to darkest and is itself one of the steps, outlined here; gray is a ramp of its own. The themes give roles these steps, and views and styles never use a step directly. To change a base color, edit Palette.json and regenerate Palette.xaml, as docs/design-system.md describes."/>
+
+        <ds:StorySection x:Name="RolesSection" Title="Roles" StyleName="Surface, Text, Border, Accent and status …Brush"
+                         Description="The colors views and styles use. Each role does one job, so a view picks the role for what it shows, never a color. Light and Dark, shown side by side, give each role a palette step, and High Contrast one of the colors of the person's Windows contrast theme, named as in Settings."/>
+
+        <ds:StorySection x:Name="ReadableSection" Title="Readable text" StyleName="ColorCatalog.ReadablePairs"
+                         Description="Text meets a contrast of 4.5:1 on every surface it appears on, in Light and Dark. The ratios are worked out from the themes, and the design system tests fail if one drops below 4.5:1. High contrast takes the person's own colors."/>
+
+        <ds:StorySection x:Name="ComponentSection" Title="Component colors" StyleName="ColorCatalog.ComponentColorGroups"
+                         Description="Colors that belong to one component keep their own names. They follow the rules roles do: Light and Dark take palette steps, and High Contrast a contrast theme color."/>
+    </StackPanel>
+</ds:Story>

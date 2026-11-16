@@ -4,7 +4,8 @@
           xmlns:ds="clr-namespace:XMAT.DesignSystem"
           Title="Menus"
           Summary="The menu bar's dropdowns and context menus share one surface: rounded, with a soft shadow, and rows with room for an icon. Context menus group their rows under labeled headers. The More menu of a tab row is on the Tabs page."
-          StyleFile="Styles/Menus.xaml">
+          Section="Components"
+          DefinedIn="XMAT/Styles/Menus.xaml">
     <StackPanel>
         <ds:StorySection Title="Menu bar" StyleName="Menu (default style), MainMenuBarStyle, MenuItem (default style)"
                          Description="The main window's menu row, a band of window chrome. Open a menu to see its dropdown.">

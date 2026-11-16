@@ -13,15 +13,15 @@
             <ColumnDefinition/>
         </Grid.ColumnDefinitions>
 
-        <!-- Pages: one per component; selecting one shows it. -->
+        <!-- Pages, under the section each is in; selecting one shows it. -->
         <DockPanel Margin="16,20,8,16">
             <TextBlock x:Name="Heading" Text="Design system" DockPanel.Dock="Top" Margin="12,0,0,4" FontSize="18"
                        FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level1"/>
-            <TextBlock x:Name="Subheading" DockPanel.Dock="Top" Margin="12,0,0,14" TextWrapping="Wrap"
-                       Text="The new look's components in the states they can be set to. Hover, press and Tab through them for the rest."
+            <TextBlock x:Name="Subheading" DockPanel.Dock="Top" Margin="12,0,0,6" TextWrapping="Wrap"
+                       Text="The new look's foundations and components, read from the files XMAT uses. Hover, press and Tab through the components for the rest."
                        Foreground="{DynamicResource TextSecondaryBrush}"/>
             <ListBox x:Name="PageList" ItemContainerStyle="{DynamicResource DesignSystemPageItemStyle}"
-                     AutomationProperties.Name="Components"
+                     AutomationProperties.Name="Pages"
                      Background="Transparent" BorderThickness="0" Padding="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      SelectionChanged="PageList_SelectionChanged">
@@ -31,17 +31,31 @@
                         <Setter Property="Background" Value="Transparent"/>
                     </Style>
                 </ListBox.Resources>
+                <!-- Each section's name, above its pages. -->
+                <ListBox.GroupStyle>
+                    <GroupStyle>
+                        <GroupStyle.HeaderTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" Margin="12,14,0,6" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           AutomationProperties.HeadingLevel="Level3"/>
+                            </DataTemplate>
+                        </GroupStyle.HeaderTemplate>
+                    </GroupStyle>
+                </ListBox.GroupStyle>
             </ListBox>
         </DockPanel>
 
-        <!-- The page: its component, what it is for and its style file, the preview settings, then its examples. -->
+        <!-- The page: what it shows, what it is for and the files that define it, the preview settings, then its
+             examples. -->
         <DockPanel Grid.Column="1" Margin="8,20,0,0">
             <StackPanel DockPanel.Dock="Top" Margin="0,0,24,0">
                 <TextBlock x:Name="PageTitle" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"
                            AutomationProperties.HeadingLevel="Level2"/>
                 <TextBlock x:Name="PageSummary" Margin="0,6,0,0" MaxWidth="720" HorizontalAlignment="Left"
                            TextWrapping="Wrap"/>
-                <TextBlock x:Name="PageStyleFile" Margin="0,6,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                <TextBlock x:Name="PageDefinedIn" Margin="0,6,0,0" MaxWidth="720" HorizontalAlignment="Left"
+                           TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
                 <!-- The preview settings change this window only. -->
                 <WrapPanel x:Name="PreviewSettings" Margin="0,16,0,12" AutomationProperties.Name="Preview settings">
                     <TextBlock x:Name="ThemeLabel" Text="Theme" Margin="0,0,12,0" VerticalAlignment="Center"

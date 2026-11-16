@@ -4,7 +4,8 @@
           xmlns:ds="clr-namespace:XMAT.DesignSystem"
           Title="Text boxes and dropdowns"
           Summary="Text boxes take a typed value, such as a host or a port; read-only text areas show request and response text in the inspector. Dropdowns choose one value from a list."
-          StyleFile="Styles/Inputs.xaml">
+          Section="Components"
+          DefinedIn="XMAT/Styles/Inputs.xaml">
     <StackPanel>
         <ds:StorySection Title="Text box" StyleName="TextBox (default style)"
                          Description="One line of typed text, with 3px corners. Read only, it can still be selected and copied.">

@@ -5,7 +5,8 @@
           xmlns:local="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
           Title="Histograms"
           Summary="Histograms show how an amount is spread over the values in a report, such as the packets each source sent in a network capture's analysis. The largest values come first, each with a bar against the largest, in the lanes of a column summary. Histograms in a report share their lanes, so their bars line up."
-          StyleFile="Styles/DataViz.xaml">
+          Section="Components"
+          DefinedIn="XMAT/Styles/DataViz.xaml">
     <StackPanel>
         <ds:StorySection Title="Counts" StyleName="HistogramView (default style)"
                          Description="Amounts that add up, such as packets or bytes: the total and the number of values under the title, and each value's share of the total. Past seven values, the six largest show with the rest in one row, and Show all lists every value.">

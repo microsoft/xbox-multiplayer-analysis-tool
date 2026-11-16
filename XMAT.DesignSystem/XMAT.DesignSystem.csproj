@@ -30,4 +30,11 @@
     <ProjectReference Include="..\XMAT\XboxMultiplayerAnalysisTool.csproj" />
   </ItemGroup>
 
+  <!-- The theme files as written, which the foundation pages read to show what each color is made of: the palette's
+       base colors and steps, and the step or contrast theme color each theme gives a color (Foundations/ThemeSources.cs). -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\XMAT\Themes\Palette.json;..\XMAT\Themes\Palette.xaml;..\XMAT\Themes\LightTheme.xaml;..\XMAT\Themes\DarkTheme.xaml;..\XMAT\Themes\HighContrastTheme.xaml"
+                      LogicalName="XMAT.DesignSystem.Themes.%(Filename)%(Extension)" WithCulture="false" />
+  </ItemGroup>
+
 </Project>

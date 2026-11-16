@@ -4,7 +4,8 @@
           xmlns:ds="clr-namespace:XMAT.DesignSystem"
           Title="Check boxes and radio buttons"
           Summary="Check boxes turn an option on or off, such as Auto Scroll above the timeline. Radio buttons choose one option from a few shown together, such as the timeline's views."
-          StyleFile="Styles/Inputs.xaml">
+          Section="Components"
+          DefinedIn="XMAT/Styles/Inputs.xaml">
     <StackPanel>
         <ds:StorySection Title="Check box" StyleName="CheckBox (default style)"
                          Description="An option on or off.">
