@@ -70,8 +70,9 @@ namespace XMAT.Tests.Proxy
             {
                 await Task.Delay(Timeout.Infinite, context.RequestAborted);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
             {
+                // The proxy shutdown aborts the event-stream request.
             }
         }
     }

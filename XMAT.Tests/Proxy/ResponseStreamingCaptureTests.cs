@@ -117,8 +117,11 @@ namespace XMAT.Tests.Proxy
                     firstRead = await body.ReadAsync(buffer, timeout.Token);
                     received.Write(buffer, 0, firstRead);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    throw new InvalidOperationException(
+                        $"{route} knownLength={knownLength} limit={limit}: timed out before receiving the first response bytes.",
+                        ex);
                 }
                 using (response)
                 {

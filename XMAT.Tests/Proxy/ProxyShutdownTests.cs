@@ -163,8 +163,9 @@ namespace XMAT.Tests.Proxy
                 {
                     await Task.Delay(Timeout.InfiniteTimeSpan, context.RequestAborted);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
                 {
+                    // Stopping the proxy intentionally aborts this origin request.
                 }
             });
             int port = GetFreePort();

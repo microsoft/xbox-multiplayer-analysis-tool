@@ -124,6 +124,7 @@ namespace XMAT.Tests.Proxy
                 }
                 catch (Exception ex) when (ex is OperationCanceledException or IOException)
                 {
+                    // Client cancellation or disconnection is expected to end the never-ending origin response.
                 }
             }, useTls: tls);
             await using var proxy = await ProxyTestHarness.StartAsync();
@@ -721,6 +722,7 @@ namespace XMAT.Tests.Proxy
             }
             catch (OperationCanceledException)
             {
+                return (response, text.ToString());
             }
             return (response, text.ToString());
         }
@@ -1009,6 +1011,7 @@ namespace XMAT.Tests.Proxy
                 }
                 catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException)
                 {
+                    // Stopping the raw origin cancels pending accept and response operations.
                 }
             }
 

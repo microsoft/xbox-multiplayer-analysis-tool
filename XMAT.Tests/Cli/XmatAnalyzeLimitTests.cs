@@ -83,7 +83,7 @@ namespace XMAT.Tests.Cli
             Assert.Equal(2, byDefault.Json().GetProperty("totals").GetProperty("calls").GetInt32());
             Assert.Equal(new[] { 512L, 256L, 128L, 100_000L }, Limits(Summary(directory, "default")));
             CliAssert.ExitCode(0, exported);
-            Assert.Equal(stored, StoredBodies(Path.Combine(directory.Root, "x.xmatcap")));
+            Assert.Equal(stored, StoredBodies(Path.Join(directory.Root, "x.xmatcap")));
             CliAssert.ExitCode(3, lowered);
             Assert.Equal(new[] { "analysis.input.limit" }, lowered.ErrorCodes());
             Assert.Equal(new[] { 512L, 256L, 32L, 100_000L }, Limits(lowered.Json()));
