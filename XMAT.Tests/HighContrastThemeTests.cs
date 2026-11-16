@@ -112,8 +112,8 @@ namespace XMAT.Tests
                 var pairs = new List<(string Text, string Background)>
                 {
                     ("TextPrimaryBrush", "SurfacePanelBrush"),
-                    ("TextControlBrush", "SurfaceHoverBrush"),
-                    ("TextControlBrush", "AccentSoftBrush"),
+                    ("ButtonTextBrush", "SurfaceHoverBrush"),
+                    ("ButtonTextBrush", "AccentSoftBrush"),
                     ("AccentOnFillBrush", "AccentFillBrush"),
                     ("AccentOnFillBrush", "CaptureActionHoverBrush")
                 };

@@ -34,7 +34,7 @@ namespace XMAT.Tests.DesignSystem
             ["SurfaceHoverBrush"] = "ButtonHoverBackgroundBrush",
             ["TextPrimaryBrush"] = "PrimaryForegroundBrush",
             ["TextSecondaryBrush"] = "SecondaryForegroundBrush",
-            ["BorderDefaultBrush"] = "BorderBrush",
+            ["BorderSubtleBrush"] = "BorderBrush",
             ["AccentFillBrush"] = "ActiveSelectionBrush",
             ["AccentOnFillBrush"] = "ActiveSelectionForegroundBrush"
         };
@@ -143,21 +143,26 @@ namespace XMAT.Tests.DesignSystem
             }
         }
 
-        // Text meets 4.5:1 on every surface it appears on, as the design system's ColorCatalog.ReadablePairs lists them.
+        // Every pair in the design system's ColorCatalog.ContrastGroups stands out by the contrast its group needs: text
+        // by 4.5:1 and control outlines by 3:1.
         [Theory]
         [InlineData("LightTheme.xaml")]
         [InlineData("DarkTheme.xaml")]
-        public void TextRoles_AreReadableOnEverySurface(string theme)
+        public void Colors_StandOutFromTheirSurfaces(string theme)
         {
             Dictionary<string, string> palette = Palette();
             Dictionary<string, string> colors = Colors(theme);
             string Hex(string role) => palette[Regex.Match(colors[role], @"^\{StaticResource (\w+)\}$").Groups[1].Value];
 
-            Assert.NotEmpty(ColorCatalog.ReadablePairs);
-            foreach (var (text, surface) in ColorCatalog.ReadablePairs)
+            Assert.NotEmpty(ColorCatalog.ContrastGroups);
+            foreach (ContrastGroup group in ColorCatalog.ContrastGroups)
             {
-                double contrast = Contrast(Hex(text), Hex(surface));
-                Assert.True(contrast >= ColorCatalog.ReadableContrast, $"{theme}: {text} on {surface} is {contrast:F2}:1");
+                foreach (ContrastPair pair in group.Pairs)
+                {
+                    double contrast = Contrast(Hex(pair.Foreground), Hex(pair.Surface));
+                    Assert.True(contrast >= group.Needs,
+                        $"{theme}: {pair.Foreground} on {pair.Surface} is {contrast:F2}:1, short of {group.Needs}:1");
+                }
             }
         }
 

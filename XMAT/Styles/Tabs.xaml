@@ -7,14 +7,14 @@
 
     <!-- The capture tab strip is a recessed band; the selected tab joins the content surface below it. -->
     <Style x:Key="CaptureTabStripStyle" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource SurfaceStripBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource TabStripBrush}"/>
         <Setter Property="Padding" Value="{DynamicResource TabStripPadding}"/>
     </Style>
 
     <Style TargetType="TabControl">
         <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
         <Setter Property="Padding" Value="{DynamicResource TabContentPadding}"/>
         <Setter Property="Template">
             <Setter.Value>
@@ -158,7 +158,7 @@
                         <Border x:Name="HoverOutline" BorderThickness="1" Visibility="Collapsed"
                                 BorderBrush="{DynamicResource HoverOutlineBrush}" IsHitTestVisible="False"/>
                         <Border x:Name="Separator" Grid.Column="1" Width="1" Height="20" Margin="3,0"
-                                VerticalAlignment="Center" Background="{DynamicResource BorderDefaultBrush}"
+                                VerticalAlignment="Center" Background="{DynamicResource BorderSubtleBrush}"
                                 IsHitTestVisible="False"/>
 
                     </Grid>
@@ -168,7 +168,7 @@
                             <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter TargetName="HeaderSite" Property="TextElement.Foreground" Value="{DynamicResource TextHeadingBrush}"/>
+                            <Setter TargetName="HeaderSite" Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
                             <Setter TargetName="SelectionIndicator" Property="Visibility" Value="Visible"/>
                         </Trigger>
 
@@ -225,7 +225,7 @@
                         <Trigger Property="IsSelected" Value="True">
                             <Setter TargetName="TabSurface" Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>
                             <Setter TargetName="SelectionIndicator" Property="Visibility" Value="Visible"/>
-                            <Setter TargetName="HeaderSite" Property="TextElement.Foreground" Value="{DynamicResource TextHeadingBrush}"/>
+                            <Setter TargetName="HeaderSite" Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
                         </Trigger>
 
                         <Trigger Property="IsEnabled" Value="False">
@@ -265,7 +265,7 @@
                             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
-                            <Setter Property="Foreground" Value="{DynamicResource TextHeadingBrush}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

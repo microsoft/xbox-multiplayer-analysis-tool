@@ -122,7 +122,7 @@
       </TabControl>
     </Grid>
 
-    <Border Grid.Row="1" BorderBrush="{DynamicResource BorderDefaultBrush}" BorderThickness="{app:Look New='0,1,0,0', Original=0}"
+    <Border Grid.Row="1" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="{app:Look New='0,1,0,0', Original=0}"
             Style="{StaticResource FooterStyle}">
       <Border Style="{StaticResource CloseHostStyle}">
         <Button x:Name="CloseButton" MinWidth="{app:Look New={StaticResource CloseButtonMinWidth}, Original=90}"

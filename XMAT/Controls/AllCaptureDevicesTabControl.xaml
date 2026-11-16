@@ -41,7 +41,7 @@
             <TabControl.Resources>
                 <Style x:Key="CaptureDeviceTabControlStyle" TargetType="{x:Type local:TabControlEx}">
                     <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
-                    <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
                     <Setter Property="Padding" Value="{DynamicResource PanelPadding}"/>
                     <Setter Property="Template">
                         <Setter.Value>

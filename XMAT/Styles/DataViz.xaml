@@ -61,7 +61,7 @@
                 <ControlTemplate TargetType="local:ColumnSummaryView">
                     <Border x:Name="PART_Surface" Margin="12,4,12,16" Padding="0,12"
                             Width="{TemplateBinding SurfaceWidth}" HorizontalAlignment="Left" VerticalAlignment="Top"
-                            Background="{DynamicResource SurfacePanelBrush}" BorderBrush="{DynamicResource BorderDefaultBrush}"
+                            Background="{DynamicResource SurfacePanelBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
                             BorderThickness="1" CornerRadius="{DynamicResource ControlCornerRadius}">
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="12" ShadowDepth="4" Direction="270" Color="Black"
@@ -75,7 +75,7 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="{Binding Title}" FontSize="{DynamicResource SectionTitleFontSize}" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource TextHeadingBrush}" TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" TextTrimming="CharacterEllipsis"
                                            VerticalAlignment="Center"/>
                                 <TextBlock Grid.Column="1" Margin="12,0,0,1" VerticalAlignment="Bottom" Text="{Binding Totals}"
                                            Foreground="{DynamicResource TextSecondaryBrush}"/>
@@ -227,7 +227,7 @@
                         <StackPanel x:Name="Header" Margin="0,0,0,6">
                             <TextBlock x:Name="Title" Text="{Binding Title}" TextWrapping="Wrap"
                                        FontSize="{DynamicResource SectionTitleFontSize}" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextHeadingBrush}" AutomationProperties.HeadingLevel="Level3"/>
+                                       Foreground="{DynamicResource TextPrimaryBrush}" AutomationProperties.HeadingLevel="Level3"/>
                             <TextBlock x:Name="Totals" Text="{Binding Totals}" Margin="0,2,0,0" TextWrapping="Wrap"
                                        Foreground="{DynamicResource TextSecondaryBrush}"/>
                         </StackPanel>

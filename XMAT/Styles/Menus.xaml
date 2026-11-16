@@ -24,7 +24,7 @@
     <Style x:Key="ContextMenuSurfaceStyle" TargetType="ContextMenu">
         <Setter Property="Background" Value="{DynamicResource SurfaceCanvasBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Padding" Value="4"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
@@ -220,7 +220,7 @@
                                 <local:MenuShadow Background="{DynamicResource SurfaceCanvasBrush}" CornerRadius="8"/>
                                 <Border x:Name="SubMenuBorder"
                                         Background="{DynamicResource SurfaceCanvasBrush}"
-                                        BorderBrush="{DynamicResource BorderDefaultBrush}"
+                                        BorderBrush="{DynamicResource BorderSubtleBrush}"
                                         BorderThickness="1"
                                         CornerRadius="8"
                                         Padding="4"
@@ -321,7 +321,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Separator">
-                    <Border Height="1" Margin="0,4" Background="{DynamicResource BorderDefaultBrush}"/>
+                    <Border Height="1" Margin="0,4" Background="{DynamicResource BorderSubtleBrush}"/>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>

@@ -42,7 +42,7 @@
                 </Border>
                 <!-- The capture's surface, outlined here so the selected tab can be seen to join it. -->
                 <Border Grid.Row="1" Background="{TemplateBinding Background}" BorderThickness="1,0,1,1"
-                        BorderBrush="{DynamicResource BorderDefaultBrush}">
+                        BorderBrush="{DynamicResource BorderSubtleBrush}">
                     <ContentPresenter ContentSource="SelectedContent" Margin="12"/>
                 </Border>
             </Grid>

@@ -119,7 +119,7 @@
     <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#FF505058"/>
     <SolidColorBrush x:Key="TextPrimaryBrush" Color="#FFD4D4D4"/>
     <SolidColorBrush x:Key="TextSecondaryBrush" Color="#FF9B9B9B"/>
-    <SolidColorBrush x:Key="BorderDefaultBrush" Color="#FF3F3F46"/>
+    <SolidColorBrush x:Key="BorderSubtleBrush" Color="#FF3F3F46"/>
     <SolidColorBrush x:Key="AccentFillBrush" Color="#FF264F78"/>
     <SolidColorBrush x:Key="AccentOnFillBrush" Color="#FFFFFFFF"/>
 

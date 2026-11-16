@@ -14,13 +14,13 @@ Colors come in three layers:
 2. **The palette**, in [`XMAT/Themes/Palette.xaml`](../XMAT/Themes/Palette.xaml), generated from the base colors. Each
    base color becomes a ramp of steps from light to dark: `Gray1` (white) to `Gray16`, and `Blue1` to `Blue12`, and so
    on. Each base color is one of the steps of its ramp, such as `Blue8`.
-3. **Roles**, in `XMAT/Themes/LightTheme.xaml`, `DarkTheme.xaml` and `HighContrastTheme.xaml`: 39 named uses, such as
+3. **Roles**, in `XMAT/Themes/LightTheme.xaml`, `DarkTheme.xaml` and `HighContrastTheme.xaml`: 31 named uses, such as
    `TextPrimaryBrush` or `SurfacePanelBrush`. The Light and Dark themes give each role a palette step; the High
    Contrast theme gives it a Windows system color, so it follows the user's contrast theme.
 
 The design system app's Color page shows all three layers, read from these files, with every role's value in each theme
-and the contrast of the text that must stay readable. The roles, the component colors and those pairs of text and
-surface are listed, with what each is for, in
+and a grid of the contrast between the colors that must stand out from each other. The roles, the component colors and
+those contrast pairs are listed, with what each is for, in
 [`XMAT.DesignSystem/Foundations/ColorCatalog.cs`](../XMAT.DesignSystem/Foundations/ColorCatalog.cs); the design system
 tests check the themes against that list.
 
@@ -36,25 +36,17 @@ Use `DynamicResource`, so the view follows theme changes.
 
 | Role | Use |
 | --- | --- |
-| `SurfaceCanvasBrush` | Window chrome: the window, menus, status bar and unselected tabs |
-| `SurfacePanelBrush` | Content panels, the selected tab, text boxes and toolbars |
+| `SurfaceCanvasBrush` | Window chrome, such as menus, the status bar and unselected tabs, and the header band of a table |
+| `SurfacePanelBrush` | Content panels, the selected tab, text boxes, toolbars and buttons |
 | `SurfaceWellBrush` | Recessed wells: tables and text areas |
-| `SurfaceHeaderBrush` | The header band of a table |
-| `SurfaceStripBrush` | The capture tab strip |
 | `SurfaceHoverBrush` | A hovered button or row |
 | `SurfaceSelectedBrush` | A chosen card, such as the device in New Capture. High Contrast keeps the window color and shows the choice with the highlight color |
-| `SurfaceControlBrush` | A button's face |
-| `TextPrimaryBrush` | Body text |
+| `TextPrimaryBrush` | All text people read, headings included. Size and weight, not color, make a heading |
 | `TextSecondaryBrush` | Labels, captions, column headers and the status bar |
 | `TextDisabledBrush` | Disabled controls |
-| `TextHeadingBrush` | Section headings |
-| `TextControlBrush` | Button text |
-| `BorderSubtleBrush` | Table grid lines and the faintest dividers |
-| `BorderDefaultBrush` | Panel borders and dividers |
-| `BorderControlBrush` | Button outlines and the pane splitter |
-| `BorderStrongBrush` | Strong outlines and scroll bar thumbs |
-| `BorderStrongHoverBrush` | A strong outline under the pointer |
-| `BorderWellBrush` | A text area's outline |
+| `BorderSubtleBrush` | Dividers, panel edges and table grid lines |
+| `BorderStrongBrush` | The outline that identifies a control, such as a check box, scroll bar thumbs and the pane splitter while it's dragged |
+| `BorderHoverBrush` | An outline under the pointer |
 | `AccentBrush` | Selection outlines, the selected tab's indicator and chart lines |
 | `AccentFillBrush` | A selected item's fill |
 | `AccentOnFillBrush` | Text on `AccentFillBrush` and on the capture button |
@@ -68,10 +60,14 @@ Use `DynamicResource`, so the view follows theme changes.
 | `InfoFillBrush`, `InfoOnFillBrush` | 3xx redirects, and their labels |
 | `NeutralFillBrush`, `NeutralOnFillBrush` | Requests without a status, and their labels |
 
-A few colors belong to one component and keep their own names: the capture button (`CaptureAction*`), input outlines
-(`InputBorderBrush`), skeleton placeholders (`Skeleton*`), the recording indicator, table column dividers, the capture
-tabs' edge and shadow, the hover outline, the scroll bar track and the analysis report's expanders. They follow the same
-rules as roles.
+Each surface is a palette step away from the next, so a level needs no border to stand out: wells sit a step below
+panels, and the chrome a step below wells. Headings take the body text color; their size and weight set them apart.
+
+A few colors belong to one component and keep their own names: button text and outlines (`ButtonTextBrush`,
+`ButtonBorderBrush`), the capture button (`CaptureAction*`), input outlines (`InputBorderBrush`), the edge of a well
+(`WellEdgeBrush`), skeleton placeholders (`Skeleton*`), the recording indicator, table column dividers, the capture tab
+strip (`TabStripBrush`) and the tabs' edge and shadow, the hover outline, the scroll bar track and the analysis
+report's expanders. They follow the same rules as roles.
 
 ### Rules
 
@@ -82,8 +78,9 @@ rules as roles.
   other themes.
 - Every color the themes define is a role or a component color in `ColorCatalog`, with what it is for, so the Color
   page shows it.
-- Text roles meet a 4.5:1 contrast ratio on every surface they appear on, and the status text and label roles on
-  their fills and soft backgrounds. `ColorCatalog.ReadablePairs` lists the pairs.
+- Text meets a 4.5:1 contrast ratio on every surface it appears on, and the outlines that identify controls meet 3:1
+  on the surfaces they sit on. `ColorCatalog.ContrastGroups` lists the pairs and the ratio each group needs. Status
+  labels also meet 4.5:1 on their fills.
 - `Palette.xaml` matches `Palette.json`.
 - Don't alias a key with `<StaticResource x:Key="..." ResourceKey="..."/>` in a theme file: WPF resolves such aliases
   in compiled dictionaries to the wrong resource. Define a brush on the same palette step instead.
@@ -114,7 +111,8 @@ Use an existing role when one fits. When a new use needs a color of its own:
    system color, in the matching group.
 2. Add it, with what it is for, to its group in `XMAT.DesignSystem/Foundations/ColorCatalog.cs`, and to the table on
    this page. A color for one component goes in `ComponentColorGroups` instead.
-3. If it is text, or a fill that holds text, add its pairs of text and surface to `ColorCatalog.ReadablePairs`.
+3. If it is text, an outline that identifies a control, or a surface either appears on, add its pairs to the matching
+   group in `ColorCatalog.ContrastGroups`.
 
 ### The original look
 
@@ -190,7 +188,8 @@ Pages are XAML files in [`XMAT.DesignSystem/Stories`](../XMAT.DesignSystem/Stori
 ### Checks
 
 - **Every color is on the Color page.** `ColorRoleTests` fails when a theme defines a color that `ColorCatalog`
-  doesn't list, when a theme misses one it lists, or when one of its pairs of text and surface drops below 4.5:1.
+  doesn't list, when a theme misses one it lists, or when one of its contrast pairs falls short of the ratio its group
+  needs: 4.5:1 for text, 3:1 for outlines.
 - **Every style is on a page.** `StoryCoverageTests` opens every page, with its menus and dropdowns open, and fails
   when a style of the new look appears on none. Styles that no page shows yet are listed in
   `XMAT.Tests/DesignSystem/UncoveredStyles.txt`; the list only shrinks, because a new style comes with its example.

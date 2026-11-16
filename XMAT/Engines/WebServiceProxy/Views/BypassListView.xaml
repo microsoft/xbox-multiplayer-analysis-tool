@@ -309,7 +309,7 @@
         <Style x:Key="EntryListStyle" TargetType="ListBox">
             <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="True">
                     <Setter Property="Background" Value="Transparent"/>
@@ -388,7 +388,7 @@
              starts 8 px below, indented to the heading's text. -->
         <Style x:Key="DisclosureStyle" TargetType="Expander">
             <Setter Property="Focusable" Value="False"/>
-            <Setter Property="Foreground" Value="{DynamicResource TextHeadingBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Expander">
@@ -465,7 +465,7 @@
              its top and bottom. Like a well, its 1 px edge shows only in high contrast. -->
         <Style x:Key="CodeChipStyle" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderWellBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource WellEdgeBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="CornerRadius" Value="{DynamicResource InputCornerRadius}"/>
             <Setter Property="Padding" Value="5,1"/>

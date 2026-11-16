@@ -374,13 +374,13 @@ namespace XMAT.Tests
                 splitter.SetDragging(true);
                 WpfTestHost.Pump();
                 Assert.Equal(1, line.Opacity);
-                Assert.Equal(((SolidColorBrush)dictionary["BorderControlBrush"]).Color,
+                Assert.Equal(((SolidColorBrush)dictionary["BorderStrongBrush"]).Color,
                     Assert.IsType<SolidColorBrush>(line.Background).Color);
                 window.Resources.MergedDictionaries.Remove(dictionary);
                 dictionary = Theme(theme == "Dark" ? "Light" : "Dark");
                 window.Resources.MergedDictionaries.Add(dictionary);
                 WpfTestHost.Pump();
-                Assert.Equal(((SolidColorBrush)dictionary["BorderControlBrush"]).Color,
+                Assert.Equal(((SolidColorBrush)dictionary["BorderStrongBrush"]).Color,
                     Assert.IsType<SolidColorBrush>(line.Background).Color);
 
                 splitter.SetDragging(false);
@@ -879,9 +879,9 @@ namespace XMAT.Tests
 
         [Theory]
         [InlineData("TextPrimaryBrush", "SurfacePanelBrush")]
-        [InlineData("TextControlBrush", "SurfaceControlBrush")]
-        [InlineData("TextControlBrush", "SurfaceHoverBrush")]
-        [InlineData("TextControlBrush", "AccentSoftBrush")]
+        [InlineData("ButtonTextBrush", "SurfacePanelBrush")]
+        [InlineData("ButtonTextBrush", "SurfaceHoverBrush")]
+        [InlineData("ButtonTextBrush", "AccentSoftBrush")]
         [InlineData("TextSecondaryBrush", "SurfaceCanvasBrush")]
         [InlineData("TextPrimaryBrush", "SurfaceCanvasBrush")]
         public void DarkTheme_TextMeetsMinimumContrast(string foreground, string background)
@@ -1012,7 +1012,7 @@ namespace XMAT.Tests
                 inspector.SelectedIndex = 0;
                 WpfTestHost.Pump();
 
-                Assert.Equal(Of("TextHeadingBrush"), ColorOf(Label(inspector, "Request/Response")));
+                Assert.Equal(Of("TextPrimaryBrush"), ColorOf(Label(inspector, "Request/Response")));
                 Assert.Equal(Of("TextSecondaryBrush"), ColorOf(Label(inspector, "WebSockets")));
                 Assert.Equal(Of("TextSecondaryBrush"), ColorOf(Label(grid, "Status")));
                 Assert.Equal(Of("TextSecondaryBrush"), ColorOf(Label(statusBar, "Capture stopped")));

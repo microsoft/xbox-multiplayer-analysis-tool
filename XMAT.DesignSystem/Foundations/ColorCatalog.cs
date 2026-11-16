@@ -13,45 +13,45 @@ namespace XMAT.DesignSystem
     // Roles that do one kind of job, such as the surfaces.
     public sealed record ColorRoleGroup(string Name, IReadOnlyList<ColorRole> Roles);
 
+    // A color drawn on a surface, which must stand out from it by a contrast ratio.
+    public sealed record ContrastPair(string Foreground, string Surface);
+
+    // Pairs that are checked together, such as text on the surfaces, and the contrast they need. Outlines are drawn
+    // around text rather than as text.
+    public sealed record ContrastGroup(string Name, double Needs, IReadOnlyList<ContrastPair> Pairs, bool Outlines = false);
+
     // XMAT's colors as the design system defines them: the roles views and styles use, the colors that belong to one
-    // component, and the text and surfaces that must stay readable together. The Color page shows them with the values
+    // component, and the pairs of colors that must stand out from each other. The Color page shows them with the values
     // the themes give them, and the design system tests (XMAT.Tests/DesignSystem/ColorRoleTests.cs) check the themes
     // against this list: every theme defines every color here, every color the themes define is here, and every pair
-    // here meets 4.5:1 in Light and Dark. To add a color, add it here and to the themes (docs/design-system.md).
+    // meets its contrast in Light and Dark. To add a color, add it here and to the themes (docs/design-system.md).
     public static class ColorCatalog
     {
-        // The contrast that text needs on its background: WCAG's 4.5:1 for normal text.
-        public const double ReadableContrast = 4.5;
+        // WCAG's contrast for text, and for the outlines and parts that identify a control.
+        public const double TextContrast = 4.5;
+        public const double ControlContrast = 3.0;
 
         public static IReadOnlyList<ColorRoleGroup> RoleGroups { get; } = new[]
         {
             new ColorRoleGroup("Surfaces", new[]
             {
-                new ColorRole("SurfaceCanvasBrush", "Window chrome: the window, menus, the status bar and unselected tabs"),
-                new ColorRole("SurfacePanelBrush", "Content panels, the selected tab, text boxes and toolbars"),
+                new ColorRole("SurfaceCanvasBrush", "Window chrome, such as menus, the status bar and unselected tabs, and the header band of a table"),
+                new ColorRole("SurfacePanelBrush", "Content panels, the selected tab, text boxes, toolbars and buttons"),
                 new ColorRole("SurfaceWellBrush", "Recessed wells: tables and text areas"),
-                new ColorRole("SurfaceHeaderBrush", "The header band of a table"),
-                new ColorRole("SurfaceStripBrush", "The capture tab strip"),
                 new ColorRole("SurfaceHoverBrush", "A hovered button or row"),
                 new ColorRole("SurfaceSelectedBrush", "A chosen card, such as the device in New Capture. High contrast keeps the background and marks the choice with the selected text background"),
-                new ColorRole("SurfaceControlBrush", "A button's face"),
             }),
             new ColorRoleGroup("Text", new[]
             {
-                new ColorRole("TextPrimaryBrush", "Body text"),
+                new ColorRole("TextPrimaryBrush", "All text people read, headings included. Size and weight, not color, make a heading"),
                 new ColorRole("TextSecondaryBrush", "Labels, captions, column headers and the status bar"),
                 new ColorRole("TextDisabledBrush", "Disabled controls"),
-                new ColorRole("TextHeadingBrush", "Section headings"),
-                new ColorRole("TextControlBrush", "Button text"),
             }),
             new ColorRoleGroup("Borders", new[]
             {
-                new ColorRole("BorderSubtleBrush", "Table grid lines and the faintest dividers"),
-                new ColorRole("BorderDefaultBrush", "Panel borders and dividers"),
-                new ColorRole("BorderControlBrush", "Button outlines and the pane splitter"),
-                new ColorRole("BorderStrongBrush", "Strong outlines and scroll bar thumbs"),
-                new ColorRole("BorderStrongHoverBrush", "A strong outline under the pointer"),
-                new ColorRole("BorderWellBrush", "A text area's outline"),
+                new ColorRole("BorderSubtleBrush", "Dividers, panel edges and table grid lines"),
+                new ColorRole("BorderStrongBrush", "The outline that identifies a control, such as a check box, scroll bar thumbs and the pane splitter while it's dragged"),
+                new ColorRole("BorderHoverBrush", "An outline under the pointer"),
             }),
             new ColorRoleGroup("Accent", new[]
             {
@@ -87,6 +87,11 @@ namespace XMAT.DesignSystem
         // their component uses them.
         public static IReadOnlyList<ColorRoleGroup> ComponentColorGroups { get; } = new[]
         {
+            new ColorRoleGroup("Buttons", new[]
+            {
+                new ColorRole("ButtonTextBrush", "Button text. It's the text color, except in high contrast, which gives buttons their own text color"),
+                new ColorRole("ButtonBorderBrush", "Button outlines, in the button text color in high contrast"),
+            }),
             new ColorRoleGroup("Start Capture button", new[]
             {
                 new ColorRole("CaptureActionBackgroundBrush", "The button's face: a soft gradient of Xbox green"),
@@ -100,10 +105,12 @@ namespace XMAT.DesignSystem
             {
                 new ColorRole("InputBorderBrush", "Text box and dropdown outlines: a soft outline with a strong bottom edge"),
                 new ColorRole("HoverOutlineBrush", "The outline that marks hover. Only high contrast shows it"),
+                new ColorRole("WellEdgeBrush", "The edge of a recessed well, such as a text area. Only high contrast shows it"),
                 new ColorRole("ScrollBarBackgroundBrush", "The scroll bar's track"),
             }),
             new ColorRoleGroup("Capture tabs", new[]
             {
+                new ColorRole("TabStripBrush", "The strip the capture tabs sit on"),
                 new ColorRole("TabItemInsetShadowBrush", "The soft shadow at the base of unselected capture tabs"),
                 new ColorRole("TabItemSelectedEdgeBrush", "The selected capture tab's top edge. Only high contrast shows it"),
             }),
@@ -127,23 +134,37 @@ namespace XMAT.DesignSystem
 
         public static IEnumerable<ColorRole> ComponentColors => ComponentColorGroups.SelectMany(group => group.Roles);
 
-        // Text and the surfaces it appears on, which must meet ReadableContrast: body and secondary text on every
-        // surface, headings, button text on a button's states, text on the accent fill, and status text on surfaces and
-        // its soft background.
-        public static IReadOnlyList<(string Text, string Surface)> ReadablePairs { get; } =
-            RoleGroups.Single(group => group.Name == "Surfaces").Roles
-                .SelectMany(surface => new[] { ("TextPrimaryBrush", surface.Key), ("TextSecondaryBrush", surface.Key) })
-                .Concat(new[]
-                {
-                    ("TextHeadingBrush", "SurfacePanelBrush"), ("TextHeadingBrush", "SurfaceSelectedBrush"),
-                    ("TextControlBrush", "SurfaceControlBrush"), ("TextControlBrush", "SurfaceHoverBrush"),
-                    ("TextControlBrush", "AccentSoftBrush"), ("AccentOnFillBrush", "AccentFillBrush"),
-                })
-                .Concat(new[] { "Success", "Warning", "Error" }.SelectMany(status => new[]
-                {
-                    ($"{status}TextBrush", $"{status}SoftBrush"), ($"{status}TextBrush", "SurfacePanelBrush"),
-                    ($"{status}TextBrush", "SurfaceWellBrush"),
-                }))
-                .ToList();
+        // The colors that must stand out from the surfaces they're on: text by 4.5:1, and the outlines that identify
+        // controls by 3:1. Disabled text needn't, as WCAG allows.
+        public static IReadOnlyList<ContrastGroup> ContrastGroups { get; } = new[]
+        {
+            new ContrastGroup("Text", TextContrast,
+                new[] { "TextPrimaryBrush", "TextSecondaryBrush" }
+                    .SelectMany(text => new[] { "SurfaceCanvasBrush", "SurfacePanelBrush", "SurfaceWellBrush", "SurfaceHoverBrush", "SurfaceSelectedBrush" }
+                        .Select(surface => new ContrastPair(text, surface)))
+                    .ToList()),
+            new ContrastGroup("Buttons and selection", TextContrast, new[]
+            {
+                new ContrastPair("ButtonTextBrush", "SurfacePanelBrush"),
+                new ContrastPair("ButtonTextBrush", "SurfaceHoverBrush"),
+                new ContrastPair("ButtonTextBrush", "AccentSoftBrush"),
+                new ContrastPair("AccentOnFillBrush", "AccentFillBrush"),
+            }),
+            new ContrastGroup("Status", TextContrast,
+                new[] { "Success", "Warning", "Error" }
+                    .SelectMany(status => new[]
+                    {
+                        new ContrastPair($"{status}TextBrush", $"{status}SoftBrush"),
+                        new ContrastPair($"{status}TextBrush", "SurfacePanelBrush"),
+                        new ContrastPair($"{status}TextBrush", "SurfaceWellBrush"),
+                    })
+                    .ToList()),
+            new ContrastGroup("Control outlines", ControlContrast, new[]
+            {
+                new ContrastPair("BorderStrongBrush", "SurfacePanelBrush"),
+                new ContrastPair("BorderStrongBrush", "SurfaceWellBrush"),
+                new ContrastPair("ButtonBorderBrush", "SurfacePanelBrush"),
+            }, Outlines: true),
+        };
     }
 }

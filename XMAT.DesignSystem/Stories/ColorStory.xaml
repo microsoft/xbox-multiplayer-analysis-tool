@@ -15,7 +15,7 @@
         <DataTemplate x:Key="PaletteStepTemplate">
             <StackPanel Width="46" Margin="0,0,2,8">
                 <Border x:Name="Swatch" Height="32" CornerRadius="3" BorderThickness="1" Background="{Binding Fill}"
-                        BorderBrush="{DynamicResource BorderDefaultBrush}" SnapsToDevicePixels="True"/>
+                        BorderBrush="{DynamicResource BorderSubtleBrush}" SnapsToDevicePixels="True"/>
                 <TextBlock Text="{Binding Number}" Margin="0,4,0,0" HorizontalAlignment="Center"/>
                 <TextBlock Text="{Binding Hex}" HorizontalAlignment="Center" FontSize="{DynamicResource MetadataFontSize}"
                            Foreground="{DynamicResource TextSecondaryBrush}"/>
@@ -58,45 +58,25 @@
             </Grid>
         </DataTemplate>
 
-        <!-- Text on a surface in one theme, and their contrast. -->
+        <!-- A color on a surface in one theme, showing their contrast: text in the color, or, for an outline, a frame in
+             the color around the theme's text. -->
         <DataTemplate x:Key="ContrastSampleTemplate">
-            <StackPanel Orientation="Horizontal">
-                <Border Width="40" Height="24" CornerRadius="3" BorderThickness="1" SnapsToDevicePixels="True"
-                        Background="{Binding Surface}" BorderBrush="{Binding Edge}">
-                    <TextBlock Text="Aa" HorizontalAlignment="Center" VerticalAlignment="Center"
+            <Border Width="58" Height="28" CornerRadius="3" BorderThickness="1" SnapsToDevicePixels="True"
+                    Background="{Binding Surface}" BorderBrush="{Binding Edge}" ToolTip="{Binding Name}">
+                <Border Margin="4,3" CornerRadius="2" BorderThickness="1" BorderBrush="{Binding Outline}">
+                    <TextBlock Text="{Binding Ratio}" HorizontalAlignment="Center" VerticalAlignment="Center"
                                Foreground="{Binding Text}"/>
                 </Border>
-                <TextBlock Text="{Binding Ratio}" Width="56" Margin="8,0,0,0" VerticalAlignment="Center"/>
-            </StackPanel>
+            </Border>
         </DataTemplate>
 
-        <DataTemplate x:Key="ReadablePairTemplate">
-            <Grid Margin="0,0,0,6">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" SharedSizeGroup="LightSample"/>
-                    <ColumnDefinition Width="Auto" SharedSizeGroup="DarkSample"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
+        <!-- A cell of a contrast grid: the pair in Light, then in Dark. -->
+        <DataTemplate x:Key="ContrastCellTemplate">
+            <StackPanel Orientation="Horizontal" Margin="0,0,12,8">
                 <ContentPresenter Content="{Binding Light}" ContentTemplate="{StaticResource ContrastSampleTemplate}"
-                                  Margin="0,0,12,0"/>
-                <ContentPresenter Grid.Column="1" Content="{Binding Dark}"
-                                  ContentTemplate="{StaticResource ContrastSampleTemplate}" Margin="0,0,12,0"/>
-                <TextBlock Grid.Column="2" Text="{Binding Pair}" VerticalAlignment="Center" TextWrapping="Wrap"/>
-            </Grid>
-        </DataTemplate>
-
-        <!-- The column names above the pairs. -->
-        <DataTemplate x:Key="ReadablePairHeaderTemplate">
-            <Grid Margin="0,0,0,8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" SharedSizeGroup="LightSample"/>
-                    <ColumnDefinition Width="Auto" SharedSizeGroup="DarkSample"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="Light" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                <TextBlock Grid.Column="1" Text="Dark" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                <TextBlock Grid.Column="2" Text="Text on surface" Foreground="{DynamicResource TextSecondaryBrush}"/>
-            </Grid>
+                                  Margin="0,0,4,0"/>
+                <ContentPresenter Content="{Binding Dark}" ContentTemplate="{StaticResource ContrastSampleTemplate}"/>
+            </StackPanel>
         </DataTemplate>
     </ds:Story.Resources>
 
@@ -105,10 +85,10 @@
                          Description="Five base colors generate the palette. Each becomes a ramp of steps from lightest to darkest and is itself one of the steps, outlined here; gray is a ramp of its own. The themes give roles these steps, and views and styles never use a step directly. To change a base color, edit Palette.json and regenerate Palette.xaml, as docs/design-system.md describes."/>
 
         <ds:StorySection x:Name="RolesSection" Title="Roles" StyleName="Surface, Text, Border, Accent and status …Brush"
-                         Description="The colors views and styles use. Each role does one job, so a view picks the role for what it shows, never a color. Light and Dark, shown side by side, give each role a palette step, and High Contrast one of the colors of the person's Windows contrast theme, named as in Settings."/>
+                         Description="The colors views and styles use: a few surfaces, three text colors and three borders, then the accent and the status colors. Each role does one job, so a view picks the role for what it shows, never a color. Light and Dark, shown side by side, give each role a palette step, and High Contrast one of the colors of the person's Windows contrast theme, named as in Settings."/>
 
-        <ds:StorySection x:Name="ReadableSection" Title="Readable text" StyleName="ColorCatalog.ReadablePairs"
-                         Description="Text meets a contrast of 4.5:1 on every surface it appears on, in Light and Dark. The ratios are worked out from the themes, and the design system tests fail if one drops below 4.5:1. High contrast takes the person's own colors."/>
+        <ds:StorySection x:Name="ContrastSection" Title="Contrast" StyleName="ColorCatalog.ContrastGroups"
+                         Description="Text stands out from the surfaces it appears on by 4.5:1, and the outlines that identify controls by 3:1. Each cell shows a color on a surface in Light, then in Dark, with their contrast, worked out from the themes; the design system tests fail if one falls short. High contrast takes the person's own colors."/>
 
         <ds:StorySection x:Name="ComponentSection" Title="Component colors" StyleName="ColorCatalog.ComponentColorGroups"
                          Description="Colors that belong to one component keep their own names. They follow the rules roles do: Light and Dark take palette steps, and High Contrast a contrast theme color."/>

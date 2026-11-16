@@ -36,9 +36,9 @@ namespace XMAT.Tests.DesignSystem
         }
 
         // Every role and component color, in the catalog's order, with the step, opacity, gradient or contrast theme
-        // color each theme gives it; and every readable pair with its contrast in Light and Dark.
+        // color each theme gives it; and a contrast grid cell for every pair, in Light and Dark.
         [Fact]
-        public void ColorPage_ShowsEveryColorWithEachThemesValue_AndTheContrastOfEveryReadablePair()
+        public void ColorPage_ShowsEveryColorWithEachThemesValue_AndTheContrastOfEveryPair()
         {
             _application.Run(window =>
             {
@@ -55,8 +55,9 @@ namespace XMAT.Tests.DesignSystem
                     Assert.Equal(
                         ColorCatalog.Roles.Concat(ColorCatalog.ComponentColors).Select(color => color.Key),
                         rows.Select(row => row.Key));
-                    Assert.Equal("Light Gray3 · Dark Gray14 · High contrast Background", Values(rows, "SurfaceCanvasBrush"));
+                    Assert.Equal("Light Gray3 · Dark Gray15 · High contrast Background", Values(rows, "SurfaceCanvasBrush"));
                     Assert.Equal("Light Gray5 at 30% · Dark Gray12 · High contrast Text", Values(rows, "ColumnDividerBrush"));
+                    Assert.Equal("Light Gray13 · Dark Gray4 · High contrast Button text", Values(rows, "ButtonTextBrush"));
                     Assert.Equal(
                         "Light Green8 to Green10 · Dark Green8 to Green10 · High contrast Selected text background",
                         Values(rows, "CaptureActionBackgroundBrush"));
@@ -69,15 +70,21 @@ namespace XMAT.Tests.DesignSystem
                     Assert.Equal(Colors.White, ((SolidColorBrush)panel.Light.Fill).Color);
                     Assert.Equal(PaletteColor("Gray13"), ((SolidColorBrush)panel.Dark.Fill).Color);
 
-                    List<ReadablePairView> pairs = story.ReadablePairs.ToList();
-                    Assert.Equal(ColorCatalog.ReadablePairs.Select(pair => $"{pair.Text} on {pair.Surface}"), pairs.Select(pair => pair.Pair));
-                    ReadablePairView body = pairs.Single(pair => pair.Pair == "TextPrimaryBrush on SurfacePanelBrush");
+                    Assert.Equal(
+                        ColorCatalog.ContrastGroups.SelectMany(group => group.Pairs).Select(pair => (pair.Foreground, pair.Surface)),
+                        story.ContrastCells.Select(cell => (cell.Foreground, cell.Surface)));
+                    ContrastCell body = story.ContrastCells.Single(cell => cell.Foreground == "TextPrimaryBrush" && cell.Surface == "SurfacePanelBrush");
                     Assert.Equal(
                         ColorStory.Ratio(SelectionForegroundConverter.Contrast(PaletteColor("Gray13"), PaletteColor("Gray1"))),
                         body.Light.Ratio);
                     Assert.Equal(
                         ColorStory.Ratio(SelectionForegroundConverter.Contrast(PaletteColor("Gray4"), PaletteColor("Gray13"))),
                         body.Dark.Ratio);
+                    Assert.Same(Brushes.Transparent, body.Light.Outline);
+                    // An outline frames the theme's text in the outline's color.
+                    ContrastCell outline = story.ContrastCells.Single(cell => cell.Foreground == "BorderStrongBrush" && cell.Surface == "SurfacePanelBrush");
+                    Assert.Equal(PaletteColor("Gray8"), ((SolidColorBrush)outline.Light.Outline).Color);
+                    Assert.Equal(PaletteColor("Gray13"), ((SolidColorBrush)outline.Light.Text).Color);
                 }
                 finally
                 {

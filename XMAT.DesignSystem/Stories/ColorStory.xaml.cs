@@ -22,15 +22,19 @@ namespace XMAT.DesignSystem
     // A role or component color: what it is for and its value in each theme.
     public sealed record ColorRowView(string Key, string Use, string Values, ThemeSwatch Light, ThemeSwatch Dark);
 
-    // Text on a surface in one theme, and their contrast, such as "12.6:1".
-    public sealed record ContrastSample(Brush Text, Brush Surface, Brush Edge, string Ratio);
+    // A color on a surface in one theme, and their contrast, such as "12.6:1": text in the color, or, for an outline, the
+    // theme's text framed by an outline in the color.
+    public sealed record ContrastSample(string Name, Brush Surface, Brush Edge, Brush Text, Brush Outline, string Ratio);
 
-    public sealed record ReadablePairView(string Pair, ContrastSample Light, ContrastSample Dark);
+    // A cell of a contrast grid: a color on a surface in Light and in Dark.
+    public sealed record ContrastCell(string Foreground, string Surface, ContrastSample Light, ContrastSample Dark);
 
-    // The Color page: the palette, the roles, the text that must stay readable and the component colors, all read from
-    // the theme files and ColorCatalog.
+    // The Color page: the palette, the roles, the colors that must stand out from each other and the component colors,
+    // all read from the theme files and ColorCatalog.
     public partial class ColorStory : Story
     {
+        private readonly List<ContrastCell> _contrastCells = new();
+
         public ColorStory()
         {
             InitializeComponent();
@@ -40,7 +44,11 @@ namespace XMAT.DesignSystem
                 RolesSection.Items.Add(GroupExample(group, "role", "roles"));
             }
 
-            ShowReadablePairs();
+            foreach (ContrastGroup group in ColorCatalog.ContrastGroups)
+            {
+                ContrastSection.Items.Add(ContrastExample(group));
+            }
+
             foreach (ColorRoleGroup group in ColorCatalog.ComponentColorGroups)
             {
                 ComponentSection.Items.Add(GroupExample(group, "color", "colors"));
@@ -52,9 +60,8 @@ namespace XMAT.DesignSystem
             RolesSection.Items.Cast<StoryExample>().Concat(ComponentSection.Items.Cast<StoryExample>())
                 .SelectMany(example => ((ItemsControl)((StackPanel)example.Content).Children[1]).Items.Cast<ColorRowView>());
 
-        internal IEnumerable<ReadablePairView> ReadablePairs =>
-            ((ItemsControl)((StackPanel)ReadableSection.Items.Cast<StoryExample>().Single().Content).Children[1])
-                .Items.Cast<ReadablePairView>();
+        // The cells of the contrast grids, for the tests.
+        internal IReadOnlyList<ContrastCell> ContrastCells => _contrastCells;
 
         // The value each theme gives KEY: "Light Gray3 · Dark Gray14 · High contrast Background".
         internal static string ValuesOf(string key) =>
@@ -107,7 +114,7 @@ namespace XMAT.DesignSystem
             };
             AutomationProperties.SetName(rows, group.Name);
             var title = new TextBlock { Text = group.Name, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) };
-            title.SetResourceReference(TextBlock.ForegroundProperty, "TextHeadingBrush");
+            title.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
             return new StoryExample
             {
                 Caption = $"{group.Roles.Count} {(group.Roles.Count == 1 ? singular : plural)}",
@@ -115,44 +122,96 @@ namespace XMAT.DesignSystem
             };
         }
 
-        private void ShowReadablePairs()
+        // A grid of GROUP's pairs: the colors down the side and the surfaces across the top, each cell in Light, then
+        // Dark.
+        private StoryExample ContrastExample(ContrastGroup group)
         {
-            var pairs = new ItemsControl
+            List<string> foregrounds = group.Pairs.Select(pair => pair.Foreground).Distinct().ToList();
+            List<string> columns = group.Pairs.Select(ColumnOf).Distinct().ToList();
+            var grid = new Grid();
+            AutomationProperties.SetName(grid, group.Name);
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            for (int column = 0; column < columns.Count; column++)
             {
-                Focusable = false,
-                ItemTemplate = (DataTemplate)Resources["ReadablePairTemplate"],
-                ItemsSource = ColorCatalog.ReadablePairs
-                    .Select(pair => new ReadablePairView(
-                        $"{pair.Text} on {pair.Surface}",
-                        Sample(ThemeSources.Light, pair.Text, pair.Surface),
-                        Sample(ThemeSources.Dark, pair.Text, pair.Surface)))
-                    .ToList(),
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                grid.Children.Add(Label(columns[column], 0, column + 1, secondary: true));
+            }
+
+            for (int row = 0; row < foregrounds.Count; row++)
+            {
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                grid.Children.Add(Label(foregrounds[row].Replace("Brush", string.Empty, StringComparison.Ordinal), row + 1, 0, secondary: false));
+                foreach (ContrastPair pair in group.Pairs.Where(pair => pair.Foreground == foregrounds[row]))
+                {
+                    var cell = new ContrastCell(
+                        pair.Foreground,
+                        pair.Surface,
+                        Sample(ThemeSources.Light, pair, group.Outlines),
+                        Sample(ThemeSources.Dark, pair, group.Outlines));
+                    _contrastCells.Add(cell);
+                    var presenter = new ContentPresenter { Content = cell, ContentTemplate = (DataTemplate)Resources["ContrastCellTemplate"] };
+                    Grid.SetRow(presenter, row + 1);
+                    Grid.SetColumn(presenter, columns.IndexOf(ColumnOf(pair)) + 1);
+                    grid.Children.Add(presenter);
+                }
+            }
+
+            return new StoryExample
+            {
+                Caption = string.Format(CultureInfo.CurrentCulture, "{0}: {1}:1 or more", group.Name, group.Needs),
+                Content = grid,
             };
-            AutomationProperties.SetName(pairs, ReadableSection.Title);
-            var table = new StackPanel
+        }
+
+        // A surface's column: its name without "Surface" and "Brush", or, for status text on its own soft background,
+        // "Soft background".
+        private static string ColumnOf(ContrastPair pair)
+        {
+            string surface = pair.Surface.Replace("Brush", string.Empty, StringComparison.Ordinal);
+            string text = pair.Foreground.Replace("TextBrush", string.Empty, StringComparison.Ordinal);
+            return surface == $"{text}Soft" ? "Soft background"
+                : surface.StartsWith("Surface", StringComparison.Ordinal) ? surface["Surface".Length..]
+                : surface;
+        }
+
+        private static TextBlock Label(string text, int row, int column, bool secondary)
+        {
+            var label = new TextBlock
             {
-                MaxWidth = 720,
-                Children = { new ContentPresenter { ContentTemplate = (DataTemplate)Resources["ReadablePairHeaderTemplate"] }, pairs },
+                Text = text,
+                Margin = new Thickness(0, 0, 12, secondary ? 6 : 8),
+                VerticalAlignment = secondary ? VerticalAlignment.Bottom : VerticalAlignment.Center,
             };
-            Grid.SetIsSharedSizeScope(table, true);
-            ReadableSection.Items.Add(new StoryExample
+            if (secondary)
             {
-                Caption = $"{ColorCatalog.ReadablePairs.Count} pairs of text and surface",
-                Content = table,
-            });
+                label.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            }
+
+            Grid.SetRow(label, row);
+            Grid.SetColumn(label, column);
+            return label;
         }
 
         private static ThemeSwatch Swatch(string theme, string key) => new(
             $"{(theme == ThemeSources.Light ? "Light" : "Dark")}: {ValueOf(theme, key)}",
             ThemeSources.BrushOf(theme, key),
             ThemeSources.BrushOf(theme, "SurfacePanelBrush"),
-            ThemeSources.BrushOf(theme, "BorderDefaultBrush"));
+            ThemeSources.BrushOf(theme, "BorderSubtleBrush"));
 
-        private static ContrastSample Sample(string theme, string text, string surface) => new(
-            ThemeSources.BrushOf(theme, text),
-            ThemeSources.BrushOf(theme, surface),
-            ThemeSources.BrushOf(theme, "BorderDefaultBrush"),
-            Ratio(ThemeSources.Contrast(theme, text, surface)));
+        // PAIR in THEME: its color as text on the surface, or, for an OUTLINE, as a frame around the theme's text.
+        private static ContrastSample Sample(string theme, ContrastPair pair, bool outline)
+        {
+            Brush color = ThemeSources.BrushOf(theme, pair.Foreground);
+            string ratio = Ratio(ThemeSources.Contrast(theme, pair.Foreground, pair.Surface));
+            return new ContrastSample(
+                $"{(theme == ThemeSources.Light ? "Light" : "Dark")}: {pair.Foreground} on {pair.Surface}, {ratio}",
+                ThemeSources.BrushOf(theme, pair.Surface),
+                ThemeSources.BrushOf(theme, "BorderSubtleBrush"),
+                outline ? ThemeSources.BrushOf(theme, "TextPrimaryBrush") : color,
+                outline ? color : Brushes.Transparent,
+                ratio);
+        }
 
         private static string Number(string key) => key.TrimStart(key.TakeWhile(char.IsLetter).ToArray());
 

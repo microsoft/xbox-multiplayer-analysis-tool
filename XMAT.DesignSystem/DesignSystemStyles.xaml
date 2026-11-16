@@ -63,7 +63,7 @@
                                    Foreground="{DynamicResource TextSecondaryBrush}"/>
                         <Border Margin="0,12,0,0" Padding="20,20,0,4" CornerRadius="8" BorderThickness="1"
                                 Background="{DynamicResource SurfacePanelBrush}"
-                                BorderBrush="{DynamicResource BorderDefaultBrush}">
+                                BorderBrush="{DynamicResource BorderSubtleBrush}">
                             <ItemsPresenter/>
                         </Border>
                     </StackPanel>

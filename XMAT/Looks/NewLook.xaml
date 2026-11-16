@@ -195,7 +195,7 @@
     <Style TargetType="ToolTip">
         <Setter Property="Background" Value="{DynamicResource SurfaceCanvasBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Padding" Value="8,4"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
@@ -223,7 +223,7 @@
         <Setter Property="MinHeight" Value="32"/>
         <Setter Property="Padding" Value="2,0,4,0"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
         <Setter Property="BorderThickness" Value="0,0,0,1"/>
     </Style>
 
@@ -231,7 +231,7 @@
         <Setter Property="MinHeight" Value="28"/>
         <Setter Property="Padding" Value="9,0"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
         <Setter Property="BorderThickness" Value="0,1,0,0"/>
     </Style>
 
@@ -240,7 +240,7 @@
     <Style x:Key="PaneTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
         <Setter Property="FontSize" Value="{DynamicResource PaneTitleFontSize}"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextHeadingBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
         <Setter Property="AutomationProperties.HeadingLevel" Value="Level2"/>
     </Style>
@@ -248,7 +248,7 @@
     <Style x:Key="SectionTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
         <Setter Property="FontSize" Value="{DynamicResource SectionTitleFontSize}"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextHeadingBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="AutomationProperties.HeadingLevel" Value="Level3"/>
     </Style>
 
@@ -299,7 +299,7 @@
                                 Background="{TemplateBinding BorderBrush}"
                                 IsHitTestVisible="False" SnapsToDevicePixels="True"/>
                         <Border x:Name="ResizeLine" Height="1" VerticalAlignment="Center"
-                                Background="{DynamicResource BorderControlBrush}"
+                                Background="{DynamicResource BorderStrongBrush}"
                                 Opacity="0" IsHitTestVisible="False"
                                 SnapsToDevicePixels="True"/>
                     </Grid>
@@ -332,7 +332,7 @@
 
     <!-- Divides the capture area from the analysis area. -->
     <Style x:Key="PaneSplitterStyle" TargetType="GridSplitter" BasedOn="{StaticResource {x:Type GridSplitter}}">
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
         <Setter Property="Padding" Value="12,0"/>
     </Style>
 
@@ -357,7 +357,7 @@
         </Style.Resources>
         <Setter Property="Focusable" Value="False"/>
         <Setter Property="Background" Value="{DynamicResource SurfaceWellBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderWellBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource WellEdgeBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="Padding" Value="{DynamicResource TextAreaPadding}"/>
         <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -395,19 +395,19 @@
 
     <Style TargetType="GroupBox">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
     </Style>
 
     <Style TargetType="ListBox">
         <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
     </Style>
 
     <Style TargetType="TreeView">
         <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
     </Style>
 
     <!-- A tree inside a recessed well draws directly on the well. -->
@@ -441,9 +441,9 @@
     </Style>
 
     <Style TargetType="DataGridColumnHeader">
-        <Setter Property="Background" Value="{DynamicResource SurfaceHeaderBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfaceCanvasBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource SurfaceHeaderBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource SurfaceCanvasBrush}"/>
         <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="Padding" Value="{DynamicResource TableHeaderPadding}"/>
         <Setter Property="MinHeight" Value="{DynamicResource TableHeaderMinHeight}"/>
@@ -590,11 +590,11 @@
            BasedOn="{StaticResource TrafficGridHeaderStyle}"/>
 
     <Style TargetType="DataGridRowHeader">
-        <Setter Property="Background" Value="{DynamicResource SurfaceHeaderBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfaceCanvasBrush}"/>
     </Style>
 
     <Style TargetType="Separator">
-        <Setter Property="Background" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource BorderSubtleBrush}"/>
     </Style>
 
     <Style TargetType="UserControl">

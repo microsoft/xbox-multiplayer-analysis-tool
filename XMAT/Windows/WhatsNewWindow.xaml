@@ -77,11 +77,11 @@
 
         <!-- The page: a picture of the change, its name, what it does and where to find it. -->
         <Border Grid.Column="1" Margin="8,20,20,0" Padding="24,24,24,20" CornerRadius="8"
-                Background="{DynamicResource SurfacePanelBrush}" BorderBrush="{DynamicResource BorderDefaultBrush}"
+                Background="{DynamicResource SurfacePanelBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
                 BorderThickness="1">
             <StackPanel>
                 <Border Height="300" CornerRadius="6" BorderThickness="1" local:SurfaceClip.CornerRadius="6"
-                        Background="{DynamicResource SurfaceCanvasBrush}" BorderBrush="{DynamicResource BorderDefaultBrush}">
+                        Background="{DynamicResource SurfaceCanvasBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}">
                     <Image x:Name="PageImage" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
                 </Border>
                 <TextBlock x:Name="PageTitle" Margin="0,20,0,8" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"/>

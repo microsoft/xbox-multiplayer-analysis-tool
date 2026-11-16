@@ -14,27 +14,19 @@
     <SolidColorBrush x:Key="SurfaceCanvasBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
     <SolidColorBrush x:Key="SurfacePanelBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
     <SolidColorBrush x:Key="SurfaceWellBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
-    <SolidColorBrush x:Key="SurfaceHeaderBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
-    <SolidColorBrush x:Key="SurfaceStripBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
     <SolidColorBrush x:Key="SurfaceHoverBrush" Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}"/>
     <!-- A chosen card keeps the window color: its outline and check, in the highlight color, show the choice. -->
     <SolidColorBrush x:Key="SurfaceSelectedBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
-    <SolidColorBrush x:Key="SurfaceControlBrush" Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}"/>
 
     <!-- Text -->
     <SolidColorBrush x:Key="TextPrimaryBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
     <SolidColorBrush x:Key="TextSecondaryBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
     <SolidColorBrush x:Key="TextDisabledBrush" Color="{DynamicResource {x:Static SystemColors.GrayTextColorKey}}"/>
-    <SolidColorBrush x:Key="TextHeadingBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
-    <SolidColorBrush x:Key="TextControlBrush" Color="{DynamicResource {x:Static SystemColors.ControlTextColorKey}}"/>
 
     <!-- Borders -->
     <SolidColorBrush x:Key="BorderSubtleBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
-    <SolidColorBrush x:Key="BorderDefaultBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
-    <SolidColorBrush x:Key="BorderControlBrush" Color="{DynamicResource {x:Static SystemColors.ControlTextColorKey}}"/>
     <SolidColorBrush x:Key="BorderStrongBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
-    <SolidColorBrush x:Key="BorderStrongHoverBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
-    <SolidColorBrush x:Key="BorderWellBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
+    <SolidColorBrush x:Key="BorderHoverBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
 
     <!-- Accent -->
     <SolidColorBrush x:Key="AccentBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
@@ -61,6 +53,13 @@
     <SolidColorBrush x:Key="NeutralOnFillBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
 
     <!-- Component colors -->
+    <!-- Buttons take the contrast theme's button colors, so they stand out from the text around them. A button's face
+         is the panel color, which every Windows contrast theme gives the button background too. -->
+    <SolidColorBrush x:Key="ButtonTextBrush" Color="{DynamicResource {x:Static SystemColors.ControlTextColorKey}}"/>
+    <SolidColorBrush x:Key="ButtonBorderBrush" Color="{DynamicResource {x:Static SystemColors.ControlTextColorKey}}"/>
+    <SolidColorBrush x:Key="TabStripBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"/>
+    <!-- Wells share the window color here, so their edge shows. -->
+    <SolidColorBrush x:Key="WellEdgeBrush" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}"/>
     <!-- Skeleton placeholders stay still here: a GrayText bar with no highlight. -->
     <SolidColorBrush x:Key="SkeletonBaseBrush" Color="{DynamicResource {x:Static SystemColors.GrayTextColorKey}}"/>
     <SolidColorBrush x:Key="SkeletonHighlightBrush" Color="Transparent"/>

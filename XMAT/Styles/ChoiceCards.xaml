@@ -24,7 +24,7 @@
          description is secondary. Content shows 8px under the text while the card is chosen. -->
     <Style TargetType="local:ChoiceCard">
         <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Padding" Value="12"/>
@@ -60,7 +60,7 @@
                                     <TextBlock x:Name="TitleText" Text="{TemplateBinding Title}" TextWrapping="Wrap"
                                                FontSize="{DynamicResource SectionTitleFontSize}" FontWeight="SemiBold"
                                                LineHeight="{DynamicResource TextLineHeight}"
-                                               Foreground="{DynamicResource TextHeadingBrush}"/>
+                                               Foreground="{DynamicResource TextPrimaryBrush}"/>
                                     <TextBlock x:Name="DescriptionText" Margin="0,4,0,0" Text="{TemplateBinding Description}"
                                                TextWrapping="Wrap" Foreground="{DynamicResource TextPrimaryBrush}"/>
                                     <Grid x:Name="NoteRow" Margin="0,8,0,0">
@@ -117,7 +117,7 @@
                             <Setter TargetName="NotePicture" Property="Visibility" Value="Collapsed"/>
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource BorderStrongHoverBrush}"/>
+                            <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource BorderHoverBrush}"/>
                             <Setter TargetName="HoverOutline" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">

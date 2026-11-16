@@ -127,7 +127,7 @@
                 <Popup x:Name="ProcessFilterPopup" Grid.Column="4" PlacementTarget="{Binding ElementName=ProcessFilterButton}" Placement="Bottom"
                        StaysOpen="False" AllowsTransparency="False">
                     <!-- Tab stays inside the open popup; Esc closes it and returns to the Process button. -->
-                    <Border Background="{DynamicResource SurfaceCanvasBrush}" BorderBrush="{DynamicResource BorderDefaultBrush}"
+                    <Border Background="{DynamicResource SurfaceCanvasBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
                             TextElement.Foreground="{DynamicResource TextPrimaryBrush}"
                             KeyboardNavigation.TabNavigation="Cycle"
                             BorderThickness="1" Padding="8">

@@ -11,7 +11,7 @@
          is and what it needs (Styles/ChoiceCards.xaml). Windows/AddDeviceWindow.xaml is the original look's. -->
     <DockPanel Width="720">
         <!-- Add capture and Cancel, under a divider. -->
-        <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderDefaultBrush}"
+        <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}"
                 Padding="{DynamicResource DialogFooterInset}">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="AddButton" MinWidth="88" MinHeight="{DynamicResource ControlHeight}"

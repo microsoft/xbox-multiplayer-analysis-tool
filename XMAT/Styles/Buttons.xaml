@@ -8,9 +8,9 @@
 
     <!-- Standard buttons are outlined on the surface; toolbar actions are text-only and the primary action is filled. -->
     <Style TargetType="Button">
-        <Setter Property="Background" Value="{DynamicResource SurfaceControlBrush}"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextControlBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderControlBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ButtonTextBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Padding" Value="{DynamicResource ButtonPadding}"/>
         <Setter Property="Template">
@@ -72,9 +72,9 @@
     </Style>
 
     <Style TargetType="ToggleButton">
-        <Setter Property="Background" Value="{DynamicResource SurfaceControlBrush}"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextControlBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderControlBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ButtonTextBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Padding" Value="{DynamicResource ButtonPadding}"/>
         <Setter Property="Template">
@@ -187,7 +187,7 @@
     <!-- The popup of a folded filter row is a dropdown surface; its filters stand one above another, 8px apart. -->
     <Style x:Key="FilterOverflowPopupStyle" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}"/>
         <Setter Property="Padding" Value="{DynamicResource PanelPadding}"/>

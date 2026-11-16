@@ -113,7 +113,7 @@
                                     MinWidth="{TemplateBinding ActualWidth}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}"
                                     Background="{DynamicResource SurfacePanelBrush}"
-                                    BorderBrush="{DynamicResource BorderDefaultBrush}"
+                                    BorderBrush="{DynamicResource BorderSubtleBrush}"
                                     BorderThickness="1" Padding="4,6"
                                     CornerRadius="{DynamicResource ControlCornerRadius}">
                                 <ScrollViewer CanContentScroll="True" VerticalScrollBarVisibility="Auto">
@@ -129,7 +129,7 @@
                             <Setter TargetName="ContentSite" Property="Visibility" Value="Collapsed"/>
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Border" Property="BorderBrush" Value="{DynamicResource BorderStrongHoverBrush}"/>
+                            <Setter TargetName="Border" Property="BorderBrush" Value="{DynamicResource BorderHoverBrush}"/>
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="Border" Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}"/>
@@ -204,7 +204,7 @@
                             <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="CheckBorder" Property="BorderBrush" Value="{DynamicResource BorderStrongHoverBrush}"/>
+                            <Setter TargetName="CheckBorder" Property="BorderBrush" Value="{DynamicResource BorderHoverBrush}"/>
                         </Trigger>
                         <Trigger Property="IsKeyboardFocused" Value="True">
                             <Setter TargetName="FocusRing" Property="Visibility" Value="Visible"/>
@@ -244,7 +244,7 @@
                             <Setter TargetName="Dot" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource BorderStrongHoverBrush}"/>
+                            <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource BorderHoverBrush}"/>
                         </Trigger>
                         <Trigger Property="IsKeyboardFocused" Value="True">
                             <Setter TargetName="FocusRing" Property="Visibility" Value="Visible"/>

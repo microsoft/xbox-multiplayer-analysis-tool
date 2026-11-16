@@ -8,31 +8,25 @@
         <ResourceDictionary Source="Palette.xaml"/>
     </ResourceDictionary.MergedDictionaries>
 
-    <!-- Surfaces: window chrome, content panels, recessed wells, table headers, the capture tab strip, hover, a chosen
-         card and buttons -->
-    <SolidColorBrush x:Key="SurfaceCanvasBrush" Color="{StaticResource Gray14}"/>
+    <!-- Surfaces: window chrome and table headers, content panels and buttons, recessed wells, hover and a chosen card.
+         Each level is a step apart: wells sit a step below panels and the chrome a step below wells, so a table's
+         header band stands out from its rows. -->
+    <SolidColorBrush x:Key="SurfaceCanvasBrush" Color="{StaticResource Gray15}"/>
     <SolidColorBrush x:Key="SurfacePanelBrush" Color="{StaticResource Gray13}"/>
     <SolidColorBrush x:Key="SurfaceWellBrush" Color="{StaticResource Gray14}"/>
-    <SolidColorBrush x:Key="SurfaceHeaderBrush" Color="{StaticResource Gray15}"/>
-    <SolidColorBrush x:Key="SurfaceStripBrush" Color="{StaticResource Gray16}"/>
     <SolidColorBrush x:Key="SurfaceHoverBrush" Color="{StaticResource Gray12}"/>
     <SolidColorBrush x:Key="SurfaceSelectedBrush" Color="{StaticResource Blue12}"/>
-    <SolidColorBrush x:Key="SurfaceControlBrush" Color="{StaticResource Gray13}"/>
 
-    <!-- Text -->
+    <!-- Text: one color for all text people read, headings included, a quieter one for labels, and one for disabled
+         controls -->
     <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource Gray4}"/>
     <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource Gray6}"/>
     <SolidColorBrush x:Key="TextDisabledBrush" Color="{StaticResource Gray8}"/>
-    <SolidColorBrush x:Key="TextHeadingBrush" Color="{StaticResource Gray2}"/>
-    <SolidColorBrush x:Key="TextControlBrush" Color="{StaticResource Gray4}"/>
 
-    <!-- Borders: from the faintest grid line to the outline that identifies a control -->
-    <SolidColorBrush x:Key="BorderSubtleBrush" Color="{StaticResource Gray12}"/>
-    <SolidColorBrush x:Key="BorderDefaultBrush" Color="{StaticResource Gray11}"/>
-    <SolidColorBrush x:Key="BorderControlBrush" Color="{StaticResource Gray9}"/>
+    <!-- Borders: dividers and grid lines, the outline that identifies a control, and an outline under the pointer -->
+    <SolidColorBrush x:Key="BorderSubtleBrush" Color="{StaticResource Gray11}"/>
     <SolidColorBrush x:Key="BorderStrongBrush" Color="{StaticResource Gray8}"/>
-    <SolidColorBrush x:Key="BorderStrongHoverBrush" Color="{StaticResource Gray8}"/>
-    <SolidColorBrush x:Key="BorderWellBrush" Color="{StaticResource Gray14}"/>
+    <SolidColorBrush x:Key="BorderHoverBrush" Color="{StaticResource Gray8}"/>
 
     <!-- Accent: selection, focus and the selected tab -->
     <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource Blue6}"/>
@@ -59,6 +53,11 @@
     <SolidColorBrush x:Key="NeutralOnFillBrush" Color="{StaticResource Gray16}"/>
 
     <!-- Component colors: each belongs to one component, and High Contrast gives it a system color of its own. -->
+    <!-- Buttons: their text and outline. High contrast gives buttons the contrast theme's button text color. -->
+    <SolidColorBrush x:Key="ButtonTextBrush" Color="{StaticResource Gray4}"/>
+    <SolidColorBrush x:Key="ButtonBorderBrush" Color="{StaticResource Gray8}"/>
+    <SolidColorBrush x:Key="TabStripBrush" Color="{StaticResource Gray16}"/>
+    <SolidColorBrush x:Key="WellEdgeBrush" Color="{StaticResource Gray14}"/>
     <SolidColorBrush x:Key="SkeletonBaseBrush" Color="{StaticResource Gray11}"/>
     <SolidColorBrush x:Key="SkeletonHighlightBrush" Color="{StaticResource Gray13}"/>
     <SolidColorBrush x:Key="RecordingIndicatorBrush" Color="{StaticResource Red6}"/>
@@ -106,23 +105,23 @@
 
     <!-- Old names that views shared with the original look still use, each on its role's step. Remove them
          with the original look. -->
-    <SolidColorBrush x:Key="MenuBackgroundBrush" Color="{StaticResource Gray14}"/>
+    <SolidColorBrush x:Key="MenuBackgroundBrush" Color="{StaticResource Gray15}"/>
     <SolidColorBrush x:Key="AltRowBackgroundBrush" Color="{StaticResource Gray14}"/>
     <SolidColorBrush x:Key="CapturePendingForegroundBrush" Color="{StaticResource Amber4}"/>
 
-    <!-- Windows system colors, for built-in controls that XMAT doesn't restyle -->
+    <!-- Windows system colors, for built-in controls that XMAT doesn't restyle. Their text is the text color, and their chrome the canvas color. -->
     <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="{StaticResource Gray13}"/>
-    <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="{StaticResource Gray2}"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="{StaticResource Gray4}"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="{StaticResource Gray14}"/>
-    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="{StaticResource Gray2}"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="{StaticResource Gray4}"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="{StaticResource Blue12}"/>
-    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="{StaticResource Gray2}"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="{StaticResource Gray4}"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="{StaticResource Blue12}"/>
-    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="{StaticResource Gray2}"/>
-    <SolidColorBrush x:Key="{x:Static SystemColors.ScrollBarBrushKey}" Color="{StaticResource Gray14}"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="{StaticResource Gray4}"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.ScrollBarBrushKey}" Color="{StaticResource Gray15}"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="{StaticResource Gray8}"/>
-    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="{StaticResource Gray14}"/>
-    <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="{StaticResource Gray2}"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="{StaticResource Gray15}"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="{StaticResource Gray4}"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.MenuHighlightBrushKey}" Color="{StaticResource Blue12}"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightBrushKey}" Color="{StaticResource Gray12}"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightLightBrushKey}" Color="{StaticResource Gray14}"/>
@@ -131,6 +130,6 @@
     <SolidColorBrush x:Key="{x:Static SystemColors.ActiveBorderBrushKey}" Color="{StaticResource Gray11}"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.InactiveBorderBrushKey}" Color="{StaticResource Gray11}"/>
     <SolidColorBrush x:Key="{x:Static SystemColors.InfoBrushKey}" Color="{StaticResource Amber12}"/>
-    <SolidColorBrush x:Key="{x:Static SystemColors.InfoTextBrushKey}" Color="{StaticResource Gray2}"/>
+    <SolidColorBrush x:Key="{x:Static SystemColors.InfoTextBrushKey}" Color="{StaticResource Gray4}"/>
 
 </ResourceDictionary>

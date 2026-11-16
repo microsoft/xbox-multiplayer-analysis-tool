@@ -15,7 +15,7 @@
     <Style x:Key="CallRateTitleStyle" TargetType="TextBlock">
         <Setter Property="FontSize" Value="{DynamicResource PaneTitleFontSize}"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextHeadingBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
         <Setter Property="Margin" Value="0,0,16,0"/>
         <Setter Property="AutomationProperties.HeadingLevel" Value="Level3"/>
@@ -36,9 +36,9 @@
     <!-- The window switch: two joined segments, the chosen one in the accent like a checked toggle. Tag holds a
          segment's corner radius. -->
     <Style x:Key="CallRateSegmentStyle" TargetType="RadioButton">
-        <Setter Property="Background" Value="{DynamicResource SurfaceControlBrush}"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextControlBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderControlBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ButtonTextBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
         <Setter Property="FontSize" Value="{DynamicResource BaseFontSize}"/>
         <Setter Property="Padding" Value="12,0"/>
         <Setter Property="MinHeight" Value="28"/>
@@ -106,7 +106,7 @@
     </Style>
 
     <Style x:Key="CallRateHeaderBandStyle" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource SurfaceHeaderBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfaceCanvasBrush}"/>
         <Setter Property="CornerRadius" Value="4,4,0,0"/>
         <Setter Property="MinHeight" Value="{DynamicResource TableHeaderMinHeight}"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
@@ -209,7 +209,7 @@
     <!-- The hover readout, raised over the rows. -->
     <Style x:Key="CallRateTipStyle" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}"/>
         <Setter Property="Padding" Value="8,3"/>

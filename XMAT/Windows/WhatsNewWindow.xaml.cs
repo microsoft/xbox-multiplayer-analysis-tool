@@ -95,7 +95,7 @@ namespace XMAT
             {
                 var border = (Border)PageDots.Children[dot];
                 border.Width = dot == index ? 16 : 6;
-                border.SetResourceReference(Border.BackgroundProperty, dot == index ? "AccentFillBrush" : "BorderDefaultBrush");
+                border.SetResourceReference(Border.BackgroundProperty, dot == index ? "AccentFillBrush" : "BorderSubtleBrush");
             }
 
             Counter.Text = Localization.GetLocalizedString("WHATS_NEW_COUNTER", index + 1, _pages.Count);

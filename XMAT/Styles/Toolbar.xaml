@@ -13,7 +13,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ToolBar">
                     <Border Background="{TemplateBinding Background}"
-                            BorderBrush="{DynamicResource BorderDefaultBrush}"
+                            BorderBrush="{DynamicResource BorderSubtleBrush}"
                             BorderThickness="0"
                             Padding="0">
                         <ToolBarPanel x:Name="PART_ToolBarPanel" IsItemsHost="True"/>
@@ -49,7 +49,7 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
-                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
@@ -84,7 +84,7 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/>
-                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource BorderDefaultBrush}"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}"/>
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
@@ -131,7 +131,7 @@
                             <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="CheckBorder" Property="BorderBrush" Value="{DynamicResource BorderStrongHoverBrush}"/>
+                            <Setter TargetName="CheckBorder" Property="BorderBrush" Value="{DynamicResource BorderHoverBrush}"/>
                         </Trigger>
                         <Trigger Property="IsKeyboardFocused" Value="True">
                             <Setter TargetName="FocusRing" Property="Visibility" Value="Visible"/>
@@ -147,7 +147,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Separator">
                     <Border Width="1" Height="20" Margin="8,0" VerticalAlignment="Center"
-                            Background="{DynamicResource BorderDefaultBrush}"/>
+                            Background="{DynamicResource BorderSubtleBrush}"/>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -281,9 +281,9 @@
             </Trigger>
             <Trigger Property="IsChecked" Value="True">
                 <Setter Property="Content" Value="{x:Static wsc:CaptureConnectionView.StopTraceText}"/>
-                <Setter Property="Background" Value="{DynamicResource SurfaceControlBrush}"/>
-                <Setter Property="Foreground" Value="{DynamicResource TextControlBrush}"/>
-                <Setter Property="BorderBrush" Value="{DynamicResource BorderControlBrush}"/>
+                <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
+                <Setter Property="Foreground" Value="{DynamicResource ButtonTextBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
             </Trigger>
             <MultiTrigger>
                 <MultiTrigger.Conditions>
@@ -300,9 +300,9 @@
                 <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
             </MultiTrigger>
             <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Background" Value="{DynamicResource SurfaceControlBrush}"/>
+                <Setter Property="Background" Value="{DynamicResource SurfacePanelBrush}"/>
                 <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}"/>
-                <Setter Property="BorderBrush" Value="{DynamicResource BorderControlBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}"/>
             </Trigger>
         </Style.Triggers>
     </Style>
