@@ -1,0 +1,31 @@
+<Window x:Class="XMAT.WebServiceCapture.SequenceRangeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Sequential requests" Width="460" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{DynamicResource PanelBackgroundBrush}"
+        Foreground="{DynamicResource PrimaryForegroundBrush}">
+  <StackPanel Margin="12">
+    <TextBlock x:Name="PromptText" TextWrapping="Wrap" Margin="0,0,0,10"/>
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="12"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
+      <Label x:Name="StartLabel" Target="{Binding ElementName=StartBox}"/>
+      <Label x:Name="EndLabel" Grid.Column="2" Target="{Binding ElementName=EndBox}"/>
+      <TextBox x:Name="StartBox" Grid.Row="1" VerticalContentAlignment="Center" TextChanged="Range_TextChanged"/>
+      <TextBox x:Name="EndBox" Grid.Row="1" Grid.Column="2" VerticalContentAlignment="Center" TextChanged="Range_TextChanged"/>
+    </Grid>
+    <TextBlock x:Name="CountText" Margin="0,10,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button x:Name="OkButton" MinWidth="90" Margin="4" Padding="8,4" IsDefault="True" Click="Ok_Click"/>
+      <Button x:Name="CancelButton" MinWidth="90" Margin="4" Padding="8,4" IsCancel="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>

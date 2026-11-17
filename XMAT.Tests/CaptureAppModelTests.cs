@@ -57,6 +57,48 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task CanCloseAsync_BlocksNewOperationsWhileCheckingDevices_AndReopensWhenCloseIsDeclined()
+        {
+            var closeResult = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var controller = new TestCaptureController(() => closeResult.Task);
+            var model = new CaptureAppModel();
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(controller));
+
+            Task<bool> closeTask = model.CanCloseAsync();
+
+            Assert.True(model.IsClosing);
+            Assert.False(model.CanModifyCaptureData);
+            Assert.False(model.TryBeginCaptureDataOperation(out IDisposable operation));
+            Assert.Null(operation);
+            using var cancellation = new CancellationTokenSource();
+            Assert.False(model.TryBeginCancellableCaptureDataOperation(cancellation, out operation));
+            Assert.Null(operation);
+
+            closeResult.SetResult(false);
+
+            Assert.False(await closeTask);
+            Assert.False(model.IsClosing);
+            Assert.True(model.TryBeginCaptureDataOperation(out operation));
+            operation.Dispose();
+        }
+
+        [Fact]
+        public async Task CancelClosePreparation_ReopensAdmissionAfterSuccessfulCheck()
+        {
+            var model = new CaptureAppModel();
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(new TestCaptureController(() => Task.FromResult(true))));
+
+            Assert.True(await model.CanCloseAsync());
+            Assert.True(model.IsClosing);
+
+            model.CancelClosePreparation();
+
+            Assert.False(model.IsClosing);
+            Assert.True(model.TryBeginCaptureDataOperation(out IDisposable operation));
+            operation.Dispose();
+        }
+
+        [Fact]
         public async Task CanCloseAsync_SkipsReadOnlyCaptures()
         {
             var imported = new TestCaptureController(() => throw new InvalidOperationException("Read-only capture checked."));

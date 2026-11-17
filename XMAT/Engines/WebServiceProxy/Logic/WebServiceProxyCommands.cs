@@ -8,6 +8,14 @@ namespace XMAT.WebServiceCapture
 {
     public static class WebServiceProxyCommands
     {
+        public static readonly RoutedUICommand EditAndResend =
+            new("Edit and resend", "EditAndResend", typeof(WebServiceProxyCommands));
+
+        // Reissues captured rows through the shared ReplayOperation; the parameter is a ReissueRequest.
+        public static readonly RoutedUICommand Reissue =
+            new("Reissue", "Reissue", typeof(WebServiceProxyCommands));
+        public static readonly RoutedUICommand CancelReissue =
+            new("Cancel replay", "CancelReissue", typeof(WebServiceProxyCommands));
         public static readonly RoutedUICommand ChangePort =
             new("Change Proxy Port", "ChangePort", typeof(WebServiceProxyCommands));
         public static readonly RoutedUICommand DiscardPortChange =
