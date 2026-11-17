@@ -29,6 +29,8 @@
     <!-- Build order only: the tests in Cli run the built xmat.exe from XMAT.Cli's output folder. Private="false" keeps
          xmat.exe and its configuration files out of the test output, so they are never run without xmat.dll. -->
     <ProjectReference Include="..\XMAT.Cli\XMAT.Cli.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <!-- xmat-echo.exe stands in for curl.exe when tests check what a generated cURL script passes to its child. -->
+    <ProjectReference Include="..\XMAT.Tests.Echo\XMAT.Tests.Echo.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 
   <ItemGroup>

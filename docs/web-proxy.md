@@ -283,11 +283,10 @@ are regenerated, and connection-only headers are omitted. Methods other than exa
 GET, HEAD, and OPTIONS, in capitals, require confirmation, as does changing the captured
 origin. CONNECT and WebSocket handshakes cannot be resent.
 
-Use **Cancel request** to stop waiting, or **Copy as cURL (PowerShell 7)** to copy a
-command for PowerShell 7 with `curl.exe` available. **Copied commands can contain
-credentials and body data.** Sending has a 30-second timeout and a 16 MiB response
-limit for each request. Cancelling or timing out cannot undo changes already processed
-by the server.
+Use **Cancel request** to stop waiting. Sending has a 30-second timeout and a 16 MiB
+response limit for each request. Cancelling or timing out cannot undo changes already
+processed by the server. To send the request outside XMAT, use **Copy as cURL** or
+**Save as cURL script** (see below).
 
 To send a request that was never captured, select **Actions > Compose a New Request**.
 The composer opens with an empty GET request and works the same way.
@@ -338,10 +337,58 @@ and `X-OverrideGateway` are not applied, and XMAT does not send a request that h
 in the composer, delete it from the headers. Use **Connect to another endpoint** to send
 to another address.
 
-**Copy as cURL** copies one request with the default options only: it is not available
-for a numbered URL (see below), with **Follow same-origin redirects**, with an **HTTP
-version** other than **Automatic**, or with **Connect to another endpoint**, since the
-command would not send the same requests.
+### Copy as cURL and Save as cURL script
+
+**Copy as cURL (PowerShell 7)** copies a command, and **Save as cURL script...** saves a
+script, that sends the request in the composer with the `curl.exe` that comes with
+Windows; XMAT itself sends nothing. **Both hold the full request, credentials and body
+included**, as the warning beside the buttons says: anyone who gets the command or the
+script can use them.
+
+- **What they need to run.** Windows, PowerShell 7.2 or later, and the inbox
+  `%SystemRoot%\System32\curl.exe`, version 8.21.0 or later, never another `curl` on the
+  `PATH`. A header value with non-ASCII characters also needs curl's `Unicode` feature.
+  The command and the script check all of this first, and refuse, sending nothing, when
+  something is missing or when the command line would be longer than Windows allows. A
+  refusal or failure gives a nonzero result: the script's exit code, or `$LASTEXITCODE`
+  for the pasted command, which never closes PowerShell. When either fails or is
+  interrupted, for example with Ctrl+C, it stops the curl that it started, and an
+  interrupted command or script leaves `$LASTEXITCODE` at 1 in the PowerShell session
+  that ran it.
+- **How curl runs.** Without a proxy or a curl configuration file, and with none of the
+  proxy, curl or TLS settings of your environment. It never follows redirects. It
+  trusts the certificates that Windows trusts and also checks that the server's
+  certificate was not revoked, which **Send** does not: a certificate whose revocation
+  Windows cannot check fails in the command or script. Unlike **Send**, it has no
+  overall time limit and no limit on the size of a response. It writes the response
+  body, and any error, to the console.
+- **What is sent.** One request, with the method, URL, headers and body as XMAT sends
+  them over HTTP/1.1; `Host` and `Content-Length` come from the URL and the body. A
+  header value with non-ASCII characters, which XMAT does not send, is sent as its UTF-8
+  bytes, and an empty value as `Name:` rather than `Name: `. **HTTP/1.1 only** is sent
+  exactly; with **Automatic**, curl chooses the version itself.
+- **When they are not available.** While a part that a request file left out is not
+  supplied, for a numbered URL (see below), and with **Follow same-origin redirects**,
+  **HTTP/2 only**, or **Connect to another endpoint**: each button says why. A request
+  with a Fiddler control header, a HEAD request with a body, or a URL and headers too
+  long for one command line are refused when you select either button, and the status
+  line says why.
+- **Another origin.** When the URL goes to another origin than the request was captured
+  or loaded for, XMAT asks whether to export the request for that origin, which it
+  names: every time, before asking about the content, and No by default. Declining
+  copies and saves nothing. Allowing it is no permission to send, and a permission to
+  send is none to export.
+- **Copy as cURL** copies a command to paste into PowerShell 7 with one click. The body
+  can be at most 64 KiB; save a larger one with **Save as cURL script**. XMAT never
+  clears the clipboard: when nothing is copied, the clipboard keeps what it had.
+- **Save as cURL script...** asks where to save the `.ps1` file, then about another
+  origin if needed, then whether to save the full request at all, No by default, for
+  every script. The body, up to 64 MiB, is inside the script. The script is saved like a
+  request file: privately, only on a local NTFS drive, and never in place of another
+  file.
+- **In the background.** XMAT prepares the command or script without holding up the
+  composer. **Cancel request**, or closing the composer, stops it before anything is
+  copied or saved. A script that was already saved by then stays saved.
 
 ### Numbered URLs
 
@@ -364,8 +411,8 @@ sent stay in the **XMAT Replays** tab. The composer shows the last response only
 is read once, when you choose it: later changes to it are not sent, and the composer
 keeps only its bytes and its name. Headers such as `Content-Type` are not changed.
 **Clear body** removes the uploaded body. A file that cannot be read leaves the body as
-it was. Fiddler's `<@INCLUDE@>` tokens and multipart forms are not supported: such text
-is sent as typed, and no file is read.
+it was, and so does **Cancel request** during the upload. Fiddler's `<@INCLUDE@>` tokens
+and multipart forms are not supported: such text is sent as typed, and no file is read.
 
 ### Drag a request into the composer
 
@@ -373,9 +420,80 @@ Drag a request from a connections list onto an open composer to edit and send it
 One request is dragged at a time; CONNECT tunnels, protocol upgrades, and requests
 recorded without their body cannot be dragged. The composer loads a copy of the request
 as it was when the drag began, clears the previous response, and sends nothing. If you
-have edited the request in the composer, it asks before replacing it. Only requests
-dragged from XMAT can be dropped; text, links, and files are refused, and nothing can be
-dropped while the composer sends or reads a file.
+have edited the request in the composer, it asks before replacing it. A drop keeps the
+**HTTP version**, **Connect to another endpoint**, and **Follow same-origin redirects**
+as they are, so changing only those asks nothing here; opening a request file still asks
+about them, since it resets them. Only requests dragged from XMAT can be dropped; text,
+links, and files are refused, and nothing can be dropped while the composer sends or
+reads a file.
+
+### Open and save request files
+
+**Save request as** saves the request in the composer as a request file, without
+sending it, and **Open request** opens one in place of the request in the editors. A
+request file is JSON in XMAT's `xmat-request/1` format; XMAT suggests the extension
+`.xmat-request.json`. It holds one request and its **HTTP version**, and never **Connect
+to another endpoint**, **Follow same-origin redirects**, a range for a numbered URL, or
+any permission.
+
+- **A template by default.** Unless you include the captured content, the file is a
+  template: it keeps only safe protocol structure, which is the method when it is a
+  standard one (GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE, or TRACE), the HTTP
+  version, and that the request has no headers or no body when it has none. It keeps no
+  captured URL, header name or value, or body; the file marks those parts as left out.
+- **Captured content, by your choice, every time.** Each save asks whether to
+  **Include captured content**, which is off. The question lists the header names and
+  query parameter names that XMAT recognizes as sensitive, never their values, and the
+  size of the body, which XMAT does not inspect; recognizing nothing does not make a
+  request safe to share. Each name is shown on its own line, with any character that
+  could hide or reorder text, such as a line break or a bidirectional control, shown as
+  `\uXXXX`, and a long name cut short; at most 20 names are listed, then how many more
+  there are. XMAT never remembers the answer. A file with the captured content keeps
+  the whole request, credentials included: share it only as you would share them.
+- **Another origin needs its own permission.** When the URL goes to another origin than
+  the request was captured or loaded for, saving it with its content needs a separate
+  permission for that origin, since the file's URL becomes the origin that later changes
+  are checked against. Including the content never gives that permission.
+- **Where files are saved.** XMAT first checks the request and finds the names it
+  recognizes, without holding up the composer, then writes the file privately, for your
+  account only, and gives it its name once it is complete: only on a local NTFS drive,
+  not on a network share or a drive with another file system, such as FAT, and not
+  through a link. It never replaces a file: choose another name when one exists.
+  **Cancel request**, or closing the composer, before the file is complete saves
+  nothing, and while XMAT still checks the request it also asks nothing. If XMAT cannot
+  remove its temporary file, named `.xmat-`, a random name, and `.tmp`, it says so:
+  delete that file, which can hold part of the request.
+- **Opening a file.** The file is read and checked as untrusted data before anything
+  changes: a file that cannot be read, is larger than 96 MiB, or is not a valid request
+  file leaves the request as it was. So does **Cancel request**, even if the file was
+  read by then, and nothing is asked. Opening sets the **HTTP version** from the file,
+  turns off **Connect to another endpoint**, clearing its endpoint, and **Follow
+  same-origin redirects**, with *N* back to 10, clears the previous response, and sends
+  nothing. Before it discards your edits, XMAT asks whether to replace the current
+  request: edits to the request since it was loaded, even only supplying a part that
+  its file left out, and changes to these transport options from what the composer
+  started with or the last opened file set, including changes made before you dragged
+  in a request. Declining keeps everything as it was, and no answer is a permission to
+  send. Text in the file, such as Fiddler's `<@INCLUDE@>`, is used as it is, and no
+  other file is read. The composer shows only the file's name, never its folder, with
+  any character that could hide or reorder text shown as `\uXXXX`, and the **XMAT
+  Replays** tab records each send as coming from that file name. A file never grants a
+  permission: sending still asks for every confirmation that it needs, and the file's
+  URL is the origin that a changed URL is checked against.
+- **A large body is not shown.** The editor shows a body of at most 64 KiB from a
+  request file. A larger body is kept as its exact bytes, which the composer sends and
+  saves as they are, and shown only by the file's name and the body's size, never as
+  text or Base64. **Copy as cURL** does not copy it, and **Save as cURL script** saves
+  it whole. **Upload File** replaces it and **Clear body** removes it.
+- **Parts left out.** A template leaves parts out. The composer lists them above the
+  editors, and nothing is sent, exported for curl, or saved with its content until each
+  one is supplied. Typing in an editor does not supply a part: enter it, then select its
+  button, **Use this method**, **Use this URL**, **Use these headers** or **No
+  headers**, and **Use this body** or **Empty body**. **Use this body** reads the body
+  in the background, and **Cancel request** stops it without supplying anything.
+  **Upload File** and **Clear body** do not supply the body either. A part that is not
+  valid is not supplied, and the status says why. Saving the request as a template
+  keeps the parts that are still left out.
 
 ## Replay requests
 

@@ -8,11 +8,12 @@ using System.Security.Principal;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 using XMAT.Cli;
+using XMAT.Operations.Storage;
 
 namespace XMAT.Tests.Cli
 {
     // --out is admitted without following anything, and the staging folder is created and held relative to the held
-    // folders above it (CliOutputFolder, CliDirectoryHandle): no rename, junction, symbolic link or name that Windows would
+    // folders above it (CliOutputFolder, AnchoredHandles): no rename, junction, symbolic link or name that Windows would
     // read otherwise sends the writes, the publication or the cleanup elsewhere. These tests attack as the same user, so
     // they show what Windows does with the folders while xmat holds them; that another account is refused alike is not
     // tested here. Nothing reaches a network: 192.0.2.1 is reserved for documentation and never routed.
@@ -393,8 +394,8 @@ namespace XMAT.Tests.Cli
             SafeFileHandle[] held = Hold(directory.Root);
             try
             {
-                using SafeFileHandle created = CliDirectoryHandle.CreateNew(held[^1], "created", PrivateTo(CurrentUser()));
-                Assert.ThrowsAny<IOException>(() => CliDirectoryHandle.Rename(created, held[^1], "taken"));
+                using SafeFileHandle created = AnchoredHandles.CreateNew(held[^1], "created", PrivateTo(CurrentUser()));
+                Assert.ThrowsAny<IOException>(() => AnchoredHandles.Rename(created, held[^1], "taken"));
             }
             finally
             {
@@ -490,7 +491,7 @@ namespace XMAT.Tests.Cli
         [InlineData(@"\Device\CdRom0", false)]
         [InlineData(null, false)]
         public void IsLocalVolumeDevice_IsOnlyAHarddiskVolume(string device, bool expected) =>
-            Assert.Equal(expected, CliOutputFolder.IsLocalVolumeDevice(device));
+            Assert.Equal(expected, StorageAdmission.IsLocalVolumeDevice(device));
 
         // Folders above --out may be reparse points only of the kinds that leave names alone.
         [Theory]
@@ -503,7 +504,7 @@ namespace XMAT.Tests.Cli
         [InlineData(0xA000000Cu, false)]
         [InlineData(0x8000001Bu, false)]
         public void IsAdmittedReparseTag_AdmitsOnlyKindsThatLeaveNamesAlone(uint? tag, bool expected) =>
-            Assert.Equal(expected, CliOutputFolder.IsAdmittedReparseTag(tag));
+            Assert.Equal(expected, StorageAdmission.IsAdmittedReparseTag(tag));
 
         // The owner can always change the folder's access control, so it must be the current user too.
         [Theory]
@@ -518,7 +519,7 @@ namespace XMAT.Tests.Cli
                 security.SetOwner(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
             }
 
-            Assert.Equal(expected, CliOutputFolder.IsPrivateDescriptor(security, user));
+            Assert.Equal(expected, StorageAdmission.IsPrivateDescriptor(security, user));
         }
 
         // Only a local NTFS volume: network shares, mapped drives among them, and other file systems are refused.
@@ -530,7 +531,7 @@ namespace XMAT.Tests.Cli
         [InlineData(null, @"\Device\HarddiskVolume3\out", false)]
         [InlineData("NTFS", null, false)]
         public void IsSupportedStorage_IsOnlyLocalNtfs(string fileSystem, string devicePath, bool expected) =>
-            Assert.Equal(expected, CliOutputFolder.IsSupportedStorage(fileSystem, devicePath));
+            Assert.Equal(expected, StorageAdmission.IsSupportedStorage(fileSystem, devicePath));
 
         private static void ConversionRace(bool symbolic, bool beforeCreating)
         {
@@ -588,11 +589,11 @@ namespace XMAT.Tests.Cli
             Assert.Null(CliOutputFolder.CheckTarget(Path.Join(folder, Results), out CliOutputTarget target));
             var held = new List<SafeFileHandle>
             {
-                CliDirectoryHandle.OpenVolumeRoot(CliDirectoryHandle.QueryDosDevice(target.Volume)),
+                AnchoredHandles.OpenVolumeRoot(AnchoredHandles.QueryDosDevice(target.Volume)),
             };
             foreach (string name in target.Folders)
             {
-                held.Add(CliDirectoryHandle.OpenFolder(held[^1], name));
+                held.Add(AnchoredHandles.OpenFolder(held[^1], name));
             }
 
             return held.ToArray();

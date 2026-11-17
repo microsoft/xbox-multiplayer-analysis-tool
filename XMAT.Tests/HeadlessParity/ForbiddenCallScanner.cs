@@ -90,6 +90,15 @@ namespace XMAT.Tests.HeadlessParity
         internal static bool IsHeadlessNamespace(string typeName) =>
             IsInNamespace(typeName, "XMAT.Operations") || IsInNamespace(typeName, "XMAT.Cli");
 
+        // Every member ("Type::Member") that the code of these types uses, nested types and compiler-generated code
+        // (lambdas, local functions, async and iterator state machines) included: calls, delegates and field accesses.
+        internal static IReadOnlyList<string> MembersUsedBy(string assemblyPath, IReadOnlyCollection<string> typeNames)
+        {
+            using FileStream stream = File.OpenRead(assemblyPath);
+            using var image = new PEReader(stream);
+            return new ForbiddenCallScanner(image).ScanMembersUsedBy(typeNames);
+        }
+
         private static Dictionary<ushort, OpCode> CreateOpCodeTable()
         {
             var table = new Dictionary<ushort, OpCode>();
@@ -191,6 +200,39 @@ namespace XMAT.Tests.HeadlessParity
             }
 
             return ToCalls(counts);
+        }
+
+        private IReadOnlyList<string> ScanMembersUsedBy(IReadOnlyCollection<string> typeNames)
+        {
+            var members = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (TypeDefinitionHandle typeHandle in _metadata.TypeDefinitions)
+            {
+                TypeDefinition type = _metadata.GetTypeDefinition(typeHandle);
+                foreach (MethodDefinition method in type.GetMethods()
+                    .Select(_metadata.GetMethodDefinition))
+                {
+                    if (method.RelativeVirtualAddress == 0)
+                    {
+                        continue;
+                    }
+
+                    string userTypeName = TypeName(DeclaringMember(typeHandle, method).Type);
+                    if (!typeNames.Any(name => userTypeName == name || userTypeName.StartsWith(name + "+", StringComparison.Ordinal)))
+                    {
+                        continue;
+                    }
+
+                    foreach ((OpCode instruction, EntityHandle operand) in MemberOperands(method))
+                    {
+                        (string memberType, string member) = instruction.OperandType == OperandType.InlineField
+                            ? DescribeField(operand)
+                            : DescribeMethodMember(operand);
+                        members.Add(memberType + "::" + member);
+                    }
+                }
+            }
+
+            return members.ToList();
         }
 
         // Keys are "caller|callee"; neither part contains '|'.

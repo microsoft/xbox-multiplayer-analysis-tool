@@ -33,10 +33,14 @@ namespace XMAT.WebServiceCapture
 
         // Composed from nothing, with Actions > Compose a New Request.
         Composed,
+
+        // Opened in the composer from a request file, with Open request; SourceName is the file's name, never its path.
+        RequestFile,
     }
 
     // Where a row of the Replays tab comes from: the tab, request number and table row of the request that it sends again,
-    // as they were when the send started, or nothing for a composed request. It is kept in memory only.
+    // as they were when the send started; the name of the request file that the request was opened from; or nothing for a
+    // composed request. It is kept in memory only.
     internal sealed record ReplayProvenance(
         ReplaySourceKind Kind,
         string SourceName = null,
@@ -51,6 +55,10 @@ namespace XMAT.WebServiceCapture
             return new ReplayProvenance(kind, sourceName ?? string.Empty, row.RequestNumber, row.RecordRowId);
         }
 
+        // A request opened from a request file, by the file's name alone.
+        internal static ReplayProvenance FromRequestFile(string fileName) =>
+            new(ReplaySourceKind.RequestFile, fileName ?? string.Empty);
+
         // What the request details show, such as "Local PC #12".
         internal string Describe() => Kind switch
         {
@@ -58,6 +66,7 @@ namespace XMAT.WebServiceCapture
                 Localization.GetLocalizedString("REPLAY_SOURCE_REISSUED", SourceName, RequestNumber).Trim(),
             ReplaySourceKind.Edited =>
                 Localization.GetLocalizedString("REPLAY_SOURCE_EDITED", SourceName, RequestNumber).Trim(),
+            ReplaySourceKind.RequestFile => Localization.GetLocalizedString("REPLAY_SOURCE_REQUEST_FILE", SourceName),
             _ => Localization.GetLocalizedString("REPLAY_SOURCE_COMPOSED"),
         };
     }

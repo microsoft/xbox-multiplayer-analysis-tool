@@ -5,13 +5,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Security;
-using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
 using Microsoft.Win32.SafeHandles;
+using XMAT.Operations.Storage;
 
 namespace XMAT.Cli
 {
@@ -22,30 +21,28 @@ namespace XMAT.Cli
     // the access control back (IsPrivate) before anything is written, and refuses to continue otherwise.
     //
     // --out is admitted without following anything: CheckTarget reads it without touching the file system and refuses
-    // network and device paths; TryReserve checks that its drive or volume name stands for a local volume, opens that
-    // volume's root by its device path, and opens and holds each folder down to the parent of --out relative to the one
-    // above it, refusing junctions, mounted folders, symbolic links and any reparse point that is not known to leave
-    // names alone. It then creates the staging folder relative to the held parent and holds it too. Held folders cannot
-    // be renamed or removed, and each contains the next, so none can become a link either; publication renames the
-    // staging folder relative to the parent, and every path xmat uses is the staging folder's verbatim volume path
+    // network and device paths; StorageAdmission holds the walk from the volume root down to the parent of --out,
+    // refusing junctions, mounted folders, symbolic links and any reparse point that is not known to leave names alone.
+    // AnchoredHandles then creates and holds the staging folder relative to that parent. Held folders cannot be renamed
+    // or removed, and each contains the next, so none can become a link either; publication renames the staging folder
+    // relative to the parent, and every path xmat uses is the staging folder's verbatim volume path
     // (\\?\Volume{...}\...), which Windows uses as it is.
     internal sealed class CliOutputFolder : IDisposable
     {
         internal const string StagingPrefix = ".xmat-staging-";
         private const int Attempts = 10;
-        private const string LocalVolumePrefix = @"\Device\HarddiskVolume";
         private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(100);
 
         private readonly string _name;
-        private SafeFileHandle[] _folders;
+        private StorageAnchor _anchor;
         private SafeFileHandle _handle;
         private bool _published;
 
-        private CliOutputFolder(string name, string stagingPath, SafeFileHandle[] folders, SafeFileHandle handle)
+        private CliOutputFolder(string name, string stagingPath, StorageAnchor anchor, SafeFileHandle handle)
         {
             _name = name;
             StagingPath = stagingPath;
-            _folders = folders;
+            _anchor = anchor;
             _handle = handle;
         }
 
@@ -61,37 +58,13 @@ namespace XMAT.Cli
         internal static CliFailure CheckTarget(string output, out CliOutputTarget target)
         {
             target = null;
-            string fullPath;
-            try
+            StorageAdmissionFailure? failure = StorageAdmission.ParseTarget(output, out StorageTarget parsed);
+            if (failure != null)
             {
-                fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(output));
-            }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or SecurityException)
-            {
-                return InvalidPath();
+                return AdmissionFailure(failure.Value);
             }
 
-            bool verbatim = fullPath.StartsWith(@"\\?\", StringComparison.Ordinal);
-            string rest = verbatim ? fullPath[4..] : fullPath;
-            string volume = DriveName(rest) ?? (verbatim ? VolumeName(rest) : null);
-            if (volume == null)
-            {
-                return Unprotected();
-            }
-
-            rest = rest.Length > volume.Length + 1 ? rest[(volume.Length + 1)..] : "";
-            string[] names = rest.Length == 0 ? Array.Empty<string>() : rest.Split('\\');
-            if (names.Length == 0)
-            {
-                return ParentMissing();
-            }
-
-            if (!names.All(IsFolderName))
-            {
-                return InvalidPath();
-            }
-
-            target = new CliOutputTarget(volume, names[..^1], names[^1]);
+            target = new CliOutputTarget(parsed.Volume, parsed.Folders, parsed.Name);
             return null;
         }
 
@@ -107,58 +80,37 @@ namespace XMAT.Cli
         {
             ArgumentNullException.ThrowIfNull(target);
             folder = null;
-            string device = CliDirectoryHandle.QueryDosDevice(target.Volume);
-            if (device == null)
+            var parsed = new StorageTarget(target.Volume, target.Folders, target.Name);
+            StorageAdmissionFailure? admission =
+                StorageAdmission.HoldParent(parsed, out StorageAnchor anchor, checkpoint, CancellationToken.None);
+            if (admission != null)
             {
-                return ParentMissing();
+                return AdmissionFailure(admission.Value);
             }
 
-            if (!IsLocalVolumeDevice(device))
-            {
-                return Unprotected();
-            }
-
-            var folders = new List<SafeFileHandle>();
             SafeFileHandle staging = null;
             try
             {
-                folders.Add(CliDirectoryHandle.OpenVolumeRoot(device));
-                foreach (string name in target.Folders)
-                {
-                    SafeFileHandle next = CliDirectoryHandle.OpenFolder(folders[^1], name);
-                    if (next == null)
-                    {
-                        return ParentMissing();
-                    }
-
-                    folders.Add(next);
-                    if (!IsAdmittedReparseTag(CliDirectoryHandle.ReparseTag(next)))
-                    {
-                        return Unprotected();
-                    }
-
-                    checkpoint?.Invoke(name);
-                }
-
-                if (CliDirectoryHandle.Exists(folders[^1], target.Name))
+                if (AnchoredHandles.Exists(anchor.Parent, target.Name))
                 {
                     return new CliFailure(
                         CliExitCodes.Conflict, "cli.output.exists", "The --out folder already exists; xmat never overwrites output.");
                 }
 
                 checkpoint?.Invoke(StagingPrefix + runId);
-                staging = CliDirectoryHandle.CreateNew(folders[^1], StagingPrefix + runId, CurrentUserOnly());
+                staging = AnchoredHandles.CreateNew(
+                    anchor.Parent, StagingPrefix + runId, StorageAdmission.CurrentUserDirectorySecurity());
 
                 // A folder that became a link after it was checked fails the creation above. Checked again now that each
                 // held folder contains the next and the parent contains the staging folder, so none can become one any more.
-                if (!folders.Skip(1).All(handle => IsAdmittedReparseTag(CliDirectoryHandle.ReparseTag(handle))))
+                if (!anchor.IsChainAdmitted())
                 {
                     Remove(staging);
                     staging = null;
                     return Unprotected();
                 }
 
-                folder = new CliOutputFolder(target.Name, CliDirectoryHandle.FinalPath(staging), folders.ToArray(), staging);
+                folder = new CliOutputFolder(target.Name, AnchoredHandles.FinalPath(staging), anchor, staging);
                 return null;
             }
             catch
@@ -174,29 +126,10 @@ namespace XMAT.Cli
             {
                 if (folder == null)
                 {
-                    foreach (SafeFileHandle handle in folders)
-                    {
-                        handle.Dispose();
-                    }
+                    anchor.Dispose();
                 }
             }
         }
-
-        // The device of a local volume, as a drive or volume name stands for it: \Device\HarddiskVolumeN, and nothing else,
-        // such as a network redirector, a substituted drive (\??\C:\...) or a shadow copy.
-        internal static bool IsLocalVolumeDevice(string device) =>
-            device != null &&
-            device.Length > LocalVolumePrefix.Length &&
-            device.StartsWith(LocalVolumePrefix, StringComparison.OrdinalIgnoreCase) &&
-            device[LocalVolumePrefix.Length..].All(char.IsAsciiDigit);
-
-        // A folder above --out may be a reparse point only of a kind that leaves names alone: Cloud Files (OneDrive), data
-        // deduplication and Windows Overlay Filter compression. Junctions, mounted folders, symbolic links, any other name
-        // surrogate and any unknown kind are refused.
-        internal static bool IsAdmittedReparseTag(uint? tag) =>
-            tag is null ||
-            (tag.Value & 0xFFFF0FFF) == 0x9000001A ||
-            tag.Value is 0x80000013 or 0x80000017;
 
         // Whether the staging folder can keep the output private: it is on a local NTFS volume (IsSupportedStorage), and
         // its owner and access control, read through the handle, are the current user's alone (IsPrivateDescriptor).
@@ -206,52 +139,14 @@ namespace XMAT.Cli
             try
             {
                 using WindowsIdentity identity = WindowsIdentity.GetCurrent();
-                return IsSupportedStorage(CliDirectoryHandle.FileSystemName(Handle), CliDirectoryHandle.DevicePath(Handle)) &&
-                    IsPrivateDescriptor(CliDirectoryHandle.Security(Handle), identity.User);
+                return StorageAdmission.IsSupportedStorage(
+                        AnchoredHandles.FileSystemName(Handle), AnchoredHandles.DevicePath(Handle)) &&
+                    StorageAdmission.IsPrivateDescriptor(AnchoredHandles.Security(Handle), identity.User);
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
                 return false;
             }
-        }
-
-        // Only a local NTFS volume (\Device\HarddiskVolumeN) is supported: there Windows keeps the access control and
-        // refuses to rename a folder that holds an open handle. Network shares, including mapped drives (\Device\Mup),
-        // and other file systems are not.
-        internal static bool IsSupportedStorage(string fileSystemName, string devicePath) =>
-            string.Equals(fileSystemName, "NTFS", StringComparison.OrdinalIgnoreCase) &&
-            devicePath != null &&
-            devicePath.StartsWith(@"\Device\HarddiskVolume", StringComparison.OrdinalIgnoreCase);
-
-        // True only when user owns the folder, it inherits nothing, its only entries allow user, and they pass on to
-        // everything created in it (container and object inherit, with no propagation limit), since a new file would
-        // otherwise get its creator's default access.
-        internal static bool IsPrivateDescriptor(DirectorySecurity security, SecurityIdentifier user)
-        {
-            if (security == null || user == null || !security.AreAccessRulesProtected ||
-                !user.Equals(security.GetOwner(typeof(SecurityIdentifier))))
-            {
-                return false;
-            }
-
-            AuthorizationRuleCollection rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
-
-            // The entries may come back split, for example one per inheritance flag; together they must cover both.
-            InheritanceFlags inherited = InheritanceFlags.None;
-            foreach (FileSystemAccessRule rule in rules)
-            {
-                if (rule.IsInherited || rule.AccessControlType != AccessControlType.Allow || !user.Equals(rule.IdentityReference))
-                {
-                    return false;
-                }
-
-                if (rule.PropagationFlags == PropagationFlags.None)
-                {
-                    inherited |= rule.InheritanceFlags;
-                }
-            }
-
-            return inherited == (InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit);
         }
 
         internal static bool IsFileSystemFailure(Exception exception) =>
@@ -291,14 +186,14 @@ namespace XMAT.Cli
             for (int attempt = 1; ; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (CliDirectoryHandle.Exists(Parent, _name))
+                if (AnchoredHandles.Exists(Parent, _name))
                 {
                     return false;
                 }
 
                 try
                 {
-                    CliDirectoryHandle.Rename(Handle, Parent, _name);
+                    AnchoredHandles.Rename(Handle, Parent, _name);
                     _published = true;
                     Release();
                     return true;
@@ -333,7 +228,7 @@ namespace XMAT.Cli
                     () =>
                     {
                         DeleteContents(StagingPath);
-                        CliDirectoryHandle.MarkForDeletion(Handle);
+                        AnchoredHandles.MarkForDeletion(Handle);
                     },
                     CancellationToken.None);
                 return true;
@@ -353,16 +248,14 @@ namespace XMAT.Cli
 
         private SafeFileHandle Handle => _handle ?? throw new ObjectDisposedException(nameof(CliOutputFolder));
 
-        private SafeFileHandle Parent => _folders?[^1] ?? throw new ObjectDisposedException(nameof(CliOutputFolder));
+        private SafeFileHandle Parent =>
+            _anchor?.Parent ?? throw new ObjectDisposedException(nameof(CliOutputFolder));
 
         // Lets go of the staging folder, then of the folders above it.
         private void Release()
         {
             Interlocked.Exchange(ref _handle, null)?.Dispose();
-            foreach (SafeFileHandle folder in Interlocked.Exchange(ref _folders, null) ?? Array.Empty<SafeFileHandle>())
-            {
-                folder.Dispose();
-            }
+            Interlocked.Exchange(ref _anchor, null)?.Dispose();
         }
 
         // Removes a staging folder that is still empty, and lets go of it.
@@ -370,7 +263,7 @@ namespace XMAT.Cli
         {
             try
             {
-                CliDirectoryHandle.MarkForDeletion(staging);
+                AnchoredHandles.MarkForDeletion(staging);
             }
             catch (IOException)
             {
@@ -392,34 +285,6 @@ namespace XMAT.Cli
                 "cli.output.unprotected",
                 "xmat cannot keep its output private there: the --out folder must be on a local NTFS volume and reached " +
                     "without a network path, a mapped or substituted drive, a junction, a mounted folder or a symbolic link.");
-
-        // "C:" when path starts with a drive's root (C:\) or is the drive itself.
-        private static string DriveName(string path) =>
-            path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':' && (path.Length == 2 || path[2] == '\\')
-                ? path[..2]
-                : null;
-
-        // "Volume{...}" when path starts with a volume name, as in \\?\Volume{...}\.
-        private static string VolumeName(string path)
-        {
-            const string Prefix = "Volume{";
-            int length = Prefix.Length + 37;
-            return path.Length >= length &&
-                path.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase) &&
-                path[length - 1] == '}' &&
-                (path.Length == length || path[length] == '\\') &&
-                Guid.TryParseExact(path[Prefix.Length..(length - 1)], "D", out _)
-                ? path[..length]
-                : null;
-        }
-
-        // One folder name, used as it is, so nothing that Windows would read otherwise: not "." or "..", and no separator,
-        // stream (':'), wildcard or control character.
-        private static bool IsFolderName(string name) =>
-            name.Length is > 0 and <= 255 &&
-            name != "." &&
-            name != ".." &&
-            name.All(character => character >= ' ' && character is not ('"' or '*' or '/' or ':' or '<' or '>' or '?' or '\\' or '|'));
 
         // Deletes a file, or a folder and everything in it; a junction or link is removed itself and never followed.
         private static void DeleteEntry(string path)
@@ -487,20 +352,12 @@ namespace XMAT.Cli
             }
         }
 
-        private static DirectorySecurity CurrentUserOnly()
+        private static CliFailure AdmissionFailure(StorageAdmissionFailure failure) => failure switch
         {
-            using WindowsIdentity identity = WindowsIdentity.GetCurrent();
-            var security = new DirectorySecurity();
-            security.SetOwner(identity.User);
-            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            security.AddAccessRule(new FileSystemAccessRule(
-                identity.User,
-                FileSystemRights.FullControl,
-                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                PropagationFlags.None,
-                AccessControlType.Allow));
-            return security;
-        }
+            StorageAdmissionFailure.InvalidPath => InvalidPath(),
+            StorageAdmissionFailure.ParentMissing => ParentMissing(),
+            _ => Unprotected(),
+        };
     }
 
     // --out as CheckTarget reads it, without touching the file system: the drive (C:) or volume name (Volume{...}) that

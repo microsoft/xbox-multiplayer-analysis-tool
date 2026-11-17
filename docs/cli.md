@@ -25,10 +25,19 @@ xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--paralle
             [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods]
             [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N]
             [--max-records N]
-xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]...
-             [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS]
-             [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods]
+xmat compose --url URL | --request-file FILE --out DIR [--sequence START-END] [--method METHOD]
+             [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body]
+             [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
+             [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change]
              [--allow-connect-to]
+xmat save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] [--method METHOD]
+                  [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE]
+                  [--empty-body] [--unconditional] [--http-version auto|1.1|2] [--include-sensitive]
+                  [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]
+xmat curl INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--include-sensitive] [--device ID]
+          [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE]
+          [--empty-body] [--unconditional] [--http-version auto|1.1] [--allow-origin-change] [--max-input-mib N]
+          [--max-data-mib N] [--max-record-mib N] [--max-records N]
 xmat doctor --for analyze
 xmat help [COMMAND]
 xmat --version
@@ -201,8 +210,9 @@ xmat --version
   the HTTP stack cannot send, fails with `replay.request.invalid`. Unless you allow it, xmat
   refuses to send a method other than GET, HEAD and OPTIONS, which can change data on the server
   (`replay.policy.unsafe-method`; `--allow-unsafe-methods` allows it), or captured headers, such as credentials, to
-  another origin than the one they were captured for (`replay.policy.origin-change`; `--allow-origin-change`, which
-  only `replay` takes, allows the origins that `--url` or `--origin` name). Redirects are returned, not followed,
+  another origin than the one they were captured or saved for (`replay.policy.origin-change`; `--allow-origin-change`
+  allows the origins that `--url` or `--origin` name: `replay` takes it, `compose` only with `--request-file`, and
+  `save-request` and `curl` only with `--include-sensitive`). Redirects are returned, not followed,
   unless `--follow-redirects N` follows up to `N` of them (0 by default, at most 10), and only within the origin that
   was sent to: a 303 continues as GET (a HEAD stays a HEAD) and a 301 or 302 to a POST continues as GET, both without
   the body, as browsers do, while a 307 or 308 keeps the method and the body. A redirect to another origin is never
@@ -281,6 +291,70 @@ xmat --version
   characters, for example 10,000 URLs of up to about 1,600 characters. The requests are planned in ascending order,
   round after round; with `--parallel` they can reach the server in another order. Each send's `sequence` in the
   JSON output is its number.
+- `xmat save-request` saves requests as request files (`xmat-request/1`) and sends nothing: the requests that
+  `INPUT --request SPEC` selects, the request of a `--request-file`, or a new request with `--url`, after the same edits
+  as `replay`. It publishes `DIR/summary.json` (schema `xmat-save-request/1`) and `DIR/requests/NNNNN.json`, one file
+  per request, at most 10,000 of them (`replay.plan.too-large`, exit code 3, checked before any request is built).
+- A request file is a template by default. It keeps the HTTP version, the method when it is `GET`, `HEAD`, `OPTIONS`,
+  `POST`, `PUT`, `PATCH`, `DELETE` or `TRACE`, and an empty header block or body only when there is none. It leaves out
+  the URL, every header name and value, any other method and the body, and its `omitted` member lists what it left out.
+  `--include-sensitive` saves everything instead, captured credentials and cookies included: such a file is as private
+  as the capture. A request whose origin an edit changed is then saved only with `--allow-origin-change`
+  (`replay.policy.origin-change`, exit code 3), since its file's URL becomes the origin that a later change needs consent
+  for. The JSON output and `summary.json` give, for each file, its profile, what it leaves out, and how many header and
+  query parameter names the sanitized export would treat as secret: never a name or a value. A body is never inspected,
+  only counted (`bodyBytesNotInspected`).
+- `xmat compose --request-file FILE` sends a request file's request. A request file is data: it never grants consent
+  and carries no transport option but its HTTP version, which `--http-version` overrides. xmat reads it as untrusted: at
+  most 96 MiB, a body of at most 64 MiB, at most 256 headers of at most 256 KiB together, and nothing but the members of
+  `xmat-request/1` (`replay.request-file.invalid`, `.unsupported`, `.not-found`, `.too-large` or `.unreadable`, exit code
+  3). With a file, `--url`, `--method`, `--header`, `--remove-header` and `--body-file` edit its request, and these
+  supply what the file left out: `--url` the URL, `--method` the method, `--clear-headers` an empty header block, which
+  `--header` and `--remove-header` then edit, and `--body-file` or `--empty-body` the body. Adding a header never
+  supplies a header block that the file left out. A request that still leaves anything out is never sent
+  (`replay.request.incomplete`, exit code 3). The file's URL is the request's origin: changing it needs
+  `--allow-origin-change`, which compose takes only with `--request-file`. The JSON output's `input` gives only the
+  file's kind (`request-file`) and SHA-256.
+- `xmat curl` exports requests as cURL scripts and sends nothing: the requests that `INPUT --request SPEC` selects,
+  the request of a `--request-file`, or a new request with `--url`, after the same edits and completions as
+  `save-request`. Each script is a PowerShell 7 file that runs the `curl.exe` of Windows (in `System32`) with arguments
+  that make curl send what xmat sends over HTTP/1.1: the same request line, `Host`, header lines in the same order and
+  body bytes. Two things differ: a header value that is not ASCII, which xmat does not send, goes out as its UTF-8
+  bytes, and an empty value as `Name:` rather than `Name: `.
+  A script holds its request as captured, credentials, cookies and body included, so `curl` needs
+  `--include-sensitive`: without it, xmat refuses before it reads any input or creates anything
+  (`replay.curl.consent-required`, exit code 3). A request whose origin an edit changed also needs
+  `--allow-origin-change` (`replay.policy.origin-change`, exit code 3). xmat publishes `DIR/summary.json` (schema
+  `xmat-curl/1`), `DIR/scripts/NNNNN.ps1`, one script per request, and `DIR/bodies/NNNNN.bin` for each body that is
+  not empty, at most 10,000 scripts (`replay.plan.too-large`, exit code 3, checked before any request is built). The
+  JSON output and `summary.json` give, for each script, its body's size, the HTTP version it asks for, whether it needs
+  a `curl.exe` with Unicode support, and how many header and query parameter names the sanitized export would treat as
+  secret: never a name or a value.
+- A request that curl is not known to send the same way is refused (exit code 3): a request file that asks for HTTP/2
+  only (`replay.curl.unsupported`; pass `--http-version auto` or `1.1` to export it), a URL with a `#`
+  (`replay.curl.unsupported`), HEAD with a body (`replay.curl.head-body`), a URL and headers too long for a Windows
+  command line (`replay.curl.arguments-too-large`), a Fiddler control header (`replay.request.control-header`), a
+  request that still leaves anything out (`replay.request.incomplete`) and an invalid request
+  (`replay.request.invalid`), such as one with a header value that is not well-formed Unicode. `--http-version 2` is a
+  usage error, and so are the options that only sending uses: `--repeat`, `--parallel`, `--timeout`,
+  `--max-response-mib`, `--follow-redirects`, `--connect-to`, `--allow-connect-to`, `--sequence`,
+  `--allow-unsafe-methods`, `--verify`, `--verify-diff` and `--origin` (`cli.usage.unsupported-option`, exit code 2).
+- A script needs PowerShell 7.2 or later on Windows. It refuses to send unless `curl.exe` is at least version 8.21.0
+  and, when the URL or a header is not ASCII, supports Unicode. It runs curl without a configuration file (`-q`) and
+  with only `SystemRoot`, `windir`, `SystemDrive`, `TEMP` and `TMP` in its environment, so no proxy, CA bundle or other
+  curl setting from your profile or environment applies. It reads its body from `../bodies/NNNNN.bin` next to it and
+  sends nothing unless that file still has the exact length and SHA-256 that the script holds. That check only catches
+  a body file that changed apart from its script: whoever can change the script can also change its URL, headers, body
+  file, length and hash, so keep scripts and body files as private as the capture. Its exit code is
+  curl's, or 1 when the script refused or failed before curl finished; when it fails or is interrupted, it stops the
+  curl that it started, and an interrupted script leaves `$LASTEXITCODE` at 1 in the PowerShell session that ran it.
+- A script asks curl for exactly HTTP/1.1 when the request is exported with `--http-version 1.1`, or from a request
+  file that asks for `1.1`. With `auto`, curl chooses the version itself, which need not be the one that xmat would use
+  (xmat sends HTTP/2 to an HTTPS server that offers it). The rest is curl's own behavior, not xmat's: curl trusts the
+  certificates that Windows trusts and also checks that the server's certificate was not revoked, which xmat does not,
+  so a certificate whose revocation Windows cannot check fails in the script; it follows no redirect; it has no overall
+  time limit and no limit on the size of a response, unlike `xmat replay` with `--timeout` and `--max-response-mib`;
+  and it writes the response body, and any error, to the console.
 - `xmat doctor --for analyze` checks what `xmat analyze` needs and writes nothing: the analysis rules (`data.rules`),
   the API map (`data.apimap`) and the English strings (`localization.en-us`) installed next to `xmat.exe`, and a 64-bit
   process (`runtime.64-bit`). A missing or damaged file fails its check with a code such as `analysis.assets.rules` and
@@ -460,8 +534,10 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
-| Compose and send a new request (`request.compose`) | `xmat compose --url URL --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--body-file FILE] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-connect-to]` | Supported (S9) |
+| Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE --out DIR [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to]` | Supported (S9) |
+| Export requests as cURL scripts for PowerShell 7, without sending them (`request.curl`) | `xmat curl INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--include-sensitive] [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--unconditional] [--http-version auto\|1.1] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
+| Save requests as request files, without sending them (`request.save`) | `xmat save-request INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--unconditional] [--http-version auto\|1.1\|2] [--include-sensitive] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Report navigation and analysis tabs (`view.analysis-navigation`) | (none) | GUI only. Presentation: moves between report views and tabs |
