@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -126,6 +125,9 @@ namespace XMAT.WebServiceCapture
             ConnectToText.ToolTip = Localization.GetLocalizedString("COMPOSER_CONNECT_TO_HINT");
             AutomationProperties.SetName(ConnectToText, Localization.GetLocalizedString("COMPOSER_CONNECT_TO_ENDPOINT"));
             ResponseView.Title = Localization.GetLocalizedString("COMPOSER_RESPONSE");
+            // The response came through the HTTP stack, which already removed its transfer framing: its preview never
+            // decodes chunked framing again.
+            ResponseView.BodyIsDecoded = true;
             CopyCurlButton.Content = Localization.GetLocalizedString("COMPOSER_COPY_CURL");
             SendButton.Content = Localization.GetLocalizedString("COMPOSER_SEND");
             CancelSendButton.Content = Localization.GetLocalizedString("COMPOSER_CANCEL_SEND");
@@ -467,8 +469,6 @@ namespace XMAT.WebServiceCapture
             ResponseView.FirstLineAndHeaders = response.FirstLineAndHeaders;
             ResponseView.HeaderDictionary = headers;
             ResponseView.BodyBytes = response.BodyBytes;
-            ResponseView.BodyText = (string)new BodyConverter().Convert(
-                new object[] { headers, response.BodyBytes }, typeof(string), null, CultureInfo.CurrentCulture);
             LastResult = result;
         }
 
@@ -478,7 +478,6 @@ namespace XMAT.WebServiceCapture
             ResponseView.FirstLineAndHeaders = "";
             ResponseView.HeaderDictionary = null;
             ResponseView.BodyBytes = null;
-            ResponseView.BodyText = null;
         }
 
         // The status followed by what the Replays tab did with the send: recorded, recorded without bodies that did not
@@ -521,6 +520,8 @@ namespace XMAT.WebServiceCapture
         {
             _closed = true;
             StopWork();
+            // The response's preview stops now, not when the view is unloaded later: a closed window shows nothing.
+            ResponseView.StopPreview();
             // A run or read in progress releases the client once it has ended (EndState): it may still be using it.
             ReleaseClient();
             base.OnClosed(e);

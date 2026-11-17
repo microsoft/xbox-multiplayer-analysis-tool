@@ -62,6 +62,18 @@ namespace XMAT.WebServiceCapture
         };
     }
 
+    // What Reissue and verify found for one send that it verified, as the Replays tab keeps it with the send's row
+    // (ReplayRecorder): Verdict, the verdict that ReplayOperation made, which the row keeps whatever else happens; and Diff,
+    // the verification differences that came with that verdict (ReplayExchange.VerifyDiff), when the tab kept them. They
+    // hold captured content (lines, JSON values, byte excerpts), so they are kept in memory only and never logged, saved
+    // or exported. When the tab did not keep them, NotKeptBytes is their size (VerifyDiff.SerializedBytes); BudgetBytes is
+    // how much of them the tab keeps. Diff and NotKeptBytes are both null for a send that came without differences.
+    internal sealed record RecordedVerification(
+        ReplayVerification Verdict,
+        VerifyDiff Diff = null,
+        int? NotKeptBytes = null,
+        long BudgetBytes = VerifyDiffLimits.MaxRetainedBytes);
+
     // The requests of a Replay menu run, fixed on the UI thread before the user is asked about them: copies of the rows
     // that can be replayed, as they are then, and where each comes from. A live capture that updates a row afterwards
     // changes nothing: what the user confirms is what is sent. The copies share the rows' bodies and header dictionaries,
@@ -116,7 +128,8 @@ namespace XMAT.WebServiceCapture
 
     // What a GUI replay run did: the operation's result, or none when XMAT was busy and nothing was sent; the tab it was
     // recorded in and the most bodies that tab keeps; the sends that the tab recorded, the bodies it did not keep and the
-    // sends it could not record; and whether the user cancelled the run.
+    // sends it could not record; whether the user cancelled the run; and the verification differences that the tab did
+    // not keep, and how much of them it keeps.
     internal sealed record ReplayRunResult(
         OperationResult<ReplayResult> Result,
         string Destination = null,
@@ -124,7 +137,9 @@ namespace XMAT.WebServiceCapture
         int Recorded = 0,
         int OmittedBodies = 0,
         int NotRecorded = 0,
-        bool CancelledByUser = false)
+        bool CancelledByUser = false,
+        int OmittedVerifyDiffs = 0,
+        long VerifyDiffBudgetBytes = 0)
     {
         internal static ReplayRunResult Busy { get; } = new(Result: null);
 
@@ -140,6 +155,10 @@ namespace XMAT.WebServiceCapture
     // still recorded, with its status, headers and timing, without those bodies, with a note that says so, and with a
     // header in its stored request or response head that says how many bytes were not kept
     // (RequestReplayDraft.RequestBodyNotKeptHeader, ResponseBodyNotKeptHeader), which saved captures and exports keep.
+    // A verified send's row keeps its verdict (RecordedVerification), and its verification differences while they fit what
+    // is left of VerifyDiffBudgetBytes (counted as VerifyDiff.SerializedBytes, a payload budget, not a measure of memory),
+    // its earlier rows included; differences that do not fit are not kept, and the row's note says so, but the send is
+    // recorded and its verdict is the same either way.
     internal sealed class ReplayRecorder : IReplayExchangeSink
     {
         internal const long DefaultBodyBudgetBytes = 256L * 1024 * 1024;
@@ -151,13 +170,14 @@ namespace XMAT.WebServiceCapture
         private readonly Func<bool> _isOpen;
         private readonly Action _stop;
         private long _retainedBodyBytes;
+        private long _retainedVerifyDiffBytes;
         private long _lastNumber;
         private int _notRecorded;
 
         // Created on the UI thread, which onUiThread runs an action on synchronously, or not at all once it no longer takes
         // rows (UI types pass their dispatcher). isOpen says, on the UI thread, whether the tab still takes rows, and stop
-        // ends the run once it does not. Replay rows are numbered after the rows the tab already has, whose bodies count
-        // against the budget.
+        // ends the run once it does not. Replay rows are numbered after the rows the tab already has, whose bodies and
+        // verification differences count against the budgets.
         internal ReplayRecorder(
             WebServiceDeviceCaptureController controller,
             IDataTable table,
@@ -165,7 +185,8 @@ namespace XMAT.WebServiceCapture
             Func<ReplayItemResult, ReplayProvenance> provenanceOf,
             Func<bool> isOpen = null,
             Action stop = null,
-            long bodyBudgetBytes = DefaultBodyBudgetBytes)
+            long bodyBudgetBytes = DefaultBodyBudgetBytes,
+            long verifyDiffBudgetBytes = VerifyDiffLimits.MaxRetainedBytes)
         {
             _controller = controller ?? throw new ArgumentNullException(nameof(controller));
             _table = table;
@@ -174,11 +195,14 @@ namespace XMAT.WebServiceCapture
             _isOpen = isOpen ?? (() => true);
             _stop = stop;
             ArgumentOutOfRangeException.ThrowIfNegative(bodyBudgetBytes);
+            ArgumentOutOfRangeException.ThrowIfNegative(verifyDiffBudgetBytes);
             BodyBudgetBytes = bodyBudgetBytes;
+            VerifyDiffBudgetBytes = verifyDiffBudgetBytes;
             foreach (ProxyConnectionModel row in controller.ProxyConnections)
             {
                 _lastNumber = Math.Max(_lastNumber, row.RequestNumber);
                 _retainedBodyBytes += BodyBytes(row);
+                _retainedVerifyDiffBytes += row.Verification?.Diff?.SerializedBytes ?? 0;
             }
         }
 
@@ -187,13 +211,20 @@ namespace XMAT.WebServiceCapture
 
         internal long BodyBudgetBytes { get; }
 
+        internal long VerifyDiffBudgetBytes { get; }
+
         // The counts below change on the UI thread, but for NotRecorded; read them there once the run has ended.
         internal long RetainedBodyBytes => _retainedBodyBytes;
+
+        internal long RetainedVerifyDiffBytes => _retainedVerifyDiffBytes;
 
         internal int Recorded { get; private set; }
 
         // Request and response bodies that sends had but their rows do not keep.
         internal int OmittedBodies { get; private set; }
+
+        // Verification differences that verified sends came with but their rows do not keep.
+        internal int OmittedVerifyDiffs { get; private set; }
 
         // Sends that found the tab closed, or that the UI thread did not take.
         internal int NotRecorded => Volatile.Read(ref _notRecorded);
@@ -223,7 +254,8 @@ namespace XMAT.WebServiceCapture
         // A capture row for one send: the request as XMAT built it and the response, with no status when none came, and
         // without the bodies that the tab does not keep, which a header in the head and the row's note account for. The
         // note also says how a send with the composer's transport options went (TransportNote), from what the operation
-        // recorded for it (sent), never from the composer's current controls.
+        // recorded for it (sent), never from the composer's current controls, and, for a verified send, its verdict and
+        // whether the tab kept its verification differences (VerifyNote), which the row keeps with it (verification).
         internal static ProxyConnectionModel ToRow(
             long number,
             ReplayProvenance provenance,
@@ -231,7 +263,8 @@ namespace XMAT.WebServiceCapture
             bool keepRequestBody = true,
             bool keepResponseBody = true,
             long bodyBudgetBytes = DefaultBodyBudgetBytes,
-            ReplayItemResult sent = null)
+            ReplayItemResult sent = null,
+            RecordedVerification verification = null)
         {
             ArgumentNullException.ThrowIfNull(exchange);
             Uri uri = exchange.RequestUri;
@@ -266,9 +299,8 @@ namespace XMAT.WebServiceCapture
             string tooLargeNote = responseTooLarge
                 ? Localization.GetLocalizedString("REPLAY_NOTE_RESPONSE_TOO_LARGE")
                 : null;
-            string transportNote = TransportNote(sent);
-            string[] notes = { bodiesNote, tooLargeNote, transportNote };
-            string replayNote = string.Join("\n", notes.Where(note => note != null));
+            string note = string.Join(
+                "\n", new[] { bodiesNote, tooLargeNote, TransportNote(sent), VerifyNote(verification) }.Where(line => line != null));
             return new ProxyConnectionModel(
                 number,
                 exchange.StatusCode == 0 ? string.Empty : exchange.StatusCode.ToString(CultureInfo.InvariantCulture),
@@ -285,7 +317,8 @@ namespace XMAT.WebServiceCapture
                 "0.0.0.0")
             {
                 Replay = provenance,
-                ReplayNote = replayNote.Length == 0 ? null : replayNote,
+                ReplayNote = note.Length == 0 ? null : note,
+                Verification = verification,
             };
         }
 
@@ -319,6 +352,25 @@ namespace XMAT.WebServiceCapture
             return connectTo ? Localization.GetLocalizedString("REPLAY_NOTE_CONNECT_TO") + " " + version : version;
         }
 
+        // A verified send's verdict, and, when the tab did not keep its verification differences, that it did not; null for
+        // a send that was not verified.
+        internal static string VerifyNote(RecordedVerification verification)
+        {
+            if (verification == null)
+            {
+                return null;
+            }
+
+            string verdict = verification.Verdict.Matches
+                ? Localization.GetLocalizedString("REPLAY_NOTE_VERIFY_MATCHED")
+                : Localization.GetLocalizedString(
+                    "REPLAY_NOTE_VERIFY_DIFFERED", VerifyDiffWording.Differences(verification.Verdict));
+            return verification.NotKeptBytes is int notKept
+                ? verdict + " " + Localization.GetLocalizedString(
+                    "REPLAY_NOTE_VERIFY_DIFF_NOT_KEPT", notKept, verification.BudgetBytes / (1024 * 1024))
+                : verdict;
+        }
+
         // On the UI thread, which also closes tabs: a row goes into the open tab, or nowhere.
         private void Record(ReplayProvenance provenance, ReplayExchange exchange, ReplayItemResult result)
         {
@@ -332,7 +384,14 @@ namespace XMAT.WebServiceCapture
             bool keepResponse = TryRetain(exchange.Response?.Body.LongLength ?? 0);
             OmittedBodies += (keepRequest ? 0 : 1) + (keepResponse ? 0 : 1);
             ProxyConnectionModel row = ToRow(
-                _lastNumber + 1, provenance, exchange, keepRequest, keepResponse, BodyBudgetBytes, result);
+                _lastNumber + 1,
+                provenance,
+                exchange,
+                keepRequest,
+                keepResponse,
+                BodyBudgetBytes,
+                result,
+                RetainVerification(result, exchange));
             if (_table != null)
             {
                 row.AddToDataTable(_controller.DeviceName, _table);
@@ -342,6 +401,32 @@ namespace XMAT.WebServiceCapture
             _lastNumber++;
             Recorded++;
             LastRecorded = row;
+        }
+
+        // A send's verdict, with the verification differences that came with that very verdict while they fit what is left
+        // of the budget; null for a send that was not verified. The verdict is the operation's, kept or not.
+        private RecordedVerification RetainVerification(ReplayItemResult result, ReplayExchange exchange)
+        {
+            if (result.Verification == null)
+            {
+                return null;
+            }
+
+            VerifyDiff diff = exchange.VerifyDiff;
+            if (diff == null || !ReferenceEquals(diff.Verification, result.Verification))
+            {
+                return new RecordedVerification(result.Verification, BudgetBytes: VerifyDiffBudgetBytes);
+            }
+
+            if (diff.SerializedBytes > VerifyDiffBudgetBytes - _retainedVerifyDiffBytes)
+            {
+                OmittedVerifyDiffs++;
+                return new RecordedVerification(
+                    result.Verification, NotKeptBytes: diff.SerializedBytes, BudgetBytes: VerifyDiffBudgetBytes);
+            }
+
+            _retainedVerifyDiffBytes += diff.SerializedBytes;
+            return new RecordedVerification(result.Verification, diff, BudgetBytes: VerifyDiffBudgetBytes);
         }
 
         // A send that the tab cannot take is counted, and the run stops: nothing after it would be recorded either.
@@ -439,6 +524,7 @@ namespace XMAT.WebServiceCapture
         private readonly Action<Action> _onUiThread;
         private readonly Func<WebServiceDeviceCaptureController, IDataTable> _tableOf;
         private readonly long _bodyBudgetBytes;
+        private readonly long _verifyDiffBudgetBytes;
 
         // onUiThread runs an action on the UI thread synchronously, or not at all once that thread no longer takes work:
         // UI types pass their dispatcher. tableOf gives the table that the tab's rows go to; by default the capture
@@ -447,14 +533,17 @@ namespace XMAT.WebServiceCapture
             CaptureAppModel model,
             Action<Action> onUiThread,
             Func<WebServiceDeviceCaptureController, IDataTable> tableOf = null,
-            long bodyBudgetBytes = ReplayRecorder.DefaultBodyBudgetBytes)
+            long bodyBudgetBytes = ReplayRecorder.DefaultBodyBudgetBytes,
+            long verifyDiffBudgetBytes = VerifyDiffLimits.MaxRetainedBytes)
         {
             _model = model ?? throw new ArgumentNullException(nameof(model));
             _onUiThread = onUiThread ?? throw new ArgumentNullException(nameof(onUiThread));
             _tableOf = tableOf ??
                 (controller => (controller.CaptureMethod as WebServiceCaptureMethod)?.WebProxyConnectionsTable);
             ArgumentOutOfRangeException.ThrowIfNegative(bodyBudgetBytes);
+            ArgumentOutOfRangeException.ThrowIfNegative(verifyDiffBudgetBytes);
             _bodyBudgetBytes = bodyBudgetBytes;
+            _verifyDiffBudgetBytes = verifyDiffBudgetBytes;
         }
 
         // False while an analysis or another capture-data operation, such as another replay, is running, and once XMAT is
@@ -490,7 +579,8 @@ namespace XMAT.WebServiceCapture
                     provenanceOf,
                     () => !_model.IsShuttingDown && _model.CaptureDeviceContexts.Contains(destination),
                     cancellation.Cancel,
-                    _bodyBudgetBytes);
+                    _bodyBudgetBytes,
+                    _verifyDiffBudgetBytes);
                 if (show)
                 {
                     _model.SelectedDeviceContext = destination;

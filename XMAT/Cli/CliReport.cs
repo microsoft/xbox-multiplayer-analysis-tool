@@ -117,6 +117,10 @@ namespace XMAT.Cli
         internal string InputSha256 { get; set; }
 
         internal IReadOnlyList<ReplayItemResult> Items { get; set; } = Array.Empty<ReplayItemResult>();
+
+        // With --verify-diff, the state of each send's verification detail by send id, for each diff.json written. Only the
+        // state: the details themselves are in the files.
+        internal Dictionary<int, VerifyDiffState> Details { get; } = new();
     }
 
     // Everything one xmat run reports: the JSON document on standard output (CliJson) and the text on standard error.

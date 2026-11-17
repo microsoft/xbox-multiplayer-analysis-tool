@@ -95,6 +95,8 @@ namespace XMAT.Operations.Replay
         internal static ReplayEdits None { get; } = new();
     }
 
+    // VerifyDiff also builds the differences of each verified send (VerifyDiffOperation) and hands them to the sink with its
+    // exchange (ReplayExchange.VerifyDiff), never in the result; it needs Verify.
     internal sealed record ReplayOptions(
         int Repeat = 1,
         int Parallelism = 1,
@@ -105,7 +107,8 @@ namespace XMAT.Operations.Replay
         bool AllowUnsafeMethods = false,
         bool AllowOriginChange = false,
         bool AllowConnectTo = false,
-        ReplayTransportOptions Transport = null)
+        ReplayTransportOptions Transport = null,
+        bool VerifyDiff = false)
     {
         internal const int MaxRepeat = 1000;
         internal const int MaxParallelism = 16;
@@ -142,7 +145,8 @@ namespace XMAT.Operations.Replay
             EffectiveTimeout > TimeSpan.Zero && EffectiveTimeout <= MaxTimeout &&
             MaxResponseBytes is > 0 and <= MaxResponseLimit &&
             (long)Parallelism * MaxResponseBytes <= MaxInFlightResponseBytes &&
-            MaxRedirects is >= 0 and <= MaxRedirectLimit;
+            MaxRedirects is >= 0 and <= MaxRedirectLimit &&
+            (Verify || !VerifyDiff);
     }
 
     // Receives each send as it completes, one call at a time, so it can write or show the messages without keeping them

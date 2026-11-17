@@ -145,5 +145,21 @@ namespace XMAT.Operations.Replay
 
         // The transport failure, for the GUI to show. Its message can name hosts, so the command line never reports it.
         internal Exception Error { get; init; }
+
+        // The send's verification differences, set once by ReplayOperation before the sink sees the exchange when the run
+        // asked for them (ReplayOptions.VerifyDiff) and the send was verified; null otherwise. They can hold captured
+        // content, so they travel with the exchange to the sink and never into ReplayResult.
+        internal VerifyDiff VerifyDiff { get; private set; }
+
+        internal void SetVerifyDiff(VerifyDiff diff)
+        {
+            ArgumentNullException.ThrowIfNull(diff);
+            if (VerifyDiff != null)
+            {
+                throw new InvalidOperationException("The exchange already has its verification differences.");
+            }
+
+            VerifyDiff = diff;
+        }
     }
 }

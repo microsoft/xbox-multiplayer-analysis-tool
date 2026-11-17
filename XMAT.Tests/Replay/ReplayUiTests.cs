@@ -956,13 +956,14 @@ namespace XMAT.Tests.Replay
             }
         });
 
-        // A captured response recorded without its body (replay.verify.skipped) cannot be verified. Whether some or all of
-        // a run's requests are such, they count as not verified, neither matched nor differed, the summary says so and
-        // why, and it is a warning.
+        // A request with no captured response, or whose captured response was recorded without its body (an empty body with
+        // the marker), cannot be verified (replay.verify.skipped). Whether some or all of a run's requests are such, they
+        // count as not verified, neither matched nor differed (a request with no captured response is not taken for one
+        // whose status differs), the summary says so and why, and it is a warning.
         [Theory]
         [InlineData(true)]
         [InlineData(false)]
-        public Task ReissueAndVerify_CountsResponsesRecordedWithoutTheirBodyAsNotVerified_AndWarns(bool someVerified) => _application.RunAsync(async () =>
+        public Task ReissueAndVerify_CountsRequestsWithoutACapturedResponseOrBodyAsNotVerified_AndWarns(bool someVerified) => _application.RunAsync(async () =>
         {
             await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok("reply"));
             var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
@@ -976,7 +977,10 @@ namespace XMAT.Tests.Replay
                 : new[]
                 {
                     Capture(1, server.Port, "/one", responseHeaders: notKept),
-                    Capture(2, server.Port, "/two", responseHeaders: notKept),
+                    new ProxyConnectionModel(
+                        2, string.Empty, DateTime.UtcNow, TimeSpan.Zero, "http", $"127.0.0.1:{server.Port}", "GET",
+                        "/no-response", $"GET /no-response HTTP/1.1\r\nHost: 127.0.0.1:{server.Port}\r\n", [], string.Empty,
+                        [], "127.0.0.1"),
                 };
             CaptureConnectionView view = HostListUiTests.CaptureView(new HostListPolicy(), rows);
             view.ReplayTarget = Target(model, table: null);
@@ -1000,8 +1004,10 @@ namespace XMAT.Tests.Replay
                 Assert.Equal(
                     Localization.GetLocalizedString("REPLAY_VERIFY_SUMMARY_NOT_VERIFIED", 2, matched, 0, 0, notVerified),
                     text);
-                Assert.Contains("were not verified, because their captured response was recorded without its body", text);
+                Assert.Contains(
+                    "were not verified: no response was captured for them, or it was recorded without its body", text);
                 Assert.Equal(MessageBoxImage.Warning, image);
+                Assert.All(ReplaysOf(model).ProxyConnections, row => Assert.Equal(row.Path == "/kept", row.IsVerified));
             }
             finally
             {
