@@ -170,6 +170,8 @@ code and what a problem or a warning means. The original look keeps its whole-ro
   row stays body text.
 - **STATUS-3** Charts color each status class the same way: the timeline, the traffic overview and the column
   summaries.
+- **STATUS-4** In a table, the status codes line up: every row keeps the icon's space, whether or not it shows the
+  icon.
 
 ## Components
 

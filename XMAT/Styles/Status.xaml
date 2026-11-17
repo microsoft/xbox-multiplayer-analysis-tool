@@ -40,16 +40,16 @@
         </CombinedGeometry.Geometry2>
     </CombinedGeometry>
 
-    <!-- An HTTP status in a table cell. A problem's or a warning's code takes its color, after its icon; any other code
-         takes the row's text color. The code is set as a text column sets its text, so the cell lines up with the
-         row's other cells (STATUS-2). -->
+    <!-- An HTTP status in a table cell. A problem's or a warning's code takes its color, after its icon, and any other
+         code the row's text color (STATUS-2). Every row keeps the icon's space, so the codes line up (STATUS-4). The
+         code is set as a text column sets its text, so it sits in its cell as the row's other values do. -->
     <Style TargetType="local:StatusText">
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="local:StatusText">
                     <StackPanel Orientation="Horizontal">
                         <Path x:Name="Icon" Width="12" Height="12" Margin="2,0,2,0" VerticalAlignment="Center"
-                              Stretch="Uniform" Visibility="Collapsed"/>
+                              Stretch="Uniform" Visibility="Hidden"/>
                         <TextBlock x:Name="Code" Text="{TemplateBinding Status}"
                                    Style="{x:Static DataGridTextColumn.DefaultElementStyle}"/>
                     </StackPanel>

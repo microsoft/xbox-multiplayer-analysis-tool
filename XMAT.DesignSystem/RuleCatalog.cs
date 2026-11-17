@@ -75,6 +75,10 @@ namespace XMAT.DesignSystem
                 "Charts color each status class the same way: 2xx green, 3xx blue, 4xx amber, 5xx red, and no status gray.",
                 "In a chart, color is the data, so it has to read the same in the timeline, the traffic overview and the column summaries.",
                 "StatusMeaningTests.Charts_ColorEachStatusClassTheSameWay"),
+            new DesignRule("STATUS-4", RuleLevel.Must, "Status",
+                "In a table, the status codes line up: every row keeps the icon's space, whether or not it shows the icon.",
+                "A straight column of codes is quick to scan, and the icons make a column of their own beside it.",
+                "StatusMeaningTests.Table_LinesUpEveryStatusCode"),
 
             new DesignRule("BUTTON-1", RuleLevel.Should, "Buttons",
                 "Label a button with the action it takes, using a verb, such as Add capture or Delete. Not OK, Yes or No.",

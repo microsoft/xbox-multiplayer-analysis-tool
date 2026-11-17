@@ -103,6 +103,32 @@
                 </ds:RuleExample>
             </ds:StoryRule>
             <ds:StoryRule RuleId="STATUS-3"/>
+            <ds:StoryRule RuleId="STATUS-4">
+                <ds:RuleExample Kind="Do" Caption="Every row keeps the icon's space, so the codes make one straight column.">
+                    <StackPanel>
+                        <app:StatusText Status="200" Margin="0,2"/>
+                        <app:StatusText Status="503" Margin="0,2"/>
+                        <app:StatusText Status="200" Margin="0,2"/>
+                        <app:StatusText Status="429" Margin="0,2"/>
+                    </StackPanel>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="A code that moves over for its icon breaks the column, so the codes are slower to scan.">
+                    <StackPanel>
+                        <TextBlock Text="200" Margin="2,2"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,2">
+                            <Path Width="12" Height="12" Margin="2,0" VerticalAlignment="Center" Stretch="Uniform"
+                                  Data="{DynamicResource ProblemIconGeometry}" Fill="{DynamicResource ErrorTextBrush}"/>
+                            <TextBlock Text="503" Margin="2,0" Foreground="{DynamicResource ErrorTextBrush}"/>
+                        </StackPanel>
+                        <TextBlock Text="200" Margin="2,2"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,2">
+                            <Path Width="12" Height="12" Margin="2,0" VerticalAlignment="Center" Stretch="Uniform"
+                                  Data="{DynamicResource AttentionIconGeometry}" Fill="{DynamicResource WarningTextBrush}"/>
+                            <TextBlock Text="429" Margin="2,0" Foreground="{DynamicResource WarningTextBrush}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ds:RuleExample>
+            </ds:StoryRule>
         </ds:StoryRules>
     </StackPanel>
 </ds:Story>

@@ -72,32 +72,9 @@ namespace XMAT.Tests.DesignSystem
                 {
                     foreach (bool newLook in new[] { true, false })
                     {
-                        LookState.Current.IsNewLook = newLook;
-                        ResourceDictionary look = ThemeManager.CreateLook(newLook);
-                        ThemeManager.LoadTheme(look, "Light", newLook, highContrast: false);
-                        window.Resources = look;
                         Color Of(string key) => ((SolidColorBrush)window.FindResource(key)).Color;
-
-                        var controller = new WebServiceDeviceCaptureController("Test device", DeviceType.Unknown, true);
-                        string[] statuses = { "200", "429", "503", string.Empty };
-                        for (int index = 0; index < statuses.Length; index++)
+                        foreach (var (model, row, status, code) in ShowTable(window, newLook, "200", "429", "503", string.Empty))
                         {
-                            controller.ProxyConnections.Add(CaptureTimelineTestData.Create(index + 1, status: statuses[index]));
-                        }
-
-                        var view = new CaptureConnectionView { AutoScroll = false, DataContext = new Context(controller) };
-                        var grid = (DataGrid)view.FindName("ConnectionList");
-                        grid.IsSynchronizedWithCurrentItem = false;
-                        window.Width = 1200;
-                        window.Height = 720;
-                        WpfTestHost.Show(window, view);
-
-                        foreach (ProxyConnectionModel model in controller.ProxyConnections)
-                        {
-                            var row = (DataGridRow)grid.ItemContainerGenerator.ContainerFromItem(model);
-                            Assert.NotNull(row);
-                            StatusText status = DesignSystemWindowTests.Descendants(row).OfType<StatusText>().Single();
-                            TextBlock code = DesignSystemWindowTests.Descendants(status).OfType<TextBlock>().Single();
                             Color rowText = ((SolidColorBrush)row.Foreground).Color;
                             Color codeText = ((SolidColorBrush)code.Foreground).Color;
                             string shown = model.Status.Length == 0 ? "no-status" : model.Status;
@@ -129,6 +106,39 @@ namespace XMAT.Tests.DesignSystem
                                 Assert.Equal(rowText, codeText);
                                 Assert.Same(DataGridTextColumn.DefaultElementStyle, code.Style);
                             }
+                        }
+
+                        window.Content = null;
+                    }
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = wasNewLook;
+                }
+            });
+        }
+
+        // In the new look every row keeps the icon's space, so a code starts in the same place whether or not its row
+        // shows the icon. The original look has no icons, and its codes line up too.
+        [Fact]
+        public void Table_LinesUpEveryStatusCode()
+        {
+            _application.Run(window =>
+            {
+                bool wasNewLook = LookState.Current.IsNewLook;
+                try
+                {
+                    foreach (bool newLook in new[] { true, false })
+                    {
+                        var codes = ShowTable(window, newLook, "200", "503", "302", "429")
+                            .Select(shown => (shown.Model.Status, X: shown.Code.TranslatePoint(new Point(), shown.Row).X))
+                            .ToList();
+                        foreach (var (status, x) in codes.Skip(1))
+                        {
+                            Assert.True(Math.Abs(x - codes[0].X) < 0.5,
+                                $"STATUS-4: in the {(newLook ? "new" : "original")} look a {status} status's code starts " +
+                                $"{x:0.#}px into its row and a {codes[0].Status} status's {codes[0].X:0.#}px, so the codes " +
+                                "don't line up.");
                         }
 
                         window.Content = null;
@@ -232,6 +242,41 @@ namespace XMAT.Tests.DesignSystem
         }
 
         private static XDocument Load(string file) => XDocument.Load(System.IO.Path.Combine(RepositoryPaths.Root, "XMAT", file));
+
+        // Shows the capture table in a look, in the light theme, with a request for each status, and returns each
+        // request's row, status cell and code.
+        private static List<(ProxyConnectionModel Model, DataGridRow Row, StatusText Status, TextBlock Code)> ShowTable(
+            Window window, bool newLook, params string[] statuses)
+        {
+            LookState.Current.IsNewLook = newLook;
+            ResourceDictionary look = ThemeManager.CreateLook(newLook);
+            ThemeManager.LoadTheme(look, "Light", newLook, highContrast: false);
+            window.Resources = look;
+
+            var controller = new WebServiceDeviceCaptureController("Test device", DeviceType.Unknown, true);
+            for (int index = 0; index < statuses.Length; index++)
+            {
+                controller.ProxyConnections.Add(CaptureTimelineTestData.Create(index + 1, status: statuses[index]));
+            }
+
+            var view = new CaptureConnectionView { AutoScroll = false, DataContext = new Context(controller) };
+            var grid = (DataGrid)view.FindName("ConnectionList");
+            grid.IsSynchronizedWithCurrentItem = false;
+            window.Width = 1200;
+            window.Height = 720;
+            WpfTestHost.Show(window, view);
+
+            var shown = new List<(ProxyConnectionModel, DataGridRow, StatusText, TextBlock)>();
+            foreach (ProxyConnectionModel model in controller.ProxyConnections)
+            {
+                var row = (DataGridRow)grid.ItemContainerGenerator.ContainerFromItem(model);
+                Assert.NotNull(row);
+                StatusText status = DesignSystemWindowTests.Descendants(row).OfType<StatusText>().Single();
+                shown.Add((model, row, status, DesignSystemWindowTests.Descendants(status).OfType<TextBlock>().Single()));
+            }
+
+            return shown;
+        }
 
         private static IEnumerable<XElement> Triggers(XDocument document, string binding) =>
             document.Descendants(Presentation + "DataTrigger").Where(trigger => (string)trigger.Attribute("Binding") == binding);
