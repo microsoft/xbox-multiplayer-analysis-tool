@@ -98,11 +98,11 @@ namespace XMAT.Operations.Replay
 
         internal const string UnknownLength = "unknown";
 
-        // "HTTP/1.1", or "HTTP/2" when the minor version is 0, as the proxy shows versions.
+        // "HTTP/1.1" or "HTTP/1.0" as the version names them, and "HTTP/2" for HTTP/2, which has no minor version.
         internal static string FormatVersion(Version version) =>
             version == null
                 ? "HTTP/1.1"
-                : version.Minor == 0
+                : version.Major >= 2
                     ? "HTTP/" + version.Major.ToString(CultureInfo.InvariantCulture)
                     : "HTTP/" + version.ToString(2);
     }
@@ -137,8 +137,35 @@ namespace XMAT.Operations.Replay
 
         internal int Redirects { get; init; }
 
-        // The transport failure, for the GUI to show. Its message can name hosts, so the command line never reports it.
+        // The transport failure, for the GUI to show. Its message can name hosts, so the command line never reports it. A
+        // Windows-authentication send keeps none: its failures are their codes only.
         internal Exception Error { get; init; }
+
+        // The Authorization scheme label that the final request of a Windows-authentication send carried when the HTTP
+        // stack sent it, "Negotiate" or "NTLM", read before the header was removed from the live message; null when it
+        // carried neither, and for every other send. It is a header label only: neither proof that authentication
+        // succeeded nor the package that was negotiated.
+        internal string AuthHeaderSchemeObserved { get; init; }
+
+        // A raw send, whose request went out as its prepared bytes.
+        internal bool Raw { get; init; }
+
+        // A raw send's plaintext bytes in write calls to the connection's stream that completed: what XMAT handed to that
+        // stream, not what reached the peer. Null for a Parsed send.
+        internal long? RequestBytesWritten { get; init; }
+
+        // A raw send's write state: none, partial, uncertain or complete (RawWriteState). Null for a Parsed send.
+        internal string RequestWrite { get; init; }
+
+        // A raw send's response framing: content-length, chunked, close or none. Null for a Parsed send, and when no
+        // response was read.
+        internal string ResponseFraming { get; init; }
+
+        // The fields of a raw response's chunked trailer section: counted, never merged and not kept.
+        internal int ResponseTrailerFields { get; init; }
+
+        // The origin that the request inherits: its captured origin, or else the origin that it was sent to.
+        internal Uri ProvenanceOrigin { get; init; }
 
         // The send's verification differences, set once by ReplayOperation before the sink sees the exchange when the run
         // asked for them (ReplayOptions.VerifyDiff) and the send was verified; null otherwise. They can hold captured

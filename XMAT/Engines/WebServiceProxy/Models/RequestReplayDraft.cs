@@ -28,7 +28,9 @@ namespace XMAT.WebServiceCapture
             "If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "If-Range"
         };
 
-        private string _originalAuthority;
+        // The URL whose origin a change needs consent for (ChangesOrigin), kept whole: Uri's authority (GetLeftPart) drops
+        // an IPv6 zone, which comparing origins keeps (ReplayAuthority.SameOrigin).
+        private Uri _origin;
         private string _bodyText = "";
 
         // The exact bytes that SetBodyBytes gave, shared rather than copied, so one large body can serve many drafts.
@@ -61,14 +63,17 @@ namespace XMAT.WebServiceCapture
 
         internal bool UsesUnsafeMethod => IsUnsafeMethod(Method);
 
-        // True when the URL no longer targets the origin the request was captured for, while it still carries the
-        // captured headers, such as credentials.
+        // True when the URL no longer targets the origin the request was captured for (ReplayAuthority.SameOrigin), while
+        // it still carries the captured headers, such as credentials.
         internal bool ChangesOrigin =>
-            _originalAuthority != null && Uri.TryCreate(Url, UriKind.Absolute, out var uri) &&
-            !string.Equals(_originalAuthority, uri.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase);
+            _origin != null && Uri.TryCreate(Url, UriKind.Absolute, out var uri) && !ReplayAuthority.SameOrigin(_origin, uri);
 
         // Even a safe method needs confirmation when captured credentials could reach a different origin.
         internal bool RequiresConfirmation => UsesUnsafeMethod || ChangesOrigin;
+
+        // The origin that the request was captured, loaded or first sent for, which ChangesOrigin compares the URL with;
+        // null when it has none yet, such as a new request or a request file without a URL.
+        internal Uri CapturedOrigin => _origin;
 
         internal static RequestReplayDraft FromCapture(ProxyConnectionModel capture) =>
             FromCapture(capture, int.MaxValue, CancellationToken.None);
@@ -109,7 +114,7 @@ namespace XMAT.WebServiceCapture
             {
                 Method = capture.Method,
                 Url = url,
-                _originalAuthority = new Uri(url).GetLeftPart(UriPartial.Authority),
+                _origin = new Uri(url),
                 HeadersText = firstLineEnd < 0 ? "" : rawHeaders[(firstLineEnd + 1)..].TrimEnd('\r', '\n'),
             };
             if (body.LongLength > maxShownBodyBytes)
@@ -118,12 +123,27 @@ namespace XMAT.WebServiceCapture
                 return draft;
             }
 
-            draft.BodyIsBase64 = true;
-            draft.BodyText = Convert.ToBase64String(body);
-
             // Encoded payloads must not be treated as editable text just because their bytes decode as UTF-8.
             bool encoded = capture.RequestHeaders.TryGetValue("Content-Encoding", out string encoding) &&
                 !string.Equals(encoding, "identity", StringComparison.OrdinalIgnoreCase);
+            draft.ShowBody(body, encoded, maxShownBodyBytes, cancellationToken);
+            return draft;
+        }
+
+        // How a captured body is shown (FromCapture, and RawConversion.ToDraft for a raw request's): its exact bytes when it
+        // is larger than maxShownBodyBytes; otherwise text when it is not encoded and is UTF-8 without control characters
+        // other than line breaks and tabs, and lossless Base64 when it is not.
+        internal void ShowBody(byte[] body, bool encoded, int maxShownBodyBytes, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(body);
+            if (body.LongLength > maxShownBodyBytes)
+            {
+                SetBodyBytes(body);
+                return;
+            }
+
+            BodyIsBase64 = true;
+            BodyText = Convert.ToBase64String(body);
             if (!encoded)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -132,8 +152,8 @@ namespace XMAT.WebServiceCapture
                     string text = StrictUtf8.GetString(body);
                     if (!text.Any(c => char.IsControl(c) && c is not ('\r' or '\n' or '\t')))
                     {
-                        draft.BodyText = text;
-                        draft.BodyIsBase64 = false;
+                        BodyText = text;
+                        BodyIsBase64 = false;
                     }
                 }
                 catch (DecoderFallbackException)
@@ -141,7 +161,6 @@ namespace XMAT.WebServiceCapture
                     // Binary and non-UTF-8 bodies remain editable as lossless Base64.
                 }
             }
-            return draft;
         }
 
         // The scheme, host and port that FromCapture sends a request to when its path is relative to the recorded host, as
@@ -167,7 +186,7 @@ namespace XMAT.WebServiceCapture
             {
                 Method = content.Method ?? "",
                 Url = content.Url ?? "",
-                _originalAuthority = content.Url == null ? null : AuthorityOf(content.Url),
+                _origin = content.Url == null ? null : OriginOf(content.Url),
                 HeadersText = content.Headers == null ? "" : FormatHeaders(content.Headers),
                 Omissions = content.Omitted ?? throw new ArgumentException("The content has no omissions.", nameof(content)),
             };
@@ -204,10 +223,11 @@ namespace XMAT.WebServiceCapture
             return draft;
         }
 
-        // The scheme, host and port of an absolute URL, which may be a sequence template ('#' only in its path or query).
-        private static string AuthorityOf(string url) =>
+        // An absolute URL, which may be a sequence template ('#' only in its path or query), as the origin that a change
+        // needs consent for: only its scheme, host, with any IPv6 zone, and port are compared (ChangesOrigin).
+        private static Uri OriginOf(string url) =>
             Uri.TryCreate(url.Replace(ReplaySequence.Placeholder.ToString(), "0"), UriKind.Absolute, out Uri uri)
-                ? uri.GetLeftPart(UriPartial.Authority)
+                ? uri
                 : throw new ArgumentException("The URL is not an absolute URL.", nameof(url));
 
         private static byte[] GetCapturedBody(ProxyConnectionModel capture)
@@ -338,9 +358,22 @@ namespace XMAT.WebServiceCapture
                 BodyIsBase64 = BodyIsBase64,
                 _bodyText = _bodyText,
                 _sharedBody = _sharedBody,
-                _originalAuthority = _originalAuthority,
+                _origin = _origin,
                 Omissions = Omissions,
             };
+
+        // A copy whose captured origin is origin, sharing this draft's header text and body: how a recorded send's origin
+        // comes back to a request made from its row, so that a later send to another origin asks again.
+        // A null origin would erase the one that a load established, so it is refused.
+        internal RequestReplayDraft WithCapturedOrigin(Uri origin)
+        {
+            ArgumentNullException.ThrowIfNull(origin);
+            if (!origin.IsAbsoluteUri)
+                throw new ArgumentException("The origin is not an absolute URL.", nameof(origin));
+            RequestReplayDraft copy = WithUrl(Url);
+            copy._origin = origin;
+            return copy;
+        }
 
         // Replaces the body with these exact bytes, without copying them; BodyText shows them as Base64.
         internal void SetBodyBytes(byte[] body)
@@ -422,7 +455,7 @@ namespace XMAT.WebServiceCapture
                     "Enter an absolute HTTP or HTTPS URL without embedded credentials, with a '#' only in its path or query.",
                     nameof(url));
             Url = url;
-            _originalAuthority ??= AuthorityOf(url);
+            _origin ??= OriginOf(url);
             Omissions = Omissions with { Url = false };
         }
 
@@ -500,67 +533,205 @@ namespace XMAT.WebServiceCapture
             return (significant / 4 * 3) - padding;
         }
 
+        // The characters of body text that TryCountBody reads between two checks of its token.
+        internal const int CountSliceChars = 1 << 20;
+
+        // GetBodyLength's count and checks, made in slices of the text with the token checked before each and after the
+        // last, and never throwing for invalid data: a body that is not valid text or Base64 gives its problem and a length
+        // of 0. A surrogate pair, or Base64 padding, that a slice boundary splits is read as GetBodyLength reads the whole
+        // text. Off the UI thread, so a large body is never counted or checked there.
+        internal BodyCount TryCountBody(CancellationToken token) => TryCountBody(CountSliceChars, token);
+
+        // TryCountBody in slices of sliceChars characters; afterSlice gets each slice's index once that slice is read
+        // (tests).
+        internal BodyCount TryCountBody(int sliceChars, CancellationToken token, Action<int> afterSlice = null)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(sliceChars, 1);
+            token.ThrowIfCancellationRequested();
+            if (_sharedBody != null)
+                return new BodyCount(_sharedBody.LongLength, BodyProblem.None);
+            string text = _bodyText ?? "";
+            return BodyIsBase64
+                ? CountBase64(text, sliceChars, afterSlice, token)
+                : CountText(text, sliceChars, afterSlice, token);
+        }
+
+        // The UTF-8 length of text, which must be valid UTF-16: a high surrogate followed by a low one, wherever a slice
+        // boundary falls between them, is one character of 4 bytes, and any other surrogate is invalid.
+        private static BodyCount CountText(string text, int sliceChars, Action<int> afterSlice, CancellationToken token)
+        {
+            long bytes = 0;
+            bool highSurrogate = false;
+            int slice = 0;
+            for (int start = 0; start < text.Length; slice++)
+            {
+                token.ThrowIfCancellationRequested();
+                int end = (int)Math.Min(text.Length, (long)start + sliceChars);
+                for (int index = start; index < end; index++)
+                {
+                    char c = text[index];
+                    if (highSurrogate)
+                    {
+                        if (!char.IsLowSurrogate(c))
+                            return new BodyCount(0, BodyProblem.NotText);
+                        bytes += 4;
+                        highSurrogate = false;
+                    }
+                    else if (char.IsHighSurrogate(c))
+                    {
+                        highSurrogate = true;
+                    }
+                    else if (char.IsLowSurrogate(c))
+                    {
+                        return new BodyCount(0, BodyProblem.NotText);
+                    }
+                    else
+                    {
+                        bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+                    }
+                }
+
+                afterSlice?.Invoke(slice);
+                start = end;
+            }
+
+            token.ThrowIfCancellationRequested();
+            return highSurrogate ? new BodyCount(0, BodyProblem.NotText) : new BodyCount(bytes, BodyProblem.None);
+        }
+
+        // GetBodyLength's Base64 rules, with the significant characters and the padding carried across slices.
+        private static BodyCount CountBase64(string text, int sliceChars, Action<int> afterSlice, CancellationToken token)
+        {
+            long significant = 0;
+            int padding = 0;
+            int slice = 0;
+            for (int start = 0; start < text.Length; slice++)
+            {
+                token.ThrowIfCancellationRequested();
+                int end = (int)Math.Min(text.Length, (long)start + sliceChars);
+                for (int index = start; index < end; index++)
+                {
+                    char c = text[index];
+                    if (c is ' ' or '\t' or '\r' or '\n')
+                        continue;
+                    if (c == '=')
+                        padding++;
+                    else if (padding > 0 || !(char.IsAsciiLetterOrDigit(c) || c is '+' or '/'))
+                        return new BodyCount(0, BodyProblem.NotBase64);
+                    significant++;
+                }
+
+                afterSlice?.Invoke(slice);
+                start = end;
+            }
+
+            token.ThrowIfCancellationRequested();
+            return significant % 4 != 0 || padding > 2
+                ? new BodyCount(0, BodyProblem.NotBase64)
+                : new BodyCount((significant / 4 * 3) - padding, BodyProblem.None);
+        }
+
         // The header lines as ParseHeaders reads them, checked in place against RequestFileLimits: each line is valid, and
         // there are at most MaxHeaders of them, of at most MaxHeaderBytes of UTF-8 names and values together. Nothing is
         // allocated, so text of any size is refused at no cost.
         private static void CheckHeaderLimits(string headersText)
         {
-            ReadOnlySpan<char> rest = (headersText ?? "").AsSpan();
+            var lines = new HeaderLineReader(headersText, null, CancellationToken.None);
             int count = 0;
             long bytes = 0;
-            while (!rest.IsEmpty)
+            while (lines.Read(out ReadOnlySpan<char> name, out _, out ReadOnlySpan<char> value))
             {
-                int end = rest.IndexOfAny('\r', '\n');
-                ReadOnlySpan<char> line;
-                if (end < 0)
-                {
-                    line = rest;
-                    rest = ReadOnlySpan<char>.Empty;
-                }
-                else if (rest[end] == '\r' && (end + 1 == rest.Length || rest[end + 1] != '\n'))
-                {
-                    throw new FormatException("Headers must use complete lines.");
-                }
-                else
-                {
-                    line = rest[..end];
-                    rest = rest[(end + (rest[end] == '\r' ? 2 : 1))..];
-                }
-
-                if (line.IsWhiteSpace())
-                    continue;
-                int separator = line.IndexOf(':');
-                ReadOnlySpan<char> name = separator > 0 ? line[..separator] : ReadOnlySpan<char>.Empty;
-                ReadOnlySpan<char> value = separator > 0 ? line[(separator + 1)..] : ReadOnlySpan<char>.Empty;
-                if (separator <= 0 || !IsToken(name) || !IsHeaderValue(value))
-                    throw new FormatException(InvalidHeaderMessage);
-                bytes += Encoding.UTF8.GetByteCount(name) + Encoding.UTF8.GetByteCount(value.Trim(" \t"));
+                bytes += Encoding.UTF8.GetByteCount(name) + Encoding.UTF8.GetByteCount(value);
                 if (++count > RequestFileLimits.MaxHeaders || bytes > RequestFileLimits.MaxHeaderBytes)
                     throw new FormatException("A request file holds at most 256 headers, of at most 256 KiB together.");
             }
         }
 
-        private static bool IsToken(ReadOnlySpan<char> text)
+        // Header text read in place, line by line, by ParseHeaders' rules: a line ends with CRLF or LF, and a lone CR is
+        // refused; a blank line is skipped; any other line is a token name, a colon and a value without control characters
+        // other than tab, read without the spaces and tabs around it. Nothing is copied and each character is read once:
+        // the token is checked, and checkpoint (tests) called, each time another RawRequest.CheckChars characters have been
+        // read, so that text of any size can be read on a cancellable worker.
+        internal ref struct HeaderLineReader
         {
-            foreach (char c in text)
+            private readonly ReadOnlySpan<char> _text;
+            private int _position;
+            private ScanProgress _progress;
+
+            internal HeaderLineReader(string headersText, Action<long> checkpoint, CancellationToken token)
             {
-                if (!IsTokenCharacter(c))
-                    return false;
+                _text = (headersText ?? string.Empty).AsSpan();
+                _position = 0;
+                _progress = new ScanProgress(checkpoint, token);
             }
 
-            return !text.IsEmpty;
-        }
-
-        // As IsValidHeader checks a value: no control character other than tab.
-        private static bool IsHeaderValue(ReadOnlySpan<char> text)
-        {
-            foreach (char c in text)
+            // The next line that is not blank: its name, the text after its colon as typed, and its value, that text
+            // without the spaces and tabs around it. False after the last line; FormatException, with ParseHeaders'
+            // message, at the first line that is not a valid header.
+            internal bool Read(out ReadOnlySpan<char> name, out ReadOnlySpan<char> raw, out ReadOnlySpan<char> value)
             {
-                if ((char.IsControl(c) && c != '\t') || c == '\u007f')
-                    return false;
-            }
+                while (_position < _text.Length)
+                {
+                    int start = _position;
+                    int end = _text.Length;
+                    int separator = -1;
+                    int first = -1;
+                    int last = -1;
+                    bool blank = true;
+                    bool valid = true;
+                    _position = _text.Length;
+                    for (int index = start; index < _text.Length; index++)
+                    {
+                        _progress.Advance(1);
+                        char c = _text[index];
+                        if (c is '\r' or '\n')
+                        {
+                            if (c == '\r')
+                            {
+                                if (index + 1 == _text.Length || _text[index + 1] != '\n')
+                                    throw new FormatException(IncompleteLinesMessage);
 
-            return true;
+                                // The CRLF's LF is read too.
+                                _progress.Advance(1);
+                            }
+
+                            end = index;
+                            _position = index + (c == '\r' ? 2 : 1);
+                            break;
+                        }
+
+                        blank &= char.IsWhiteSpace(c);
+                        if (separator < 0)
+                        {
+                            if (c == ':')
+                                separator = index;
+                            else
+                                valid &= IsTokenCharacter(c);
+                        }
+                        else
+                        {
+                            valid &= (!char.IsControl(c) || c == '\t') && c != '\u007f';
+                            if (c is not (' ' or '\t'))
+                            {
+                                first = first < 0 ? index : first;
+                                last = index;
+                            }
+                        }
+                    }
+
+                    if (blank)
+                        continue;
+                    if (separator <= start || !valid)
+                        throw new FormatException(InvalidHeaderMessage);
+                    name = _text[start..separator];
+                    raw = _text[(separator + 1)..end];
+                    value = first < 0 ? ReadOnlySpan<char>.Empty : _text[first..(last + 1)];
+                    return true;
+                }
+
+                name = raw = value = ReadOnlySpan<char>.Empty;
+                return false;
+            }
         }
 
         // An absolute HTTP or HTTPS URL without user info or a fragment, of at most MaxUrlChars characters; a URL with a
@@ -628,6 +799,8 @@ namespace XMAT.WebServiceCapture
 
         private const string InvalidHeaderMessage = "Enter one valid 'Name: value' header per line.";
 
+        private const string IncompleteLinesMessage = "Headers must use complete lines.";
+
         private static string FormatHeaders(IEnumerable<KeyValuePair<string, string>> headers) =>
             string.Join("\r\n", headers.Select(header => $"{header.Key}: {header.Value}"));
 
@@ -639,7 +812,7 @@ namespace XMAT.WebServiceCapture
             using var reader = new StringReader((headersText ?? "").Replace("\r\n", "\n"));
             // StringReader accepts lone CRs; reject these rather than allowing hidden header injection.
             if ((headersText ?? "").Replace("\r\n", "").Contains('\r'))
-                throw new FormatException("Headers must use complete lines.");
+                throw new FormatException(IncompleteLinesMessage);
             string line;
             while ((line = reader.ReadLine()) != null)
             {
@@ -659,4 +832,15 @@ namespace XMAT.WebServiceCapture
         internal static bool IsTokenCharacter(char c) =>
             char.IsAsciiLetterOrDigit(c) || "!#$%&'*+-.^_`|~".Contains(c);
     }
+
+    // Why a draft's body could not be counted (RequestReplayDraft.TryCountBody).
+    internal enum BodyProblem
+    {
+        None,
+        NotText,
+        NotBase64,
+    }
+
+    // A draft's body length in bytes, as GetBodyLength counts it, or the problem that stopped the count, with a length of 0.
+    internal readonly record struct BodyCount(long Length, BodyProblem Problem);
 }

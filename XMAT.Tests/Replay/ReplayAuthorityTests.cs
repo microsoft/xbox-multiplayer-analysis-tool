@@ -28,7 +28,7 @@ namespace XMAT.Tests.Replay
             await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok("ok"));
             string port = server.Port.ToString(CultureInfo.InvariantCulture);
             Assert.True(ReplayConnectTo.TryParse("127.0.0.1:" + port, out ReplayConnectTo connectTo));
-            using var sender = new ReplaySender(connectTo);
+            using var sender = new ReplaySender(new ReplaySenderSetup(ConnectTo: connectTo));
 
             ReplayExchange exchange = await sender.SendAsync(
                 new RequestReplayDraft { Url = template.Replace("{port}", port) }, ReplaySendOptions.Default, CancellationToken.None);

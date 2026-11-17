@@ -118,7 +118,7 @@ namespace XMAT.Tests.Replay
             using var certificate = trustedRoot ? _authority.Issue(address: IPAddress.Loopback) : _authority.Issue(Host);
             await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok(), new LoopbackTls(certificate));
             ReplayConnectTo target = Endpoint(server.Port);
-            using ReplaySender sender = trustedRoot ? Trusting(target) : new ReplaySender(target);
+            using ReplaySender sender = trustedRoot ? Trusting(target) : new ReplaySender(new ReplaySenderSetup(ConnectTo: target));
             var draft = new RequestReplayDraft
             {
                 Method = "POST",
@@ -220,7 +220,8 @@ namespace XMAT.Tests.Replay
         {
             await using var server = new LoopbackHttpServer(_ => new LoopbackResponse(
                 401, "Unauthorized", "WWW-Authenticate: Negotiate\r\nWWW-Authenticate: NTLM\r\n"));
-            using ReplaySender sender = connectTo ? new ReplaySender(Endpoint(server.Port)) : new ReplaySender();
+            using ReplaySender sender =
+                connectTo ? new ReplaySender(new ReplaySenderSetup(ConnectTo: Endpoint(server.Port))) : new ReplaySender();
             string url = connectTo ? $"http://{Host}:{server.Port}/" : server.Origin + "/";
 
             ReplayExchange exchange = await sender.SendAsync(new RequestReplayDraft { Url = url }, Options(), CancellationToken.None);
@@ -236,7 +237,7 @@ namespace XMAT.Tests.Replay
         {
             using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
-            using ReplaySender sender = new(Endpoint(((IPEndPoint)listener.LocalEndpoint).Port));
+            using ReplaySender sender = new(new ReplaySenderSetup(ConnectTo: Endpoint(((IPEndPoint)listener.LocalEndpoint).Port)));
             using var cancellation = new CancellationTokenSource();
             Task<ReplayExchange> sending = sender.SendAsync(
                 new RequestReplayDraft { Url = $"https://{Host}/" }, Options(), cancellation.Token);
@@ -262,7 +263,7 @@ namespace XMAT.Tests.Replay
         }
 
         // The run's transport decides its sender: a connect-to run gets one of its own for exactly its endpoint, and never
-        // the direct sender (which the GUI passes over its pooled connections); a direct run never gets a connect-to one.
+        // the direct sender (which the GUI passes over its pooled connections); a direct run never gets one of its own.
         // The run asks for its HTTP version too: HTTP/1.1 only completes with a server that offers HTTP/2, where auto
         // would negotiate HTTP/2, which this server does not speak.
         [Theory]
@@ -275,7 +276,7 @@ namespace XMAT.Tests.Replay
                 _ => LoopbackResponse.Ok(),
                 new LoopbackTls(certificate, new[] { SslApplicationProtocol.Http2, SslApplicationProtocol.Http11 }));
             ReplayConnectTo endpoint = Endpoint(server.Port);
-            var connectedTo = new List<ReplayConnectTo>();
+            var setups = new List<ReplaySenderSetup>();
             int directSenders = 0;
             var operation = new ReplayOperation
             {
@@ -284,10 +285,10 @@ namespace XMAT.Tests.Replay
                     directSenders++;
                     return Trusting(Endpoint(server.Port));
                 },
-                ConnectToSenderFactory = target =>
+                OwnSenderFactory = setup =>
                 {
-                    connectedTo.Add(target);
-                    return Trusting(target);
+                    setups.Add(setup);
+                    return Trusting(setup.ConnectTo);
                 },
             };
             var transport = new ReplayTransportOptions(ReplayHttpVersion.Http11, connectTo ? endpoint : null);
@@ -300,7 +301,8 @@ namespace XMAT.Tests.Replay
                 CancellationToken.None);
 
             Assert.True(result.Succeeded, Describe(result));
-            Assert.Equal(connectTo ? new[] { endpoint } : Array.Empty<ReplayConnectTo>(), connectedTo);
+            Assert.Equal(
+                connectTo ? new[] { new ReplaySenderSetup(ConnectTo: endpoint) } : Array.Empty<ReplaySenderSetup>(), setups);
             Assert.Equal(connectTo ? 0 : 1, directSenders);
             ReplayItemResult item = Assert.Single(result.Value.Items);
             Assert.Equal(
@@ -344,7 +346,7 @@ namespace XMAT.Tests.Replay
             var operation = new ReplayOperation
             {
                 SenderFactory = () => Counting(ref senders),
-                ConnectToSenderFactory = _ => Counting(ref senders),
+                OwnSenderFactory = _ => Counting(ref senders),
             };
             ReplaySource source = ReplaySource.FromDraft(new RequestReplayDraft { Url = url });
             var options = new ReplayOptions(AllowConnectTo: allowConnectTo, Transport: transport);
@@ -426,9 +428,10 @@ namespace XMAT.Tests.Replay
         // A sender built as XMAT builds it, which also trusts this test's root.
         private ReplaySender Trusting(ReplayConnectTo connectTo)
         {
-            SocketsHttpHandler handler = ReplaySender.CreateHandler(connectTo);
+            var setup = new ReplaySenderSetup(ConnectTo: connectTo);
+            SocketsHttpHandler handler = ReplaySender.CreateHandler(setup);
             _authority.Trust(handler);
-            return new ReplaySender(new HttpMessageInvoker(handler), ownsInvoker: true);
+            return new ReplaySender(new HttpMessageInvoker(handler), ownsInvoker: true, setup);
         }
 
         private static ReplaySender Counting(ref int senders)

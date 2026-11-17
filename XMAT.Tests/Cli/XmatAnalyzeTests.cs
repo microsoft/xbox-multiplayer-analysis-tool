@@ -463,7 +463,7 @@ namespace XMAT.Tests.Cli
             finally
             {
                 // Only its verbatim path names it; an ordinary one would remove the decoy instead.
-                Directory.Delete(real, recursive: true);
+                TestFolderCleanup.Delete(real);
             }
         }
 

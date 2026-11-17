@@ -147,19 +147,30 @@ namespace XMAT.Tests.Replay
         }
 
         [Theory]
-        [InlineData("Http2", false, 0, "https://e.test/", "Http2Exact")]
-        [InlineData("Auto", true, 0, "https://e.test/", "ConnectTo")]
-        [InlineData("Auto", false, 1, "https://e.test/", "Redirects")]
-        [InlineData("Auto", false, 0, "https://e.test/item/#", "NumberedUrl")]
+        [InlineData("Http2", false, 0, "https://e.test/", "Http2Exact", false, false, false)]
+        [InlineData("Auto", true, 0, "https://e.test/", "ConnectTo", false, false, false)]
+        [InlineData("Auto", false, 0, "https://e.test/", "Proxy", true, false, false)]
+        [InlineData("Auto", false, 0, "https://e.test/", "ClientCertificate", false, true, false)]
+        [InlineData("Auto", false, 0, "https://e.test/", "WindowsAuth", false, false, true)]
+        [InlineData("Http11", false, 0, "https://e.test/", "WindowsAuth", false, false, true)]
+        [InlineData("Auto", false, 1, "https://e.test/", "Redirects", false, false, false)]
+        [InlineData("Auto", false, 0, "https://e.test/item/#", "NumberedUrl", false, false, false)]
         public void ATransportThatCurlIsNotKnownToMatch_IsRefused(
-            string version, bool connectTo, int redirects, string url, string reason)
+            string version, bool connectTo, int redirects, string url, string reason, bool proxy, bool clientCertificate, bool windowsAuth)
         {
             Assert.True(ReplayConnectTo.TryParse("192.0.2.10:443", out ReplayConnectTo target));
+            Assert.True(ReplayProxy.TryParse("http://192.0.2.20:3128", out ReplayProxy upstream));
+            Assert.True(ReplayClientCertificate.TryParse(new string('A', 40), out ReplayClientCertificate certificate));
             var draft = new RequestReplayDraft { Method = "GET", Url = url };
 
             CurlExportException refused = Assert.Throws<CurlExportException>(() => RequestCurlExporter.Prepare(
                 draft,
-                new ReplayTransportOptions(Enum.Parse<ReplayHttpVersion>(version), connectTo ? target : null),
+                new ReplayTransportOptions(
+                    Enum.Parse<ReplayHttpVersion>(version),
+                    connectTo ? target : null,
+                    proxy ? upstream : null,
+                    clientCertificate ? certificate : null,
+                    windowsAuth),
                 redirects,
                 CancellationToken.None));
 

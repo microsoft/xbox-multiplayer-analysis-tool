@@ -313,6 +313,45 @@ namespace XMAT.Tests
             Assert.Equal("response-body", await new StreamReader(context.Response.Body).ReadToEndAsync());
         }
 
+        // The captured response names the version of the upstream's status line, which the request's "HTTP/2 or lower"
+        // leaves to the server: HTTP/1.0 and HTTP/1.1 with their minor versions, HTTP/2 without one.
+        [Theory]
+        [InlineData(1, 0, "HTTP/1.0")]
+        [InlineData(1, 1, "HTTP/1.1")]
+        [InlineData(2, 0, "HTTP/2")]
+        public async Task InvokeAsync_CapturesTheVersionThatTheUpstreamAnswered(int major, int minor, string expected)
+        {
+            var proxy = new WebServiceProxy();
+            var registry = new InterceptedTunnelRegistry();
+            registry.Register(53000, new InterceptedTunnelContext(1000, new ClientRequest()));
+            ServerResponse capturedResponse = null;
+            proxy.ReceivedWebResponse += (_, args) => capturedResponse = args.Response;
+            var upstreamHandler = new RecordingHandler
+            {
+                Response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Version = new Version(major, minor),
+                    Content = new StringContent("ok")
+                }
+            };
+            using var httpClient = new HttpClient(upstreamHandler);
+            var application = new InterceptedProxyApplication(proxy, httpClient, registry);
+            var context = new DefaultHttpContext();
+            context.Connection.RemotePort = 53000;
+            context.Request.Protocol = "HTTP/2";
+            context.Request.Scheme = "https";
+            context.Request.Method = "GET";
+            context.Request.Host = new HostString("example.com");
+            context.Request.Path = "/";
+            context.Response.Body = new MemoryStream();
+
+            await application.InvokeAsync(context);
+
+            Assert.NotNull(capturedResponse);
+            Assert.Equal(expected, capturedResponse.Version);
+            Assert.StartsWith(expected + " 200 OK\r\n", capturedResponse.FirstLineAndHeaders, StringComparison.Ordinal);
+        }
+
         [Fact]
         public async Task MultiplexedStreamsKeepTheConnectProcessContext()
         {

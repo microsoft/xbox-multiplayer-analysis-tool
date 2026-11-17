@@ -241,6 +241,53 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // The question names the URL's origin for Connect to another endpoint as the check found it, bounded and escaped
+        // there: a long host is cut short, and a zero-width character that the host keeps is shown as \uXXXX, so the origin
+        // cannot pass for another one. The run is allowed, and connects to the endpoint with the URL whole, exactly as
+        // typed.
+        [Theory]
+        [InlineData("long")]
+        [InlineData("unseen")]
+        public Task TheQuestion_ShowsTheOriginBoundedAndEscaped_AndTheRunKeepsTheUrlWhole(
+            string kind) => _application.RunAsync(async () =>
+        {
+            string host = kind == "long" ? string.Join(".", Enumerable.Repeat(new string('a', 60), 6)) + ".test" : "x\u200By.test";
+            string origin = "https://" + host;
+            string url = origin + "/item";
+            using var direct = new RecordingHandler();
+            using var httpClient = new HttpClient(direct);
+            using var client = new RequestReplayClient(httpClient);
+            using var connected = new RecordingHandler();
+            var targets = new List<string>();
+            client.OperationFactory = () => ConnectingOperation(targets, connected);
+            var questions = new List<string>();
+            var window = RequestComposerWindow.ForNewRequest(client, Answer(questions, true));
+            try
+            {
+                Find<TextBox>(window, "UrlBox").Text = url;
+                Find<CheckBox>(window, "ConnectToBox").IsChecked = true;
+                Find<TextBox>(window, "ConnectToText").Text = Endpoint;
+
+                await window.SendAsync();
+
+                string question = Assert.Single(questions);
+                string paragraph = question.Split("\n\n")[^1];
+                Assert.Equal(
+                    Localization.GetLocalizedString("COMPOSER_CONFIRM_SEND", "GET", UntrustedText.Show(url, 512)) + "\n\n" +
+                        Localization.GetLocalizedString("COMPOSER_CONFIRM_CONNECT_TO", Endpoint, UntrustedText.Show(origin, 300)),
+                    question);
+                Assert.DoesNotContain(origin, paragraph, StringComparison.Ordinal);
+                Assert.DoesNotContain("\u200B", question, StringComparison.Ordinal);
+                Assert.Equal(new[] { Endpoint }, targets);
+                Assert.Equal(new Uri(url).AbsoluteUri, Assert.Single(connected.Requests).Uri.AbsoluteUri);
+                Assert.Empty(direct.Requests);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
         // What is sent is the transport that was checked and confirmed: changing the controls while XMAT asks changes
         // nothing in that send. The Replays tab's notes come from what each send recorded, never from the controls as they
         // are afterwards, and the next send uses the controls as they are then.
@@ -464,10 +511,10 @@ namespace XMAT.Tests.Replay
         // connecting anywhere.
         private static ReplayOperation ConnectingOperation(List<string> targets, RecordingHandler handler) => new()
         {
-            ConnectToSenderFactory = target =>
+            OwnSenderFactory = setup =>
             {
-                targets.Add(target.ToString());
-                return new ReplaySender(new HttpMessageInvoker(handler, disposeHandler: false), ownsInvoker: true);
+                targets.Add(setup.ConnectTo.ToString());
+                return new ReplaySender(new HttpMessageInvoker(handler, disposeHandler: false), ownsInvoker: true, setup);
             },
         };
 

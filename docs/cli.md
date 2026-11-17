@@ -23,15 +23,18 @@ xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat 
             [--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header "NAME: VALUE"]...
             [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]...
             [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS]
-            [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods]
-            [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N]
-            [--max-records N]
-xmat compose --url URL | --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD]
+            [--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL]
+            [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN]
+            [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--max-input-mib N]
+            [--max-data-mib N] [--max-record-mib N] [--max-records N]
+xmat compose --url URL | --request-file FILE | --raw FILE --target ORIGIN --out DIR [--save-saz] [--allow-raw]
+             [--fix-content-length] [--sequence START-END] [--method METHOD]
              [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body]
              [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]...
              [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N]
-             [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change]
-             [--allow-connect-to]
+             [--http-version auto|1.1|2] [--connect-to IP:PORT] [--proxy URL] [--client-cert THUMBPRINT]
+             [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] [--allow-unsafe-methods]
+             [--allow-origin-change] [--allow-connect-to] [--allow-proxy]
 xmat save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] [--method METHOD]
                   [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE]
                   [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]...
@@ -187,11 +190,15 @@ xmat --version
   `--exclude-process` selectors. The input is never modified. An exported `FILE` holds the selected sessions
   themselves, so treat it like the capture it came from.
 - `xmat replay` sends requests from a capture again, like Fiddler's Reissue, and `xmat compose` sends one new request,
-  like Fiddler's Composer. Both send directly from this PC, the way the GUI's request composer does: never through a
-  proxy (so XMAT's capture, scripts and host lists do not apply and the replays are not captured), without cookies of
-  their own, without decompressing responses, and with Windows' certificate validation. `replay` reads `INPUT` exactly
-  as `analyze` does, with the same limit options and `analysis.input.*` errors. `--request` selects requests by the
-  number the GUI shows in its `#` column: `all`, or numbers and ranges such as `1,5,9-12` (at most 10,000 numbers). A
+  like Fiddler's Composer. Both send from this PC, the way the GUI's request composer does: directly, unless `--proxy`
+  names an upstream proxy, and never through the system's or the environment's proxy settings (so, unless you name
+  XMAT's own proxy, XMAT's capture, scripts and host lists do not apply and the replays are not captured), without
+  cookies of their own, without a client certificate unless `--client-cert` names one, without answering an
+  authentication challenge unless `--windows-auth` is given, without decompressing
+  responses, and with Windows' certificate validation. `replay` reads
+  `INPUT` exactly as `analyze` does, with the same limit options and `analysis.input.*` errors. `--request` selects
+  requests by the number the GUI shows in its `#` column: `all`, or numbers and ranges such as `1,5,9-12` (at most
+  10,000 numbers). A
   number given on its own must exist (`replay.request.not-found`) and be an HTTP or HTTPS request without a protocol
   upgrade, recorded with its request body (`replay.request.unsupported`); a range or `all` skips CONNECT tunnels,
   WebSocket handshakes, replays that XMAT recorded without their request body (`X-XMAT-Request-Body-Not-Kept`) and
@@ -250,6 +257,12 @@ xmat --version
   one usable `Location`. With `--follow-redirects 0`, a redirect is the result as it is, without a code; otherwise a
   redirect that is not followed is the result, with the code `replay.redirect.origin-change`,
   `replay.redirect.insecure`, `replay.redirect.unsupported` or `replay.redirect.limit`.
+- Wherever xmat compares origins (a redirect, a changed origin, the requests of a `--connect-to` run), two URLs are of
+  one origin when their schemes and ports are the same and so are their hosts, compared both as written, ignoring case,
+  and in their canonical ASCII (IDN) form. So `ασ.example` and `ας.example`, which differ only in a Greek final sigma,
+  are two origins, as DNS has them, and so are an IPv6 address with two zones, or with one zone written two ways, such
+  as `[fe80::1%25A]` and `[fe80::1%25a]`. A host that has no canonical form is of no origin: a redirect to it is not
+  followed, and a `--connect-to` run with it is refused (`replay.connect-to.origin-count`).
 - A request that carries one of Fiddler's control headers, `Fiddler-Host`, `X-OverrideHost`,
   `X-IgnoreCertCNMismatch` or `X-OverrideGateway`, is refused (`replay.request.control-header`): xmat never acts on
   a captured header, so a capture never chooses where its requests go or which certificate is accepted. Remove the
@@ -257,8 +270,8 @@ xmat --version
 - `--http-version` chooses the HTTP version: `auto` (the default) sends HTTP/2 to an HTTPS server that offers it and
   HTTP/1.1 otherwise, as before; `1.1` and `2` ask for exactly that version, and a request that cannot be sent with it
   fails (`replay.send.failed`) rather than go out with another. `2` needs HTTPS URLs (`replay.http-version.https-required`).
-  xmat never answers an authentication challenge, such as NTLM or Negotiate, with your Windows credentials: the
-  challenge is the result.
+  Unless `--windows-auth` is given, xmat never answers an authentication challenge, such as NTLM or Negotiate, with
+  your Windows credentials: the challenge is the result.
 - `--connect-to IP:PORT` connects to that endpoint instead of the address of the URL's host, as Fiddler's
   `Fiddler-Host` does, for example to send a request for a production host name to a test server. The endpoint is a
   numeric address and a port (`IPv4:PORT` or `[IPv6]:PORT`, without a zone; the port is 1 to 65535); a host name, a
@@ -270,6 +283,87 @@ xmat --version
   whatever the address: the requests, with their headers and body, go to that endpoint. Redirects within the origin
   go there too. When the endpoint cannot be reached, the send fails (`replay.send.failed`); xmat never falls back to
   the URL's host, a proxy or a name lookup.
+- `--proxy URL` sends every request through that upstream HTTP proxy, as Fiddler's gateway does: an `http://` request
+  goes to the proxy whole, and an `https://` one through a `CONNECT` tunnel, with TLS to the server inside it. `URL` is
+  `http://HOST` or `http://HOST:PORT`, with or without a final `/`: `HOST` is an ASCII host name (an international one
+  in its `xn--` form) or an IP address, an IPv6 one in brackets without a zone, and `PORT` is 1 to 65535, 80 by
+  default. For the proxy only, anything else is a usage error that never repeats the value (exit code 2): a user name
+  or password, a path, query or fragment, another scheme (HTTPS and SOCKS proxies included), a host name that ends
+  with a dot or whose last label is a number, or an address in another form, such as `127.1` or `0x7f.0.0.1`. Every
+  request of the run goes through the proxy, a loopback URL included, and so does every redirect that is followed;
+  `--proxy` cannot be used with `--connect-to` (`replay.proxy.connect-to`). The proxy is a trusted recipient of the
+  whole request: it receives the whole of every `http://` request, its `Authorization`, `Cookie` and other headers and
+  its body included. For HTTPS, the unencrypted CONNECT request exposes the destination host and port and, when
+  supplied, User-Agent information that may identify the application/title, SDK or device. If the proxy intercepts
+  HTTPS with a certificate this PC trusts, it also receives the whole request and it—not XMAT—decides whether the
+  server is genuine. XMAT's own proxy does not check servers' certificates. xmat checks the server's certificate as it
+  does without a proxy, so a proxy that intercepts HTTPS with a certificate that this PC does not trust fails the send.
+  Use only a proxy that you trust with the requests' credentials: xmat sends nothing without `--allow-proxy`
+  (`replay.policy.proxy`). An HTTP 407 on a send through the proxy, whether it answers the request, the `CONNECT` of
+  its tunnel or comes inside the tunnel, fails the send without a response or status, with
+  `replay.proxy.auth-required`, which means: HTTP 407 (Proxy Authentication Required) was received. XMAT does not
+  authenticate to proxies and did not retry the request. A proxy that answers the `CONNECT` of an `https://` request
+  with a status other than 200 or 407 fails the send with `replay.proxy.tunnel-failed`, and one that cannot be reached
+  fails it with `replay.proxy.unreachable`; xmat never falls back to sending directly.
+- `--client-cert THUMBPRINT` offers a certificate from your Personal certificate store (`Cert:\CurrentUser\My`) to a
+  server that asks for a client certificate, as Fiddler can. `THUMBPRINT` is the certificate's SHA-1 thumbprint, 40
+  hexadecimal digits without spaces. A client certificate identifies you to the server that receives it, so xmat sends
+  nothing unless `--allow-client-cert ORIGIN` names the run's one origin (`replay.policy.client-cert`). `ORIGIN` is
+  `https://HOST` or `https://HOST:PORT` (443 by default), with or without a final `/`. `HOST` is a host name (an
+  international one in either form) whose last label, once in ASCII, is not a number, an IPv4 address written as four
+  decimal numbers, or an IPv6 address in brackets without a zone. For both options anything else is a usage error that
+  never repeats the value (exit code 2). Two origins are the same when their hosts, in ASCII, and their ports are; a
+  host that ends with a dot is another origin. The run's URLs must be HTTPS (`replay.client-cert.https-required`), each
+  with an origin that a certificate can be allowed for (`replay.client-cert.origin-invalid`, for example an IPv6
+  address with a zone, or a host name whose last label is a number once in ASCII, such as `127。1`), and share that one
+  origin (`replay.client-cert.origin-count`). `--client-cert` cannot be used with `--proxy` (`replay.client-cert.proxy`);
+  with `--connect-to` the endpoint must still prove that it is the URL's host.
+- Only after every check and permission passed does xmat open the store, read-only, and look for the certificate, valid
+  or not. It refuses one when:
+  - the store cannot be read (`replay.client-cert.store-unavailable`), or no certificate, or more than one, has that
+    thumbprint (`replay.client-cert.not-found`, `.ambiguous`);
+  - its properties cannot be read (`.metadata-unavailable`);
+  - it is a certificate authority's (`.ca`);
+  - it is not allowed for client authentication (`.not-client-auth`) or digital signatures (`.key-usage`);
+  - its key is not RSA or ECDSA (`.unsupported-key`, which includes a key for RSA-PSS only), or this PC has no private
+    key recorded for it (`.no-private-key`).
+
+  xmat itself never asks for a PIN, a smart card or consent. Before it sends anything, it uses the key once, silently,
+  to sign a fixed value; a key that cannot be used that way, such as one that needs a PIN or a smart card, is refused
+  (`replay.client-cert.key-unavailable`). During the TLS handshake xmat asks Windows to use the key silently as well,
+  which has not been verified for every key storage provider, such as smart cards: one could still ask then. An ECDSA
+  key in a CryptoAPI provider and a key in a CryptoAPI provider that cannot sign SHA-256 hashes, such as the older
+  "Microsoft Enhanced Cryptographic Provider", are refused as `key-unavailable` too. xmat never changes the store or the
+  certificate. Each of these refusals is exit code 3, and nothing is sent.
+- The certificate is sent only to a server that asks for one, and only after that server showed a certificate that
+  this PC accepts for the allowed origin: the same check that xmat makes on every HTTPS server, made before the
+  certificate leaves. A server whose certificate is untrusted or names another host never receives it. TLS sessions are
+  never resumed, so every connection checks the server again. A server that does not ask for a certificate receives
+  none, and the send goes on without it. A redirect is followed only within that one origin. An expired certificate is
+  offered as it is: the server decides.
+- `--windows-auth` answers the server's `Negotiate` and `NTLM` challenges with the Windows credentials that xmat runs
+  with, as Fiddler's Composer can. Windows authentication: XMAT answers the origin's challenge with the Windows
+  credentials that it runs with, which may be a service or machine account's; Negotiate may fall back to NTLM, which a
+  recipient can relay or attack offline; a DNS attacker can steer the Kerberos service name through CNAMEs, while HTTPS
+  still proves the host. So xmat sends nothing unless `--allow-windows-auth ORIGIN` names the run's one origin
+  (`replay.policy.windows-auth`). `ORIGIN` is written as for `--allow-client-cert`, and anything else is a usage error
+  that never repeats the value (exit code 2). Before anything is sent, a run with `--windows-auth` is also refused when
+  it uses `--proxy` (`replay.windows-auth.proxy`) or `--connect-to` (`replay.windows-auth.connect-to`); when its URLs
+  are not HTTPS (`replay.windows-auth.https-required`), not each of an origin that it can be allowed for
+  (`replay.windows-auth.origin-invalid`) or not of one origin (`replay.windows-auth.origin-count`); with
+  `--http-version 2` (`replay.windows-auth.http2`); or when a request has an `Authorization` header of its own, even an
+  empty one or one that its `Connection` header names (`replay.windows-auth.authorization-header`). With
+  `--client-cert` too, the run needs both permissions, each for its one origin, and the certificate's checks come
+  first.
+- With `--windows-auth`, xmat answers only the allowed origin's `Negotiate` and `NTLM` challenges: a `Basic`, `Digest`
+  or any other challenge, and a 407's `Proxy-Authenticate`, are the result. It never sends credentials before the
+  server asks, asks for exactly HTTP/1.1 (`auto` becomes `1.1`, and the output says so), follows a redirect only within
+  the allowed origin, and sends on connections of the run's own, closed when the run ends, so no other request uses a
+  connection that it authenticated. The `Authorization` header that Windows authentication adds while a request is
+  sent is removed from it after each hop, so `request.http` and `replays.saz` show the request as xmat built it, without
+  that header. In each response, `WWW-Authenticate` and `Proxy-Authenticate` keep only the scheme names of their
+  `Negotiate`, `NTLM` and `Kerberos` challenges, without their tokens; other challenges stay as received, and a value
+  that is not a well-formed challenge list is left out.
 - Each request waits for its response up to `--timeout` seconds (30 by default, at most 600) and keeps a body of up to
   `--max-response-mib` (16 by default, at most 512). HEAD, 1xx, 204 and 304 responses have no body, whatever their
   `Content-Length` says. A request without a complete response is a result too: its
@@ -309,13 +403,22 @@ xmat --version
   which the GUI's import, `xmat analyze` and `xmat replay` read. It is a transcript of what xmat sent and got, not a
   capture of the wire. A request names its final URL in full, in ASCII (an international host name in its IDN form,
   an IPv6 address without its zone), with the `Host` that was sent, the headers of `request.http`, one line each (a
-  reader joins repeated ones with commas), and its body. A response has the head and body of `response.http`. A
+  reader joins repeated ones with commas), and its body. A `compose --raw` send is saved normalized instead: its
+  target in that absolute form, `Host` written as that URL's authority whatever `Host` the request had, its other
+  fields without the spaces around their values, and a chunked body decoded, with `Content-Length` in place of its
+  `Transfer-Encoding`; only its `request.http` holds its exact bytes. A response has the head and body of
+  `response.http`. A
   response larger than `--max-response-mib` keeps its head, followed by `X-XMAT-Response-Body-Not-Kept` with the size
   that the response declared (unverified) or `unknown`, and no body, so a replay of the archive does not verify it. A
   request without a complete response has no response. A session's number is its send's id, and sessions come in the
   order the sends completed, which `--parallel` can change. Session flags name the send: `x-xmat-replay-id`,
   `x-xmat-replay-of` (the request number), `x-xmat-replay-device`, `x-xmat-replay-sequence`, `x-xmat-replay-outcome`
-  (`completed`, `failed`, `timed-out` or `too-large`), `x-xmat-replay-code` and `x-xmat-replay-redirects`. The archive
+  (`completed`, `failed`, `timed-out` or `too-large`), `x-xmat-replay-code`, `x-xmat-replay-redirects`, for a send
+  that was not direct, `x-xmat-replay-transport` (`connect-to` or `proxy`, never the endpoint or the proxy), for a
+  send that could offer a client certificate, `x-xmat-replay-client-certificate-configured` (`true`; never the
+  certificate, nor whether the server received it) and, for a send that could answer with Windows authentication,
+  `x-xmat-replay-windows-auth-configured` (`true`; never whether the server asked or authentication succeeded). The
+  archive
   is completed only when the run publishes `DIR`; a run that publishes nothing removes it with the staging folder. It
   holds captured content, as the request and response files do, and is published privately with them. xmat reads it
   back only within its input limits (`--max-input-mib`, `--max-record-mib` and the others below), refusing a larger
@@ -359,6 +462,81 @@ xmat --version
   (`replay.request.incomplete`, exit code 3). The file's URL is the request's origin: changing it needs
   `--allow-origin-change`, which compose takes only with `--request-file`. The JSON output's `input` gives only the
   file's kind (`request-file`) and SHA-256.
+- `xmat compose --raw FILE --target ORIGIN --allow-raw` sends the request in `FILE` as its exact bytes (Raw mode, like
+  the Raw tab of Fiddler's Composer but constrained): one HTTP/1.1 request to one HTTP or HTTPS origin, on a connection
+  of its own, without the normalization that every other send gets. `--target` is that origin, `http://HOST` or
+  `https://HOST` with an optional `:PORT`; a path, query, fragment or user information is a usage error. `--raw` itself
+  selects HTTP/1.1.
+  - The file is the whole request. Its size is checked first, at most 64 KiB + 65 MiB (`replay.raw.input-too-large`);
+    it is read once, never past that size, and only those bytes are used; it cannot be read: `replay.raw.file-unreadable`.
+    Its path never reaches the output, and the JSON output's `input` gives only its kind (`raw-file`) and SHA-256.
+  - xmat checks the request before anything is resolved, connected or sent, and refuses it with exit code 3 and one of
+    these codes; for a fault in the head, standard error names its line number:
+    - `replay.raw.input-too-large`: a head over 64 KiB, a request line over 16 KiB, more than 256 field lines, a
+      method over 64 characters, a body over 64 MiB, more than 1 MiB of chunk framing, or a chunk line over 8 KiB;
+    - `replay.raw.invalid`: anything but ASCII with CRLF line ends, a folded line, a line before the request line,
+      other than single spaces in the request line, or a field that is not `NAME: VALUE`;
+    - `replay.raw.method`: a method that is not a token of 1 to 64 characters, `CONNECT`, or a standard method written
+      in another case (`get`);
+    - `replay.raw.target`: anything but a path (origin-form), or an absolute URL followed by a path whose scheme and
+      authority are the target origin's, written as xmat writes them: the scheme and the host in lower case (an
+      international name in its `xn--` form, an IPv6 address in brackets) and the port, which may be left out only
+      when it is the scheme's default; a fragment, user information, `*` or an authority alone is refused;
+    - `replay.raw.version`: anything but `HTTP/1.1`;
+    - `replay.raw.duplicate-field`: a field name that appears twice, in any case;
+    - `replay.request.control-header`: a Fiddler control header;
+    - `replay.raw.host`: not exactly one `Host` naming the target origin, in any case, with its port, which may be left
+      out only when it is the scheme's default; with an absolute URL as the target, `Host` must be exactly the
+      authority written there;
+    - `replay.raw.connection`: `Connection` other than exactly `close`, or `Keep-Alive`, `Proxy-Connection` or `TE`;
+    - `replay.raw.expect` and `replay.raw.upgrade`: `Expect`, `Upgrade`, `HTTP2-Settings` or a WebSocket field;
+    - `replay.raw.trailer`: a `Trailer` field, a chunk extension or a trailer field;
+    - `replay.raw.framing`: a `Content-Length` that is not the body's length (digits only, no leading zero),
+      `Transfer-Encoding` other than exactly `chunked`, both of them, incomplete chunks, or bytes after the body;
+    - `replay.raw.body-not-allowed`: a body for `HEAD` or `TRACE`;
+    - `replay.raw.target-denied`: a `--target` IP address that no request may be sent to: an unspecified (`0.0.0.0`,
+      `::`), multicast or limited broadcast (`255.255.255.255`) address, or an IPv4-mapped IPv6 form of one. Private
+      and loopback addresses are allowed: Raw mode is meant for servers that you own or may test. A `--target` host
+      name is checked when it is looked up, once its send has begun: when every address it resolves to is denied,
+      that send fails with `replay.raw.target-denied` and is recorded like any failed send (exit code 12), rather
+      than refused before anything is sent.
+  - `--fix-content-length` first replaces the value of the request's one `Content-Length` with the body's length, as
+    Fiddler's Fix Content-Length does; it needs exactly one `Content-Length` and no `Transfer-Encoding`
+    (`replay.raw.fix-content-length`). The file itself is never changed.
+  - Consent: without `--allow-raw`, nothing is sent (`replay.policy.raw`, exit code 3). The checks refuse what xmat
+    can see as ambiguous, but they do not prove how a front end, proxy or load balancer between xmat and the server
+    reads the request: those can read it differently from the server behind them, and it can affect other users'
+    requests on a back-end connection that they share. `Connection: close` binds only xmat's own connection. Use Raw
+    mode only with servers that you own or may test. A method other than `GET`, `HEAD` and `OPTIONS`, and `GET` or
+    `OPTIONS` with a body, also needs `--allow-unsafe-methods` (`replay.policy.raw-unsafe`): a server that does not
+    expect a body may read it as another request.
+  - Raw mode sends no proxy, client certificate, Windows authentication or automatic cookies and credentials: only the
+    fields in the file. It follows no redirect, retries nothing, and never sends HTTP/2, `Expect`, an upgrade or
+    `CONNECT`. Its one transport option is `--connect-to`, for an HTTPS target only, with `--allow-connect-to`. With
+    `--raw`, `--url`, `--method`, `--header`, `--remove-header`, `--clear-headers`, `--body-file`, `--empty-body`,
+    `--form`, `--form-string`, `--form-type`, `--request-file`, `--sequence`, `--proxy`, `--allow-proxy`,
+    `--client-cert`, `--allow-client-cert`, `--windows-auth`, `--allow-windows-auth`, `--allow-origin-change`,
+    `--http-version` other than `1.1` and `--follow-redirects` other than `0` are usage errors (exit code 2), and so are
+    `--target`, `--allow-raw` and `--fix-content-length` without `--raw`. `replay`, `save-request` and `curl` take none
+    of these four options.
+  - Over HTTPS, xmat offers only `http/1.1` (`replay.raw.alpn` when the server chooses another protocol), never
+    resumes a session and offers no client certificate. It checks the server's certificate as Windows does, with two
+    limits. Revocation is not checked (`NoCheck`), as in every replay path, so a revoked certificate can pass when the
+    rest of its validation succeeds. And Raw mode turns certificate downloads off: validation never fetches an issuer
+    certificate from a URL in the server's certificate and fetches no revocation data, so a raw HTTPS server must send
+    every intermediate certificate that this PC does not already have in its certificate stores or cache; Windows'
+    automatic root update may still ask Windows Update about an unknown root. Other sends keep Windows' default, which
+    allows such downloads, so for them `NoCheck` is no promise that validation makes no network request; one policy
+    for every replay path is an open follow-up.
+  - xmat reads one HTTP/1.x response within Raw mode's limits (`replay.raw.response-invalid`), with a body framed by
+    `Content-Length`, `chunked` alone (`replay.raw.response-coding` otherwise) or the end of the connection. A body that
+    the connection ends cannot be proven complete, and one that ends early is `replay.raw.response-incomplete`.
+    `response.http` is the normalized response: a chunked body decoded, with `Content-Length` in place of its
+    `Transfer-Encoding` and `Trailer` fields; its trailer fields are counted but their values are not kept.
+  - `replays/NNNNN/request.http` is the request's exact bytes, the attempted request, whatever happened to it. The
+    send's `requestWrite` says how much of it xmat handed to the connection: `none`, `partial`, `complete`, or
+    `uncertain` when a write failed or was interrupted; `requestBytesWritten` counts those bytes. Neither proves what
+    the server received, and `complete` does not either.
 - `xmat curl` exports requests as cURL scripts and sends nothing: the requests that `INPUT --request SPEC` selects,
   the request of a `--request-file`, or a new request with `--url`, after the same edits and completions as
   `save-request`. Each script is a PowerShell 7 file that runs the `curl.exe` of Windows (in `System32`) with arguments
@@ -381,7 +559,8 @@ xmat --version
   request that still leaves anything out (`replay.request.incomplete`) and an invalid request
   (`replay.request.invalid`), such as one with a header value that is not well-formed Unicode. `--http-version 2` is a
   usage error, and so are the options that only sending uses: `--repeat`, `--parallel`, `--timeout`,
-  `--max-response-mib`, `--follow-redirects`, `--connect-to`, `--allow-connect-to`, `--sequence`,
+  `--max-response-mib`, `--follow-redirects`, `--connect-to`, `--allow-connect-to`, `--proxy`, `--allow-proxy`,
+  `--client-cert`, `--allow-client-cert`, `--windows-auth`, `--allow-windows-auth`, `--sequence`,
   `--allow-unsafe-methods`, `--verify`, `--verify-diff` and `--origin` (`cli.usage.unsupported-option`, exit code 2).
 - A script needs PowerShell 7.2 or later on Windows. It refuses to send unless `curl.exe` is at least version 8.21.0
   and, when the URL or a header is not ASCII, supports Unicode. It runs curl without a configuration file (`-q`) and
@@ -417,6 +596,20 @@ xmat --version
   staging folder cannot be removed the exit code is 7, whatever else happened. A second Ctrl+C ends xmat at once.
   Closing the console window, logging off or shutting down cancels too, but Windows ends xmat a few seconds later. If
   xmat is killed, delete the `.xmat-staging-*` folder it leaves next to `DIR`.
+- `xmat compose --raw` is the one exception: a raw send that began is always recorded. A cancellation before the first
+  raw send began publishes nothing, as above (exit code 130, `cli.cancelled`). Once a raw send began, a cancellation
+  ends the sends in flight as cancelled (`replay.send.cancelled`), starts no further send, and publishes the sends
+  that began, and only those: `summary.json` and the JSON document then have the status `cancelled`, those sends'
+  items, files and `replays.saz` sessions, and the errors `replay.cancelled` and `cli.cancelled-after-send`, with
+  exit code 130. A run whose sends all ended before the cancellation keeps its outcome (exit code 0 or 12) and is
+  published. Either way, publication (the sessions of `replays.saz` and the archive's completion, `summary.json`, the
+  removal of the work folder and the rename) then runs on a finalization of its own, which the cancellation does not
+  stop but bounds: if it has not finished 30 seconds after the cancellation arrived, even in the middle of a send's
+  session, nothing is published and the run exits with code 130 (`cli.cancelled`). A write that fails, of a send's
+  files or session or of the publication, publishes nothing either, even if the run was cancelled meanwhile (exit code
+  6). In both cases the JSON document has no `cli.cancelled-after-send`. A second Ctrl+C during the finalization still
+  ends xmat at once, and after a console close, logoff or shutdown Windows still ends xmat a few seconds later: `DIR` is
+  then complete or absent, and the `.xmat-staging-*` folder can remain next to it.
 
 ## Output
 
@@ -480,17 +673,31 @@ recorded response, part of `skippedIncomplete`), and the same counts per device 
 
 Instead of the analysis fields, `replay` and `compose` report `options` (`repeat`, `parallel`, `timeoutSeconds`,
 `maxResponseMib`, `followRedirects`, `unconditional`, `verify`, `verifyDiff`, `allowUnsafeMethods`, `allowOriginChange`,
-`httpVersion`, `connectTo`, which says whether `--connect-to` was given but never its endpoint, `allowConnectTo` and
-`saveSaz`), `replays` (one per send, in order, each with its `id`, `device` and `request` (null for `compose`),
-`sequence` (the number that `--sequence` put in the URL, otherwise null), `iteration`, `outcome`, `status` (null without
-a response), `durationMs`, `responseBytes`, `redirects`, `transport` (`direct` or `connect-to`, as the send was
-configured), `httpVersion` (the version asked for: `auto`, `1.1` or `2`), `responseVersion` (the version of the
-response, such as `1.1` or `2`, null without one), `code`, `verify` (null without `--verify`, otherwise its `result`,
-`match` or `mismatch`, its `differences`, a list of `status` and `body`, and its `detail`, null without `--verify-diff`,
-otherwise the `state` of its `diff.json` and, once published, its `file`) and, once published, its `files`) and `totals`
-(`replays`, `completed`, `failed`, `matched` and `mismatched`); `replay` also reports `input` and `limits` like
-`analyze`. `summary.json` of a replay holds `schema` (`xmat-replay/1`), `command`, `runId`, `version`, the same fields
-and the run's `warnings`.
+`httpVersion` (the version that the run asks for: `--http-version`, or else the request file's, and `1.1` for `auto`
+with `--windows-auth`), `connectTo`, which says whether `--connect-to` was given but never its endpoint,
+`allowConnectTo`, `proxy`, which says whether `--proxy` was given but never its URL, `allowProxy`, `clientCertificate`,
+which says whether `--client-cert` was given but never its thumbprint, `allowClientCertificate`, which says whether
+`--allow-client-cert` was given but never its origin, `windowsAuth`, which says whether `--windows-auth` was given,
+`allowWindowsAuth`, which says whether `--allow-windows-auth` was given but never its origin, `saveSaz`, and `raw`,
+`allowRaw` and `fixContentLength`, which say whether `--raw`, `--allow-raw` and `--fix-content-length` were given but
+never the file or the `--target` origin), `replays` (one per send, in order, each with its `id`, `device` and `request`
+(null for `compose`), `sequence` (the number that `--sequence` put in the URL, otherwise null), `iteration`, `outcome`,
+`status` (null without a response), `durationMs`, `responseBytes`, `redirects`, `transport` (`direct`, `connect-to` or
+`proxy`, as the send was configured), `httpVersion` (the version asked for: `auto`, `1.1` or `2`), `responseVersion`
+(the version of the response, such as `1.1` or `2`, null without one), `authHeaderSchemeObserved` (with
+`--windows-auth`, the `Authorization` label that the send's final request carried, `Negotiate` or `NTLM`, and otherwise
+null: a header label only, which proves neither that authentication succeeded nor which package was negotiated, while
+null does not prove that none was used), `raw` (whether the send was a `compose --raw` send), `requestWrite` and
+`requestBytesWritten` (a raw send's write state, `none`, `partial`, `uncertain` or `complete`, and the bytes of its
+request that xmat handed to the connection, which prove nothing about what the server received; null for other sends),
+`responseFraming` (a raw send's response framing, `content-length`, `chunked`, `close` or `none`, null without a
+response and for other sends), `code`, `verify` (null without `--verify`, otherwise its `result`, `match` or `mismatch`,
+its `differences`, a list of `status` and `body`, and its `detail`, null without `--verify-diff`, otherwise the `state`
+of its `diff.json` and, once published, its `file`) and, once published, its `files`) and `totals` (`replays`,
+`completed`, `failed`, `matched` and `mismatched`); `replay` also reports `input` and `limits` like `analyze`.
+`summary.json` of a replay holds `schema` (`xmat-replay/1`), `command`, `runId`, `version`, `status` (as in the JSON
+output: `cancelled` only for a `compose --raw` run published after a cancellation), the same fields, and the run's
+`warnings` and `errors`.
 
 If xmat cannot produce this document (an internal error), it writes a fixed fallback document instead, with only
 `schema`, `command`, `runId`, `status`, `exitCode`, `artifacts`, `cleanup`, empty `warnings` and the error
@@ -504,7 +711,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 |---|---|
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
-| 3 | Invalid input or nothing to analyze or export: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, the process selectors leave no session, or `export` has no session to write; for `replay` and `compose` also a selection, edit, sequence, `--body-file` or `--form` body, HTTP version or connect-to endpoint that cannot be used, a Fiddler control header, or a request that needs `--allow-unsafe-methods`, `--allow-origin-change` or `--allow-connect-to` (nothing is sent) |
+| 3 | Invalid input or nothing to analyze or export: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, the process selectors leave no session, or `export` has no session to write; for `replay` and `compose` also a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint, proxy, client certificate or Windows authentication that cannot be used, a Fiddler control header, a `--raw` file or request that Raw mode refuses, or a request that needs `--allow-raw`, `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to`, `--allow-proxy`, `--allow-client-cert` or `--allow-windows-auth` for its origin (nothing is sent) |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
 | 5 | Conflict: `--out` already exists, or `export`'s `--out` names the input or is locked by another program (`export.output.locked`) |
 | 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`), or `export`'s `--out` is on storage without Windows permissions (`export.output.unprotected`) |
@@ -513,7 +720,7 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 | 11 | `--verify` (or `--verify-diff`) and a replayed response differs from the captured one (the results are published) |
 | 12 | A replayed or composed request got no complete response (the results are published) |
 | 70 | Internal error, for example a process selection that does not match the analyzed sessions (`analysis.process-filter.consistency`), or a `help`, `--version` or passing `doctor` run whose JSON document could not be produced (`cli.internal.output`) |
-| 130 | Cancelled before the results were published |
+| 130 | Cancelled: nothing was published, except by `compose --raw` once a raw send began (`cli.cancelled-after-send`) |
 
 ## Compatibility
 
@@ -578,9 +785,9 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the proxy port (`proxy.port`) | (not available yet) | Planned (S5, XMAT-021) |
 | Recover proxy settings after a crash (`proxy.recover`) | (not available yet) | Planned (S6, XMAT-021) |
 | Check a device's proxy status (`proxy.status`) | (not available yet) | Planned (S6, XMAT-021) |
-| Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to]` | Supported (S9) |
+| Compose and send a new request (`request.compose`) | `xmat compose --url URL \| --request-file FILE \| --raw FILE --target ORIGIN --out DIR [--save-saz] [--allow-raw] [--fix-content-length] [--sequence START-END] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--proxy URL] [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy]` | Supported (S9) |
 | Export requests as cURL scripts for PowerShell 7, without sending them (`request.curl`) | `xmat curl INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--include-sensitive] [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto\|1.1] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
-| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
+| Replay captured requests, as captured or edited (`request.replay`) | `xmat replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] [--verify] [--verify-diff] [--url URL \| --origin URL] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] [--max-response-mib N] [--http-version auto\|1.1\|2] [--connect-to IP:PORT] [--proxy URL] [--client-cert THUMBPRINT] [--allow-client-cert ORIGIN] [--windows-auth] [--allow-windows-auth ORIGIN] [--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--allow-proxy] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | Save requests as request files, without sending them (`request.save`) | `xmat save-request INPUT --request SPEC \| --request-file FILE \| --url URL --out DIR [--device ID] [--method METHOD] [--header "NAME: VALUE"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE\|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto\|1.1\|2] [--include-sensitive] [--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]` | Supported (S9) |
 | List, inspect, recover or clean up headless runs (`run.records`) | (not available yet) | Planned (S4, XMAT-021) |
 | Validate a capture script without running it (`script.validate`) | (not available yet) | Planned (S8a, XMAT-021) |

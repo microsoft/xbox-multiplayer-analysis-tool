@@ -225,9 +225,9 @@ namespace XMAT.Tests.Cli
             CliAssert.ExitCode(
                 0, await XmatProcess.RunAsync(directory.Root, "curl", input, "--request", "1", "--include-sensitive", "--out", "out"));
 
-            Task<RawRequest> received = server.AcceptAsync();
+            Task<ReceivedRequest> received = server.AcceptAsync();
             ScriptRun script = await CurlScripts.RunAsync(Path.Join(directory.Root, "out", "scripts", "00001.ps1"), directory.Root);
-            RawRequest request = await received;
+            ReceivedRequest request = await received;
 
             Assert.True(script.ExitCode == 0, script.ToString());
             Assert.Equal("POST /upload?a=1 HTTP/1.1", request.Lines[0]);
