@@ -67,7 +67,7 @@ namespace XMAT.Tests.Proxy
             {
                 Assert.Empty(proxy.CapturedRequests);
             }
-            output.WriteLine($"{route} {(upload ? "up" : "down")}: {elapsed:F0} ms, {body.Length * 8 / elapsed:F0} kbps");
+            output.WriteLine($"{route} {(upload ? "up" : "down")}: {elapsed:F0} ms, {body.Length * 8d / elapsed:F0} kbps");
             Assert.InRange(elapsed, 850, 3500);
         }
 

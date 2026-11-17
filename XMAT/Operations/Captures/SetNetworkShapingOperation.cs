@@ -26,7 +26,8 @@ namespace XMAT.Operations.Captures
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                ArgumentNullException.ThrowIfNull(request?.Controller);
+                ArgumentNullException.ThrowIfNull(request);
+                ArgumentNullException.ThrowIfNull(request.Controller);
                 new NetworkShapingPlan(1, request.Profile, BodyTimeoutSeconds: request.BodyTimeoutSeconds).Validate();
                 bool notified = request.Controller.Apply(request.Profile);
                 var diagnostics = new List<OperationDiagnostic>();

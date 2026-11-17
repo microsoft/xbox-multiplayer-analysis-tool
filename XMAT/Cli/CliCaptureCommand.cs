@@ -155,6 +155,8 @@ namespace XMAT.Cli
                     }
                     catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                     {
+                        // A closed progress stream must not interrupt capture or its cleanup.
+                        return;
                     }
                 }
             }

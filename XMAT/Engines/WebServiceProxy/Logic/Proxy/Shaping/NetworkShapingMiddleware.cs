@@ -4,6 +4,7 @@
 
 using System;
 using System.Buffers;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Pipelines;
 using System.Threading;
@@ -57,6 +58,7 @@ namespace XMAT.WebServiceCapture.Proxy
             catch (Exception ex) when (
                 (ex is OperationCanceledException or IOException) && stopping.IsCancellationRequested)
             {
+                Trace.TraceInformation("The shaped connection stopped during cancellation.");
             }
             finally
             {
@@ -67,6 +69,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 }
                 catch (Exception ex) when (ex is OperationCanceledException or IOException)
                 {
+                    Trace.TraceInformation("The shaping pumps stopped during connection cleanup.");
                 }
                 finally
                 {
@@ -132,6 +135,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 {
                     while (queue.Reader.TryRead(out Chunk remaining))
                     {
+                        // The consumer never took ownership of these queued buffers.
                         remaining.Dispose();
                     }
                     await destination.CompleteAsync(failure).ConfigureAwait(false);

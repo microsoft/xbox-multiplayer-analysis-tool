@@ -10,6 +10,18 @@ namespace XMAT.Tests.Proxy
 {
     public class NetworkShapingOperationTests
     {
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task MissingRequestOrControllerReturnsInvalidInput(bool missingController)
+        {
+            var result = await new SetNetworkShapingOperation().ExecuteAsync(
+                missingController ? new(null, NetworkShapingProfile.Off) : null,
+                OperationContext.None, CancellationToken.None);
+            Assert.Equal(OperationOutcome.InvalidInput, result.Outcome);
+            Assert.Equal("capture.shaping.invalid", Assert.Single(result.Diagnostics).Code);
+        }
+
         [Fact]
         public async Task ObserverFailureDoesNotMisreportTheAppliedPolicyOrSkipOtherObservers()
         {

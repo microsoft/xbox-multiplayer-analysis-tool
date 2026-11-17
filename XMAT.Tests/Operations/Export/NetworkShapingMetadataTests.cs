@@ -16,6 +16,16 @@ namespace XMAT.Tests.Operations.Export
 {
     public sealed class NetworkShapingMetadataTests
     {
+        [Fact]
+        public void DeadlineOnlyOverrideIsRecordedButDefaultUnshapedCaptureIsNot()
+        {
+            var controller = new NetworkShapingController();
+            Assert.Null(NetworkShapingMetadata.From(controller, 120));
+            NetworkShapingMetadata metadata = NetworkShapingMetadata.From(controller, 60);
+            Assert.Equal(60, Assert.Single(metadata.Traces).BodyTimeoutSeconds);
+            Assert.NotNull(NetworkShapingMetadata.Parse(NetworkShapingMetadata.Serialize(metadata)));
+        }
+
         [Theory]
         [InlineData(false)]
         [InlineData(true)]

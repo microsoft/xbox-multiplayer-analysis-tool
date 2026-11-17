@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -118,6 +119,7 @@ namespace XMAT.Operations.Captures
                                 }
                                 catch (OperationCanceledException) when (running.IsCancellationRequested)
                                 {
+                                    Trace.TraceInformation("The shaping schedule stopped with the capture.");
                                 }
                             }
                             finally
@@ -183,12 +185,10 @@ namespace XMAT.Operations.Captures
                 {
                     throw new InvalidOperationException("The scheduled shaping change failed.");
                 }
-                foreach (OperationDiagnostic diagnostic in result.Diagnostics)
+                foreach (OperationDiagnostic diagnostic in result.Diagnostics.Where(
+                    diagnostic => !diagnostics.Exists(existing => existing.Code == diagnostic.Code)))
                 {
-                    if (!diagnostics.Exists(existing => existing.Code == diagnostic.Code))
-                    {
-                        diagnostics.Add(diagnostic);
-                    }
+                    diagnostics.Add(diagnostic);
                 }
             }
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);

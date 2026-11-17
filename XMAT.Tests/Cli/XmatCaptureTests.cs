@@ -78,6 +78,37 @@ namespace XMAT.Tests.Cli
         }
 
         [Fact]
+        public async Task LongStagingPathCapturesBodiesAndPublishesWithoutSidecars()
+        {
+            using var directory = new CliTestDirectory();
+            // A normal-length output can require a staging path beyond Windows' classic limit.
+            int padding = Math.Max(1, 240 - Path.Combine(directory.Root, "capture.xmatcap").Length - 1);
+            string folder = Path.Combine(directory.Root, new string('p', padding));
+            Directory.CreateDirectory(folder);
+            string output = Path.Combine(folder, "capture.xmatcap");
+            byte[] body = Encoding.UTF8.GetBytes("synthetic capture body");
+            await using var origin = await LoopbackOrigin.StartAsync(
+                context => context.Response.Body.WriteAsync(body).AsTask());
+            int port = AvailablePort();
+            using XmatChild child = XmatProcess.Start(
+                XmatProcess.CliDirectory, directory.Root, "capture",
+                "--port", port.ToString(), "--duration-seconds", "2", "--out", output);
+            await WaitForListenerAsync(child, port);
+            using var client = Client(port);
+            using var content = new ByteArrayContent(body);
+            using HttpResponseMessage response = await client.PostAsync(origin.Url("/upload"), content);
+            Assert.Equal(body, await response.Content.ReadAsByteArrayAsync());
+            XmatRun run = await child.CompleteAsync();
+            CliAssert.ExitCode(0, run);
+            Assert.Equal(new[] { output }, Directory.GetFileSystemEntries(folder));
+            using var capture = new SqLtReadonlyDatabase(output);
+            var row = Assert.Single(capture.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
+            Assert.Equal(body, Convert.FromBase64String(row.Str(WebServiceCaptureMethod.FieldKey_RequestBody)));
+            Assert.Equal(body, Convert.FromBase64String(row.Str(WebServiceCaptureMethod.FieldKey_ResponseBody)));
+            AssertListenerReleased(port);
+        }
+
+        [Fact]
         public async Task EmptyBlockedCaptureStillKeepsHistoryForHeadlessAnalysis()
         {
             using var directory = new CliTestDirectory();
@@ -141,7 +172,8 @@ namespace XMAT.Tests.Cli
             await WaitForListenerAsync(child, port);
             using var client = Client(port);
             var elapsed = Stopwatch.StartNew();
-            using HttpResponseMessage response = await client.PostAsync(origin.Url("/upload"), new ByteArrayContent(body));
+            using var content = new ByteArrayContent(body);
+            using HttpResponseMessage response = await client.PostAsync(origin.Url("/upload"), content);
             Assert.Equal(body, await response.Content.ReadAsByteArrayAsync());
             Assert.InRange(elapsed.Elapsed.TotalMilliseconds, 850, 3000);
             await Task.Delay(TimeSpan.FromSeconds(2.1));

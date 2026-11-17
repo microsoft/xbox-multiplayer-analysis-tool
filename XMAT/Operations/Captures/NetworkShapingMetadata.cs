@@ -26,7 +26,7 @@ namespace XMAT.Operations.Captures
         internal static NetworkShapingMetadata From(NetworkShapingController controller, int bodyTimeoutSeconds)
         {
             IReadOnlyList<NetworkShapingChange> history = controller.History;
-            return bodyTimeoutSeconds != ProxyRequestReadPolicy.Default.BodyTotalTimeout.TotalSeconds ||
+            return TimeSpan.FromSeconds(bodyTimeoutSeconds) != ProxyRequestReadPolicy.Default.BodyTotalTimeout ||
                 history.Any(change => change.Profile.Mode != NetworkShapingMode.Off)
                 ? new(1, new[] { new NetworkShapingTrace(bodyTimeoutSeconds, history) })
                 : null;

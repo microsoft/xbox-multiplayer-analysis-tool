@@ -28,7 +28,8 @@ namespace XMAT.Operations.Captures
         {
             _connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
-                DataSource = path,
+                // SQLite uses native file APIs; xmat.exe does not opt into long-path handling.
+                DataSource = PrivateFolder.NativePath(path),
                 Mode = SqliteOpenMode.ReadWriteCreate,
                 Pooling = false,
             }.ToString());

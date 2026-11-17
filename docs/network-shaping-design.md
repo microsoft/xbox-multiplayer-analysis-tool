@@ -50,6 +50,10 @@ non-UI proxy core so the GUI and CLI use the same behavior.
 - The foreground CLI uses explicit client routing, a bounded capture lifetime,
   and private atomic output. It does not configure system/console proxies,
   firewall, certificate trust, or GUI preferences.
+- Pass the private staging database's extended native path to SQLite. Staging
+  can cross Windows' classic path limit even when the requested output does
+  not. Keep a child-process `xmat.exe` regression: the long-path-aware test host
+  or `dotnet xmat.dll` can hide this failure.
 
 ## Extending the feature
 
