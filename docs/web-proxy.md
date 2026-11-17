@@ -165,6 +165,7 @@ these controls are not a claim that those unpublished cases have been satisfied.
 
 The [foreground CLI command and timed JSON schedules](cli.md#foreground-proxy-capture) provide the same core
 without changing system settings or requiring a driver.
+Developers extending this feature can use the [maintainer guide](network-shaping-design.md).
 
 ## Inspect requests and responses
 
