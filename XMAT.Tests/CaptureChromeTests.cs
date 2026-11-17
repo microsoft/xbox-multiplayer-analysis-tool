@@ -389,6 +389,8 @@ namespace XMAT.Tests
             });
         }
 
+        // The new look keeps a row in body text, or CONNECT's in muted text, and shows a problem's or a warning's code in
+        // its color in the status cell (STATUS-2). All of it stays readable when the theme or a status changes.
         [Theory]
         [InlineData("Light")]
         [InlineData("Dark")]
@@ -402,8 +404,9 @@ namespace XMAT.Tests
                 var gridStyle = NewLookMarkup.Document.Descendants(Presentation + "Style")
                     .Single(style => (string)style.Attribute("TargetType") == "DataGrid");
                 window.Resources[typeof(DataGrid)] = Parse<Style>(gridStyle);
+                window.Resources.MergedDictionaries.Add(StatusStyles());
                 var controller = Proxy(9000);
-                var states = new[] { ("200", "POST"), ("200", "CONNECT"), ("", "GET"), ("503", "GET") };
+                var states = new[] { ("200", "POST"), ("200", "CONNECT"), ("", "GET"), ("429", "GET"), ("503", "GET") };
                 foreach (var (status, method) in states)
                 {
                     for (int repeat = 0; repeat < 2; repeat++)
@@ -433,7 +436,8 @@ namespace XMAT.Tests
                         window.Resources.MergedDictionaries.Add(dictionary);
                     }
                     WpfTestHost.Pump();
-                    var colors = new List<Color>();
+                    var rowColors = new List<Color>();
+                    var codeColors = new List<Color>();
                     foreach (var model in controller.ProxyConnections)
                     {
                         grid.ScrollIntoView(model);
@@ -444,20 +448,33 @@ namespace XMAT.Tests
                         Assert.All(Descendants(row).OfType<TextBlock>().Where(text => !string.IsNullOrEmpty(text.Text)),
                             text => Assert.True(Contrast(text.Foreground, row.Background) >= 4.5,
                                 $"{name}: capture cell text must meet 4.5:1 contrast."));
-                        colors.Add(Assert.IsType<SolidColorBrush>(row.Foreground).Color);
+                        var (code, icon) = StatusCell(row);
+                        if (icon.Visibility == Visibility.Visible)
+                        {
+                            Assert.True(Contrast(icon.Fill, row.Background) >= 3,
+                                $"{name}: the icon of a {model.Status} status must meet 3:1 contrast.");
+                        }
+                        rowColors.Add(Assert.IsType<SolidColorBrush>(row.Foreground).Color);
+                        codeColors.Add(Assert.IsType<SolidColorBrush>(code.Foreground).Color);
                     }
-                    Assert.Equal(4, colors.Distinct().Count());
+                    // Body text and CONNECT's muted text; the codes add a warning's and a problem's colors.
+                    Assert.Equal(2, rowColors.Distinct().Count());
+                    Assert.Equal(4, codeColors.Distinct().Count());
                 }
 
+                // A status that arrives later colors its cell, and not its row.
                 var pending = controller.ProxyConnections[4];
                 grid.ScrollIntoView(pending);
                 WpfTestHost.Pump();
                 var pendingRow = Assert.IsType<DataGridRow>(grid.ItemContainerGenerator.ContainerFromItem(pending));
-                var pendingColor = Assert.IsType<SolidColorBrush>(pendingRow.Foreground).Color;
-                CaptureTimelineTestData.Update(pending, status: "200");
+                var pendingRowColor = Assert.IsType<SolidColorBrush>(pendingRow.Foreground).Color;
+                var pendingCode = StatusCell(pendingRow).Code;
+                var pendingCodeColor = Assert.IsType<SolidColorBrush>(pendingCode.Foreground).Color;
+                CaptureTimelineTestData.Update(pending, status: "503");
                 WpfTestHost.Pump();
-                Assert.NotEqual(pendingColor, Assert.IsType<SolidColorBrush>(pendingRow.Foreground).Color);
-                Assert.True(Contrast(pendingRow.Foreground, pendingRow.Background) >= 4.5);
+                Assert.Equal(pendingRowColor, Assert.IsType<SolidColorBrush>(pendingRow.Foreground).Color);
+                Assert.NotEqual(pendingCodeColor, Assert.IsType<SolidColorBrush>(pendingCode.Foreground).Color);
+                Assert.True(Contrast(pendingCode.Foreground, pendingRow.Background) >= 4.5);
             });
         }
 
@@ -474,6 +491,7 @@ namespace XMAT.Tests
                 var gridStyle = NewLookMarkup.Document.Descendants(Presentation + "Style")
                     .Single(style => (string)style.Attribute("TargetType") == "DataGrid");
                 window.Resources[typeof(DataGrid)] = Parse<Style>(gridStyle);
+                window.Resources.MergedDictionaries.Add(StatusStyles());
                 var controller = Proxy(9000);
                 var model = new ProxyConnectionModel(
                     63, "429", CaptureTimelineTestData.Origin, TimeSpan.FromMilliseconds(20),
@@ -503,6 +521,11 @@ namespace XMAT.Tests
                         text.FontSize, text.Foreground, VisualTreeHelper.GetDpi(text).PixelsPerDip);
                     Assert.True(text.ActualWidth + 0.5 >= measured.WidthIncludingTrailingWhitespace,
                         $"The complete capture value '{text.Text}' must remain visible after resizing.");
+                    // A value laid out after something else, as a status after its icon, keeps its width even where
+                    // its cell cuts it off.
+                    var bounds = text.TransformToAncestor(cell).TransformBounds(new Rect(text.RenderSize));
+                    Assert.True(bounds.Right <= cell.ActualWidth + 0.5,
+                        $"The complete capture value '{text.Text}' must fit in its column after resizing.");
                 }
             });
         }
@@ -1210,6 +1233,19 @@ namespace XMAT.Tests
         {
             Source = new Uri($"pack://application:,,,/XboxMultiplayerAnalysisTool;component/Themes/{name}Theme.xaml")
         };
+
+        // The new look's status cell, with its problem and warning icons.
+        private static ResourceDictionary StatusStyles() => new()
+        {
+            Source = new Uri("pack://application:,,,/XboxMultiplayerAnalysisTool;component/Styles/Status.xaml")
+        };
+
+        private static (TextBlock Code, System.Windows.Shapes.Path Icon) StatusCell(DataGridRow row)
+        {
+            var status = Descendants(row).OfType<StatusText>().Single();
+            return ((TextBlock)status.Template.FindName("Code", status),
+                (System.Windows.Shapes.Path)status.Template.FindName("Icon", status));
+        }
 
         internal static XDocument ProductMarkup(string name)
         {

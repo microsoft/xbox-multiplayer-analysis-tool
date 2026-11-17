@@ -22,6 +22,7 @@
         <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/Styles/ChoiceCards.xaml" />
         <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/Styles/CaptureIcons.xaml" />
         <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/Styles/ScrollBars.xaml" />
+        <ResourceDictionary Source="/XboxMultiplayerAnalysisTool;component/Styles/Status.xaml" />
     </ResourceDictionary.MergedDictionaries>
 
     <!-- Shape: buttons, tabs and wells use 4px corners; inputs are 3px; the one primary action is 5px. -->

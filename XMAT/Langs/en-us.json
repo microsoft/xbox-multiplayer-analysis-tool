@@ -9,6 +9,8 @@
 	"THEME_DARK": "Dark",
 	"THEME_HIGH_CONTRAST_NOTE": "High contrast is on, so Windows sets the colors",
 	"CAPTURE_CAPTURING": "Capturing",
+	"STATUS_TEXT_PROBLEM": "{0}, problem",
+	"STATUS_TEXT_ATTENTION": "{0}, needs attention",
 	"ANALYSIS_LOADING": "Analyzing capture\u2026",
 	"NEW_LOOK_TOGGLE": "New look",
 	"NEW_LOOK_TOOLTIP": "Turn off to compare the redesign with the original XMAT look",

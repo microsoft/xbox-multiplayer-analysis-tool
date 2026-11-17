@@ -46,16 +46,6 @@ namespace XMAT.WebServiceCapture
         private bool _isWaterfall = true;
         private bool _isVolume;
 
-        // Bar and label colors from the theme by status: none or unrecognized, 2xx, 3xx, 4xx, and 5xx or above.
-        private static readonly (string Bar, string Label)[] StatusResourceKeys =
-        {
-            ("NeutralFillBrush", "NeutralOnFillBrush"),
-            ("SuccessFillBrush", "SuccessOnFillBrush"),
-            ("InfoFillBrush", "InfoOnFillBrush"),
-            ("WarningFillBrush", "WarningOnFillBrush"),
-            ("ErrorFillBrush", "ErrorOnFillBrush")
-        };
-
         public static readonly DependencyProperty ItemsSourceProperty =
             DependencyProperty.Register(nameof(ItemsSource),
                 typeof(ObservableCollection<ProxyConnectionModel>),
@@ -587,12 +577,12 @@ namespace XMAT.WebServiceCapture
                 visual.Model = model;
                 visual.Version = row.Version;
                 visual.Root.Tag = model;
-                var status = StatusIndex(model.Status);
+                var status = TrafficSummary.ClassOf(model.Status);
                 if (visual.Status != status)
                 {
                     visual.Status = status;
-                    visual.Root.SetResourceReference(Border.BackgroundProperty, StatusResourceKeys[status].Bar);
-                    visual.Label.SetResourceReference(TextBlock.ForegroundProperty, StatusResourceKeys[status].Label);
+                    visual.Root.SetResourceReference(Border.BackgroundProperty, StatusMeanings.ChartFill(status));
+                    visual.Label.SetResourceReference(TextBlock.ForegroundProperty, StatusMeanings.ChartLabel(status));
                 }
                 visual.Root.ToolTip = $"{model.Method} {model.Host}{model.Path}\n" +
                     $"Status: {model.Status}\nTime: {row.Start:HH:mm:ss.fff}\n" +
@@ -753,20 +743,14 @@ namespace XMAT.WebServiceCapture
             }
         }
 
-        private static int StatusIndex(string status)
-        {
-            var index = int.TryParse(status, out var code) ? code / 100 : 0;
-            return index >= 2 ? Math.Min(index, 5) - 1 : 0;
-        }
-
         private sealed class BarVisual(Border root, TextBlock label)
         {
             internal Border Root { get; } = root;
             internal TextBlock Label { get; } = label;
             internal ProxyConnectionModel Model { get; set; }
             internal long Version { get; set; }
-            // The StatusResourceKeys entry the bar's colors refer to.
-            internal int Status { get; set; } = -1;
+            // The status class the bar's colors are for, as charts color them (StatusMeanings.ChartFill).
+            internal TrafficStatusClass? Status { get; set; }
         }
 
         private sealed record AxisVisual(Line Tick, TextBlock Label);

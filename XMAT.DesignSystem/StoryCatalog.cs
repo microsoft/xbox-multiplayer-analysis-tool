@@ -14,6 +14,7 @@ namespace XMAT.DesignSystem
         internal static IReadOnlyList<Func<Story>> Pages { get; } = new Func<Story>[]
         {
             () => new ColorStory(),
+            () => new StatusStory(),
             () => new ButtonsStory(),
             () => new ToolbarStory(),
             () => new TextInputsStory(),

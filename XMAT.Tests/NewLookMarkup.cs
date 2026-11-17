@@ -23,6 +23,7 @@ namespace XMAT.Tests
             "Styles/Tabs.xaml",
             "Styles/ChoiceCards.xaml",
             "Styles/ScrollBars.xaml",
+            "Styles/Status.xaml",
             "Looks/NewLook.xaml",
         };
 

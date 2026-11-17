@@ -192,7 +192,16 @@
             </DataGrid.InputBindings>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="#"      Binding="{Binding RequestNumber}" Width="{app:Look New=44, Original=30}" MinWidth="{app:Look New=44, Original=20}"/>
-                <DataGridTextColumn Header="STATUS" Binding="{Binding Status}"        Width="{app:Look New=80, Original=50}" MinWidth="{app:Look New=80, Original=20}"/>
+                <!-- The status's meaning sets how it shows (app:StatusText): the new look colors a problem's or a
+                     warning's status cell, and the original look the whole row, below. -->
+                <DataGridTemplateColumn Header="STATUS" SortMemberPath="Status" ClipboardContentBinding="{Binding Status}"
+                                        Width="{app:Look New=80, Original=50}" MinWidth="{app:Look New=80, Original=20}">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <app:StatusText Status="{Binding Status}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <DataGridTextColumn Header="METHOD" Binding="{Binding Method}"        Width="{app:Look New=88, Original=70}" MinWidth="{app:Look New=88, Original=20}"/>
                 <DataGridTextColumn Header="SCHEME" Binding="{Binding Scheme}"        Width="{app:Look New=88, Original=70}" MinWidth="{app:Look New=88, Original=20}"/>
                 <DataGridTextColumn Header="HOST"   Binding="{Binding Host}"          Width="{app:Look New=162, Original=200}" MinWidth="{app:Look New=100, Original=20}"/>
@@ -220,12 +229,21 @@
                         <DataTrigger Binding="{Binding Method}" Value="CONNECT">
                             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
                         </DataTrigger>
-                        <DataTrigger Binding="{Binding Status}" Value="">
+                        <!-- The original look colors the whole row of a request without a status, or with an error. -->
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="False"/>
+                                <Condition Binding="{Binding Status}" Value=""/>
+                            </MultiDataTrigger.Conditions>
                             <Setter Property="Foreground" Value="{DynamicResource CapturePendingForegroundBrush}"/>
-                        </DataTrigger>
-                        <DataTrigger Binding="{Binding Status, Converter={StaticResource proxyStatusIsErrorConverter}}" Value="True">
+                        </MultiDataTrigger>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsNewLook, Source={x:Static app:LookState.Current}}" Value="False"/>
+                                <Condition Binding="{Binding Status, Converter={StaticResource proxyStatusIsErrorConverter}}" Value="True"/>
+                            </MultiDataTrigger.Conditions>
                             <Setter Property="Foreground" Value="{DynamicResource ErrorTextBrush}"/>
-                        </DataTrigger>
+                        </MultiDataTrigger>
                     </Style.Triggers>
                 </Style>
             </DataGrid.RowStyle>

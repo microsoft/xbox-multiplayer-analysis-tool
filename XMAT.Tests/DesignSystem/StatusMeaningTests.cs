@@ -1,0 +1,256 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+// SPDX-License-Identifier: MIT
+
+using System.Text.RegularExpressions;
+using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Xml.Linq;
+using XMAT.NetworkTrace;
+using XMAT.SharedInterfaces;
+using XMAT.Tests.HeadlessParity;
+using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Models;
+using XMAT.WebServiceCapture.Proxy;
+using Path = System.Windows.Shapes.Path;
+
+namespace XMAT.Tests.DesignSystem
+{
+    // Every state XMAT shows has a meaning (XMAT/Logic/StatusMeanings.cs), and the meaning, not the state, sets how it
+    // shows: in a table only a problem's or a warning's status cell takes color, and the charts color each status class
+    // alike (docs/design-system.md).
+    [Collection(CaptureUiApplicationCollection.Name)]
+    public class StatusMeaningTests
+    {
+        private static readonly XNamespace Presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        private static readonly XNamespace Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        private static readonly Regex DynamicReference = new(@"^\{DynamicResource\s+(\w+)\s*\}$", RegexOptions.CultureInvariant);
+
+        private readonly CaptureUiApplicationFixture _application;
+
+        public StatusMeaningTests(CaptureUiApplicationFixture application) => _application = application;
+
+        // A state added without a meaning throws, citing STATUS-1, wherever a view asks for it.
+        [Fact]
+        public void EveryState_HasAMeaning()
+        {
+            var missing = new List<string>();
+            Check<TrafficStatusClass>(status => StatusMeanings.Of(status));
+            Check<TrafficStatusClass>(status => StatusMeanings.ChartFill(status));
+            Check<DeviceStatusEnum>(state => StatusMeanings.Of(state));
+            Check<ProxyConfigurationState>(state => StatusMeanings.Of(state));
+            Check<ProxyState>(state => StatusMeanings.Of(state));
+            Assert.True(missing.Count == 0, string.Join(Environment.NewLine, missing));
+
+            void Check<T>(Func<T, object> meaning) where T : struct, Enum
+            {
+                foreach (T value in Enum.GetValues<T>())
+                {
+                    try
+                    {
+                        meaning(value);
+                    }
+                    catch (ArgumentOutOfRangeException exception)
+                    {
+                        missing.Add(exception.Message);
+                    }
+                }
+            }
+        }
+
+        // In the new look, a problem's or a warning's status takes its color and icon and its row stays body text. The
+        // original look colors the whole row, as it always has, and shows the status as its other cells.
+        [Fact]
+        public void Table_ColorsOnlyTheStatusCellOfAProblemOrWarning()
+        {
+            _application.Run(window =>
+            {
+                bool wasNewLook = LookState.Current.IsNewLook;
+                try
+                {
+                    foreach (bool newLook in new[] { true, false })
+                    {
+                        LookState.Current.IsNewLook = newLook;
+                        ResourceDictionary look = ThemeManager.CreateLook(newLook);
+                        ThemeManager.LoadTheme(look, "Light", newLook, highContrast: false);
+                        window.Resources = look;
+                        Color Of(string key) => ((SolidColorBrush)window.FindResource(key)).Color;
+
+                        var controller = new WebServiceDeviceCaptureController("Test device", DeviceType.Unknown, true);
+                        string[] statuses = { "200", "429", "503", string.Empty };
+                        for (int index = 0; index < statuses.Length; index++)
+                        {
+                            controller.ProxyConnections.Add(CaptureTimelineTestData.Create(index + 1, status: statuses[index]));
+                        }
+
+                        var view = new CaptureConnectionView { AutoScroll = false, DataContext = new Context(controller) };
+                        var grid = (DataGrid)view.FindName("ConnectionList");
+                        grid.IsSynchronizedWithCurrentItem = false;
+                        window.Width = 1200;
+                        window.Height = 720;
+                        WpfTestHost.Show(window, view);
+
+                        foreach (ProxyConnectionModel model in controller.ProxyConnections)
+                        {
+                            var row = (DataGridRow)grid.ItemContainerGenerator.ContainerFromItem(model);
+                            Assert.NotNull(row);
+                            StatusText status = DesignSystemWindowTests.Descendants(row).OfType<StatusText>().Single();
+                            TextBlock code = DesignSystemWindowTests.Descendants(status).OfType<TextBlock>().Single();
+                            Color rowText = ((SolidColorBrush)row.Foreground).Color;
+                            Color codeText = ((SolidColorBrush)code.Foreground).Color;
+                            string shown = model.Status.Length == 0 ? "no-status" : model.Status;
+                            if (newLook)
+                            {
+                                (string brush, bool icon) expected = StatusMeanings.OfHttpStatus(model.Status) switch
+                                {
+                                    StatusMeaning.Problem => ("ErrorTextBrush", true),
+                                    StatusMeaning.Attention => ("WarningTextBrush", true),
+                                    _ => ("TextPrimaryBrush", false),
+                                };
+                                var icon = (Path)status.Template.FindName("Icon", status);
+                                Assert.True(rowText == Of("TextPrimaryBrush"),
+                                    $"STATUS-2: the row of a {shown} request is in color; only its status cell may be.");
+                                Assert.True(codeText == Of(expected.brush),
+                                    $"STATUS-2: a {shown} status isn't in {expected.brush}.");
+                                Assert.True((icon.Visibility == Visibility.Visible) == expected.icon,
+                                    $"STATUS-2: a {shown} status {(expected.icon ? "has no" : "has an")} icon.");
+                            }
+                            else
+                            {
+                                string expected = model.Status switch
+                                {
+                                    "" => "CapturePendingForegroundBrush",
+                                    "429" or "503" => "ErrorTextBrush",
+                                    _ => "TextPrimaryBrush",
+                                };
+                                Assert.Equal(Of(expected), rowText);
+                                Assert.Equal(rowText, codeText);
+                                Assert.Same(DataGridTextColumn.DefaultElementStyle, code.Style);
+                            }
+                        }
+
+                        window.Content = null;
+                    }
+                }
+                finally
+                {
+                    LookState.Current.IsNewLook = wasNewLook;
+                }
+            });
+        }
+
+        // The timeline takes its fills from StatusMeanings.ChartFill; the traffic overview and the column summaries name
+        // theirs in their styles, which match it, and the column summaries sort statuses into the same classes.
+        [Fact]
+        public void Charts_ColorEachStatusClassTheSameWay()
+        {
+            var found = new List<string>();
+            const string OverviewFile = "Styles/TrafficOverview.xaml";
+            XDocument overview = Load(OverviewFile);
+            var strip = new Dictionary<string, TrafficStatusClass>
+            {
+                ["SuccessBrush"] = TrafficStatusClass.Success,
+                ["RedirectBrush"] = TrafficStatusClass.Redirect,
+                ["ClientErrorBrush"] = TrafficStatusClass.ClientError,
+                ["ServerErrorBrush"] = TrafficStatusClass.ServerError,
+                ["NoStatusBrush"] = TrafficStatusClass.None,
+            };
+            foreach (XElement setter in overview.Descendants(Presentation + "Setter"))
+            {
+                if (strip.TryGetValue((string)setter.Attribute("Property") ?? string.Empty, out TrafficStatusClass status))
+                {
+                    Compare(OverviewFile, $"the strip's {status}", (string)setter.Attribute("Value"), status);
+                }
+            }
+
+            XElement swatch = overview.Descendants(Presentation + "Border")
+                .Single(border => (string)border.Attribute(Xaml + "Name") == "Swatch");
+            Compare(OverviewFile, "the legend's Success", (string)swatch.Attribute("Background"), TrafficStatusClass.Success);
+            foreach (XElement trigger in Triggers(overview, "{Binding StatusClass}"))
+            {
+                var status = Enum.Parse<TrafficStatusClass>((string)trigger.Attribute("Value"));
+                Compare(OverviewFile, $"the legend's {status}", Background(trigger, "Swatch"), status);
+            }
+
+            const string DataVizFile = "Styles/DataViz.xaml";
+            foreach (XElement trigger in Triggers(Load(DataVizFile), "{Binding Bar}"))
+            {
+                string bar = (string)trigger.Attribute("Value");
+                if (bar == nameof(ColumnSummaryBar.Neutral))
+                {
+                    continue;
+                }
+
+                TrafficStatusClass status = bar == nameof(ColumnSummaryBar.NoStatus)
+                    ? TrafficStatusClass.None
+                    : Enum.Parse<TrafficStatusClass>(bar);
+                Compare(DataVizFile, $"a column summary's {status} bar", Background(trigger, "Bar"), status);
+            }
+
+            foreach (string code in new[] { "200", "301", "404", "429", "503", "599", "100", string.Empty, "none" })
+            {
+                TrafficStatusClass status = TrafficSummary.ClassOf(code);
+                string expected = status == TrafficStatusClass.None ? nameof(ColumnSummaryBar.NoStatus) : status.ToString();
+                string bar = ColumnSummaryBars.ForHttpStatus(code).ToString();
+                if (bar != expected)
+                {
+                    found.Add($"STATUS-3: a column summary puts \"{code}\" in its {bar} bar rather than {expected}, so " +
+                        "it colors it unlike the other charts.");
+                }
+            }
+
+            Assert.True(found.Count == 0, string.Join(Environment.NewLine, found));
+
+            void Compare(string file, string what, string value, TrafficStatusClass status)
+            {
+                string expected = StatusMeanings.ChartFill(status);
+                Match key = DynamicReference.Match(value ?? string.Empty);
+                if (!key.Success || key.Groups[1].Value != expected)
+                {
+                    found.Add($"STATUS-3: {file} colors {what} with {value}, not {{DynamicResource {expected}}} as " +
+                        "StatusMeanings.ChartFill does.");
+                }
+            }
+        }
+
+        // A screen reader hears what a status means, since it doesn't see the color or the icon (COLOR-7).
+        [Fact]
+        public void StatusText_TellsScreenReadersWhatAProblemOrWarningMeans()
+        {
+            _application.Run(_ =>
+            {
+                Assert.Equal("503, problem", SpokenName("503"));
+                Assert.Equal("429, needs attention", SpokenName("429"));
+                Assert.Equal("200", SpokenName("200"));
+                Assert.Equal(string.Empty, SpokenName(string.Empty));
+            });
+
+            static string SpokenName(string status) =>
+                UIElementAutomationPeer.CreatePeerForElement(new StatusText { Status = status }).GetName();
+        }
+
+        private static XDocument Load(string file) => XDocument.Load(System.IO.Path.Combine(RepositoryPaths.Root, "XMAT", file));
+
+        private static IEnumerable<XElement> Triggers(XDocument document, string binding) =>
+            document.Descendants(Presentation + "DataTrigger").Where(trigger => (string)trigger.Attribute("Binding") == binding);
+
+        // The Background a trigger gives the element named TARGET.
+        private static string Background(XElement trigger, string target) =>
+            (string)trigger.Elements(Presentation + "Setter")
+                .Single(setter => (string)setter.Attribute("TargetName") == target && (string)setter.Attribute("Property") == "Background")
+                .Attribute("Value");
+
+        private sealed class Context(IDeviceCaptureController controller) : ICaptureDeviceContext
+        {
+            public DeviceType DeviceType { get; set; } = DeviceType.Unknown;
+            public CaptureType CaptureType => CaptureType.WebProxy;
+            public string DeviceName => "Test device";
+            public bool IsSelected { get; set; }
+            public bool IsReadOnly { get; set; }
+            public System.Drawing.Color DeviceColor { get; set; }
+            public IDeviceCaptureController CaptureController => controller;
+        }
+    }
+}

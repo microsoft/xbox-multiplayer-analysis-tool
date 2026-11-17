@@ -1,0 +1,108 @@
+<ds:Story x:Class="XMAT.DesignSystem.StatusStory"
+          xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:ds="clr-namespace:XMAT.DesignSystem"
+          xmlns:app="clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool"
+          Title="Status"
+          Summary="What a state means to the person looking at it sets how XMAT shows it, the same way in every view: a problem in red with a cross, something that needs attention in amber with a warning sign, a running capture with the recording dot, work under way in words, and everything routine without color. In charts, where color is the data, each status class has its own color."
+          Section="Foundations"
+          DefinedIn="XMAT/Logic/StatusMeanings.cs, XMAT/Styles/Status.xaml, XMAT/Controls/StatusText.cs">
+    <ds:Story.Resources>
+        <!-- A state and its meaning, shown as the meaning shows: an icon or the recording dot, and its name. -->
+        <DataTemplate x:Key="StateTemplate">
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="112"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding State}"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Path x:Name="Icon" Width="12" Height="12" Margin="0,0,6,0" VerticalAlignment="Center" Stretch="Uniform"
+                          Visibility="Collapsed"/>
+                    <Ellipse x:Name="Dot" Width="8" Height="8" Margin="2,0,8,0" VerticalAlignment="Center"
+                             Fill="{DynamicResource RecordingIndicatorBrush}" Visibility="Collapsed"/>
+                    <TextBlock x:Name="Meaning" Text="{Binding MeaningText}" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </StackPanel>
+            </Grid>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Meaning}" Value="Problem">
+                    <Setter TargetName="Icon" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Icon" Property="Data" Value="{DynamicResource ProblemIconGeometry}"/>
+                    <Setter TargetName="Icon" Property="Fill" Value="{DynamicResource ErrorTextBrush}"/>
+                    <Setter TargetName="Meaning" Property="Foreground" Value="{DynamicResource ErrorTextBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Meaning}" Value="Attention">
+                    <Setter TargetName="Icon" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Icon" Property="Data" Value="{DynamicResource AttentionIconGeometry}"/>
+                    <Setter TargetName="Icon" Property="Fill" Value="{DynamicResource WarningTextBrush}"/>
+                    <Setter TargetName="Meaning" Property="Foreground" Value="{DynamicResource WarningTextBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Meaning}" Value="Live">
+                    <Setter TargetName="Dot" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Meaning" Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </ds:Story.Resources>
+
+    <StackPanel>
+        <ds:StorySection Title="Meanings" StyleName="StatusMeaning, StatusText (default style)"
+                         Description="Five meanings, from the most urgent. Outside charts, color is kept for a problem, something that needs attention and the recording dot, and never used alone: an icon, the words or the code say the same in a contrast theme and to a screen reader.">
+            <ds:StoryExample Caption="Problem">
+                <app:StatusText Status="503"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Needs attention">
+                <app:StatusText Status="429"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Live">
+                <app:RecordingIndicator Style="{DynamicResource RecordingIndicatorStyle}" IsActive="True" Margin="0"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Working">
+                <TextBlock Text="Downloading trace…" Foreground="{DynamicResource TextSecondaryBrush}"/>
+            </ds:StoryExample>
+            <ds:StoryExample Caption="Routine">
+                <app:StatusText Status="200"/>
+            </ds:StoryExample>
+        </ds:StorySection>
+
+        <ds:StorySection x:Name="StatesSection" Title="States" StyleName="StatusMeanings.Of"
+                         Description="The meaning of every state XMAT shows, read from StatusMeanings. A state gets its meaning there before any view shows it, or the design system tests fail. Until the proxy records the requests that fail, a request without a status is routine: it can't be told from one still waiting."/>
+
+        <ds:StorySection x:Name="ChartsSection" Title="In charts" StyleName="StatusMeanings.ChartFill"
+                         Description="In the timeline, the traffic overview and the column summaries, color is the data, so every status class has a fill of its own, and the bar or a legend names it."/>
+
+        <ds:StoryRules Description="How every view shows a state. A Must rule names the tests that fail when XMAT breaks it, and their failures start with its ID.">
+            <ds:StoryRule RuleId="STATUS-1">
+                <ds:RuleExample Kind="Do" Caption="Work under way says what it's doing, without color.">
+                    <TextBlock Text="Downloading trace…" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="Routine work in amber sends people looking for a problem that isn't there.">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Width="12" Height="12" Margin="0,0,6,0" VerticalAlignment="Center" Stretch="Uniform"
+                              Data="{DynamicResource AttentionIconGeometry}" Fill="{DynamicResource WarningTextBrush}"/>
+                        <TextBlock Text="Downloading trace…" Foreground="{DynamicResource WarningTextBrush}"/>
+                    </StackPanel>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="STATUS-2">
+                <ds:RuleExample Kind="Do" Caption="Only the status cell takes color, with its icon, and the row stays body text.">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="63" Width="32"/>
+                        <app:StatusText Status="429" Width="64"/>
+                        <TextBlock Text="GET" Width="48"/>
+                        <TextBlock Text="images.example"/>
+                    </StackPanel>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="The whole row in color, which gets loud in a busy capture.">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="63" Width="32" Foreground="{DynamicResource WarningTextBrush}"/>
+                        <TextBlock Text="429" Width="64" Margin="2,0" Foreground="{DynamicResource WarningTextBrush}"/>
+                        <TextBlock Text="GET" Width="48" Foreground="{DynamicResource WarningTextBrush}"/>
+                        <TextBlock Text="images.example" Foreground="{DynamicResource WarningTextBrush}"/>
+                    </StackPanel>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="STATUS-3"/>
+        </ds:StoryRules>
+    </StackPanel>
+</ds:Story>

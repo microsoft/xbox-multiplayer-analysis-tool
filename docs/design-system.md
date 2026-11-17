@@ -143,6 +143,34 @@ use three old names, `MenuBackgroundBrush`, `AltRowBackgroundBrush` and `Capture
 `IssueBadge` uses the original issue colors in the original look. `ColorRoleTests` lists every remaining use; the list
 only shrinks. Remove them, and the original themes, with the original look.
 
+## Status
+
+What a state means to the person looking at it sets how XMAT shows it, the same way in every view.
+[`XMAT/Logic/StatusMeanings.cs`](../XMAT/Logic/StatusMeanings.cs) gives every state one of five meanings:
+
+| Meaning | How it shows | States |
+| --- | --- | --- |
+| Problem | Red, with a cross | 5xx, a device that can't be reached, a web proxy that couldn't stop cleanly |
+| Needs attention | Amber, with a warning sign | 4xx, a device whose proxy setting can't be read |
+| Live | The recording dot and Capturing | A running capture or trace |
+| Working | What's happening, in words, without color | A trace connecting, starting, stopping, downloading or disconnecting |
+| Routine | No color | 2xx, 3xx, a request without a status yet, an idle capture, a proxy set as expected |
+
+In charts, where color is the data, each status class has a fill of its own: 2xx green, 3xx blue, 4xx amber, 5xx red
+and no status gray. A request without a status is routine until the proxy records the requests that fail; until then
+it can't be told from one that is still waiting.
+
+A table shows an HTTP status with `StatusText` ([`XMAT/Controls/StatusText.cs`](../XMAT/Controls/StatusText.cs)), drawn
+by [`XMAT/Styles/Status.xaml`](../XMAT/Styles/Status.xaml) with the problem and warning icons. Screen readers hear the
+code and what a problem or a warning means. The original look keeps its whole-row colors.
+
+- **STATUS-1** Every state XMAT shows has one meaning, set in `StatusMeanings`. A state gets its meaning there before
+  a view shows it; one without a meaning throws.
+- **STATUS-2** In a table, only a problem's or a warning's status cell takes color, with its icon. The rest of the
+  row stays body text.
+- **STATUS-3** Charts color each status class the same way: the timeline, the traffic overview and the column
+  summaries.
+
 ## Components
 
 The new look's resources start in [`XMAT/Looks/NewLook.xaml`](../XMAT/Looks/NewLook.xaml), which `App.xaml` merges. It
@@ -159,6 +187,7 @@ holds the corner, spacing and type size values every view shares, and merges one
 | `ScrollBars.xaml` | Scroll bars, with a thumb at least 24px long |
 | `Menus.xaml` | Menu bars, dropdowns, context menus and the More menu |
 | `TrafficOverview.xaml`, `AnalysisCharts.xaml`, `DataViz.xaml` | The traffic overview, the call rate charts, the column summaries a table's column headers open, and the histograms in analysis reports |
+| `Status.xaml` | An HTTP status in a table, and the problem and warning icons |
 | `Spacing.xaml`, `Motion.xaml` | The 4px spacing grid, and animation durations and curves |
 
 Tables, tree views, tooltips, the status bar and text styles are still in `NewLook.xaml`; they move to
