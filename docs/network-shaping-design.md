@@ -55,6 +55,13 @@ non-UI proxy core so the GUI and CLI use the same behavior.
 - The foreground CLI uses explicit client routing, a bounded capture lifetime,
   and private atomic output. It does not configure system/console proxies,
   firewall, certificate trust, or GUI preferences.
+- New native captures store text through parameters and carry
+  `CaptureTextFormat.LiteralUserVersion`, so replay and sanitized export can
+  distinguish them from ambiguous legacy captures. Preserve both text provenance
+  and shaping history when importing or exporting.
+- Metadata parsing also runs during replay's pre-storage preparation. Use explicit
+  JSON reading and known data constructors there, not reflective deserialization;
+  keep the preparation-boundary tests intact.
 - Pass the private staging database's extended native path to SQLite. Staging
   can cross Windows' classic path limit even when the requested output does
   not. Keep a child-process `xmat.exe` regression: the long-path-aware test host

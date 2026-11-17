@@ -147,8 +147,28 @@ namespace XMAT.Tests.Operations.Export
         [InlineData("{\"version\":2,\"traces\":[]}")]
         [InlineData("{\"version\":1,\"traces\":null}")]
         [InlineData("{\"version\":1,\"traces\":[],\"device\":\"private-device\"}")]
+        [InlineData("{\"version\":1,\"traces\":[{\"bodyTimeoutSeconds\":120,\"changes\":[{\"profile\":{}}],\"device\":\"private-device\"}]}")]
+        [InlineData("{\"version\":1,\"traces\":[{\"bodyTimeoutSeconds\":120,\"changes\":[{\"profile\":{},\"device\":\"private-device\"}]}]}")]
+        [InlineData("{\"version\":1,\"traces\":[{\"bodyTimeoutSeconds\":120,\"changes\":[{\"profile\":{\"host\":\"private-host\"}}]}]}")]
+        [InlineData("{\"version\":1,\"traces\":[{\"bodyTimeoutSeconds\":120,\"changes\":[{\"profile\":{\"mode\":\"unknown\"}}]}]}")]
+        [InlineData("{\"version\":1,\"traces\":[{\"bodyTimeoutSeconds\":120,\"changes\":[{\"profile\":null}]}]}")]
+        [InlineData("{\"version\":1,\"traces\":[{\"bodyTimeoutSeconds\":120,\"changes\":[{\"timestamp\":\"invalid\",\"profile\":{}}]}]}")]
         public void UnrecognizedMetadataIsNotSilentlyExported(string json) =>
             Assert.Throws<InvalidDataException>(() => NetworkShapingMetadata.Parse(json));
+
+        [Theory]
+        [InlineData("{}", NetworkShapingMode.Off)]
+        [InlineData("{\"mode\":\"ShApE\"}", NetworkShapingMode.Shape)]
+        [InlineData("{\"mode\":3}", NetworkShapingMode.Disconnect)]
+        public void RecordedProfilesKeepTheirDefaultsAndSupportedModeSpellings(string profile, NetworkShapingMode mode)
+        {
+            NetworkShapingMetadata metadata = NetworkShapingMetadata.Parse(
+                "{\"version\":1,\"traces\":[{\"bodyTimeoutSeconds\":120,\"changes\":[{\"profile\":" + profile + "}]}]}");
+            NetworkShapingChange change = Assert.Single(Assert.Single(metadata.Traces).Changes);
+            Assert.Equal(new NetworkShapingProfile(mode), change.Profile);
+            Assert.Equal(0, change.Sequence);
+            Assert.Equal(default, change.Timestamp);
+        }
 
         [Fact]
         public void DuplicateArchiveMetadataIsRejected()

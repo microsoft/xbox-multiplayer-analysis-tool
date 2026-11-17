@@ -1249,7 +1249,8 @@ namespace XMAT.Models
             CaptureDevicesTable?.AddRow(
                 (Int64)context.DeviceType,
                 context.DeviceName,
-                (Int64)context.CaptureType);
+                (Int64)context.CaptureType,
+                string.Empty);
             _replayContext = context;
             _captureDeviceContexts.Add(context);
             InvalidateCommands();

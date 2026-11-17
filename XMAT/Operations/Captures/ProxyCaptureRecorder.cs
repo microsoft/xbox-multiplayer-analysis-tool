@@ -40,6 +40,7 @@ namespace XMAT.Operations.Captures
             try
             {
                 _connection.Open();
+                Execute($"PRAGMA user_version={CaptureTextFormat.LiteralUserVersion}");
                 Execute(
                     "CREATE TABLE CaptureDevices (id INTEGER PRIMARY KEY, DeviceType INTEGER, DeviceName TEXT, " +
                     "CaptureType INTEGER, NetworkShaping TEXT)");

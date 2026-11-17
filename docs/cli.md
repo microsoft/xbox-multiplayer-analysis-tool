@@ -73,6 +73,7 @@ Windows permissions. Readiness is printed to stderr; stdout remains one final `x
 `capture` object containing record count, file size, SHA-256, protection status and optional `networkShaping` history.
 **Ctrl+C cancels and publishes nothing**, matching analyze/export. Interrupted or failed runs remove their private
 staging files; cleanup failures return exit 7. Captures contain raw traffic and should be treated as sensitive.
+New captures use the literal-text format, so replay and sanitized export do not require legacy-text consent.
 The recorder stops with a failure rather than publishing an incomplete result if it exceeds 100000 sessions,
 64 MiB in one projected update, or 512 MiB of cumulative projected data. These are capture limits, not analysis limits.
 

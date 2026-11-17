@@ -74,14 +74,80 @@ namespace XMAT.Operations.Captures
             }
             try
             {
-                NetworkShapingMetadata metadata =
-                    JsonSerializer.Deserialize<NetworkShapingMetadata>(json, NetworkShapingPlan.JsonOptions);
+                // Replay reads metadata before configuring storage; construct only these known data types.
+                using JsonDocument document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 16 });
+                JsonElement root = document.RootElement;
+                CheckProperties(root, "version", "traces");
+                JsonElement traceElements = root.GetProperty("traces");
+                if (traceElements.GetArrayLength() > MaximumTraces)
+                {
+                    throw new JsonException();
+                }
+                var traces = new List<NetworkShapingTrace>();
+                int totalChanges = 0;
+                foreach (JsonElement trace in traceElements.EnumerateArray())
+                {
+                    CheckProperties(trace, "bodyTimeoutSeconds", "changes");
+                    JsonElement changes = trace.GetProperty("changes");
+                    if ((totalChanges += changes.GetArrayLength()) > MaximumChanges)
+                    {
+                        throw new JsonException();
+                    }
+                    traces.Add(new NetworkShapingTrace(
+                        trace.GetProperty("bodyTimeoutSeconds").GetInt32(),
+                        changes.EnumerateArray().Select(ReadChange).ToArray()));
+                }
+                var metadata = new NetworkShapingMetadata(root.GetProperty("version").GetInt32(), traces);
                 Validate(metadata);
                 return metadata;
             }
-            catch (Exception ex) when (ex is JsonException or ArgumentException)
+            catch (Exception ex) when (
+                ex is JsonException or ArgumentException or InvalidOperationException or FormatException or KeyNotFoundException)
             {
                 throw new InvalidDataException("Shaping metadata is invalid.", ex);
+            }
+        }
+
+        private static NetworkShapingChange ReadChange(JsonElement change)
+        {
+            CheckProperties(change, "sequence", "timestamp", "profile");
+            JsonElement profile = change.GetProperty("profile");
+            CheckProperties(profile, "mode", "downKbps", "upKbps", "latencyMs", "jitterMs");
+            NetworkShapingMode mode = NetworkShapingMode.Off;
+            if (profile.TryGetProperty("mode", out JsonElement value))
+            {
+                if (value.ValueKind == JsonValueKind.Number)
+                {
+                    mode = (NetworkShapingMode)value.GetInt32();
+                }
+                else if (value.ValueKind != JsonValueKind.String ||
+                    !Enum.TryParse(value.GetString(), ignoreCase: true, out mode))
+                {
+                    throw new JsonException();
+                }
+            }
+            return new NetworkShapingChange(
+                change.TryGetProperty("sequence", out JsonElement sequence) ? sequence.GetInt64() : 0,
+                change.TryGetProperty("timestamp", out JsonElement timestamp) ? timestamp.GetDateTimeOffset() : default,
+                new NetworkShapingProfile(
+                    mode,
+                    ReadNumber(profile, "downKbps"),
+                    ReadNumber(profile, "upKbps"),
+                    ReadNumber(profile, "latencyMs"),
+                    ReadNumber(profile, "jitterMs")));
+        }
+
+        private static int ReadNumber(JsonElement parent, string name) =>
+            parent.TryGetProperty(name, out JsonElement value) ? value.GetInt32() : 0;
+
+        private static void CheckProperties(JsonElement element, params string[] names)
+        {
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                if (!names.Contains(property.Name, StringComparer.Ordinal))
+                {
+                    throw new JsonException();
+                }
             }
         }
 

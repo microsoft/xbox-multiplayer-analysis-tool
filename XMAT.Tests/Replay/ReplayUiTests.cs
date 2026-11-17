@@ -1150,7 +1150,7 @@ namespace XMAT.Tests.Replay
                 hostListPolicy: model.HostListPolicy,
                 proxyFactory: () => new WebServiceProxy());
             model.CaptureDeviceContexts.Add(console);
-            model.CaptureDevicesTable.AddRow((long)DeviceType.XboxConsole, name, (long)CaptureType.WebProxy);
+            model.CaptureDevicesTable.AddRow((long)DeviceType.XboxConsole, name, (long)CaptureType.WebProxy, string.Empty);
             UseTable(console, table);
             return console;
         }
@@ -1201,7 +1201,8 @@ namespace XMAT.Tests.Replay
                 "CaptureDevices",
                 new Field<long>("DeviceType"),
                 new Field<string>("DeviceName"),
-                new Field<long>("CaptureType"));
+                new Field<long>("CaptureType"),
+                new Field<string>(XMAT.Operations.Captures.NetworkShapingMetadata.DeviceField));
             return database;
         }
 

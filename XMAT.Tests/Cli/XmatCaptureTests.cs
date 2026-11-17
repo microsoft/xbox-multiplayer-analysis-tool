@@ -253,6 +253,36 @@ namespace XMAT.Tests.Cli
         }
 
         [Fact]
+        public async Task CapturedRequestsCanBeReplayedAndSanitizedWithoutLegacyConsent()
+        {
+            using var directory = new CliTestDirectory();
+            await using var origin = await LoopbackOrigin.StartAsync();
+            int port = AvailablePort();
+            using XmatChild child = XmatProcess.Start(
+                XmatProcess.CliDirectory, directory.Root, "capture",
+                "--port", port.ToString(), "--duration-seconds", "2", "--out", "capture.xmatcap");
+            await WaitForListenerAsync(child, port);
+            using var client = Client(port);
+            using var request = new HttpRequestMessage(HttpMethod.Get, origin.Url("/quoted"));
+            const string quoted = "\"double\" 'single'";
+            request.Headers.Add("X-Quoted", quoted);
+            using HttpResponseMessage response = await client.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+            CliAssert.ExitCode(0, await child.CompleteAsync());
+
+            XmatRun replay = await XmatProcess.RunAsync(
+                directory.Root, "replay", "capture.xmatcap", "--request", "1", "--out", "replayed");
+            CliAssert.ExitCode(0, replay);
+            Assert.Equal(2, origin.Requests.Count);
+            Assert.All(origin.Requests, observed => Assert.Equal(quoted, observed.Headers["X-Quoted"]));
+
+            XmatRun export = await XmatProcess.RunAsync(
+                directory.Root, "export", "capture.xmatcap", "--format", "sanitized-saz", "--out", "sanitized.saz");
+            CliAssert.ExitCode(0, export);
+            Assert.True(File.Exists(Path.Join(directory.Root, "sanitized.saz")));
+        }
+
+        [Fact]
         public async Task EmptyBlockedCaptureStillKeepsHistoryForHeadlessAnalysis()
         {
             using var directory = new CliTestDirectory();
