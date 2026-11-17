@@ -63,6 +63,15 @@ namespace XMAT.ApplicationServices
             { return _inputs.Values.Select(entry => entry.Descriptor).ToArray(); }
         }
 
+        public string GetOriginalPath(Guid inputId)
+        {
+            lock (_gate)
+            {
+                var entry = _inputs.GetValueOrDefault(inputId) ?? throw new CaptureFileException(CaptureFileFailure.Unavailable);
+                return Path.Combine(entry.Directory, entry.Descriptor.FileName);
+            }
+        }
+
         public Task ValidateAsync(Guid inputId, long maximumBytes, CancellationToken cancellationToken = default) =>
             WithFileAsync(inputId, maximumBytes, (_, _, _) => Task.FromResult(true), cancellationToken);
 

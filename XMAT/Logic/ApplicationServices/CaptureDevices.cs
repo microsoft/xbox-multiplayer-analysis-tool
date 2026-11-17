@@ -36,7 +36,8 @@ namespace XMAT.ApplicationServices
             _model = model ?? throw new ArgumentNullException(nameof(model));
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
             _create = create ?? ((type, name, capture) => new CaptureDeviceContextModel(
-                type, name, capture, false, null, hostListPolicy: model.HostListPolicy));
+                type, name, capture, false, null, hostListPolicy: model.HostListPolicy,
+                deferProxyCreation: model.DeferProxyCreation));
             _gdkInstalled = gdkInstalled ?? (() => GDKXHelper.IsGDKXInstalled(false));
             _defaultConsole = defaultConsole ?? (() => Task.Run(
                 XboxClient.XboxClientConnection.GetDefaultConsoleAddress));
@@ -171,7 +172,16 @@ namespace XMAT.ApplicationServices
                     return Change(target, false, false, failure: CaptureDeviceFailure.Cancelled);
                 DemandRegistered(target);
                 cancellationToken.ThrowIfCancellationRequested();
+                var revision = _model.CaptureCatalog.DescribeTarget(target).Revision;
+                await using var backup = target.CaptureController is WebServiceDeviceCaptureController { DeletesStoredRowsOnClose: true }
+                    ? await AgentMutationProtection.BeforeCaptureAsync(_model, WebServiceCaptureMethod.TableName,
+                        target.DeviceName, "remove-capture", AgentMutationProtection.Revision(revision), cancellationToken)
+                    : new AgentMutationProtection.Protection(null, null);
+                DemandRevision(target, revision);
+                cancellationToken.ThrowIfCancellationRequested();
+                backup.Demand();
                 await _model.RemoveDeviceContextAsync(target);
+                backup.Committed();
                 var removed = _model.CaptureCatalog.RecordRemoval(target);
                 if (target.IsReadOnly)
                     return new(removed.Id, removed.Revision, removed.CaptureEpoch, true, true, Removed: true);
@@ -264,7 +274,7 @@ namespace XMAT.ApplicationServices
                 proxy?.PendingPort, proxy?.ProxyHost, proxy?.HasPortReservation == true,
                 proxy?.HasPendingPortReservation == true, state,
                 endpoint == null ? null : new(endpoint.Host, endpoint.Port),
-                ownedEndpoint, removalFailure, PendingPortAvailability(target));
+                ownedEndpoint, removalFailure, PendingPortAvailability(target), proxy?.DeletesStoredRowsOnClose == true);
         }
 
         private CaptureDeviceFailure RemovalAvailability(
@@ -370,6 +380,6 @@ namespace XMAT.ApplicationServices
             }
         }
 
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(_dispatcher, action);
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => ApplicationDispatch.RunOnUiAsync(_dispatcher, action);
     }
 }

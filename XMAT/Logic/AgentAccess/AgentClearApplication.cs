@@ -27,8 +27,10 @@ namespace XMAT.AgentAccess
             var capture = await catalog.WithTargetAsync(captureId, expectedRevision, (_, descriptor) => Task.FromResult(descriptor));
             if (capture.IsReadOnly || capture.IsRunning || capture.RecoveryRequired)
                 throw new AgentAccessException(AgentAccessError.OperationUnavailable);
+            var hasData = runtime.Policy == null || await operations.HasDataAsync(captureId, expectedRevision, token);
             var descriptor = new AgentOperationDescriptor("capture.clear", [permission],
-                AgentOperationEffects.StateChange | AgentOperationEffects.DataDeletion | AgentOperationEffects.HumanOwnedResource,
+                AgentOperationEffects.StateChange | AgentOperationEffects.HumanOwnedResource |
+                    (hasData ? AgentOperationEffects.DataDeletion : AgentOperationEffects.None),
                 hash, Localization.GetLocalizedString("ETL_CLEAR_APPROVAL", capture.DeviceName, capture.CaptureType, expectedRevision));
             token.ThrowIfCancellationRequested();
             return runtime.Submit(session, descriptor, idempotencyKey, async context =>
@@ -49,7 +51,9 @@ namespace XMAT.AgentAccess
                 try
                 {
                     return await catalog.WithTargetAsync(captureId, expectedRevision,
-                        (_, current) => Task.FromResult(!current.IsRunning && !current.IsReadOnly && !current.RecoveryRequired));
+                        async (_, current) => !current.IsRunning && !current.IsReadOnly && !current.RecoveryRequired &&
+                            (runtime.Policy == null ||
+                                await operations.HasDataAsync(captureId, expectedRevision, cancellation) == hasData));
                 }
                 catch (AgentAccessException) { return false; }
             });

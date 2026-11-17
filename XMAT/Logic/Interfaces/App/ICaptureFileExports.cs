@@ -12,19 +12,27 @@ namespace XMAT.SharedInterfaces
     public enum CaptureFileFailure
     {
         InvalidPath, FolderChanged, DestinationExists, ProtectedSource, Unavailable, InputChanged, InvalidCapture,
-        SchemaLimit, LiveDatabase, UnsupportedLocation
+        SchemaLimit, LiveDatabase, UnsupportedLocation, PublicationUncertain
     }
 
-    public sealed class CaptureFileException(CaptureFileFailure failure)
+    public sealed class CaptureFileException(
+        CaptureFileFailure failure, string recoveryTemporaryPath = null, string recoveryDestinationPath = null,
+        int? nativeErrorCode = null)
         : InvalidOperationException(failure.ToString())
     {
         public CaptureFileFailure Failure { get; } = failure;
+        public string RecoveryTemporaryPath { get; } = recoveryTemporaryPath;
+        public string RecoveryDestinationPath { get; } = recoveryDestinationPath;
+        public int? NativeErrorCode { get; } = nativeErrorCode;
     }
 
     public sealed record ExportFolderDescriptor(Guid Id, string Path);
-    public sealed record QueryFileDestination(Guid FolderId, string FileName, QueryExportFormat Format);
+    public sealed record FileOverwriteState(string Identity, long Length, string Sha256);
+    public sealed record CaptureLocalDestination(Guid FolderId, string FileName, FileOverwriteState Overwrite);
+    public sealed record QueryFileDestination(
+        Guid FolderId, string FileName, QueryExportFormat Format, FileOverwriteState Overwrite = null);
     public sealed record QueryFileExportReceipt(Guid FolderId, string FileName, long Length, long RowCount, bool Published);
-    public sealed record ScriptFileDestination(Guid FolderId, string FileName);
+    public sealed record ScriptFileDestination(Guid FolderId, string FileName, FileOverwriteState Overwrite = null);
     public sealed record ScriptFileExportReceipt(
         Guid CaptureId, Guid ScriptId, long Revision, string SourceHash,
         Guid FolderId, string FileName, long Length, bool Published);
@@ -32,6 +40,16 @@ namespace XMAT.SharedInterfaces
     public interface ICaptureFileExports
     {
         Task<ExportFolderDescriptor> RegisterFolderAsync(string path, CancellationToken cancellationToken = default);
+        Task<CaptureLocalDestination> PrepareDestinationAsync(
+            string path, bool overwrite, CancellationToken cancellationToken = default) =>
+            Task.FromException<CaptureLocalDestination>(new CaptureFileException(CaptureFileFailure.Unavailable));
+        Task<CaptureReportDestination> PrepareReportDestinationAsync(
+            string path, IReadOnlyList<CaptureReportArtifact> manifest, bool overwrite, CancellationToken cancellationToken = default) =>
+            Task.FromException<CaptureReportDestination>(new CaptureFileException(CaptureFileFailure.Unavailable));
+        Task SaveSqlDocumentAsync(
+            string text, CaptureLocalDestination destination, long maximumBytes,
+            Func<CancellationToken, Task> beforePublish, CancellationToken cancellationToken = default) =>
+            Task.FromException(new CaptureFileException(CaptureFileFailure.Unavailable));
         IReadOnlyList<ExportFolderDescriptor> GetFolders();
         Task ValidateAsync(QueryFileDestination destination, CancellationToken cancellationToken = default);
         Task ValidateCaptureAsync(CaptureFileDestination destination, CancellationToken cancellationToken = default);

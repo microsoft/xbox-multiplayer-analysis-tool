@@ -22,7 +22,7 @@ namespace XMAT.Tests.HeadlessParity
                 "desktop-adapter",
                 "the WPF App adapter, including its dispatcher and dialog helpers",
                 "keep desktop effects in the GUI adapter and use OperationContext.Progress and structured results",
-                (type, member) => IsType(type, "XMAT.App")),
+                (type, member) => IsType(type, "XMAT.App") || IsType(type, "XMAT.ApplicationDispatch")),
             new Rule(
                 "app-model",
                 "the GUI's app model (CaptureAppModel, including its AppModel singleton)",

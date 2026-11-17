@@ -23,7 +23,8 @@ namespace XMAT.AgentAccess
         CaptureCatalog catalog,
         ICaptureOperations operations,
         Func<bool> accepting,
-        ICaptureRecoveryOperations recoveryOperations = null)
+        ICaptureRecoveryOperations recoveryOperations = null,
+        ICaptureDataOperations dataOperations = null)
     {
         private readonly byte[] _cursorKey = RandomNumberGenerator.GetBytes(32);
         private static readonly AgentPermission SummaryRead =
@@ -57,7 +58,7 @@ namespace XMAT.AgentAccess
                 throw new AgentAccessException(AgentAccessError.OperationNotFound);
             }
 
-            var limits = runtime.GetSession(session).Limits;
+            var limits = runtime.GetResponseLimits(session);
             var rows = new List<CaptureDescriptor>();
             string next = null;
             JsonElement page = default;
@@ -148,6 +149,8 @@ namespace XMAT.AgentAccess
                 runtime.ForgetSupersededCapture(captureId, snapshot.CaptureEpoch);
                 var effects = AgentOperationEffects.None;
                 var scriptDetails = string.Empty;
+                var confirmationRequired = false;
+                AgentScriptVersion[] scriptVersions = [];
                 if (snapshot.IsRunning != running)
                 {
                     if (running)
@@ -157,7 +160,12 @@ namespace XMAT.AgentAccess
                     }
                     effects = AgentOperationEffects.StateChange;
                     if (target.CaptureType == CaptureType.NetworkTrace && running)
-                        effects |= AgentOperationEffects.DataDeletion;
+                    {
+                        confirmationRequired = dataOperations == null ? snapshot.PacketCount != 0 :
+                            await dataOperations.HasDataAsync(captureId, expectedRevision, cancellationToken);
+                        if (runtime.Policy == null || confirmationRequired)
+                            effects |= AgentOperationEffects.DataDeletion;
+                    }
                     if (target.CaptureType == CaptureType.WebProxy &&
                         (target.DeviceType == DeviceType.LocalPC || !running))
                     {
@@ -169,6 +177,8 @@ namespace XMAT.AgentAccess
                     {
                         effects |= AgentOperationEffects.HumanOwnedResource;
                     }
+                    if (!running)
+                        confirmationRequired |= AnotherClientOwnsCapture(session, captureId, snapshot.CaptureEpoch);
                     if (running && target.CaptureController is WebServiceDeviceCaptureController proxy &&
                         proxy.Scripts.HasActiveScripts)
                     {
@@ -176,6 +186,8 @@ namespace XMAT.AgentAccess
                         effects |= AgentOperationEffects.TrustedCodeExecution;
                         scriptDetails = string.Join("\n\n", proxy.Scripts.ActiveScripts.Select(script =>
                             $"{script.DisplayName}\n{script.Script}"));
+                        scriptVersions = proxy.Scripts.ActiveScripts.Select(script => script.CaptureState())
+                            .Select(state => new AgentScriptVersion(state.Id, state.SourceHash)).ToArray();
                     }
                 }
                 var details = target.CaptureType == CaptureType.NetworkTrace
@@ -186,7 +198,7 @@ namespace XMAT.AgentAccess
                         running ? Localization.GetLocalizedString("AGENT_START") : Localization.GetLocalizedString("AGENT_STOP"),
                         snapshot.ProxyPort?.ToString(CultureInfo.InvariantCulture) ?? "-",
                         expectedRevision, effects, scriptDetails);
-                return new Plan(requirements.ToArray(), effects, details);
+                return new Plan(requirements.ToArray(), effects, details, confirmationRequired, scriptVersions);
             });
             }
             catch (AgentAccessException exception) when (exception.Error is
@@ -203,13 +215,17 @@ namespace XMAT.AgentAccess
             DemandAccepting();
             cancellationToken.ThrowIfCancellationRequested();
             var descriptor = new AgentOperationDescriptor(
-                action, plan.Requirements, plan.Effects, hash, plan.Details);
+                action, plan.Requirements, plan.Effects, hash, plan.Details,
+                confirmationRequired: plan.ConfirmationRequired, scriptVersions: plan.ScriptVersions);
 
             return runtime.Submit(session, descriptor, idempotencyKey, context =>
                 catalog.WithTargetAsync(captureId, expectedRevision, async (target, snapshot) =>
                 {
                     DemandAccepting();
                     runtime.Demand(session, plan.Requirements);
+                    if (!running && !plan.ConfirmationRequired &&
+                        AnotherClientOwnsCapture(session, captureId, snapshot.CaptureEpoch))
+                        throw new AgentAccessException(AgentAccessError.SourceChanged);
                     if (running && !snapshot.IsRunning)
                     {
                         runtime.EnsureOwnershipAvailable(session,
@@ -221,6 +237,7 @@ namespace XMAT.AgentAccess
                         result = await operations.SetRunningAsync(
                             target, running, cancellationToken: context.CancellationToken);
                     }
+                    catch (AgentAccessException) { throw; }
                     catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
                     {
                         var failure = CaptureTransitionFailure.Get(exception);
@@ -230,7 +247,8 @@ namespace XMAT.AgentAccess
                         }
                         throw new AgentAccessException(failure != null && (!running || failure.IsRunning)
                             ? AgentAccessError.RecoveryRequired : exception is UnauthorizedAccessException
-                                ? AgentAccessError.ElevationRequired : AgentAccessError.ExecutionFailed);
+                                ? AgentAccessError.ElevationRequired : exception is CapturePrerequisiteException prerequisite
+                                    ? AvailabilityError(prerequisite.Failure) : AgentAccessError.ExecutionFailed);
                     }
                     if (!result.Succeeded)
                     {
@@ -251,7 +269,12 @@ namespace XMAT.AgentAccess
                     cancellationToken.ThrowIfCancellationRequested();
                     try
                     {
-                        return await catalog.WithTargetAsync(captureId, expectedRevision, (_, _) => Task.FromResult(true));
+                        return await catalog.WithTargetAsync(captureId, expectedRevision, async (target, snapshot) =>
+                            (running || plan.ConfirmationRequired || !AnotherClientOwnsCapture(session, captureId, snapshot.CaptureEpoch)) &&
+                            (!running || target.CaptureType != CaptureType.NetworkTrace || runtime.Policy == null ||
+                                dataOperations == null || snapshot.IsRunning ||
+                                await dataOperations.HasDataAsync(captureId, expectedRevision, cancellationToken) ==
+                                    plan.Effects.HasFlag(AgentOperationEffects.DataDeletion)));
                     }
                     catch (AgentAccessException exception) when (exception.Error is
                         AgentAccessError.SourceChanged or AgentAccessError.OperationNotFound)
@@ -260,6 +283,11 @@ namespace XMAT.AgentAccess
                     }
                 });
         }
+
+        private bool AnotherClientOwnsCapture(AgentSession session, Guid captureId, long epoch) =>
+            runtime.GetOwnedResources().Any(resource =>
+                resource.Resource == new AgentResourceKey(AgentResourceKind.Capture, captureId) &&
+                resource.SessionId != session.Id && resource.Revision == epoch.ToString(CultureInfo.InvariantCulture));
 
         internal async Task<JsonElement> AvailabilityAsync(
             AgentSession session, Guid captureId, bool running, CancellationToken cancellationToken)
@@ -286,8 +314,10 @@ namespace XMAT.AgentAccess
                     snapshot.TraceMayBeRunning,
                     snapshot.PacketCount,
                     snapshot.LocalTraceSession,
-                    canControl = runtime.GetSession(session).Permissions.Contains(
-                        new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(captureId)))
+                    canControl = runtime.Policy?.Settings.Allows(
+                        new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(captureId))) ??
+                        runtime.GetSession(session).Permissions.Contains(
+                            new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(captureId)))
                 });
             });
             runtime.Demand(session, SummaryRead);
@@ -345,6 +375,7 @@ namespace XMAT.AgentAccess
         private static AgentAccessError AvailabilityError(CaptureOperationFailure failure) => failure switch
         {
             CaptureOperationFailure.ElevationRequired => AgentAccessError.ElevationRequired,
+            CaptureOperationFailure.ProxyTrustRequired => AgentAccessError.ProxyTrustRequired,
             CaptureOperationFailure.GdkRequired => AgentAccessError.GdkRequired,
             CaptureOperationFailure.RecoveryRequired => AgentAccessError.RecoveryRequired,
             CaptureOperationFailure.UnsupportedCapture => AgentAccessError.UnsupportedOperation,
@@ -424,6 +455,8 @@ namespace XMAT.AgentAccess
         }
 
         private sealed record Cursor(Guid Session, string Fingerprint, int Offset);
-        private sealed record Plan(AgentPermission[] Requirements, AgentOperationEffects Effects, string Details);
+        private sealed record Plan(
+            AgentPermission[] Requirements, AgentOperationEffects Effects, string Details,
+            bool ConfirmationRequired, AgentScriptVersion[] ScriptVersions);
     }
 }

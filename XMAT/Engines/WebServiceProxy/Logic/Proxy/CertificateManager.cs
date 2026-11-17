@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -15,8 +16,9 @@ namespace XMAT.WebServiceCapture.Proxy
 {
     internal class CertificateManager : IDisposable, ICertificateManager
     {
-        private readonly string AuthorityName = "Xbox Multiplayer Analysis Tool Root Cert Authority";
-        private readonly string IssuerName = "Microsoft";
+        private const string AuthorityName = "Xbox Multiplayer Analysis Tool Root Cert Authority";
+        private const string IssuerName = "Microsoft";
+        private const string RootSubject = "CN=" + AuthorityName + ", O=" + IssuerName;
 
         private readonly string CertFileName = "XMATRoot.cer";
         private readonly string CertFileNameFiddler = "FiddlerRoot.cer";
@@ -56,9 +58,11 @@ namespace XMAT.WebServiceCapture.Proxy
             _myStore?.Close();
         }
 
-        public bool Initialize()
+        public bool Initialize() => Initialize(allowCreate: true);
+
+        internal bool Initialize(bool allowCreate)
         {
-            bool success = CreateRootCertificate();
+            bool success = CreateRootCertificate(allowCreate);
 
             if (success)
             {
@@ -72,15 +76,9 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             _certCache.Clear();
 
-            X509Certificate2Collection certs = _rootStore.Certificates.Find(
-                X509FindType.FindBySubjectDistinguishedName,
-                $"CN={AuthorityName}, O={IssuerName}", false);
-            if (certs.Count > 0)
-                _rootCert = certs[0];
-
             if (_myStore != null)
             {
-                certs = _myStore.Certificates.Find(X509FindType.FindByIssuerName, IssuerName, false);
+                var certs = _myStore.Certificates.Find(X509FindType.FindByIssuerName, IssuerName, false);
                 foreach (var cert in certs)
                     _certCache.TryAdd(cert.GetNameInfo(X509NameType.SimpleName, false), cert);
             }
@@ -98,35 +96,53 @@ namespace XMAT.WebServiceCapture.Proxy
             });
         }
 
-        public bool CreateRootCertificate()
+        internal static bool HasUsableRoot()
+        {
+            try
+            {
+                using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
+                store.Open(OpenFlags.ReadOnly);
+                var certificates = store.Certificates.Find(X509FindType.FindBySubjectDistinguishedName, RootSubject, false);
+                try
+                {
+                    return certificates.Cast<X509Certificate2>().Any(certificate =>
+                        certificate.HasPrivateKey &&
+                        certificate.NotAfter > DateTimeOffset.UtcNow.AddYears(HostCertValidityYears));
+                }
+                finally
+                {
+                    foreach (var certificate in certificates)
+                        certificate.Dispose();
+                }
+            }
+            catch (Exception exception) when (exception is CryptographicException or UnauthorizedAccessException)
+            { return false; }
+        }
+
+        public bool CreateRootCertificate() => CreateRootCertificate(allowCreate: true);
+
+        internal bool CreateRootCertificate(bool allowCreate)
         {
             lock (_rootLock)
             {
-                if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
+                if (_rootCert != null && _rootCert.HasPrivateKey &&
+                    _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
                     return true;
 
                 var certs = _rootStore.Certificates.Find(
                     X509FindType.FindBySubjectDistinguishedName,
-                    $"CN={AuthorityName}, O={IssuerName}", false);
-                if (certs.Count > 0)
+                    RootSubject, false);
+                var usable = certs.Cast<X509Certificate2>().Where(certificate =>
+                    certificate.HasPrivateKey &&
+                    certificate.NotAfter > DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
+                    .OrderByDescending(certificate => certificate.NotAfter).FirstOrDefault();
+                if (usable != null)
                 {
-                    X509Certificate2 mostValidCert = certs[0];
-                    for (int i = 1; i < certs.Count; i++)
-                    {
-                        if (certs[i].NotAfter > mostValidCert.NotAfter)
-                            mostValidCert = certs[i];
-                    }
-
-                    // If the existing root cert doesn't have enough validity remaining
-                    // to issue host certs, remove it and create a new one.
-                    if (mostValidCert.NotAfter > DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
-                    {
-                        _rootCert = mostValidCert;
-                        return true;
-                    }
-
-                    _rootStore.RemoveRange(certs);
+                    _rootCert = usable;
+                    return true;
                 }
+                if (!allowCreate)
+                    return false;
 
                 try
                 {
@@ -135,6 +151,7 @@ namespace XMAT.WebServiceCapture.Proxy
                         Localization.GetLocalizedString("PROXY_ROOT_CERT_WARNING_TITLE"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
 
+                    _rootStore.RemoveRange(certs);
                     RSA rsa = RSA.Create(4096);
 
                     CertificateRequest req = new CertificateRequest(

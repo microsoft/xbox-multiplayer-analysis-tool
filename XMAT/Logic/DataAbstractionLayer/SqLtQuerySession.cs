@@ -41,7 +41,8 @@ namespace XMAT.DataAbstractionLayer
 
         internal static Task<IQuerySession> CreateAsync(
             SqliteConnection source,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            IQuerySnapshotProjection projection = null)
         {
             return Task.Run<IQuerySession>(() =>
             {
@@ -67,6 +68,13 @@ namespace XMAT.DataAbstractionLayer
                         } while (result != raw.SQLITE_DONE);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
+                    if (projection != null)
+                    {
+                        var filteredPath = Path.Combine(workspace, "projected.sqlite");
+                        SqLtQueryProjection.Create(path, filteredPath, projection, cancellationToken);
+                        File.Delete(path);
+                        path = filteredPath;
+                    }
                     var connection = SqLtQuerySupport.Open(path, true);
                     try
                     { return new SqLtQuerySession(workspace, connection); }

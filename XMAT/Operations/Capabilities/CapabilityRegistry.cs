@@ -97,24 +97,29 @@ namespace XMAT.Operations.Capabilities
                     Click(SqlResultsXaml, "ExportAll_Click"),
                     Click(SqlResultsXaml, "ExportSelected_Click"),
                 }),
-            Capability.Planned(
-                "agent-access.manage", "Manage connected desktop agent sessions and authorization", "S9", Owner,
+            Capability.Supported(
+                "agent-access.manage", "Configure global local-agent policy and client setup", "S9",
+                cli: "agent setup [--enable true|false] [--data redacted|complete] [--actions inspect|full] [--backups true|false] [--accept]",
+                operation: "XMAT.AgentAccess.AgentAccessPolicyService",
                 gui: new[]
                 {
                     Command(AppCommandsPrefix + "ManageAgentAccess"),
                     Window("XMAT.AgentAccessWindow"),
-                    Click(AgentAccessXaml, "ApplyGrants_Click"),
-                    Click(AgentAccessXaml, "Approve_Click"),
-                    Click(AgentAccessXaml, "CancelOperation_Click"),
-                    Click(AgentAccessXaml, "ChooseExportFolder_Click"),
-                    Click(AgentAccessXaml, "ChooseInputFile_Click"),
+                   Click(AgentAccessXaml, "PolicyChanged_Click"),
+                   Click(AgentAccessXaml, "CopyCommand_Click"),
                     Click(AgentAccessXaml, "CopyConfiguration_Click"),
-                    Click(AgentAccessXaml, "Deny_Click"),
-                    Click(AgentAccessXaml, "EnableAccess_Click"),
-                    Click(AgentAccessXaml, "Revoke_Click"),
-                    Click(AgentAccessXaml, "RevokeScope_Click"),
-                    Click(AgentAccessXaml, "TakeOver_Click"),
                 }),
+            Capability.Planned("agent-access.take-over", "Take operator ownership of the selected capture/scripts without stopping them", "S9", Owner,
+                gui: new[] { Click(MainWindowXaml, "TakeOverAgentResources_Click") }),
+
+            Capability.Supported("agent.start", "Launch or reuse a persistent identity-checked local host without enabling access", "S9",
+                cli: "agent start [--mode headless|desktop]"),
+            Capability.Supported("agent.status", "Inspect bounded local instance presence and saved policy", "S9",
+                cli: "agent status [--instance ID]"),
+            Capability.Supported("agent.config", "Generate client setup; never edit third-party client configuration", "S9",
+                cli: "agent config --client copilot|claude|codex|gemini [--launch headless|desktop|none] [--instance ID]"),
+            Capability.Supported("agent.stop", "Request guarded shutdown through the same MCP application workflow", "S9",
+                cli: "agent stop --instance ID [--accept] [--save-capture ABS.xmatcap --overwrite | --discard-data] [--discard-sql] [--discard-scripts] [--disable-xbox-proxies]"),
 
             // Capture files
             Capability.Supported(
@@ -292,6 +297,9 @@ namespace XMAT.Operations.Capabilities
 
             // Certificates, diagnostics and environment
             Capability.Planned(
+                "certificate.setup", "Explicit desktop HTTPS certificate/trust setup; Windows consent cannot be automated", "S5", Owner,
+                gui: new[] { Click(MainWindowXaml, "SetupProxyTrust_Click") }),
+            Capability.Planned(
                 "certificate.export", "Show or export the existing root certificate; never creates one", "S5", Owner,
                 gui: new[] { Command(AppCommandsPrefix + "ExportRootCert") }),
             Capability.Planned(
@@ -302,7 +310,7 @@ namespace XMAT.Operations.Capabilities
                 gui: new[] { Command(AppCommandsPrefix + "ViewGDKXInfo") }),
             Capability.Supported(
                 "cli.doctor", "Check what a command needs before running it", "S1",
-                cli: "doctor --for analyze"),
+                cli: "doctor --for analyze|agent"),
 
             // Presentation only
             Capability.GuiOnly(

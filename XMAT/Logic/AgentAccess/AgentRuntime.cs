@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using XMAT.ApplicationServices;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.AgentAccess
@@ -22,6 +23,11 @@ namespace XMAT.AgentAccess
         private readonly Dictionary<Guid, Operation> _operations = new();
         private readonly Dictionary<AgentResourceKey, OwnedResource> _resources = new();
         private readonly HashSet<(AgentSession Session, AgentResourceKey Resource, string Revision)> _adopted = new();
+        private readonly Dictionary<Guid, string> _acceptedScriptVersions = new();
+        private readonly AgentAccessPolicyService _policy;
+        private readonly AgentBackupStore _backups;
+        private readonly SemaphoreSlim _policyChanges = new(1, 1);
+        private AgentAccessPolicySnapshot _appliedPolicy;
         private bool _accepting;
         private bool _disposed;
         private bool _faulted;
@@ -30,9 +36,23 @@ namespace XMAT.AgentAccess
 
         internal event EventHandler Changed;
 
+        internal AgentAccessPolicySnapshot Policy => _policy?.Current;
+        internal long DataRevision => Policy?.DataRevision ?? 0;
+        internal AgentDataPolicy DataPolicy { get; }
+
+        internal AgentRuntime(AgentAccessPolicyService policy = null, AgentBackupStore backups = null)
+        {
+            _policy = policy;
+            _backups = policy == null ? null : backups ?? new();
+            DataPolicy = new(this);
+            _appliedPolicy = policy?.Current;
+            if (policy != null)
+                policy.Changed += OnPolicyChanged;
+        }
+
         internal bool IsEnabled
         {
-            get { lock (_gate) { return _accepting; } }
+            get { lock (_gate) { return _accepting && (_policy?.Current.Settings.Enabled ?? true); } }
         }
 
         internal void Enable()
@@ -40,6 +60,8 @@ namespace XMAT.AgentAccess
             lock (_gate)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
+                if (_policy != null && !_policy.Current.Settings.Enabled)
+                    throw new AgentAccessException(AgentAccessError.AccessDisabled);
                 if (_faulted || _disabling is { IsCompletedSuccessfully: false })
                 {
                     throw new AgentAccessException(AgentAccessError.OperationUnavailable);
@@ -60,7 +82,7 @@ namespace XMAT.AgentAccess
             AgentSession session;
             lock (_gate)
             {
-                if (!_accepting || _disposed)
+                if (!_accepting || _disposed || _policy != null && !_policy.Current.Settings.Enabled)
                 {
                     throw new AgentAccessException(AgentAccessError.AccessDisabled);
                 }
@@ -75,6 +97,13 @@ namespace XMAT.AgentAccess
         {
             lock (_gate)
             { return Snapshot(GetSessionData(session)); }
+        }
+
+        internal AgentLimits GetResponseLimits(AgentSession session)
+        {
+            var limits = GetSession(session).Limits;
+            return _policy == null ? limits : new(limits.ResponseRows, Math.Max(256, (limits.ResponseBytes - 2048) / 4),
+                limits.MaximumOperations, limits.QueryTimeoutSeconds, limits.MaximumQueryResultBytes, limits.MaximumQueryResults);
         }
 
         internal void SetDeclaredClientName(AgentSession session, string name)
@@ -177,6 +206,8 @@ namespace XMAT.AgentAccess
             AgentLimits limits = null,
             IEnumerable<AgentScope> editedScopes = null)
         {
+            if (_policy != null)
+                throw new AgentAccessException(AgentAccessError.UnsupportedOperation);
             ArgumentNullException.ThrowIfNull(permissions);
             var granted = permissions.ToHashSet();
             if (granted.Contains(null))
@@ -243,7 +274,7 @@ namespace XMAT.AgentAccess
             lock (_gate)
             {
                 var data = DemandConnected(session);
-                if (permissions.Any(permission => permission == null || !data.Permissions.Contains(permission)))
+                if (permissions.Any(permission => !HasPermission(data, permission)))
                 {
                     throw new AgentAccessException(AgentAccessError.PermissionDenied);
                 }
@@ -281,17 +312,23 @@ namespace XMAT.AgentAccess
                     }
                     return existing.Id;
                 }
+                foreach (var expired in data.Operations.Values.Where(item =>
+                    item.State == AgentOperationState.AwaitingApproval && DateTimeOffset.UtcNow >= item.ConfirmationExpiresAt))
+                    FinishPending(expired, AgentOperationState.SourceChanged, AgentAccessError.SourceChanged);
+                var policy = Policy;
+                var confirmationRequired = RequiresConfirmation(descriptor, policy);
                 if (data.Operations.Count >= data.Limits.MaximumOperations ||
-                    (descriptor.RequiresApproval && data.Operations.Values.Any(item =>
+                    (confirmationRequired && data.Operations.Values.Any(item =>
                         item.State == AgentOperationState.AwaitingApproval)))
                 {
                     throw new AgentAccessException(AgentAccessError.LimitExceeded);
                 }
-                operation = new Operation(data, descriptor, execute, revalidate);
+                operation = new Operation(data, descriptor, execute, revalidate, policy?.DataRevision ?? 0, policy?.AccessRevision ?? 0,
+                    RequiresBackup(descriptor, policy));
                 data.Idempotency.Add(idempotencyKey, operation);
                 data.Operations.Add(operation.Id, operation);
                 _operations.Add(operation.Id, operation);
-                if (!descriptor.RequiresApproval)
+                if (!confirmationRequired)
                 {
                     Start(operation);
                 }
@@ -322,9 +359,86 @@ namespace XMAT.AgentAccess
             }
         }
 
-        // Only the desktop approval adapter calls this; it is not an agent operation.
+        // Confirmation never adds authority; the current policy and target are checked again before execution.
+        internal AgentConfirmation GetConfirmation(AgentSession session, Guid operationId)
+        {
+            lock (_gate)
+            {
+                var operation = GetOperationData(session, operationId);
+                if (operation.State != AgentOperationState.AwaitingApproval)
+                    return null;
+                if (!ConfirmationCurrent(operation))
+                {
+                    FinishPending(operation, AgentOperationState.SourceChanged, AgentAccessError.SourceChanged);
+                    return null;
+                }
+                var warning = operation.ApprovalDetails ?? Localization.GetLocalizedString(
+                    "AGENT_CONFIRM_EFFECTS", operation.Descriptor.Action, operation.Descriptor.Effects);
+                if (warning.Length > 4096)
+                    warning = warning[..4096] + "\n" + Localization.GetLocalizedString("AGENT_CONFIRM_TRUNCATED");
+                warning = Localization.GetLocalizedString("AGENT_CONFIRM_EFFECTS", operation.Descriptor.Action,
+                    operation.Descriptor.Effects) + "\n" + warning;
+                warning += "\n\n" + Localization.GetLocalizedString("AGENT_CONFIRM_ADVISORY");
+                if (operation.Descriptor.RawLocalOutput && DataPolicy.Redacts)
+                    warning += "\n\n" + Localization.GetLocalizedString("AGENT_RAW_OUTPUT_WARNING");
+                if ((operation.Descriptor.Effects & (AgentOperationEffects.DataDeletion | AgentOperationEffects.FileOverwrite)) != 0)
+                    warning += "\n\n" + Localization.GetLocalizedString(operation.BackupRequired
+                        ? "AGENT_CONFIRM_BACKUPS_ON" : "AGENT_CONFIRM_BACKUPS_OFF");
+                return new(operation.Id, operation.ConfirmationToken, operation.Descriptor.ArgumentsHash,
+                    operation.Descriptor.Effects, warning, operation.ConfirmationExpiresAt, operation.BackupRequired);
+            }
+        }
+
+        internal AgentOperationSnapshot Confirm(AgentSession session, Guid operationId, string confirmationToken, bool accept)
+        {
+            AgentOperationSnapshot snapshot;
+            lock (_gate)
+            {
+                var operation = GetOperationData(session, operationId);
+                if (confirmationToken == null || operation.ConfirmationToken != confirmationToken)
+                    throw new AgentAccessException(AgentAccessError.InvalidRequest);
+                if (operation.State != AgentOperationState.AwaitingApproval)
+                    return Snapshot(operation);
+                if (!ConfirmationCurrent(operation))
+                    FinishPending(operation, AgentOperationState.SourceChanged, AgentAccessError.SourceChanged);
+                else if (!accept)
+                    FinishPending(operation, AgentOperationState.Denied);
+                else if (!HasPermissions(operation.Session, operation.Descriptor))
+                    FinishPending(operation, AgentOperationState.Denied, AgentAccessError.PermissionDenied);
+                else
+                {
+                    operation.ConfirmationAccepted = true;
+                    Start(operation);
+                }
+                snapshot = Snapshot(operation);
+            }
+            NotifyChanged();
+            return snapshot;
+        }
+
+        private static bool RequiresBackup(AgentOperationDescriptor descriptor, AgentAccessPolicySnapshot policy) =>
+            policy?.Settings.AutomaticBackups == true &&
+            (descriptor.Effects & (AgentOperationEffects.DataDeletion | AgentOperationEffects.FileOverwrite)) != 0;
+
+        private bool RequiresConfirmation(AgentOperationDescriptor descriptor, AgentAccessPolicySnapshot policy) =>
+            policy == null ? descriptor.RequiresApproval : descriptor.ConfirmationRequired ||
+                descriptor.RawLocalOutput && policy.Settings.DataSharing == AgentDataSharing.Redacted ||
+                descriptor.ScriptVersions.Any(version =>
+                    policy.AccessRevision != _appliedPolicy.AccessRevision ||
+                    !_acceptedScriptVersions.TryGetValue(version.Id, out var hash) || hash != version.SourceHash);
+
+        private bool ConfirmationCurrent(Operation operation)
+        {
+            var policy = Policy;
+            return DateTimeOffset.UtcNow < operation.ConfirmationExpiresAt && operation.DataRevision == (policy?.DataRevision ?? 0) &&
+                operation.AccessRevision == (policy?.AccessRevision ?? 0) &&
+                operation.BackupRequired == RequiresBackup(operation.Descriptor, policy);
+        }
+
         internal bool Approve(Guid operationId)
         {
+            if (_policy != null)
+                return false;
             lock (_gate)
             {
                 if (!_operations.TryGetValue(operationId, out var operation) ||
@@ -403,6 +517,8 @@ namespace XMAT.AgentAccess
                 {
                     throw new AgentAccessException(AgentAccessError.ResultUnavailable);
                 }
+                if (_policy != null && operation.DataRevision != DataRevision)
+                    throw new AgentAccessException(AgentAccessError.ResultUnavailable);
                 if (Encoding.UTF8.GetByteCount(operation.Result.Value.GetRawText()) > data.Limits.ResponseBytes)
                 {
                     throw new AgentAccessException(AgentAccessError.LimitExceeded);
@@ -493,6 +609,44 @@ namespace XMAT.AgentAccess
             return true;
         }
 
+        internal bool MatchesResource(AgentResourceKey key, Guid owner, string revision)
+        {
+            lock (_gate)
+                return _resources.TryGetValue(key, out var resource) && resource.Session.Id == owner &&
+                    resource.Revision == revision && resource.State != AgentResourceState.Cleaning;
+        }
+
+        internal bool TakeOver(AgentResourceKey key, Guid owner, string revision)
+        {
+            lock (_gate)
+            {
+                if (key.Kind is not (AgentResourceKind.Capture or AgentResourceKind.Script) ||
+                    !MatchesResource(key, owner, revision))
+                    return false;
+                var resource = _resources[key];
+                _adopted.Add((resource.Session, key, revision));
+                _resources.Remove(key);
+            }
+            NotifyChanged();
+            return true;
+        }
+
+        internal async Task<bool> RetryResourceCleanupAsync(AgentResourceKey key, Guid owner, string revision)
+        {
+            OwnedResource resource;
+            lock (_gate)
+            {
+                if (!MatchesResource(key, owner, revision) ||
+                    _resources[key].State != AgentResourceState.RecoveryRequired)
+                    return false;
+                resource = _resources[key];
+                resource.Cleaning = null;
+            }
+            await CleanResourcesAsync([resource]);
+            lock (_gate)
+            { return !_resources.ContainsKey(key); }
+        }
+
         internal async Task<bool> ReleaseOwnedResourceAsync(AgentSession session, AgentResourceKey key)
         {
             OwnedResource resource;
@@ -567,6 +721,8 @@ namespace XMAT.AgentAccess
                     return new ValueTask(_disposing);
                 }
                 _disposed = true;
+                if (_policy != null)
+                    _policy.Changed -= OnPolicyChanged;
                 completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 _disposing = completion.Task;
             }
@@ -579,6 +735,8 @@ namespace XMAT.AgentAccess
             try
             {
                 await DisableAsync();
+                await _policyChanges.WaitAsync();
+                _policyChanges.Release();
                 lock (_gate)
                 {
                     foreach (var operation in _operations.Values)
@@ -659,6 +817,12 @@ namespace XMAT.AgentAccess
                         operation.Error = AgentAccessError.PermissionDenied;
                         return;
                     }
+                    if (_policy != null && !operation.ConfirmationAccepted && RequiresConfirmation(operation.Descriptor, Policy))
+                    {
+                        operation.State = AgentOperationState.Denied;
+                        operation.Error = AgentAccessError.ApprovalRequired;
+                        return;
+                    }
                     operation.State = AgentOperationState.Running;
                     operation.ExecutionStarted = true;
                 }
@@ -666,10 +830,28 @@ namespace XMAT.AgentAccess
                 context = new AgentExecutionContext(
                     (key, revision, cleanup) => OwnResource(operation, key, revision, cleanup),
                     operation.Cancellation.Token);
+                using var protection = new AgentMutationProtection(operation.Id, _policy, _backups);
                 var result = await operation.Execute(context);
+                if (protection.Backups.Count > 0)
+                {
+                    var content = System.Text.Json.Nodes.JsonNode.Parse(result.GetRawText());
+                    if (content is System.Text.Json.Nodes.JsonObject receipt)
+                    {
+                        receipt["backups"] = JsonSerializer.SerializeToNode(protection.Backups, AgentJson.Options);
+                        result = AgentJson.Encode(receipt);
+                    }
+                }
                 var bytes = Encoding.UTF8.GetByteCount(result.GetRawText());
                 lock (_gate)
                 {
+                    if (_policy != null && operation.ConfirmationAccepted &&
+                        operation.AccessRevision == _policy.Current.AccessRevision)
+                        foreach (var version in operation.Descriptor.ScriptVersions)
+                        {
+                            if (_acceptedScriptVersions.Count >= 1024 && !_acceptedScriptVersions.ContainsKey(version.Id))
+                                _acceptedScriptVersions.Remove(_acceptedScriptVersions.Keys.First());
+                            _acceptedScriptVersions[version.Id] = version.SourceHash;
+                        }
                     if (bytes > operation.Session.Limits.ResponseBytes)
                     {
                         operation.State = AgentOperationState.Failed;
@@ -678,8 +860,7 @@ namespace XMAT.AgentAccess
                     else
                     {
                         operation.State = AgentOperationState.Succeeded;
-                        if (operation.Session.State == AgentSessionState.Connected &&
-                            HasPermissions(operation.Session, operation.Descriptor))
+                        if (CanPublishResult(operation))
                         {
                             operation.Result = result.Clone();
                         }
@@ -703,8 +884,7 @@ namespace XMAT.AgentAccess
                     };
                     operation.Error = exception.Error;
                     if (exception.ProtectedResult.HasValue &&
-                        operation.Session.State == AgentSessionState.Connected &&
-                        HasPermissions(operation.Session, operation.Descriptor) &&
+                        CanPublishResult(operation) &&
                         Encoding.UTF8.GetByteCount(exception.ProtectedResult.Value.GetRawText()) <= operation.Session.Limits.ResponseBytes)
                     {
                         operation.Result = exception.ProtectedResult.Value.Clone();
@@ -933,6 +1113,14 @@ namespace XMAT.AgentAccess
             {
                 throw new AgentAccessException(AgentAccessError.PermissionsUpdating);
             }
+            if (_policy != null)
+            {
+                var policy = _policy.Current;
+                if (!policy.Settings.Enabled)
+                    throw new AgentAccessException(AgentAccessError.AccessDisabled);
+                if (_appliedPolicy.AccessRevision != policy.AccessRevision)
+                    throw new AgentAccessException(AgentAccessError.PermissionsUpdating);
+            }
             return data;
         }
 
@@ -943,8 +1131,100 @@ namespace XMAT.AgentAccess
                 ? operation : throw new AgentAccessException(AgentAccessError.OperationNotFound);
         }
 
-        private static bool HasPermissions(SessionData data, AgentOperationDescriptor descriptor) =>
-            descriptor.Requirements.All(data.Permissions.Contains);
+        private bool HasPermission(SessionData data, AgentPermission permission) =>
+            _policy != null ? _policy.Current.Settings.Allows(permission) :
+                permission != null && data.Permissions.Contains(permission);
+
+        private bool HasPermissions(SessionData data, AgentOperationDescriptor descriptor) =>
+            _policy != null ? _policy.Current.Settings.Allows(descriptor) :
+                descriptor.Requirements.All(data.Permissions.Contains);
+
+        private bool CanPublishResult(Operation operation) =>
+            operation.Session.State == AgentSessionState.Connected &&
+            HasPermissions(operation.Session, operation.Descriptor) &&
+            (_policy == null || operation.DataRevision == DataRevision);
+
+        private void OnPolicyChanged(object sender, EventArgs args) => _ = ApplyPolicyAndReportFailureAsync();
+
+        private async Task ApplyPolicyAndReportFailureAsync()
+        {
+            try
+            { await ApplyPolicyAsync(); }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                lock (_gate)
+                { _faulted = true; _accepting = false; }
+                Trace.TraceError("An agent policy change could not be drained.");
+                NotifyChanged();
+            }
+        }
+
+        internal async Task ApplyPolicyAsync()
+        {
+            if (_policy == null)
+                return;
+            await _policyChanges.WaitAsync();
+            SessionData[] sessions = [];
+            try
+            {
+                AgentAccessPolicySnapshot policy;
+                Operation[] affected;
+                bool dataChanged;
+                lock (_gate)
+                {
+                    if (_disposed)
+                        return;
+                    policy = _policy.Current;
+                    var accessChanged = policy.AccessRevision != _appliedPolicy.AccessRevision;
+                    dataChanged = policy.DataRevision != _appliedPolicy.DataRevision;
+                    var backupsChanged = policy.Settings.AutomaticBackups != _appliedPolicy.Settings.AutomaticBackups;
+                    if (!accessChanged && !backupsChanged)
+                    {
+                        _appliedPolicy = policy;
+                        return;
+                    }
+                    if (accessChanged)
+                        _acceptedScriptVersions.Clear();
+                    sessions = _sessions.Values.Where(data => data.State == AgentSessionState.Connected).ToArray();
+                    foreach (var data in sessions)
+                        data.PermissionsUpdating = true;
+                    affected = _operations.Values.Where(operation => dataChanged ||
+                        !policy.Settings.Allows(operation.Descriptor)).ToArray();
+                    foreach (var operation in affected)
+                    {
+                        operation.Result = null;
+                        RequestCancellation(operation);
+                    }
+                    foreach (var operation in _operations.Values.Where(operation =>
+                        operation.State == AgentOperationState.AwaitingApproval && (accessChanged ||
+                            backupsChanged && (operation.Descriptor.Effects &
+                                (AgentOperationEffects.DataDeletion | AgentOperationEffects.FileOverwrite)) != 0)))
+                        FinishPending(operation, AgentOperationState.Denied, AgentAccessError.PermissionDenied);
+                }
+                NotifyChanged();
+                await CancelAndDrainAsync(affected);
+                OwnedResource[] owned;
+                lock (_gate)
+                {
+                    owned = _resources.Values.Where(resource =>
+                        !policy.Settings.Allows(resource.Descriptor) ||
+                        dataChanged && IsTemporaryResource(resource.Key.Kind)).ToArray();
+                }
+                await CleanResourcesAsync(owned);
+                lock (_gate)
+                { _appliedPolicy = policy; }
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    foreach (var session in sessions)
+                        session.PermissionsUpdating = false;
+                }
+                _policyChanges.Release();
+                NotifyChanged();
+            }
+        }
 
         private static AgentSessionSnapshot Snapshot(SessionData data) => new(
             data.Session.Id, data.Name, data.State, data.PermissionsUpdating,
@@ -987,11 +1267,19 @@ namespace XMAT.AgentAccess
             SessionData session,
             AgentOperationDescriptor descriptor,
             Func<AgentExecutionContext, Task<JsonElement>> execute,
-            Func<CancellationToken, Task<bool>> revalidate)
+            Func<CancellationToken, Task<bool>> revalidate,
+            long dataRevision,
+            long accessRevision,
+            bool backupRequired)
         {
             internal Guid Id { get; } = Guid.NewGuid();
             internal SessionData Session { get; } = session;
             internal AgentOperationDescriptor Descriptor { get; } = descriptor.WithoutApprovalDetails();
+            internal long DataRevision { get; } = dataRevision;
+            internal long AccessRevision { get; } = accessRevision;
+            internal bool BackupRequired { get; } = backupRequired;
+            internal string ConfirmationToken { get; } = Guid.NewGuid().ToString("N");
+            internal DateTimeOffset ConfirmationExpiresAt => CreatedAt.AddMinutes(5);
             internal string ApprovalDetails { get; set; } = descriptor.ApprovalDetails;
             internal Func<AgentExecutionContext, Task<JsonElement>> Execute { get; set; } = execute;
             internal Func<CancellationToken, Task<bool>> Revalidate { get; set; } = revalidate;
@@ -1002,6 +1290,7 @@ namespace XMAT.AgentAccess
             internal AgentOperationState State { get; set; } = AgentOperationState.AwaitingApproval;
             internal AgentAccessError? Error { get; set; }
             internal bool ExecutionStarted { get; set; }
+            internal bool ConfirmationAccepted { get; set; }
             internal JsonElement? Result { get; set; }
         }
 

@@ -6,9 +6,6 @@ using System.Collections;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using XMAT.AgentAccess;
@@ -358,79 +355,6 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void DesktopCanRevokeAnOldLoadedSourceWithoutDroppingActiveSourceGrants()
-        {
-            _application.Run(owner =>
-            {
-                using var directory = new CaptureFileExportTests.DirectoryFixture();
-                var path = Path.Combine(directory.Path, "capture.xmatcap");
-                CaptureFileLoadTests.WriteCapture(path, [("loaded", CaptureType.WebProxy)]);
-                using var loaded = new SqLtReadonlyDatabase(path);
-                using var replacement = new SqLtReadonlyDatabase(path);
-                using var database = QueryDatabase();
-                var model = new CaptureAppModel { ActiveDatabase = database, LoadedDatabase = loaded };
-                var host = model.AgentAccess;
-                McpClient client = null;
-                AgentAccessWindow manager = null;
-                try
-                {
-                    host.MarkReady();
-                    host.Enable();
-                    client = Complete(Connect(host));
-                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
-                    var session = host.FindSession(host.Runtime.GetSessions().Single().Id);
-                    var sources = Complete(host.GetSourcesAsync());
-                    var active = sources.Single(source => source.Kind == QuerySourceKind.Active);
-                    var previous = sources.Single(source => source.Kind == QuerySourceKind.Loaded);
-                    var activeRead = new AgentPermission(AgentCapability.RawDataRead, AgentScope.Source(active.Id));
-                    Finish(host.Runtime.SetPermissionsAsync(session,
-                        [activeRead, new AgentPermission(AgentCapability.RawDataRead, AgentScope.Source(previous.Id)),
-                         new AgentPermission(AgentCapability.QueryResultExport, AgentScope.Source(previous.Id))]));
-                    var result = Query(client, host, session, previous.Id, "SELECT 42", "old source");
-                    model.LoadedDatabase = replacement;
-                    WpfTestHost.Show(owner, new Grid());
-                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
-                    CaptureDeviceTestData.PumpUntil(() => ((DataGrid)manager.FindName("Sessions")).Items.Count == 1);
-                    ((DataGrid)manager.FindName("Sessions")).SelectedItem =
-                        ((DataGrid)manager.FindName("Sessions")).Items.Cast<AgentSessionSnapshot>().Single();
-                    WpfTestHost.Pump();
-                    Assert.DoesNotContain(((ComboBox)manager.FindName("QuerySourceTarget")).Items.Cast<QuerySourceDescriptor>(),
-                        source => source.Id == previous.Id);
-                    var targets = (ComboBox)manager.FindName("GrantedScopeTarget");
-                    targets.SelectedItem = targets.Items.Cast<AgentScope>().Single(scope =>
-                        scope == AgentScope.Source(previous.Id));
-                    ((Button)manager.FindName("RevokeScope")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    CaptureDeviceTestData.PumpUntil(() =>
-                    {
-                        if (host.Runtime.GetSession(session).Permissions.Any(permission =>
-                            permission.Scope == AgentScope.Source(previous.Id)) || host.Runtime.GetOwnedResources().Count != 0)
-                            return false;
-                        try
-                        {
-                            host.Runtime.Demand(session, activeRead);
-                            return true;
-                        }
-                        catch (AgentAccessException exception) when (exception.Error == AgentAccessError.PermissionsUpdating)
-                        { return false; }
-                    });
-                    host.Runtime.Demand(session, activeRead);
-                    Assert.Equal(AgentSessionState.Connected, host.Runtime.GetSession(session).State);
-                    Assert.Empty(host.Runtime.GetOwnedResources());
-                    var released = Payload(Complete(client.CallToolAsync("xmat_get_query_page",
-                        new Dictionary<string, object> { ["resultId"] = result }).AsTask()));
-                    Assert.Equal("OperationNotFound", released.GetProperty("error").GetString());
-                    Query(client, host, session, active.Id, "SELECT 7", "active source");
-                }
-                finally
-                {
-                    manager?.Close();
-                    if (client != null)
-                        Finish(client.DisposeAsync().AsTask());
-                    Finish(host.DisposeAsync().AsTask());
-                }
-            });
-        }
 
         [Fact]
         public void QueryTimeoutAndCancellationLeaveEarlierCompletedResultsAvailable()

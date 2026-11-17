@@ -16,6 +16,22 @@ namespace XMAT.ApplicationServices
 {
     internal sealed class CaptureDataOperations(CaptureAppModel model) : ICaptureDataOperations
     {
+        public Task<bool> HasDataAsync(
+            Guid captureId, long expectedRevision, CancellationToken cancellationToken = default) =>
+            model.CaptureCatalog.WithTargetAsync(captureId, expectedRevision, async (target, _) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (target.CaptureController is WebServiceDeviceCaptureController web && web.WebSocketMessages.Count != 0)
+                    return true;
+                var name = target.CaptureType == CaptureType.WebProxy
+                    ? WebServiceCaptureMethod.TableName : NetworkTraceCaptureMethod.TableName;
+                var field = target.CaptureType == CaptureType.WebProxy
+                    ? WebServiceCaptureMethod.FieldKey_DeviceName : NetworkTraceCaptureMethod.FieldKey_DeviceName;
+                var table = model.ActiveDatabase?.TableByName(name);
+                return table != null && await Task.Run(() => table.Dataset.HasRecords(
+                    new FieldValue<string>(field, target.DeviceName)), cancellationToken);
+            });
+
         public Task<CaptureClearReceipt> ClearAsync(
             Guid captureId, long expectedRevision, CancellationToken cancellationToken = default) =>
             model.CaptureCatalog.WithTargetAsync<CaptureClearReceipt>(captureId, expectedRevision, async (target, _) =>
@@ -42,13 +58,19 @@ namespace XMAT.ApplicationServices
                 {
                     if (!model.TryBeginCaptureDataOperation(out lease))
                         throw new QueryException(QueryError.SourceBusy, "Finish the current data or analysis operation first.");
+                    await using var backup = await AgentMutationProtection.BeforeCaptureAsync(model, name,
+                        target.DeviceName, "clear", AgentMutationProtection.Revision(expectedRevision), cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (model.CaptureCatalog.DescribeTarget(target).Revision != expectedRevision ||
                         target.CaptureController.IsRunning)
                         throw new QueryException(QueryError.SourceChanged, "The capture changed before clearing.");
-                    await Task.Run(() => imported.ReplaceImportedRows(
-                        new FieldValue<string>("DeviceName", target.DeviceName), Array.Empty<object[]>(),
-                        cancellationToken), cancellationToken);
+                    await Task.Run(() =>
+                    {
+                        backup.Demand();
+                        imported.ReplaceImportedRows(new FieldValue<string>("DeviceName", target.DeviceName),
+                            Array.Empty<object[]>(), cancellationToken);
+                    }, cancellationToken);
+                    backup.Committed();
                     if (web != null)
                     {
                         web.ApplyImportedCaptures(empty, table, clearMessages: true);

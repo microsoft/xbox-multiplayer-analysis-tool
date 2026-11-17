@@ -50,9 +50,13 @@ namespace XMAT.NetworkTrace
 
         private void InitializeDataTables()
         {
-            // { "event": { "processId": 4, "threadId": 308, "timestamp": "2021-3-19T20:46:54.374Z" }, "packet": { "mediaType": "ethernet", "miniportIfIndex":4, "lowerIfIndex":4, "flags": [ "start", "end", "receive" ], "data": "////////xJ3tqEMCCABFAABOT/wAAIARZlDAqAEDwKgB/wCJAIkAOvm7/+ABEAABAAAAAAAAIEVKRUlGRUVQRUtFRUVPRUtGQkNBQ0FDQUNBQ0FDQUFBAAAgAAE=255" } }
+            NetworkTracePacketsTable = CreateDataTable(CaptureAppModel.ActiveDatabase);
+            if (NetworkTracePacketsTable == null)
+                throw new Exception("failed to create network trace packets table.");
+        }
 
-            NetworkTracePacketsTable = CaptureAppModel.ActiveDatabase.CreateTable(
+        internal static IDataTable CreateDataTable(IDatabase database) =>
+            database.CreateTable(
                 TableName,
                 new Field<string>(FieldKey_DeviceName),
                 new Field<Int32>(FieldKey_ProcessId),
@@ -66,11 +70,5 @@ namespace XMAT.NetworkTrace
                 new Field<Int32>(FieldKey_Receive),
                 new Field<string>(FieldKey_Payload)
             );
-
-            if (NetworkTracePacketsTable == null)
-            {
-                throw new Exception("failed to create network trace packets table.");
-            }
-        }
     }
 }

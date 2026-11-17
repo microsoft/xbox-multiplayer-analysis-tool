@@ -3,31 +3,86 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Threading;
 using Microsoft.Data.Sqlite;
+using SQLitePCL;
 
 namespace XMAT.DataAbstractionLayer
 {
     internal static class SqLtDatabaseBackup
     {
+        internal static void CreateSnapshot(
+            SqliteConnection source, string filepath, long maximumBytes, CancellationToken cancellationToken)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
+            cancellationToken.ThrowIfCancellationRequested();
+            using (new FileStream(filepath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            { }
+            try
+            {
+                using (var destination = SqLtQuerySupport.Open(filepath, false))
+                    Copy(source, destination, maximumBytes, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                using var durable = new FileStream(filepath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                if (durable.Length > maximumBytes)
+                    throw new IOException("The capture backup exceeds its storage limit.");
+                durable.Flush(flushToDisk: true);
+            }
+            catch
+            {
+                File.Delete(filepath);
+                throw;
+            }
+        }
+
+        private static void Copy(
+            SqliteConnection source, SqliteConnection destination, long maximumBytes, CancellationToken cancellationToken)
+        {
+            lock (SqLtConnectionGate.For(source))
+            {
+                using var pageSize = source.CreateCommand();
+                pageSize.CommandText = "PRAGMA page_size";
+                var bytesPerPage = (long)pageSize.ExecuteScalar();
+                using var backup = raw.sqlite3_backup_init(destination.Handle, "main", source.Handle, "main");
+                if (backup == null || backup.IsInvalid)
+                    throw new IOException("A capture snapshot could not be acquired.");
+                int result;
+                do
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    result = raw.sqlite3_backup_step(backup, 128);
+                    if ((long)raw.sqlite3_backup_pagecount(backup) * bytesPerPage > maximumBytes)
+                        throw new IOException("The capture backup exceeds its storage limit.");
+                    SqLtQuerySupport.Check(result, destination, cancellationToken);
+                } while (result != raw.SQLITE_DONE);
+            }
+        }
+
         internal static void SaveToFile(
-            SqliteConnection source, string filepath, SqLtDatabase hooks = null, SqLtFileIdentity? sourceIdentity = null)
+            SqliteConnection source, string filepath, SqLtDatabase hooks = null, SqLtFileIdentity? sourceIdentity = null,
+            long maximumBytes = long.MaxValue, CancellationToken cancellationToken = default)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(filepath);
             if (sourceIdentity.HasValue && File.Exists(filepath) &&
                 sourceIdentity.Value == SqLtFileIdentity.FromPath(filepath))
                 throw new ArgumentException("A capture backup cannot replace its source file.", nameof(filepath));
             try
-            { SaveCore(source, filepath, hooks); }
+            { SaveCore(source, filepath, hooks, maximumBytes, cancellationToken); }
             catch (CaptureSaveException) { throw; }
+            catch (OperationCanceledException) { throw; }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             { throw new CaptureSaveException(CaptureSaveFailure.Failed, exception); }
         }
 
-        private static void SaveCore(SqliteConnection source, string filepath, SqLtDatabase hooks)
+        private static void SaveCore(
+            SqliteConnection source, string filepath, SqLtDatabase hooks, long maximumBytes, CancellationToken cancellationToken)
         {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
+            cancellationToken.ThrowIfCancellationRequested();
             var destinationPath = Path.GetFullPath(filepath);
             var directory = Path.GetDirectoryName(destinationPath) ??
                 throw new InvalidOperationException("The save destination has no directory.");
@@ -41,12 +96,22 @@ namespace XMAT.DataAbstractionLayer
                 {
                     destination.Open();
                     hooks?.BackupFailureInjection?.Invoke(temporary);
-                    lock (SqLtConnectionGate.For(source))
-                    { source.BackupDatabase(destination); }
+                    Copy(source, destination, maximumBytes, cancellationToken);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                using (var durable = new FileStream(temporary, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    if (durable.Length > maximumBytes)
+                        throw new IOException("The capture backup exceeds its storage limit.");
+                    durable.Flush(flushToDisk: true);
                 }
                 hooks?.MoveFailureInjection?.Invoke(temporary, destinationPath);
+                cancellationToken.ThrowIfCancellationRequested();
                 try
-                { File.Move(temporary, destinationPath, true); }
+                {
+                    if (!WindowsFilePublication.TryPublish(temporary, destinationPath, true, out var error))
+                        throw new IOException("The prepared capture could not be published.", new Win32Exception(error));
+                }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 { throw new CaptureSaveException(CaptureSaveFailure.DestinationLocked, exception); }
                 committed = true;

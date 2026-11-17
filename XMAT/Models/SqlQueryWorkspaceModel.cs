@@ -62,7 +62,7 @@ namespace XMAT.Models
 
         public SqlQueryDocumentModel NewDocument()
         {
-            App.VerifyUiAccess(_dispatcher);
+            ApplicationDispatch.VerifyUiAccess(_dispatcher);
             if (!CanCreateDocument)
                 return null;
             var document = new SqlQueryDocumentModel(this,
@@ -245,7 +245,7 @@ namespace XMAT.Models
 
         public void CancelClosing()
         {
-            App.VerifyUiAccess(_dispatcher);
+            ApplicationDispatch.VerifyUiAccess(_dispatcher);
             if (_disposed)
                 return;
             _closeTask = null;
@@ -273,10 +273,10 @@ namespace XMAT.Models
         }
 
         internal Task InvokeAsync(Func<Task> action) =>
-            App.RunOnUiAsync(_dispatcher, action);
+            ApplicationDispatch.RunOnUiAsync(_dispatcher, action);
 
         internal Task<T> InvokeAsync<T>(Func<Task<T>> action) =>
-            App.RunOnUiAsync(_dispatcher, action);
+            ApplicationDispatch.RunOnUiAsync(_dispatcher, action);
 
         public ValueTask DisposeAsync() => new(InvokeAsync(() => _disposeTask ??= DisposeCoreAsync()));
 

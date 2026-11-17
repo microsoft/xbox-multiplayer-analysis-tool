@@ -10,11 +10,11 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
+using XMAT.AgentAccess;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
-using XMAT.AgentAccess;
 
 namespace XMAT
 {
@@ -39,10 +39,11 @@ namespace XMAT
 
         public MainWindow()
         {
-            CaptureAppSettings.Deserialize(CaptureAppModel.AppModel);
-
-            // Apply theme after preferences are deserialized
-            ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
+            if (Application.Current is not App { Runtime: not null })
+            {
+                CaptureAppSettings.Deserialize(CaptureAppModel.AppModel);
+                ThemeManager.ApplyTheme(CaptureAppModel.AppModel.PreferencesModel.Theme);
+            }
 
             _analysisReportExportWorkflow =
                 new AnalysisReportExportWorkflow(
@@ -87,6 +88,8 @@ namespace XMAT
             ChangeProxyPort.Header = Localization.GetLocalizedString("PROXY_PORT_CHANGE");
             ChangeProxyPort.ToolTip = Localization.GetLocalizedString("PROXY_PORT_CHANGE_TOOLTIP");
             ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
+            SetupProxyTrust.Header = Localization.GetLocalizedString("PROXY_TRUST_SETUP");
+            TakeOverAgentResources.Header = Localization.GetLocalizedString("AGENT_OPERATOR_TAKEOVER");
 
             // Sync dark mode checkbox with saved preference
             ToggleDarkMode.IsChecked = CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark";
@@ -124,7 +127,8 @@ namespace XMAT
             _originalCursor = Cursor;
 
             DataContext = CaptureAppModel.AppModel;
-            _agentAccess.MarkReady();
+            if (Application.Current is not App { Runtime: not null })
+                _agentAccess.MarkReady();
 
             // if we have tabs, select the first one
             if (CaptureAppModel.AppModel.CaptureDeviceContexts.Any())
@@ -186,6 +190,12 @@ namespace XMAT
                     return;
                 }
 
+                foreach (var target in CaptureAppModel.AppModel.CaptureDeviceContexts.Where(target => target.CaptureController.IsRunning).ToArray())
+                {
+                    var stopped = await CaptureAppModel.AppModel.CaptureOperations.SetRunningAsync(target, false);
+                    if (!stopped.Succeeded || stopped.IsRunning)
+                        return;
+                }
                 if (!CaptureAppSettings.Serialize(CaptureAppModel.AppModel))
                 {
                     return;
@@ -193,6 +203,8 @@ namespace XMAT
                 await _agentAccess.DisableAsync();
                 await CaptureAppModel.AppModel.DisposeInvestigationAsync();
                 await CaptureAppModel.AppModel.DisposeSqlWorkspaceAsync();
+                if (Application.Current is App { Runtime: not null } application)
+                    await application.Runtime.DisposeAsync();
                 _closeConfirmed = true;
                 Close();
             }

@@ -40,7 +40,7 @@ namespace XMAT.AgentAccess
             await EnsureRawAsync(session, entry);
             using var lease = Use(entry, true);
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, entry.RawCancellation.Token);
-            var limits = Runtime.GetSession(session).Limits;
+            var limits = Runtime.GetResponseLimits(session);
             var key = $"detail:{kind}:{itemId}";
             var offset = ReadOffset(session, resultId, key, cursor);
             QueryPage page;
@@ -85,7 +85,7 @@ namespace XMAT.AgentAccess
             await EnsureRawAsync(session, entry);
             using var lease = Use(entry, true);
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, entry.RawCancellation.Token);
-            var limits = Runtime.GetSession(session).Limits;
+            var limits = Runtime.GetResponseLimits(session);
             var budget = Math.Min(64 * 1024, Math.Max(1, (limits.ResponseBytes - 1024) * 3 / 4));
             QueryValueChunk chunk;
             try

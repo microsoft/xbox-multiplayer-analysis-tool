@@ -652,7 +652,7 @@ namespace XMAT.ApplicationServices
             metrics.Add(new("packet.matching-payload-window", null, canonical.Options.DuplicateWindowMilliseconds, null, "milliseconds"));
         }
 
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(_dispatcher, action);
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => ApplicationDispatch.RunOnUiAsync(_dispatcher, action);
 
         private static CaptureDataException QueryFailure(QueryException exception) => new(exception.Error switch
         {
@@ -671,7 +671,7 @@ namespace XMAT.ApplicationServices
             {
                 if (Lease == null)
                     return;
-                await App.RunOnUiAsync(Dispatcher, Lease.Dispose);
+                await ApplicationDispatch.RunOnUiAsync(Dispatcher, Lease.Dispose);
             }
         }
 

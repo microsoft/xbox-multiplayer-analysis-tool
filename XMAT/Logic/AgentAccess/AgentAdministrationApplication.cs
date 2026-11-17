@@ -54,7 +54,7 @@ namespace XMAT.AgentAccess
             var snapshot = await TranslateAsync(() => _hosts.InspectAsync(session.Id, cancellationToken));
             if (expectedRevision.HasValue && expectedRevision != snapshot.Revision)
                 throw new AgentAccessException(AgentAccessError.SourceChanged);
-            var limits = _runtime.GetSession(session).Limits;
+            var limits = _runtime.GetResponseLimits(session);
             var result = Page(snapshot.Entries, offset, limits, entries => AgentJson.Encode(new
             {
                 snapshot.Revision,
@@ -83,7 +83,7 @@ namespace XMAT.AgentAccess
             if (replay.HasValue)
                 return replay.Value;
             var plan = await TranslateAsync(() => _hosts.PrepareAsync(request, session.Id, cancellationToken));
-            EnsureBudget(_runtime.GetSession(session).Limits, AgentJson.Encode(new HostPolicyChange(long.MaxValue, true,
+            EnsureBudget(_runtime.GetResponseLimits(session), AgentJson.Encode(new HostPolicyChange(long.MaxValue, true,
                 request.Action == HostPolicyAction.Clear ? null :
                     plan.Entry ?? new(Guid.NewGuid(), request.List, plan.Request.Pattern, long.MaxValue, HostPolicyOwnership.ThisSession),
                 AffectedEntries: plan.AffectedEntries)));
@@ -96,7 +96,9 @@ namespace XMAT.AgentAccess
                 hash, Localization.GetLocalizedString("CTRL_HOST_APPROVAL",
                     request.List, request.Action, plan.Request.Pattern ?? "-", plan.Request.ExpectedRevision,
                     plan.Entry?.Id.ToString() ?? "-", plan.Entry?.Epoch.ToString() ?? "-",
-                    plan.Entry?.Ownership.ToString() ?? "-", plan.ChangesState, plan.AffectedEntries));
+                    plan.Entry?.Ownership.ToString() ?? "-", plan.ChangesState, plan.AffectedEntries),
+                confirmationRequired: plan.ChangesState && (request.Action == HostPolicyAction.Clear ||
+                    plan.Request.Pattern is { Length: > 0 } pattern && pattern.All(character => character == '*')));
             return Submit(session, descriptor, idempotencyKey, async context =>
             {
                 Demand(session, permission);
@@ -112,7 +114,7 @@ namespace XMAT.AgentAccess
             var permission = Permission(AgentCapability.Preferences);
             Demand(session, permission);
             var snapshot = await TranslateAsync(() => _preferences.InspectAsync(cancellationToken));
-            var result = Page(snapshot.ReservedProxyPorts, reservedPortOffset, _runtime.GetSession(session).Limits,
+            var result = Page(snapshot.ReservedProxyPorts, reservedPortOffset, _runtime.GetResponseLimits(session),
                 ports => AgentJson.Encode(new
                 {
                     snapshot.Revision,
@@ -174,25 +176,46 @@ namespace XMAT.AgentAccess
             Demand(session, permission);
             var snapshot = await TranslateAsync(() => _diagnostics.InspectAsync(cancellationToken));
             Demand(session, permission);
-            return EnsureBudget(_runtime.GetSession(session).Limits, AgentJson.Encode(snapshot));
+            return EnsureBudget(_runtime.GetResponseLimits(session), AgentJson.Encode(snapshot));
+        }
+
+        internal async Task<Guid> ExportDiagnosticsPathAsync(
+            AgentSession session, string expectedRevision, AdministrationArtifactKind kind, string path,
+            string idempotencyKey, bool overwrite, CancellationToken cancellationToken)
+        {
+            Demand(session, Permission(AgentCapability.Diagnostics));
+            var hash = AgentOperationDescriptor.Hash(new { expectedRevision, kind, path, overwrite });
+            var replay = _runtime.FindReplay(session, idempotencyKey, "diagnostics.export", hash);
+            if (replay.HasValue)
+                return replay.Value;
+            var destination = await AgentLocalFileRequests.OutputAsync(_runtime, session, _folders, path, kind switch
+            {
+                AdministrationArtifactKind.DiagnosticLogs => ".zip",
+                AdministrationArtifactKind.PublicRootCertificateDer => ".cer",
+                AdministrationArtifactKind.PublicRootCertificatePem => ".pem",
+                _ => throw new AgentAccessException(AgentAccessError.InvalidRequest)
+            }, overwrite, cancellationToken);
+            return await ExportDiagnosticsAsync(session, expectedRevision, kind, destination.FolderId, destination.FileName,
+                idempotencyKey, cancellationToken, destination.Overwrite, hash);
         }
 
         internal async Task<Guid> ExportDiagnosticsAsync(
             AgentSession session, string expectedRevision, AdministrationArtifactKind kind, Guid folderId,
-            string fileName, string idempotencyKey, CancellationToken cancellationToken)
+            string fileName, string idempotencyKey, CancellationToken cancellationToken,
+            FileOverwriteState overwrite = null, string requestHash = null)
         {
             if (folderId == Guid.Empty)
                 throw new AgentAccessException(AgentAccessError.InvalidRequest);
             var requirements = new[] { Permission(AgentCapability.Diagnostics),
                 new AgentPermission(AgentCapability.FileWrite, AgentScope.ExportFolder(folderId)) };
             Demand(session, requirements);
-            var hash = AgentOperationDescriptor.Hash(new { expectedRevision, kind, folderId, fileName });
+            var hash = requestHash ?? AgentOperationDescriptor.Hash(new { expectedRevision, kind, folderId, fileName });
             var replay = _runtime.FindReplay(session, idempotencyKey, "diagnostics.export", hash);
             if (replay.HasValue)
                 return replay.Value;
             var plan = await TranslateAsync(() => _diagnostics.PrepareExportAsync(
-                expectedRevision, kind, new(folderId, fileName), cancellationToken));
-            EnsureBudget(_runtime.GetSession(session).Limits, AgentJson.Encode(
+                expectedRevision, kind, new(folderId, fileName, overwrite), cancellationToken));
+            EnsureBudget(_runtime.GetResponseLimits(session), AgentJson.Encode(
                 new AdministrationExportReceipt(kind, folderId, fileName, long.MaxValue, 64, true,
                     kind != AdministrationArtifactKind.DiagnosticLogs)));
             Demand(session, requirements);
@@ -200,13 +223,15 @@ namespace XMAT.AgentAccess
             var folder = _folders?.GetFolders().FirstOrDefault(folder => folder.Id == folderId)?.Path ?? folderId.ToString();
             var descriptor = new AgentOperationDescriptor("diagnostics.export", requirements,
                 AgentOperationEffects.StateChange |
+                (overwrite == null ? AgentOperationEffects.None : AgentOperationEffects.FileOverwrite) |
                 (kind == AdministrationArtifactKind.DiagnosticLogs ? AgentOperationEffects.SensitiveDataExport : AgentOperationEffects.None),
                 hash, Localization.GetLocalizedString("CTRL_DIAGNOSTICS_APPROVAL", kind, folder, fileName, expectedRevision,
-                    plan.CertificateSha256 ?? "-"));
+                    plan.CertificateSha256 ?? "-") + AgentLocalFileRequests.Warning(overwrite),
+                confirmationRequired: overwrite != null, rawLocalOutput: kind == AdministrationArtifactKind.DiagnosticLogs);
             return Submit(session, descriptor, idempotencyKey, async context =>
             {
                 Demand(session, requirements);
-                var limits = _runtime.GetSession(session).Limits;
+                var limits = _runtime.GetResponseLimits(session);
                 ReserveDiagnosticExport(session, limits.MaximumQueryResults);
                 try
                 {
@@ -215,7 +240,7 @@ namespace XMAT.AgentAccess
                         {
                             token.ThrowIfCancellationRequested();
                             Demand(session, requirements);
-                            var currentLimits = _runtime.GetSession(session).Limits;
+                            var currentLimits = _runtime.GetResponseLimits(session);
                             if (currentLimits.MaximumQueryResultBytes < limits.MaximumQueryResultBytes ||
                                 currentLimits.QueryTimeoutSeconds < limits.QueryTimeoutSeconds)
                                 throw new AgentAccessException(AgentAccessError.LimitExceeded);
@@ -232,7 +257,7 @@ namespace XMAT.AgentAccess
                     }
                 }
             }, token => RevalidateAsync(async () =>
-                await _diagnostics.PrepareExportAsync(expectedRevision, kind, new(folderId, fileName), token) == plan));
+                await _diagnostics.PrepareExportAsync(expectedRevision, kind, new(folderId, fileName, overwrite), token) == plan));
         }
 
         internal async Task<JsonElement> NavigationTargetsAsync(
@@ -245,7 +270,7 @@ namespace XMAT.AgentAccess
             var targets = registered.Where(target =>
                 (!target.OwnerSessionId.HasValue || target.OwnerSessionId == session.Id) &&
                 (target.Kind == DesktopNavigationKind.Capture || granted.Contains(SourceSummary(target)))).ToArray();
-            var result = Page(targets, offset, _runtime.GetSession(session).Limits, rows => AgentJson.Encode(new
+            var result = Page(targets, offset, _runtime.GetResponseLimits(session), rows => AgentJson.Encode(new
             {
                 targets = rows,
                 offset,
@@ -293,7 +318,7 @@ namespace XMAT.AgentAccess
             Demand(session, permission);
             var snapshot = await TranslateAsync(() => _desktop.InspectLifecycleAsync(cancellationToken));
             Demand(session, permission);
-            return EnsureBudget(_runtime.GetSession(session).Limits, AgentJson.Encode(snapshot));
+            return EnsureBudget(_runtime.GetResponseLimits(session), AgentJson.Encode(snapshot));
         }
 
         internal async Task<Guid> RequestLifecycleAsync(
@@ -505,7 +530,7 @@ namespace XMAT.AgentAccess
             AgentSession session, AgentOperationDescriptor descriptor, string idempotencyKey,
             Func<AgentExecutionContext, Task<JsonElement>> execute, Func<CancellationToken, Task<bool>> revalidate)
         {
-            EnsureBudget(_runtime.GetSession(session).Limits, AgentJson.Encode(new AgentOperationSnapshot(
+            EnsureBudget(_runtime.GetResponseLimits(session), AgentJson.Encode(new AgentOperationSnapshot(
                 Guid.NewGuid(), session.Id, descriptor.Action, AgentOperationState.AwaitingApproval, null,
                 descriptor.Effects, descriptor.Requirements, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
                 true, true, true)));
@@ -539,13 +564,7 @@ namespace XMAT.AgentAccess
             }
             catch (CaptureFileException exception)
             {
-                throw new AgentAccessException(exception.Failure switch
-                {
-                    CaptureFileFailure.FolderChanged => AgentAccessError.SourceChanged,
-                    CaptureFileFailure.DestinationExists => AgentAccessError.DestinationExists,
-                    CaptureFileFailure.InvalidPath or CaptureFileFailure.ProtectedSource => AgentAccessError.InvalidPath,
-                    _ => AgentAccessError.OperationUnavailable
-                });
+                throw AgentFileErrors.Translate(exception);
             }
         }
 

@@ -4,9 +4,6 @@
 
 using System.Text;
 using System.Text.Json;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using XMAT.AgentAccess;
@@ -357,59 +354,6 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void DesktopGrantsSourceEditingAndApprovesTheExactDiffWithoutExecutionPermission()
-        {
-            _application.Run(owner =>
-            {
-                WpfTestHost.Show(owner, new Grid());
-                var model = new CaptureAppModel();
-                var target = new ScriptCaptureContext();
-                model.CaptureDeviceContexts.Add(target);
-                var host = new AgentAccessHost(model, Dispatcher.CurrentDispatcher);
-                AgentAccessWindow manager = null;
-                McpClient client = null;
-                try
-                {
-                    host.MarkReady();
-                    host.Enable();
-                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
-                    client = Complete(Connect(host));
-                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
-                    WpfTestHost.Pump();
-                    var sessions = (DataGrid)manager.FindName("Sessions");
-                    sessions.SelectedItem = sessions.Items.Cast<AgentSessionSnapshot>().Single();
-                    ((CheckBox)manager.FindName("ScriptReadGrant")).IsChecked = true;
-                    ((CheckBox)manager.FindName("ScriptEditGrant")).IsChecked = true;
-                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    WpfTestHost.Pump();
-                    var session = Assert.Single(host.Runtime.GetSessions());
-                    Assert.Equal(2, session.Permissions.Count);
-                    Assert.DoesNotContain(session.Permissions, permission => permission.Capability == AgentCapability.ScriptExecute);
-                    var capture = Complete(host.GetCapturesAsync()).Single().Id;
-                    var script = Complete(model.CaptureScripts.GetScriptsAsync(capture)).First();
-                    var args = ScriptArguments(capture, script, "desktop-diff");
-                    args["source"] = "Params.Continue = false;";
-                    var operation = RequestScript(client, "xmat_update_script", args);
-                    WpfTestHost.Pump();
-                    var operations = (DataGrid)manager.FindName("Operations");
-                    operations.SelectedItem = operations.Items.Cast<AgentOperationSnapshot>().Single(item => item.Id == operation);
-                    WpfTestHost.Pump();
-                    Assert.Contains("+Params.Continue = false;", ((TextBox)manager.FindName("ApprovalDetails")).Text);
-                    ((Button)manager.FindName("Approve")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    Finish(host.Runtime.WaitForCompletionAsync(host.FindSession(session.Id), operation));
-                    Assert.Equal("Params.Continue = false;", target.Controller.Scripts[WebServiceCaptureScriptableEventType.SslConnectionRequest].Script);
-                    Assert.False(target.Controller.Scripts.HasActiveScripts);
-                }
-                finally
-                {
-                    manager?.Close();
-                    if (client != null)
-                        Finish(client.DisposeAsync().AsTask());
-                    Finish(host.DisposeAsync().AsTask());
-                }
-            });
-        }
 
         [Theory]
         [InlineData(false)]

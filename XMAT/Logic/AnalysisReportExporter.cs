@@ -70,6 +70,9 @@ namespace XMAT
         internal string PublishedPath { get; }
         internal string ResiduePath { get; set; }
         internal WindowsExportFolder.OwnedDirectory OwnedResidue { get; set; }
+        internal IReadOnlyList<string> PublishedFiles { get; set; } = Array.Empty<string>();
+        internal IReadOnlyList<string> RetainedFiles { get; set; } = Array.Empty<string>();
+        internal Func<Task<bool>> CleanupResidue { get; set; }
 
         internal AnalysisReportExportException(
             AnalysisReportExportFailureKind failureKind,
@@ -202,7 +205,7 @@ namespace XMAT
         }
     }
 
-    internal sealed class AnalysisReportExporter
+    internal sealed partial class AnalysisReportExporter
     {
         internal const int MaximumCompatiblePathLength = 260;
         internal const int MaximumCaptureNameLength = 60;
@@ -325,22 +328,8 @@ namespace XMAT
                 foreach (var artifact in source.ArtifactManifest)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    await using var input = sourceFolder.OpenInput(artifact.RelativePath, out _);
-                    if (input.Length != artifact.Length)
-                        throw new AnalysisReportExportException(AnalysisReportExportFailureKind.ManifestMismatch, "The completed report changed.");
-                    var sourceHash = Convert.ToHexString(await SHA256.HashDataAsync(input, cancellationToken));
-                    if (hashes[artifact.RelativePath] != null &&
-                        !string.Equals(sourceHash, hashes[artifact.RelativePath], StringComparison.OrdinalIgnoreCase))
-                        throw new AnalysisReportExportException(AnalysisReportExportFailureKind.ManifestMismatch, "The completed report content changed.");
-                    input.Position = 0;
                     await using var output = staging.CreateFile(artifact.RelativePath);
-                    await input.CopyToAsync(output, cancellationToken);
-                    await output.FlushAsync(cancellationToken);
-                    output.Flush(flushToDisk: true);
-                    output.Position = 0;
-                    var hash = Convert.ToHexString(await SHA256.HashDataAsync(output, cancellationToken));
-                    if (output.Length != artifact.Length || !string.Equals(hash, sourceHash, StringComparison.OrdinalIgnoreCase))
-                        throw new AnalysisReportExportException(AnalysisReportExportFailureKind.ManifestMismatch, "The copied report failed validation.");
+                    await CopyApprovedArtifactAsync(sourceFolder, output, artifact, cancellationToken);
                 }
                 await beforePublish(cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
@@ -368,6 +357,25 @@ namespace XMAT
                 if (!retainStaging)
                     staging.Dispose();
             }
+        }
+
+        private static async Task CopyApprovedArtifactAsync(
+            WindowsExportFolder source, FileStream output, AnalysisArtifact artifact, CancellationToken cancellationToken)
+        {
+            await using var input = source.OpenInput(artifact.RelativePath, out _);
+            if (input.Length != artifact.Length)
+                throw new AnalysisReportExportException(AnalysisReportExportFailureKind.ManifestMismatch, "The completed report changed.");
+            var sourceHash = Convert.ToHexString(await SHA256.HashDataAsync(input, cancellationToken));
+            if (artifact.Sha256 != null && !string.Equals(sourceHash, artifact.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new AnalysisReportExportException(AnalysisReportExportFailureKind.ManifestMismatch, "The completed report content changed.");
+            input.Position = 0;
+            await input.CopyToAsync(output, cancellationToken);
+            await output.FlushAsync(cancellationToken);
+            output.Flush(flushToDisk: true);
+            output.Position = 0;
+            var hash = Convert.ToHexString(await SHA256.HashDataAsync(output, cancellationToken));
+            if (output.Length != artifact.Length || !string.Equals(hash, sourceHash, StringComparison.OrdinalIgnoreCase))
+                throw new AnalysisReportExportException(AnalysisReportExportFailureKind.ManifestMismatch, "The copied report failed validation.");
         }
 
         internal static string CreateFolderName(

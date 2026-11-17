@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,10 +16,99 @@ namespace XMAT.AgentAccess
         AgentRuntime runtime, ICaptureQueries sources, ICaptureFiles files,
         ICaptureFileExports exports, Func<bool> accepting,
         ICaptureFileInputs inputs = null, ICaptureFileLoads loads = null, ICaptureSazImports imports = null,
-        ICaptureEtlImports etlImports = null)
+        ICaptureEtlImports etlImports = null, ICaptureReadonlySources readonlySources = null)
     {
         private readonly object _gate = new();
         private readonly Dictionary<AgentSession, int> _running = new();
+
+        internal async Task<Guid> OpenPathAsync(
+            AgentSession session, string path, Guid? expectedLoadedSourceId, string idempotencyKey, CancellationToken cancellationToken)
+        {
+            DemandAccepting();
+            runtime.Demand(session, new AgentPermission(AgentCapability.CaptureLoad, AgentScope.Application));
+            var hash = AgentOperationDescriptor.Hash(new { path, expectedLoadedSourceId });
+            var replay = runtime.FindReplay(session, idempotencyKey, "capture.open_readonly", hash);
+            if (replay.HasValue)
+                return replay.Value;
+            if (readonlySources == null || loads == null)
+                throw new AgentAccessException(AgentAccessError.UnsupportedOperation);
+            var kind = Path.GetExtension(path)?.ToLowerInvariant() switch
+            {
+                ".xmatcap" => CaptureInputKind.CaptureDatabase,
+                ".saz" => CaptureInputKind.FiddlerSaz,
+                ".etl" => CaptureInputKind.NetworkTraceEtl,
+                _ => throw new AgentAccessException(AgentAccessError.InvalidPath)
+            };
+            var input = await AgentLocalFileRequests.InputAsync(runtime, session, inputs, path, kind, cancellationToken);
+            var requirements = new[]
+            {
+                new AgentPermission(AgentCapability.CaptureLoad, AgentScope.Application),
+                new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(input.Id))
+            };
+            runtime.Demand(session, requirements);
+            var state = await loads.GetStateAsync(cancellationToken);
+            if (state.LoadedSourceId != expectedLoadedSourceId)
+                throw new AgentAccessException(AgentAccessError.SourceChanged);
+            var descriptor = new AgentOperationDescriptor("capture.open_readonly", requirements,
+                AgentOperationEffects.StateChange | AgentOperationEffects.HumanOwnedResource, hash,
+                Localization.GetLocalizedString("AGENT_OPEN_READONLY_WARNING", input.FileName, input.Kind, input.Length, input.Sha256));
+            cancellationToken.ThrowIfCancellationRequested();
+            return runtime.Submit(session, descriptor, idempotencyKey, async context =>
+            {
+                var limits = runtime.GetResponseLimits(session);
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(limits.QueryTimeoutSeconds));
+                try
+                {
+                    var receipt = await readonlySources.OpenInputAsync(input.Id, state, limits.MaximumQueryResultBytes, token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        DemandAccepting();
+                        runtime.Demand(session, requirements);
+                        return Task.CompletedTask;
+                    }, timeout.Token);
+                    return AgentJson.Encode(receipt);
+                }
+                catch (CaptureFileException exception) { throw AgentFileErrors.Translate(exception); }
+                catch (QueryException exception) { throw QueryFailure(exception); }
+                catch (OperationCanceledException) when (!context.CancellationToken.IsCancellationRequested)
+                { throw new AgentAccessException(AgentAccessError.QueryTimeout); }
+            }, async token =>
+            {
+                if (await loads.GetStateAsync(token) != state)
+                    return false;
+                await ValidateInputAsync(session, input.Id, token);
+                return true;
+            });
+        }
+
+        internal async Task<Guid> LoadPathAsync(
+            AgentSession session, string path, Guid? expectedLoadedSourceId, string idempotencyKey, CancellationToken cancellationToken)
+        {
+            DemandAccepting();
+            runtime.Demand(session, new AgentPermission(AgentCapability.CaptureLoad, AgentScope.Application));
+            var hash = AgentOperationDescriptor.Hash(new { path, expectedLoadedSourceId });
+            var replay = runtime.FindReplay(session, idempotencyKey, "capture.load_file", hash);
+            if (replay.HasValue)
+                return replay.Value;
+            var input = await AgentLocalFileRequests.InputAsync(runtime, session, inputs, path, CaptureInputKind.CaptureDatabase, cancellationToken);
+            return await LoadAsync(session, input.Id, expectedLoadedSourceId, idempotencyKey, cancellationToken, hash);
+        }
+
+        internal async Task<Guid> ImportPathAsync(
+            AgentSession session, string path, Guid sourceId, string idempotencyKey, bool etl, CancellationToken cancellationToken)
+        {
+            DemandAccepting();
+            runtime.Demand(session, new AgentPermission(AgentCapability.CaptureImport, AgentScope.Source(sourceId)));
+            var action = etl ? "capture.import_etl" : "capture.import_saz";
+            var hash = AgentOperationDescriptor.Hash(new { path, sourceId });
+            var replay = runtime.FindReplay(session, idempotencyKey, action, hash);
+            if (replay.HasValue)
+                return replay.Value;
+            var input = await AgentLocalFileRequests.InputAsync(runtime, session, inputs, path,
+                etl ? CaptureInputKind.NetworkTraceEtl : CaptureInputKind.FiddlerSaz, cancellationToken);
+            return await ImportAsync(session, input.Id, sourceId, idempotencyKey, etl, cancellationToken, hash);
+        }
 
         internal Task<Guid> ImportSazAsync(
             AgentSession session, Guid inputId, Guid sourceId, string idempotencyKey, CancellationToken cancellationToken) =>
@@ -29,7 +119,8 @@ namespace XMAT.AgentAccess
             ImportAsync(session, inputId, sourceId, idempotencyKey, true, cancellationToken);
 
         private async Task<Guid> ImportAsync(
-            AgentSession session, Guid inputId, Guid sourceId, string idempotencyKey, bool etl, CancellationToken cancellationToken)
+            AgentSession session, Guid inputId, Guid sourceId, string idempotencyKey, bool etl, CancellationToken cancellationToken,
+            string requestHash = null)
         {
             ICaptureFileImports service = etl ? etlImports : imports;
             var action = etl ? "capture.import_etl" : "capture.import_saz";
@@ -40,7 +131,7 @@ namespace XMAT.AgentAccess
                 new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(inputId))
             };
             runtime.Demand(session, requirements);
-            var hash = AgentOperationDescriptor.Hash(new { inputId, sourceId });
+            var hash = requestHash ?? AgentOperationDescriptor.Hash(new { inputId, sourceId });
             var replay = runtime.FindReplay(session, idempotencyKey, action, hash);
             if (replay.HasValue)
                 return replay.Value;
@@ -58,7 +149,8 @@ namespace XMAT.AgentAccess
             if (target.SourceId != sourceId)
                 throw new AgentAccessException(AgentAccessError.SourceChanged);
             var descriptor = new AgentOperationDescriptor(action, requirements,
-                AgentOperationEffects.StateChange | AgentOperationEffects.DataDeletion | AgentOperationEffects.HumanOwnedResource,
+                AgentOperationEffects.StateChange | AgentOperationEffects.HumanOwnedResource |
+                    (runtime.Policy == null || target.ReplacesStoredRows ? AgentOperationEffects.DataDeletion : AgentOperationEffects.None),
                 hash, Localization.GetLocalizedString(etl ? "ETL_IMPORT_APPROVAL" : "AGENT_SAZ_IMPORT_APPROVAL", input.FileName, input.Length,
                     input.Sha256, sourceId, target.DeviceName, target.CaptureId?.ToString() ?? "-"));
             DemandAccepting();
@@ -68,7 +160,7 @@ namespace XMAT.AgentAccess
             {
                 DemandAccepting();
                 runtime.Demand(session, requirements);
-                var limits = runtime.GetSession(session).Limits;
+                var limits = runtime.GetResponseLimits(session);
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
                 deadline.CancelAfter(TimeSpan.FromSeconds(limits.QueryTimeoutSeconds));
                 try
@@ -125,7 +217,7 @@ namespace XMAT.AgentAccess
 
         internal async Task<Guid> LoadAsync(
             AgentSession session, Guid inputId, Guid? expectedLoadedSourceId,
-            string idempotencyKey, CancellationToken cancellationToken)
+            string idempotencyKey, CancellationToken cancellationToken, string requestHash = null)
         {
             DemandAccepting();
             var requirements = new[]
@@ -134,7 +226,7 @@ namespace XMAT.AgentAccess
                 new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(inputId))
             };
             runtime.Demand(session, requirements);
-            var hash = AgentOperationDescriptor.Hash(new { inputId, expectedLoadedSourceId });
+            var hash = requestHash ?? AgentOperationDescriptor.Hash(new { inputId, expectedLoadedSourceId });
             var replay = runtime.FindReplay(session, idempotencyKey, "capture.load_file", hash);
             if (replay.HasValue)
                 return replay.Value;
@@ -158,7 +250,7 @@ namespace XMAT.AgentAccess
             {
                 DemandAccepting();
                 runtime.Demand(session, requirements);
-                var limits = runtime.GetSession(session).Limits;
+                var limits = runtime.GetResponseLimits(session);
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
                 deadline.CancelAfter(TimeSpan.FromSeconds(limits.QueryTimeoutSeconds));
                 try
@@ -210,7 +302,7 @@ namespace XMAT.AgentAccess
 
         private async Task ValidateInputAsync(AgentSession session, Guid inputId, CancellationToken cancellationToken)
         {
-            var limits = runtime.GetSession(session).Limits;
+            var limits = runtime.GetResponseLimits(session);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(limits.QueryTimeoutSeconds));
             try
@@ -222,10 +314,28 @@ namespace XMAT.AgentAccess
             { throw new AgentAccessException(AgentAccessError.QueryTimeout); }
         }
 
+        internal async Task<Guid> SavePathAsync(
+            AgentSession session, Guid sourceId, CaptureArchiveFormat format, string path,
+            string idempotencyKey, string deviceName, bool overwrite, CancellationToken cancellationToken)
+        {
+            DemandAccepting();
+            runtime.Demand(session, new AgentPermission(AgentCapability.CaptureExport, AgentScope.Source(sourceId)));
+            var hash = AgentOperationDescriptor.Hash(new { sourceId, format, path, deviceName, overwrite });
+            var replay = runtime.FindReplay(session, idempotencyKey, "capture.export_file", hash);
+            if (replay.HasValue)
+                return replay.Value;
+            if (!Enum.IsDefined(format))
+                throw new AgentAccessException(AgentAccessError.InvalidRequest);
+            var destination = await AgentLocalFileRequests.OutputAsync(runtime, session, exports, path,
+                format == CaptureArchiveFormat.CaptureDatabase ? ".xmatcap" : ".saz", overwrite, cancellationToken);
+            return await SaveAsync(session, sourceId, format, destination.FolderId, destination.FileName, idempotencyKey,
+                runtime.DataPolicy.Resolve("device", deviceName), cancellationToken, destination.Overwrite, hash);
+        }
+
         internal async Task<Guid> SaveAsync(
             AgentSession session, Guid sourceId, CaptureArchiveFormat format,
             Guid folderId, string fileName, string idempotencyKey, string deviceName,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, FileOverwriteState overwrite = null, string requestHash = null)
         {
             DemandAccepting();
             var requirements = new[]
@@ -237,27 +347,31 @@ namespace XMAT.AgentAccess
             runtime.Demand(session, requirements);
             if (format == CaptureArchiveFormat.CaptureDatabase && deviceName != null)
                 throw new AgentAccessException(AgentAccessError.InvalidRequest);
-            var hash = AgentOperationDescriptor.Hash(new { sourceId, format, folderId, fileName, deviceName });
+            var hash = requestHash ?? AgentOperationDescriptor.Hash(new { sourceId, format, folderId, fileName, deviceName });
             var replay = runtime.FindReplay(session, idempotencyKey, "capture.export_file", hash);
             if (replay.HasValue)
                 return replay.Value;
             var source = (await sources.GetSourcesAsync(cancellationToken)).SingleOrDefault(item => item.Id == sourceId);
             if (source == null)
                 throw new AgentAccessException(AgentAccessError.UnsupportedOperation);
-            var destination = new CaptureFileDestination(folderId, fileName, format);
+            var destination = new CaptureFileDestination(folderId, fileName, format, overwrite);
             await ValidateAsync(destination, cancellationToken);
             var folder = exports.GetFolders().Single(item => item.Id == folderId);
             var descriptor = new AgentOperationDescriptor("capture.export_file", requirements,
-                AgentOperationEffects.SensitiveDataExport | AgentOperationEffects.StateChange, hash,
+                AgentOperationEffects.SensitiveDataExport | AgentOperationEffects.StateChange |
+                    (overwrite == null ? AgentOperationEffects.None : AgentOperationEffects.FileOverwrite), hash,
                 Localization.GetLocalizedString("AGENT_CAPTURE_FILE_SCOPE_APPROVAL", sourceId, source.Kind, format,
-                    folder.Path, fileName, deviceName ?? "*", format == CaptureArchiveFormat.SanitizedFiddlerSaz));
+                    folder.Path, fileName, deviceName ?? "*", format == CaptureArchiveFormat.SanitizedFiddlerSaz) +
+                    AgentLocalFileRequests.Warning(overwrite),
+                confirmationRequired: overwrite != null,
+                rawLocalOutput: format != CaptureArchiveFormat.SanitizedFiddlerSaz);
             DemandAccepting();
             cancellationToken.ThrowIfCancellationRequested();
             return runtime.Submit(session, descriptor, idempotencyKey, async context =>
             {
                 DemandAccepting();
                 runtime.Demand(session, requirements);
-                var limits = runtime.GetSession(session).Limits;
+                var limits = runtime.GetResponseLimits(session);
                 lock (_gate)
                 {
                     if (_running.GetValueOrDefault(session) >= limits.MaximumQueryResults)
@@ -335,14 +449,7 @@ namespace XMAT.AgentAccess
             catch (CaptureFileException exception) { throw FileError(exception); }
         }
 
-        private static AgentAccessException FileError(CaptureFileException exception) => new(exception.Failure switch
-        {
-            CaptureFileFailure.DestinationExists => AgentAccessError.DestinationExists,
-            CaptureFileFailure.FolderChanged or CaptureFileFailure.InputChanged => AgentAccessError.SourceChanged,
-            CaptureFileFailure.InvalidPath or CaptureFileFailure.ProtectedSource => AgentAccessError.InvalidPath,
-            CaptureFileFailure.InvalidCapture => AgentAccessError.InvalidCapture,
-            _ => AgentAccessError.OperationUnavailable
-        });
+        private static AgentAccessException FileError(CaptureFileException exception) => AgentFileErrors.Translate(exception);
 
         private void DemandAccepting()
         {

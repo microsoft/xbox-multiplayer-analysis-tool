@@ -4,9 +4,6 @@
 
 using System.Text;
 using System.Text.Json;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using XMAT.AgentAccess;
@@ -231,48 +228,6 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void DesktopCanGrantSourceSummariesWithoutGrantingRawDataOrExport()
-        {
-            _application.Run(owner =>
-            {
-                WpfTestHost.Show(owner, new Grid());
-                using var database = CaptureInvestigationTestData.WebDatabase();
-                CaptureInvestigationTestData.AddWeb(database, 1);
-                var model = new CaptureAppModel { ActiveDatabase = database };
-                var host = new AgentAccessHost(model, Dispatcher.CurrentDispatcher);
-                AgentAccessWindow manager = null;
-                McpClient client = null;
-                try
-                {
-                    host.MarkReady();
-                    host.Enable();
-                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
-                    client = Complete(Connect(host));
-                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
-                    WpfTestHost.Pump();
-                    var sessions = (DataGrid)manager.FindName("Sessions");
-                    sessions.SelectedItem = sessions.Items.Cast<AgentSessionSnapshot>().Single();
-                    ((CheckBox)manager.FindName("SourceSummaryGrant")).IsChecked = true;
-                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    WpfTestHost.Pump();
-                    var session = Assert.Single(host.Runtime.GetSessions());
-                    var source = Complete(host.GetSourcesAsync()).Single().Id;
-                    Assert.Equal(new AgentPermission(AgentCapability.SummaryRead, AgentScope.Source(source)),
-                        Assert.Single(session.Permissions));
-                    Assert.False(((CheckBox)manager.FindName("RawQueryGrant")).IsChecked);
-                    Assert.False(((CheckBox)manager.FindName("QueryExportGrant")).IsChecked);
-                    RunData(client, host, host.FindSession(session.Id), source, "WebProxy", false, "desktop-summary");
-                }
-                finally
-                {
-                    manager?.Close();
-                    if (client != null)
-                        Finish(client.DisposeAsync().AsTask());
-                    Finish(host.DisposeAsync().AsTask());
-                }
-            });
-        }
 
         [Fact]
         public void CancellingAnUninterruptibleRuleDrainsItBeforeReleasingTheSharedAnalysisLease()

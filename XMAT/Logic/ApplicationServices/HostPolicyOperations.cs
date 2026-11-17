@@ -26,7 +26,7 @@ namespace XMAT.ApplicationServices
 
         private Task<T> InvokeAsync<T>(Func<T> action, CancellationToken cancellationToken)
         {
-            return App.HasUiAccess(dispatcher) ? Task.FromResult(Run()) : App.QueueOnUi(dispatcher, Run).Task;
+            return ApplicationDispatch.HasUiAccess(dispatcher) ? Task.FromResult(Run()) : ApplicationDispatch.QueueOnUi(dispatcher, Run).Task;
             T Run()
             {
                 cancellationToken.ThrowIfCancellationRequested();

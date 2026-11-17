@@ -17,5 +17,9 @@ namespace XMAT.SharedInterfaces
         Task<IReadOnlyList<QuerySourceDescriptor>> GetSourcesAsync(CancellationToken cancellationToken = default);
         Task<IReadOnlyList<QueryTable>> GetSchemaAsync(Guid sourceId, CancellationToken cancellationToken = default);
         Task<IQuerySession> CreateSessionAsync(Guid sourceId, CancellationToken cancellationToken = default);
+        Task<IQuerySession> CreateSessionAsync(
+            Guid sourceId, IQuerySnapshotProjection projection, CancellationToken cancellationToken = default) =>
+            projection == null ? CreateSessionAsync(sourceId, cancellationToken) :
+                throw new QueryException(QueryError.ProjectionUnavailable, "A filtered snapshot is unavailable.");
     }
 }

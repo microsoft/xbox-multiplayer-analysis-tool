@@ -28,8 +28,11 @@ namespace XMAT.AgentAccess
                 "xmat_update_preferences", "CTRL_TOOL_UPDATE_PREFERENCES", false),
             AgentMcpTools.Tool((Func<CancellationToken, Task<CallToolResult>>)DiagnosticsAsync,
                 "xmat_get_diagnostics", "CTRL_TOOL_DIAGNOSTICS", true),
-            AgentMcpTools.Tool((Func<string, AdministrationArtifactKind, Guid, string, string, CancellationToken, Task<CallToolResult>>)ExportDiagnosticsAsync,
-                "xmat_export_diagnostics", "CTRL_TOOL_EXPORT_DIAGNOSTICS", false),
+            runtime.Policy == null
+                ? AgentMcpTools.Tool((Func<string, AdministrationArtifactKind, Guid, string, string, CancellationToken, Task<CallToolResult>>)ExportDiagnosticsAsync,
+                    "xmat_export_diagnostics", "CTRL_TOOL_EXPORT_DIAGNOSTICS", false)
+                : AgentMcpTools.Tool((Func<string, AdministrationArtifactKind, string, string, bool, CancellationToken, Task<CallToolResult>>)ExportDiagnosticsPathAsync,
+                    "xmat_export_diagnostics", "CTRL_TOOL_EXPORT_DIAGNOSTICS", false),
             AgentMcpTools.Tool((Func<int, CancellationToken, Task<CallToolResult>>)NavigationTargetsAsync,
                 "xmat_list_navigation_targets", "CTRL_TOOL_NAVIGATION", true),
             AgentMcpTools.Tool((Func<DesktopNavigationRequest, string, CancellationToken, Task<CallToolResult>>)RevealAsync,
@@ -58,6 +61,11 @@ namespace XMAT.AgentAccess
             string idempotencyKey, CancellationToken cancellationToken = default) =>
             wrap(async () => AgentJson.Encode(runtime.GetOperation(session,
                 await application.ExportDiagnosticsAsync(session, expectedRevision, kind, folderId, fileName, idempotencyKey, cancellationToken))));
+        private Task<CallToolResult> ExportDiagnosticsPathAsync(
+            string expectedRevision, AdministrationArtifactKind kind, string path, string idempotencyKey,
+            bool overwrite = false, CancellationToken cancellationToken = default) =>
+            wrap(async () => AgentJson.Encode(runtime.GetOperation(session,
+                await application.ExportDiagnosticsPathAsync(session, expectedRevision, kind, path, idempotencyKey, overwrite, cancellationToken))));
         private Task<CallToolResult> NavigationTargetsAsync(int offset = 0, CancellationToken cancellationToken = default) =>
             wrap(() => application.NavigationTargetsAsync(session, offset, cancellationToken));
         private Task<CallToolResult> RevealAsync(

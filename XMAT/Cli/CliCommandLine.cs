@@ -14,9 +14,10 @@ namespace XMAT.Cli
         internal const string Doctor = "doctor";
         internal const string Help = "help";
         internal const string Version = "version";
+        internal const string Agent = "agent";
 
         // The commands xmat.exe runs. Each one needs a Supported capability in the registry (XMAT.Tests/Cli checks it).
-        internal static IReadOnlyList<string> Implemented { get; } = new[] { Analyze, Doctor };
+        internal static IReadOnlyList<string> Implemented { get; } = new[] { Analyze, Doctor, Agent };
     }
 
     internal sealed record CliRequest(
@@ -27,7 +28,8 @@ namespace XMAT.Cli
         bool FailOnFindings = false,
         string Target = null,
         string Topic = null,
-        CliLimits Limits = null);
+        CliLimits Limits = null,
+        CliAgentRequest Agent = null);
 
     // A parsed request, or a data-free usage error (exit code 2).
     internal sealed record CliParseResult(CliRequest Request, string Command, OperationDiagnostic Error)
@@ -102,6 +104,8 @@ namespace XMAT.Cli
             {
                 return ParseDoctor(args);
             }
+            if (first == CliCommands.Agent)
+                return CliAgentCommandLine.Parse(args);
 
             if (first.StartsWith('-'))
             {
@@ -213,12 +217,12 @@ namespace XMAT.Cli
 
             if (arguments.Positionals.Count != 0)
             {
-                return CliParseResult.UsageError(command, "cli.usage.unexpected-argument", "doctor takes no arguments besides --for analyze.");
+                return CliParseResult.UsageError(command, "cli.usage.unexpected-argument", "doctor takes only --for analyze or --for agent.");
             }
 
             if (!arguments.Options.TryGetValue(ForOption, out string target))
             {
-                return CliParseResult.UsageError(command, "cli.usage.missing-option", "doctor needs --for analyze.");
+                return CliParseResult.UsageError(command, "cli.usage.missing-option", "doctor needs --for analyze or --for agent.");
             }
 
             return CliCatalog.IsDoctorTarget(target)

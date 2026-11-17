@@ -7,15 +7,14 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.IO;
 using System.IO.Pipes;
 using System.Linq;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using XMAT.AgentConnection;
 using XMAT.ApplicationServices;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
@@ -38,17 +37,22 @@ namespace XMAT.AgentAccess
         private readonly AgentCaptureFileApplication _captureFiles;
         private readonly AgentClearApplication _clear;
         private readonly AgentAdministrationApplication _administration;
+        private readonly AgentHostApplication _lifecycle;
         private readonly ICaptureQueries _captureQueries;
+        private readonly AgentAccessPolicyService _policy;
+        private readonly SemaphoreSlim _policyChanges = new(1, 1);
         private CancellationTokenSource _listening;
         private Task _accepting = Task.CompletedTask;
         private Task _stopping;
-        private bool _ready;
+        private volatile bool _ready;
+        private volatile bool _disposed;
         private volatile bool _paused;
 
-        internal Guid InstanceId { get; } = Guid.NewGuid();
-        internal AgentRuntime Runtime { get; } = new();
+        internal Guid InstanceId { get; }
+        internal AgentRuntime Runtime { get; }
+        internal AgentAccessPolicyService Policy => _policy;
         internal bool IsEnabled => Runtime.IsEnabled;
-        internal bool IsAccepting => IsEnabled && !_paused;
+        internal bool IsAccepting => IsEnabled && !_paused && !_disposed;
         internal event EventHandler Changed;
 
         internal AgentAccessHost(
@@ -57,14 +61,21 @@ namespace XMAT.AgentAccess
             ICaptureOperations operations = null,
             ICaptureDevices devices = null,
             ICaptureProxyOperations proxyOperations = null,
-            ICaptureEtlImports etlImports = null)
+            ICaptureEtlImports etlImports = null,
+            AgentAccessPolicyService policy = null,
+            Guid? instanceId = null)
         {
             ArgumentNullException.ThrowIfNull(model);
             ArgumentNullException.ThrowIfNull(dispatcher);
+            _policy = policy;
+            InstanceId = instanceId ?? Guid.NewGuid();
+            if (InstanceId == Guid.Empty)
+                throw new ArgumentOutOfRangeException(nameof(instanceId));
+            Runtime = new(policy);
             _model = model;
             _catalog = model.CaptureCatalog;
             _application = new AgentCaptureApplication(Runtime, _catalog, operations ?? model.CaptureOperations,
-                () => IsAccepting, model.CaptureRecoveryOperations);
+                () => IsAccepting, model.CaptureRecoveryOperations, model.CaptureDataOperations);
             _captureQueries = model.CaptureQueries;
             _queries = new AgentQueryApplication(Runtime, _captureQueries, () => IsAccepting, model.CaptureFileExports);
             _data = new AgentDataApplication(Runtime, model.CaptureInvestigation, () => IsAccepting,
@@ -76,14 +87,17 @@ namespace XMAT.AgentAccess
                 _application, () => IsAccepting);
             _captureFiles = new AgentCaptureFileApplication(Runtime, model.CaptureQueries, model.CaptureFiles,
                 model.CaptureFileExports, () => IsAccepting, model.CaptureFileInputs, model.CaptureFileLoads,
-                model.CaptureSazImports, etlImports ?? model.CaptureEtlImports);
+                model.CaptureSazImports, etlImports ?? model.CaptureEtlImports, model.CaptureReadonlySources);
             _clear = new AgentClearApplication(Runtime, _catalog, model.CaptureDataOperations, () => IsAccepting);
             _administration = new AgentAdministrationApplication(Runtime, model.HostPolicyOperations,
                 model.ApplicationPreferences, model.ApplicationDiagnostics, model.DesktopActions,
                 () => IsAccepting, model.CaptureFileExports);
+            _lifecycle = new(Runtime, model.HostLifecycle, PauseRequests, ResumeRequests);
             Runtime.Changed += (_, _) => Changed?.Invoke(this, EventArgs.Empty);
             model.PropertyChanged += ModelPropertyChanged;
             model.CaptureDeviceContexts.CollectionChanged += DeviceContextsChanged;
+            if (policy != null)
+                policy.Changed += OnPolicyChanged;
         }
 
         private void DeviceContextsChanged(object sender, NotifyCollectionChangedEventArgs args) =>
@@ -97,9 +111,65 @@ namespace XMAT.AgentAccess
             }
         }
 
-        internal void MarkReady() => _ready = true;
+        internal void MarkReady()
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_ready)
+                return;
+            _ready = true;
+            if (_policy != null)
+            {
+                _policy.StartWatching();
+                _ = SynchronizePolicyAndReportFailureAsync();
+            }
+        }
         internal void PauseRequests() => _paused = true;
-        internal void ResumeRequests() => _paused = false;
+        internal void ResumeRequests()
+        {
+            _paused = false;
+            if (_policy != null && !_disposed)
+                _ = SynchronizePolicyAndReportFailureAsync();
+        }
+
+        private void OnPolicyChanged(object sender, EventArgs args) =>
+            _ = SynchronizePolicyAndReportFailureAsync();
+
+        private async Task SynchronizePolicyAndReportFailureAsync()
+        {
+            try
+            { await SynchronizePolicyAsync(); }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                Trace.TraceError("The XMAT agent host could not apply its saved policy.");
+                Changed?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        internal async Task SynchronizePolicyAsync()
+        {
+            if (_policy == null)
+                return;
+            await _policyChanges.WaitAsync();
+            try
+            {
+                if (!_ready || _disposed)
+                    return;
+                await Runtime.ApplyPolicyAsync();
+                if (!_policy.Current.Settings.Enabled)
+                {
+                    await DisableAsync();
+                    return;
+                }
+                Task stopping;
+                lock (_gate)
+                { stopping = _stopping; }
+                if (stopping != null)
+                    await stopping;
+                if (!_paused && !_disposed && _policy.Current.Settings.Enabled)
+                    Enable();
+            }
+            finally { _policyChanges.Release(); }
+        }
         internal Task<IReadOnlyList<CaptureDescriptor>> GetCapturesAsync() => _catalog.GetCapturesAsync();
         internal Task<IReadOnlyList<QuerySourceDescriptor>> GetSourcesAsync() => _model.GetInvestigationSourcesAsync();
         internal IReadOnlyList<ExportFolderDescriptor> GetExportFolders() => _model.CaptureFileExports.GetFolders();
@@ -117,6 +187,7 @@ namespace XMAT.AgentAccess
         {
             lock (_gate)
             {
+                ObjectDisposedException.ThrowIf(_disposed, this);
                 if (!_ready || _paused || _stopping is { IsCompletedSuccessfully: false })
                 {
                     throw new AgentAccessException(AgentAccessError.OperationUnavailable);
@@ -241,34 +312,12 @@ namespace XMAT.AgentAccess
 
         internal string ConnectionConfiguration
         {
-            get
-            {
-                using var process = Process.GetCurrentProcess();
-                var command = Path.Combine(AppContext.BaseDirectory, "AgentBridge", "XMAT.AgentBridge.exe");
-                return JsonSerializer.Serialize(new
-                {
-                    mcpServers = new Dictionary<string, object>
-                    {
-                        ["xmat"] = new
-                        {
-                            type = "stdio",
-                            command,
-                            args = new[]
-                            {
-                                "--instance", InstanceId.ToString("D"),
-                                "--pid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                                "--started", process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                            },
-                            tools = new[] { "*" }
-                        }
-                    }
-                }, new JsonSerializerOptions { WriteIndented = true });
-            }
+            get => AgentClientConfiguration.Create(AppContext.BaseDirectory, AgentClientKind.Copilot,
+                instance: AgentInstanceRecord.ForCurrentProcess(InstanceId,
+                    _model.IsHeadless ? "headless" : "desktop", _ready ? "ready" : "starting", IsEnabled)).Configuration;
         }
 
-        private NamedPipeServerStream CreatePipe() => new(
-            $"XMAT.Agent.{InstanceId:N}", PipeDirection.InOut, MaximumConnections + 1,
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        private NamedPipeServerStream CreatePipe() => AgentLocalPipe.Create(InstanceId, MaximumConnections + 1);
 
         private async Task AcceptAsync(NamedPipeServerStream pipe, CancellationToken cancellationToken)
         {
@@ -279,7 +328,7 @@ namespace XMAT.AgentAccess
                     await pipe.WaitForConnectionAsync(cancellationToken);
                     lock (_gate)
                     {
-                        if (_connections.Count >= MaximumConnections || !IsAccepting)
+                        if (_connections.Count >= MaximumConnections || !IsAccepting || !AgentLocalPipe.IsAllowedClient(pipe))
                         {
                             pipe.Dispose();
                         }
@@ -313,10 +362,12 @@ namespace XMAT.AgentAccess
                 await using var bounded = new BoundedMcpInputStream(pipe);
                 McpServer server = null;
                 var tools = new AgentMcpTools(Runtime, connection.Session, _application, _queries, _data, _scripts, _devices, _proxy, _captureFiles, _clear, _administration,
-                    () => server?.ClientInfo?.Name ?? "MCP client");
+                    () => server?.ClientInfo?.Name ?? "MCP client", _lifecycle, _model.IsHeadless);
                 server = McpServer.Create(new StreamServerTransport(bounded, pipe), new McpServerOptions
                 {
                     ServerInfo = new Implementation { Name = "XMAT", Version = "0.3.0" },
+                    ServerInstructions = Localization.GetLocalizedString("AGENT_SERVER_INSTRUCTIONS",
+                        _model.IsHeadless ? "headless" : "desktop", System.IO.Path.Combine(AppContext.BaseDirectory, "AGENTS.md")),
                     ToolCollection = tools.Create()
                 });
                 await using (server)
@@ -355,10 +406,16 @@ namespace XMAT.AgentAccess
 
         public async ValueTask DisposeAsync()
         {
+            _disposed = true;
+            if (_policy != null)
+                _policy.Changed -= OnPolicyChanged;
             _model.PropertyChanged -= ModelPropertyChanged;
             _model.CaptureDeviceContexts.CollectionChanged -= DeviceContextsChanged;
             await DisableAsync();
+            await _policyChanges.WaitAsync();
+            _policyChanges.Release();
             await _administration.DisposeAsync();
+            await _lifecycle.DisposeAsync();
             await Runtime.DisposeAsync();
         }
 

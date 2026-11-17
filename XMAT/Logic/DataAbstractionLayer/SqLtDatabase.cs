@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
@@ -24,6 +25,13 @@ namespace XMAT.DataAbstractionLayer
         {
             SaveToFileInternal(filepath);
         }
+
+        public void SaveToFile(string filepath, long maximumBytes, CancellationToken cancellationToken) =>
+            SqLtDatabaseBackup.SaveToFile(_connection, filepath, this,
+                maximumBytes: maximumBytes, cancellationToken: cancellationToken);
+
+        public void CreateSnapshotToFile(string filepath, long maximumBytes, CancellationToken cancellationToken) =>
+            SqLtDatabaseBackup.CreateSnapshot(_connection, filepath, maximumBytes, cancellationToken);
 
         public IEnumerable<string> TableNames()
         {

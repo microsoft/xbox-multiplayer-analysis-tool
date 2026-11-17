@@ -32,7 +32,7 @@ XboxMultiplayerAnalysisTool|XMAT.NetworkTraceCaptureAnalysis.NetworkTraceCapture
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities+BlockingOperationDisposable::.ctor|XMAT.PublicUtilities::SafeInvoke|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities+BlockingOperationDisposable::Dispose|XMAT.PublicUtilities::SafeInvoke|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::RestartAsAdmin|System.Windows.Application::get_Current|1
-XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Application::get_Current|4
+XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Application::get_Current|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Threading.Dispatcher::BeginInvoke|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::SafeInvoke|System.Windows.Threading.Dispatcher::CheckAccess|1
 XboxMultiplayerAnalysisTool|XMAT.PublicUtilities::get_AppName|System.Windows.Application::get_Current|1

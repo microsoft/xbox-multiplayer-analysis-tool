@@ -20,7 +20,14 @@ namespace XMAT.SharedInterfaces
         UnsupportedCapture,
         ElevationRequired,
         RecoveryRequired,
-        NotInitialized
+        NotInitialized,
+        ProxyTrustRequired
+    }
+
+    public sealed class CapturePrerequisiteException(CaptureOperationFailure failure)
+        : InvalidOperationException(failure.ToString())
+    {
+        public CaptureOperationFailure Failure { get; } = failure;
     }
 
     public enum CaptureTraceRecoveryPhase { None, Stop, Download, Publish, Disconnect }

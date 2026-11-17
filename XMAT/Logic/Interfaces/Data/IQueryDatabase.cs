@@ -13,6 +13,16 @@ namespace XMAT.SharedInterfaces
     {
         Task<IReadOnlyList<QueryTable>> GetQuerySchemaAsync(CancellationToken cancellationToken = default);
         Task<IQuerySession> CreateQuerySessionAsync(CancellationToken cancellationToken = default);
+        Task<IQuerySession> CreateQuerySessionAsync(
+            IQuerySnapshotProjection projection, CancellationToken cancellationToken = default) =>
+            projection == null ? CreateQuerySessionAsync(cancellationToken) :
+                throw new QueryException(QueryError.ProjectionUnavailable, "A filtered snapshot is unavailable.");
+    }
+
+    public interface IQuerySnapshotProjection
+    {
+        long MaximumBytes { get; }
+        object[] Project(QueryTable table, object[] values, CancellationToken cancellationToken);
     }
 
     public interface IQuerySession : IAsyncDisposable

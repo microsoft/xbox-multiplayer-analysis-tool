@@ -5,9 +5,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using XMAT.AgentAccess;
@@ -181,50 +178,6 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void DesktopInputGrantIsExactAndDoesNotImplicitlyGrantScriptEditsOrFileBrowsing()
-        {
-            _application.Run(owner =>
-            {
-                WpfTestHost.Show(owner, new Grid());
-                using var directory = new CaptureFileExportTests.DirectoryFixture();
-                var path = Path.Combine(directory.Path, "input.txt");
-                File.WriteAllText(path, "// reviewed");
-                var host = new AgentAccessHost(new CaptureAppModel(), Dispatcher.CurrentDispatcher);
-                AgentAccessWindow manager = null;
-                McpClient client = null;
-                try
-                {
-                    var input = Complete(host.RegisterInputFileAsync(path));
-                    host.MarkReady();
-                    host.Enable();
-                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
-                    client = Complete(Connect(host));
-                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
-                    WpfTestHost.Pump();
-                    var sessions = (DataGrid)manager.FindName("Sessions");
-                    sessions.SelectedItem = sessions.Items.Cast<AgentSessionSnapshot>().Single();
-                    var inputs = (ComboBox)manager.FindName("InputFileTarget");
-                    inputs.SelectedItem = inputs.Items.Cast<InputFileDescriptor>().Single(item => item.Id == input.Id);
-                    ((CheckBox)manager.FindName("FileReadGrant")).IsChecked = true;
-                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    WpfTestHost.Pump();
-                    var session = Assert.Single(host.Runtime.GetSessions());
-                    Assert.Equal(new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(input.Id)),
-                        Assert.Single(session.Permissions));
-                    var tools = Complete(client.ListToolsAsync().AsTask());
-                    Assert.Contains(tools, tool => tool.Name == "xmat_load_script");
-                    Assert.DoesNotContain(tools, tool => tool.Name is "xmat_read_file" or "xmat_register_input_file");
-                }
-                finally
-                {
-                    manager?.Close();
-                    if (client != null)
-                        Finish(client.DisposeAsync().AsTask());
-                    Finish(host.DisposeAsync().AsTask());
-                }
-            });
-        }
 
         private static Dictionary<string, object> ScriptInputArguments(
             Guid captureId, CaptureScriptDescriptor script, Guid inputId, string key) => new()

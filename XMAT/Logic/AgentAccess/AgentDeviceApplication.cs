@@ -122,7 +122,8 @@ namespace XMAT.AgentAccess
             runtime.Demand(session, permission);
             cancellationToken.ThrowIfCancellationRequested();
             var descriptor = new AgentOperationDescriptor(action, [permission],
-                AgentOperationEffects.StateChange | AgentOperationEffects.DataDeletion | AgentOperationEffects.HumanOwnedResource,
+                AgentOperationEffects.StateChange | AgentOperationEffects.HumanOwnedResource |
+                    (runtime.Policy == null || state.RemovalDeletesStoredRows ? AgentOperationEffects.DataDeletion : AgentOperationEffects.None),
                 hash, Localization.GetLocalizedString("AGENT_DEVICE_REMOVE_APPROVAL",
                     state.Capture.DeviceName, state.Capture.CaptureType, expectedRevision, state.ProxyState));
             return runtime.Submit(session, descriptor, idempotencyKey, context =>

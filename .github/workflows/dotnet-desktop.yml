@@ -41,7 +41,7 @@ jobs:
     # Restore the solution
     - name: Restore the application
       run: dotnet restore $env:Solution_Name
-      
+
     # Build
     - name: Build XMAT
       run: dotnet build $env:Solution_Name -c $env:Configuration --no-restore
@@ -61,6 +61,25 @@ jobs:
         $runtime = Get-Content -LiteralPath (Join-Path $bridge "XMAT.AgentBridge.runtimeconfig.json") -Raw | ConvertFrom-Json
         if ($runtime.runtimeOptions.tfm -ne "net10.0") {
           throw "The packaged agent companion targets an unexpected framework."
+        }
+        $desktopPublish = Join-Path $env:RUNNER_TEMP "xmat-publish-desktop"
+        $cliPublish = Join-Path $env:RUNNER_TEMP "xmat-publish-cli"
+        dotnet publish XMAT\XboxMultiplayerAnalysisTool.csproj -c $env:Configuration -p:Platform=x64 --no-build --no-restore --output $desktopPublish
+        if ($LASTEXITCODE -ne 0) { throw "Desktop publish failed." }
+        dotnet publish XMAT.Cli\XMAT.Cli.csproj -c $env:Configuration -p:Platform=x64 --no-build --no-restore --output $cliPublish
+        if ($LASTEXITCODE -ne 0) { throw "CLI publish failed." }
+        foreach ($root in @($output, "XMAT.Cli\bin\x64\$env:Configuration\net10.0-windows10.0.17763.0\win-x64", $desktopPublish, $cliPublish)) {
+          foreach ($name in @("XboxMultiplayerAnalysisTool.exe", "xmat.exe", "xmat.dll", "xmat.deps.json",
+                             "xmat.runtimeconfig.json", "AGENTS.md", "CLAUDE.md", "GEMINI.md",
+                             "docs\agent-access.md", "docs\cli.md", "docs\sql-workspace.md", "AgentBridge\XMAT.AgentBridge.exe")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $root $name) -PathType Leaf)) {
+              throw "The distributed output is missing agent setup artifact: $name"
+            }
+          }
+          $agent = (& (Join-Path $root "xmat.exe") doctor --for agent) -join "`n" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $agent.status -ne 'succeeded') {
+            throw "The distributed agent prerequisite check failed."
+          }
         }
       env:
         Configuration: ${{ matrix.configuration }}
@@ -88,7 +107,7 @@ jobs:
         "-reports:TestResults/**/coverage.cobertura.xml"
         "-targetdir:TestResults/CoverageReport"
         "-reporttypes:HtmlInline_AzurePipelines;Cobertura;MarkdownSummaryGithub"
-      
+
     - name: Post Coverage Summary
       if: always()
       run: |
@@ -119,6 +138,8 @@ jobs:
         if ($LASTEXITCODE -ne 0 -or $version.schema -ne 'xmat-cli/1') { throw "xmat --version failed with exit code $LASTEXITCODE" }
         $doctor = (& $xmat doctor --for analyze) -join "`n" | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0 -or $doctor.status -ne 'succeeded') { throw "xmat doctor --for analyze failed with exit code $LASTEXITCODE" }
+        $agent = (& $xmat doctor --for agent) -join "`n" | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or $agent.status -ne 'succeeded') { throw "xmat doctor --for agent failed with exit code $LASTEXITCODE" }
         Write-Host "xmat $($version.version) runs from the artifact folder"
       env:
         Configuration: ${{ matrix.configuration }}

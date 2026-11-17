@@ -29,7 +29,7 @@ namespace XMAT.AgentAccess
                 throw new AgentAccessException(AgentAccessError.InvalidRequest);
             var addresses = await TranslateAsync(() => operations.GetSourceAddressesAsync(captureId, cancellationToken));
             var capture = await catalog.WithTargetAsync(captureId, null, (_, snapshot) => Task.FromResult(snapshot));
-            var limit = runtime.GetSession(session).Limits.ResponseRows;
+            var limit = runtime.GetResponseLimits(session).ResponseRows;
             var page = addresses.Skip(addressOffset).Take(limit).ToArray();
             DemandAccepting();
             runtime.Demand(session, Summary);
@@ -41,9 +41,12 @@ namespace XMAT.AgentAccess
                 nextAddressOffset = addressOffset + page.Length < addresses.Count ? (int?)(addressOffset + page.Length) : null,
                 addressFingerprint = AgentOperationDescriptor.Hash(addresses),
                 manualSetup = capture.DeviceType == DeviceType.GenericProxyDevice,
-                canConfigure = runtime.GetSession(session).Permissions.Contains(
-                    new AgentPermission(AgentCapability.DeviceConfiguration, AgentScope.Capture(captureId))),
-                configurationRequiresApproval = true
+                canConfigure = runtime.Policy?.Settings.Allows(
+                    new AgentPermission(AgentCapability.DeviceConfiguration, AgentScope.Capture(captureId))) ??
+                    runtime.GetSession(session).Permissions.Contains(
+                        new AgentPermission(AgentCapability.DeviceConfiguration, AgentScope.Capture(captureId))),
+                configurationRequiresApproval = runtime.Policy == null,
+                consequentialChangesRequireConfirmation = runtime.Policy != null
             });
         }
 
@@ -74,6 +77,7 @@ namespace XMAT.AgentAccess
                 var requirements = new[] { configuration, control };
                 var effects = AgentOperationEffects.StateChange | AgentOperationEffects.NetworkConfiguration;
                 var scriptDetails = string.Empty;
+                AgentScriptVersion[] scriptVersions = [];
                 if (plan.MayRestartConsole)
                     effects |= AgentOperationEffects.ConsoleRestart;
                 if (plan.RequiresManualSetup || snapshot.RecoveryRequired ||
@@ -88,8 +92,17 @@ namespace XMAT.AgentAccess
                     effects |= AgentOperationEffects.TrustedCodeExecution;
                     scriptDetails = string.Join("\n\n", proxy.Scripts.ActiveScripts.Select(script =>
                         $"{script.DisplayName}\n{script.Script}"));
+                    scriptVersions = proxy.Scripts.ActiveScripts.Select(script => script.CaptureState())
+                        .Select(state => new AgentScriptVersion(state.Id, state.SourceHash)).ToArray();
                 }
-                return Task.FromResult((requirements, effects, scriptDetails));
+                var confirmationRequired = plan.MayRestartConsole ||
+                    plan.Action == CaptureProxyAction.ApplyPendingPort && plan.PendingPort != plan.Port ||
+                    plan.Configuration is CaptureDeviceProxyState.Unknown or CaptureDeviceProxyState.Unreachable ||
+                    plan.Configuration == CaptureDeviceProxyState.Enabled && !plan.EndpointBelongsToCapture ||
+                    runtime.GetOwnedResources().Any(resource =>
+                        resource.Resource == new AgentResourceKey(AgentResourceKind.Capture, captureId) &&
+                        resource.SessionId != session.Id);
+                return Task.FromResult((requirements, effects, scriptDetails, confirmationRequired, scriptVersions));
             });
             runtime.Demand(session, policy.requirements);
             DemandAccepting();
@@ -98,7 +111,8 @@ namespace XMAT.AgentAccess
                 Localization.GetLocalizedString("AGENT_PROXY_APPROVAL", plan.TargetAddress, action,
                     plan.SourceAddress ?? "-", plan.Port, plan.PendingPort, plan.Configuration,
                     plan.Endpoint?.ToString() ?? "-", plan.MayRestartConsole, plan.RequiresManualSetup,
-                    expectedRevision, policy.scriptDetails));
+                    expectedRevision, policy.scriptDetails),
+                confirmationRequired: policy.confirmationRequired, scriptVersions: policy.scriptVersions);
             return runtime.Submit(session, descriptor, idempotencyKey, async context =>
             {
                 DemandAccepting();

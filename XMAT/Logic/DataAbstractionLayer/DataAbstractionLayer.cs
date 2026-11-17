@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +12,17 @@ namespace XMAT.DataAbstractionLayer
 {
     public static class DataAbstractionLayer
     {
+        internal static IDisposable ReserveFilePublication(string path) =>
+            LoadedCaptureDatabaseRegistry.AcquireSaveDestination(path);
+
+        internal static IDatabase CreateWorkingDatabase()
+        {
+            var database = new SqLtDatabase();
+            try
+            { database.Initialize(); return database; }
+            catch { database.Dispose(); throw; }
+        }
+
         public static IDatabase Database
         {
             get { return DataAbstractionLayerImpl.GetDatabase(); }

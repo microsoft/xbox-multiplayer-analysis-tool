@@ -50,7 +50,7 @@ namespace XMAT.AgentAccess
             var descriptor = new AgentOperationDescriptor(action, [permission], AgentOperationEffects.None, hash);
             return runtime.Submit(session, descriptor, idempotencyKey, async context =>
             {
-                var limits = runtime.GetSession(session).Limits;
+                var limits = runtime.GetResponseLimits(session);
                 var seconds = timeoutSeconds ?? limits.QueryTimeoutSeconds;
                 var bytes = maximumResultBytes ?? limits.MaximumQueryResultBytes;
                 if (seconds <= 0 || seconds > limits.QueryTimeoutSeconds ||
@@ -64,9 +64,10 @@ namespace XMAT.AgentAccess
                     try
                     {
                         var options = new QueryExecutionOptions(TimeSpan.FromSeconds(seconds), bytes);
+                        var resolvedFilter = runtime.DataPolicy.Resolve(filter);
                         result = analyze
-                            ? await investigation.AnalyzeAsync(sourceId, kind, filter, options, context.CancellationToken)
-                            : await investigation.SearchAsync(sourceId, kind, filter, options, context.CancellationToken);
+                            ? await investigation.AnalyzeAsync(sourceId, kind, resolvedFilter, options, context.CancellationToken)
+                            : await investigation.SearchAsync(sourceId, kind, resolvedFilter, options, context.CancellationToken);
                     }
                     catch (CaptureDataException exception)
                     {
@@ -191,7 +192,7 @@ namespace XMAT.AgentAccess
         {
             if (offset > rows.Count)
                 throw new AgentAccessException(AgentAccessError.OperationNotFound);
-            var limits = runtime.GetSession(session).Limits;
+            var limits = runtime.GetResponseLimits(session);
             var values = new List<T>();
             var budget = Math.Max(0, limits.ResponseBytes - 1024);
             long used = 0;

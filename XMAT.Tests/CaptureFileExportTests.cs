@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Text.Json;
+using XMAT.AgentAccess;
 using XMAT.ApplicationServices;
 using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
@@ -11,6 +12,103 @@ namespace XMAT.Tests
 {
     public class CaptureFileExportTests
     {
+        [Fact]
+        public async Task ExplicitOverwriteIsBoundToTheReviewedFileAndUsesAtomicPublication()
+        {
+            using var directory = new DirectoryFixture();
+            var path = Path.Combine(directory.Path, "result.csv");
+            await File.WriteAllTextAsync(path, "previous contents");
+            var exports = new CaptureFileExports();
+            Assert.Equal(CaptureFileFailure.DestinationExists, (await Assert.ThrowsAsync<CaptureFileException>(() =>
+                exports.PrepareDestinationAsync(path, false))).Failure);
+            var prepared = await exports.PrepareDestinationAsync(path, true);
+            Assert.NotNull(prepared.Overwrite);
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            await using var snapshot = await database.CreateQuerySessionAsync();
+            await using var result = await snapshot.ExecuteAsync("SELECT 17 AS value", new(TimeSpan.FromSeconds(10), 65536));
+            await exports.SaveQueryAsync(result, new(prepared.FolderId, prepared.FileName, QueryExportFormat.Csv, prepared.Overwrite),
+                65536, _ => Task.CompletedTask);
+            Assert.Equal("\"value\"\r\n17\r\n", await File.ReadAllTextAsync(path));
+            Assert.Single(Directory.GetFiles(directory.Path));
+        }
+
+        [Fact]
+        public async Task ChangedOverwriteTargetsAreRejectedWithoutTouchingTheNewContents()
+        {
+            using var directory = new DirectoryFixture();
+            var path = Path.Combine(directory.Path, "result.json");
+            await File.WriteAllTextAsync(path, "first");
+            var exports = new CaptureFileExports();
+            var prepared = await exports.PrepareDestinationAsync(path, true);
+            await File.WriteAllTextAsync(path, "a newer edit");
+            Assert.Equal(CaptureFileFailure.InputChanged, (await Assert.ThrowsAsync<CaptureFileException>(() =>
+                exports.ValidateAsync(new(prepared.FolderId, prepared.FileName, QueryExportFormat.Json, prepared.Overwrite)))).Failure);
+            Assert.Equal("a newer edit", await File.ReadAllTextAsync(path));
+            Assert.Single(Directory.GetFiles(directory.Path));
+        }
+
+        [Fact]
+        public async Task OverwriteOptInDoesNotAuthorizeAFileThatAppearsAfterNewFilePreflight()
+        {
+            using var directory = new DirectoryFixture();
+            var path = Path.Combine(directory.Path, "result.csv");
+            var exports = new CaptureFileExports();
+            var prepared = await exports.PrepareDestinationAsync(path, true);
+            Assert.Null(prepared.Overwrite);
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            await using var snapshot = await database.CreateQuerySessionAsync();
+            await using var result = await snapshot.ExecuteAsync("SELECT 17", new(TimeSpan.FromSeconds(10), 65536));
+            Assert.Equal(CaptureFileFailure.DestinationExists, (await Assert.ThrowsAsync<CaptureFileException>(() =>
+                exports.SaveQueryAsync(result, new(prepared.FolderId, prepared.FileName, QueryExportFormat.Csv),
+                    65536, _ =>
+                    {
+                        File.WriteAllText(path, "appeared later");
+                        return Task.CompletedTask;
+                    }))).Failure);
+            Assert.Equal("appeared later", await File.ReadAllTextAsync(path));
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task AgentOverwritePreservesAnExactPreimageOrBlocksBeforeReplacement(bool failBackup)
+        {
+            using var directory = new DirectoryFixture();
+            var path = Path.Combine(directory.Path, "result.csv");
+            var original = new byte[] { 0, 1, 0xff, 0x80, 5 };
+            await File.WriteAllBytesAsync(path, original);
+            var root = Path.Combine(directory.Path, "Backups");
+            if (failBackup)
+                await File.WriteAllTextAsync(root, "unavailable");
+            await using var policy = new AgentAccessPolicyService(new(Path.Combine(directory.Path, "policy.json")));
+            await policy.SaveAsync(new() { Enabled = true, AutomaticBackups = true }, 0);
+            using var origin = new AgentMutationProtection(Guid.NewGuid(), policy, new(root));
+            var exports = new CaptureFileExports();
+            var prepared = await exports.PrepareDestinationAsync(path, true);
+            using var database = new SqLtDatabase();
+            database.Initialize();
+            await using var snapshot = await database.CreateQuerySessionAsync();
+            await using var result = await snapshot.ExecuteAsync("SELECT 17", new(TimeSpan.FromSeconds(10), 65536));
+            var save = exports.SaveQueryAsync(result,
+                new(prepared.FolderId, prepared.FileName, QueryExportFormat.Csv, prepared.Overwrite), 65536, _ => Task.CompletedTask);
+            if (failBackup)
+            {
+                Assert.Equal(AgentAccessError.BackupFailed, (await Assert.ThrowsAsync<AgentAccessException>(() => save)).Error);
+                Assert.Equal(original, await File.ReadAllBytesAsync(path));
+            }
+            else
+            {
+                await save;
+                var backup = Assert.Single(origin.Backups);
+                Assert.Equal(original, await File.ReadAllBytesAsync(Path.Combine(backup.Directory, "previous-file.bin")));
+                Assert.Equal("Committed", backup.ActionStatus);
+                Assert.Contains("17", await File.ReadAllTextAsync(path));
+            }
+            Assert.DoesNotContain(Directory.GetFiles(directory.Path), file => Path.GetFileName(file).StartsWith(".xmat-export-", StringComparison.Ordinal));
+        }
+
         [Fact]
         public async Task PublishesCompleteFrozenResultAsANewFileWithoutTemporaryResidue()
         {

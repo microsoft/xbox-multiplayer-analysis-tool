@@ -102,6 +102,31 @@ namespace XMAT.WebServiceCapture
             _cancellationToken = cancellationToken;
         }
 
+        internal static bool IsSensitiveField(string name) => IsSensitiveName(name);
+
+        internal string SanitizeTextValue(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return value;
+            try
+            {
+                if (StrictUtf8.GetByteCount(value) > MaximumBodyBytes)
+                {
+                    Summary.OmittedBodies++;
+                    return Redacted;
+                }
+                var result = SanitizeMessage(
+                    "POST / HTTP/1.1\r\nHost: redacted.invalid\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n",
+                    StrictUtf8.GetBytes(value), true, "POST");
+                return result.BodyOmitted ? Redacted : StrictUtf8.GetString(result.Body ?? Array.Empty<byte>());
+            }
+            catch (Exception exception) when (exception is EncoderFallbackException or DecoderFallbackException)
+            {
+                Summary.OmittedBodies++;
+                return Redacted;
+            }
+        }
+
         internal SanitizedHttpMessage SanitizeMessage(
             string rawHeaders, byte[] body, bool request, string requestMethod = null)
         {

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: MIT
 
 using System.Diagnostics;
-using System.Windows.Controls;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.SharedInterfaces;
@@ -109,41 +108,6 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void DesktopSourceChoicesRefreshWhenTheApplicationReplacesItsDatabase()
-        {
-            _application.Run(owner =>
-            {
-                WpfTestHost.Show(owner, new Grid());
-                using var first = Database("before");
-                using var second = Database("after");
-                var model = new CaptureAppModel { ActiveDatabase = first };
-                var host = model.AgentAccess;
-                AgentAccessWindow manager = null;
-                try
-                {
-                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
-                    WpfTestHost.Pump();
-                    var sources = (ComboBox)manager.FindName("QuerySourceTarget");
-                    var original = Assert.Single(sources.Items.Cast<QuerySourceDescriptor>()).Id;
-                    model.ActiveDatabase = second;
-                    WpfTestHost.Pump();
-                    var replacement = Assert.Single(sources.Items.Cast<QuerySourceDescriptor>()).Id;
-                    Assert.NotEqual(original, replacement);
-                    Assert.Equal(replacement, ((QuerySourceDescriptor)sources.SelectedItem).Id);
-                    model.ActiveDatabase = null;
-                    WpfTestHost.Pump();
-                    Assert.Empty(sources.Items);
-                    Assert.False(((CheckBox)manager.FindName("RawQueryGrant")).IsEnabled);
-                    Assert.False(((CheckBox)manager.FindName("QueryExportGrant")).IsEnabled);
-                }
-                finally
-                {
-                    manager?.Close();
-                    Complete(host.DisposeAsync().AsTask());
-                }
-            });
-        }
 
         private static SqLtDatabase Database(string value)
         {

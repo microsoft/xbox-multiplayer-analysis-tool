@@ -23,5 +23,9 @@ namespace XMAT.SharedInterfaces
             long maximumBytes,
             Func<CancellationToken, Task> beforePublish,
             CancellationToken cancellationToken = default);
+        Task<CaptureLoadReceipt> LoadPreparedAsync(
+            string path, string displayName, string originalPath, CaptureLoadState expectedState,
+            Func<CancellationToken, Task> beforePublish, CancellationToken cancellationToken = default) =>
+            Task.FromException<CaptureLoadReceipt>(new CaptureFileException(CaptureFileFailure.Unavailable));
     }
 }

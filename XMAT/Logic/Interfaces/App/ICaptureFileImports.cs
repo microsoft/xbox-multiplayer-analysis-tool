@@ -8,7 +8,8 @@ using System.Threading.Tasks;
 
 namespace XMAT.SharedInterfaces
 {
-    public sealed record CaptureImportTarget(Guid SourceId, string FileName, string DeviceName, Guid? CaptureId, string Revision);
+    public sealed record CaptureImportTarget(
+        Guid SourceId, string FileName, string DeviceName, Guid? CaptureId, string Revision, bool ReplacesStoredRows = true);
     public sealed record CaptureImportReceipt(
         Guid SourceId, Guid CaptureId, string DeviceName, int RecordCount, bool AddedContext,
         bool Published, bool ViewsNotified);

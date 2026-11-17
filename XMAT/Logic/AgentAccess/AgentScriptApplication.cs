@@ -12,6 +12,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 
 namespace XMAT.AgentAccess
 {
@@ -52,13 +53,15 @@ namespace XMAT.AgentAccess
             var source = await Call(() => scripts.ReadAsync(captureId, scriptId, cancellationToken));
             if (source.Script.Revision != expectedRevision)
                 throw new AgentAccessException(AgentAccessError.SourceChanged);
-            if (source.Script.SourceBytes > runtime.GetSession(session).Limits.MaximumQueryResultBytes)
+            if (source.Script.SourceBytes > runtime.GetResponseLimits(session).MaximumQueryResultBytes)
                 throw new AgentAccessException(AgentAccessError.LimitExceeded);
             ArgumentOutOfRangeException.ThrowIfNegative(byteOffset);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
-            var utf8 = Encoding.UTF8.GetBytes(source.Source);
+            var projectedSource = runtime.DataPolicy.Redacts
+                ? runtime.DataPolicy.Text(source.Source, cancellationToken) : source.Source;
+            var utf8 = Encoding.UTF8.GetBytes(projectedSource);
             ArgumentOutOfRangeException.ThrowIfGreaterThan(byteOffset, utf8.LongLength);
-            var budget = Math.Min(64 * 1024, Math.Max(1, (runtime.GetSession(session).Limits.ResponseBytes - 1024) * 3 / 4));
+            var budget = Math.Min(64 * 1024, Math.Max(1, (runtime.GetResponseLimits(session).ResponseBytes - 1024) * 3 / 4));
             var length = (int)Math.Min(Math.Min(maximumBytes, budget), utf8.LongLength - byteOffset);
             var bytes = utf8.AsSpan(checked((int)byteOffset), length).ToArray();
             var result = AgentJson.Encode(new
@@ -68,7 +71,9 @@ namespace XMAT.AgentAccess
                 totalBytes = utf8.LongLength,
                 bytes,
                 hasMore = byteOffset + length < utf8.LongLength,
-                encoding = "utf-8"
+                encoding = "utf-8",
+                presentationOnly = runtime.DataPolicy.Redacts,
+                dataView = runtime.DataPolicy.Redacts ? "redacted" : "complete"
             });
             Demand(session, captureId, AgentCapability.ScriptRead);
             return result;
@@ -76,14 +81,22 @@ namespace XMAT.AgentAccess
 
         internal async Task<Guid> UpdateAsync(
             AgentSession session, Guid captureId, Guid scriptId, long expectedRevision, string expectedSourceHash,
-            string source, string idempotencyKey, CancellationToken cancellationToken)
+            string source, string idempotencyKey, CancellationToken cancellationToken, bool allowFilteredReplacement = false)
         {
             var requirements = Permissions(captureId, AgentCapability.ScriptRead, AgentCapability.ScriptEdit);
             Demand(session, requirements);
             ArgumentNullException.ThrowIfNull(source);
-            if (Encoding.UTF8.GetByteCount(source) > runtime.GetSession(session).Limits.MaximumQueryResultBytes)
+            if (runtime.DataPolicy.Redacts && !allowFilteredReplacement &&
+                source.Contains(SazSanitizer.Redacted, StringComparison.Ordinal))
+                throw new AgentAccessException(AgentAccessError.InvalidRequest, AgentJson.Encode(new
+                {
+                    error = AgentAccessError.InvalidRequest,
+                    reason = Localization.GetLocalizedString("AGENT_SCRIPT_PRESENTATION_ONLY")
+                }));
+            if (Encoding.UTF8.GetByteCount(source) > runtime.GetResponseLimits(session).MaximumQueryResultBytes)
                 throw new AgentAccessException(AgentAccessError.LimitExceeded);
-            var hash = AgentOperationDescriptor.Hash(new { captureId, scriptId, expectedRevision, expectedSourceHash, source });
+            var hash = AgentOperationDescriptor.Hash(new
+            { captureId, scriptId, expectedRevision, expectedSourceHash, source, allowFilteredReplacement });
             var replay = runtime.FindReplay(session, idempotencyKey, "script.update", hash);
             if (replay.HasValue)
                 return replay.Value;
@@ -111,10 +124,10 @@ namespace XMAT.AgentAccess
             var permissions = runtime.GetSession(session).Permissions;
             var granted = permissions.Where(permission => permission.Capability == AgentCapability.FileRead)
                 .Select(permission => permission.Scope.Id).ToHashSet();
-            var all = fileInputs?.GetInputs().Where(input => granted.Contains(input.Id)).ToArray() ?? [];
+            var all = fileInputs?.GetInputs().Where(input => runtime.Policy != null || granted.Contains(input.Id)).ToArray() ?? [];
             if (offset < 0 || offset > all.Length)
                 throw new AgentAccessException(AgentAccessError.InvalidRequest);
-            var items = all.Skip(offset).Take(runtime.GetSession(session).Limits.ResponseRows).ToArray();
+            var items = all.Skip(offset).Take(runtime.GetResponseLimits(session).ResponseRows).ToArray();
             foreach (var input in items)
                 Demand(session, new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(input.Id)));
             return Task.FromResult(AgentJson.Encode(new
@@ -126,14 +139,29 @@ namespace XMAT.AgentAccess
             }));
         }
 
+        internal async Task<Guid> LoadPathAsync(
+            AgentSession session, Guid captureId, Guid scriptId, long expectedRevision, string expectedSourceHash,
+            string path, string idempotencyKey, CancellationToken cancellationToken)
+        {
+            Demand(session, Permissions(captureId, AgentCapability.ScriptRead, AgentCapability.ScriptEdit));
+            var hash = AgentOperationDescriptor.Hash(new { captureId, scriptId, expectedRevision, expectedSourceHash, path });
+            var replay = runtime.FindReplay(session, idempotencyKey, "script.load_file", hash);
+            if (replay.HasValue)
+                return replay.Value;
+            var input = await AgentLocalFileRequests.InputAsync(runtime, session, fileInputs, path,
+                CaptureInputKind.ScriptSource, cancellationToken);
+            return await LoadFileAsync(session, captureId, scriptId, expectedRevision, expectedSourceHash,
+                input.Id, idempotencyKey, cancellationToken, hash);
+        }
+
         internal async Task<Guid> LoadFileAsync(
             AgentSession session, Guid captureId, Guid scriptId, long expectedRevision, string expectedSourceHash,
-            Guid inputId, string idempotencyKey, CancellationToken cancellationToken)
+            Guid inputId, string idempotencyKey, CancellationToken cancellationToken, string requestHash = null)
         {
             var requirements = Permissions(captureId, AgentCapability.ScriptRead, AgentCapability.ScriptEdit)
                 .Append(new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(inputId))).ToArray();
             Demand(session, requirements);
-            var hash = AgentOperationDescriptor.Hash(new { captureId, scriptId, expectedRevision, expectedSourceHash, inputId });
+            var hash = requestHash ?? AgentOperationDescriptor.Hash(new { captureId, scriptId, expectedRevision, expectedSourceHash, inputId });
             var replay = runtime.FindReplay(session, idempotencyKey, "script.load_file", hash);
             if (replay.HasValue)
                 return replay.Value;
@@ -153,7 +181,7 @@ namespace XMAT.AgentAccess
             {
                 Demand(session, requirements);
                 runtime.EnsureOwnershipAvailable(session, Key(scriptId));
-                using var deadline = Deadline(context, runtime.GetSession(session).Limits);
+                using var deadline = Deadline(context, runtime.GetResponseLimits(session));
                 try
                 {
                     var source = await ReadInputAsync(session, inputId, deadline.Token);
@@ -180,7 +208,7 @@ namespace XMAT.AgentAccess
                     return false;
                 try
                 {
-                    var limits = runtime.GetSession(session).Limits;
+                    var limits = runtime.GetResponseLimits(session);
                     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
                     deadline.CancelAfter(TimeSpan.FromSeconds(limits.QueryTimeoutSeconds));
                     await fileInputs.ValidateAsync(inputId, limits.MaximumQueryResultBytes, deadline.Token);
@@ -200,7 +228,7 @@ namespace XMAT.AgentAccess
                 throw new AgentAccessException(AgentAccessError.UnsupportedOperation);
             var permission = new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(inputId));
             Demand(session, permission);
-            var limits = runtime.GetSession(session).Limits;
+            var limits = runtime.GetResponseLimits(session);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(limits.QueryTimeoutSeconds));
             ReserveFile(session, limits.MaximumQueryResults);
@@ -218,14 +246,30 @@ namespace XMAT.AgentAccess
             finally { UnreserveFile(session); }
         }
 
+        internal async Task<Guid> SavePathAsync(
+            AgentSession session, Guid captureId, Guid scriptId, long expectedRevision, string expectedSourceHash,
+            string path, string idempotencyKey, bool overwrite, CancellationToken cancellationToken)
+        {
+            Demand(session, Permissions(captureId, AgentCapability.ScriptRead, AgentCapability.ScriptExport));
+            var hash = AgentOperationDescriptor.Hash(new { captureId, scriptId, expectedRevision, expectedSourceHash, path, overwrite });
+            var replay = runtime.FindReplay(session, idempotencyKey, "script.save_file", hash);
+            if (replay.HasValue)
+                return replay.Value;
+            var destination = await AgentLocalFileRequests.OutputAsync(runtime, session, fileExports,
+                path, ".txt", overwrite, cancellationToken);
+            return await SaveFileAsync(session, captureId, scriptId, expectedRevision, expectedSourceHash,
+                destination.FolderId, destination.FileName, idempotencyKey, cancellationToken, destination.Overwrite, hash);
+        }
+
         internal async Task<Guid> SaveFileAsync(
             AgentSession session, Guid captureId, Guid scriptId, long expectedRevision, string expectedSourceHash,
-            Guid folderId, string fileName, string idempotencyKey, CancellationToken cancellationToken)
+            Guid folderId, string fileName, string idempotencyKey, CancellationToken cancellationToken,
+            FileOverwriteState overwrite = null, string requestHash = null)
         {
             var requirements = Permissions(captureId, AgentCapability.ScriptRead, AgentCapability.ScriptExport)
                 .Append(new AgentPermission(AgentCapability.FileWrite, AgentScope.ExportFolder(folderId))).ToArray();
             Demand(session, requirements);
-            var hash = AgentOperationDescriptor.Hash(new
+            var hash = requestHash ?? AgentOperationDescriptor.Hash(new
             {
                 captureId,
                 scriptId,
@@ -240,21 +284,24 @@ namespace XMAT.AgentAccess
             if (fileExports == null)
                 throw new AgentAccessException(AgentAccessError.UnsupportedOperation);
             var source = await Preflight(session, captureId, scriptId, expectedRevision, expectedSourceHash, cancellationToken);
-            var destination = new ScriptFileDestination(folderId, fileName);
+            var destination = new ScriptFileDestination(folderId, fileName, overwrite);
             try
             { await fileExports.ValidateScriptAsync(destination, cancellationToken); }
             catch (CaptureFileException exception) { throw FileError(exception); }
             var folder = fileExports.GetFolders().Single(item => item.Id == folderId);
             var descriptor = new AgentOperationDescriptor("script.save_file", requirements,
-                AgentOperationEffects.SensitiveDataExport | AgentOperationEffects.StateChange, hash,
+                AgentOperationEffects.SensitiveDataExport | AgentOperationEffects.StateChange |
+                    (overwrite == null ? AgentOperationEffects.None : AgentOperationEffects.FileOverwrite), hash,
                 Localization.GetLocalizedString("AGENT_SCRIPT_FILE_APPROVAL", source.CaptureName, source.Script.Event,
-                    scriptId, expectedRevision, expectedSourceHash, source.Script.SourceBytes, folder.Path, fileName));
+                    scriptId, expectedRevision, expectedSourceHash, source.Script.SourceBytes, folder.Path, fileName) +
+                    AgentLocalFileRequests.Warning(overwrite),
+                confirmationRequired: overwrite != null, rawLocalOutput: true);
             Demand(session, requirements);
             cancellationToken.ThrowIfCancellationRequested();
             return runtime.Submit(session, descriptor, idempotencyKey, async context =>
             {
                 Demand(session, requirements);
-                var limits = runtime.GetSession(session).Limits;
+                var limits = runtime.GetResponseLimits(session);
                 using var deadline = Deadline(context, limits);
                 ReserveFile(session, limits.MaximumQueryResults);
                 try
@@ -292,13 +339,7 @@ namespace XMAT.AgentAccess
             });
         }
 
-        private static AgentAccessException FileError(CaptureFileException exception) => new(exception.Failure switch
-        {
-            CaptureFileFailure.FolderChanged or CaptureFileFailure.InputChanged => AgentAccessError.SourceChanged,
-            CaptureFileFailure.DestinationExists => AgentAccessError.DestinationExists,
-            CaptureFileFailure.InvalidPath or CaptureFileFailure.ProtectedSource => AgentAccessError.InvalidPath,
-            _ => AgentAccessError.OperationUnavailable
-        });
+        private static AgentAccessException FileError(CaptureFileException exception) => AgentFileErrors.Translate(exception);
 
         private void ReserveFile(AgentSession session, int maximum)
         {
@@ -334,7 +375,7 @@ namespace XMAT.AgentAccess
             cancellationToken.ThrowIfCancellationRequested();
             return runtime.Submit(session, descriptor, idempotencyKey, async context =>
             {
-                var limits = runtime.GetSession(session).Limits;
+                var limits = runtime.GetResponseLimits(session);
                 Reserve(session, limits.MaximumQueryResults);
                 try
                 {
@@ -372,13 +413,15 @@ namespace XMAT.AgentAccess
                 AgentOperationEffects.StateChange | AgentOperationEffects.TrustedCodeExecution |
                 AgentOperationEffects.HumanOwnedResource, hash,
                 Localization.GetLocalizedString("AGENT_SCRIPT_ACTIVATION_APPROVAL", current.CaptureName, current.Script.Event,
-                    enabled, expectedRevision, expectedSourceHash, current.Source));
+                    enabled, expectedRevision, expectedSourceHash, current.Source),
+                confirmationRequired: false,
+                scriptVersions: enabled && !current.Script.IsEnabled ? [new(scriptId, expectedSourceHash)] : []);
             cancellationToken.ThrowIfCancellationRequested();
             return runtime.Submit(session, descriptor, idempotencyKey, async context =>
             {
                 Demand(session, requirements);
                 runtime.EnsureOwnershipAvailable(session, Key(scriptId));
-                var limits = runtime.GetSession(session).Limits;
+                var limits = runtime.GetResponseLimits(session);
                 using var deadline = Deadline(context, limits);
                 CaptureScriptTransition result;
                 try
@@ -484,7 +527,7 @@ namespace XMAT.AgentAccess
         {
             var source = await Call(() => scripts.ReadAsync(captureId, scriptId, cancellationToken));
             Demand(session, captureId, AgentCapability.ScriptRead);
-            if (source.Script.SourceBytes > runtime.GetSession(session).Limits.MaximumQueryResultBytes)
+            if (source.Script.SourceBytes > runtime.GetResponseLimits(session).MaximumQueryResultBytes)
                 throw new AgentAccessException(AgentAccessError.LimitExceeded);
             if (source.Script.Revision != revision || hash == null || source.Script.SourceHash != hash)
                 throw new AgentAccessException(AgentAccessError.SourceChanged);
@@ -533,7 +576,7 @@ namespace XMAT.AgentAccess
         {
             if (offset > rows.Count)
                 throw new AgentAccessException(AgentAccessError.OperationNotFound);
-            var limits = runtime.GetSession(session).Limits;
+            var limits = runtime.GetResponseLimits(session);
             var selected = new List<T>();
             long used = 0;
             for (var index = offset; index < rows.Count && selected.Count < limits.ResponseRows; index++)

@@ -92,8 +92,19 @@ namespace XMAT.ApplicationServices
             {
                 var input = await _inputs.CopyCaptureAsync(inputId, destination, maximumBytes, token);
                 return input.FileName;
-            }, null, beforePublish, cancellationToken);
+            }, _inputs.GetOriginalPath(inputId), beforePublish, cancellationToken);
         }
+
+        public Task<CaptureLoadReceipt> LoadPreparedAsync(
+            string path, string displayName, string originalPath, CaptureLoadState expectedState,
+            Func<CancellationToken, Task> beforePublish, CancellationToken cancellationToken = default) =>
+            LoadAsync(expectedState, async (destination, token) =>
+            {
+                await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                await DataAbstractionLayer.DataAbstractionLayer.CopyCaptureInputAsync(path, file, destination, token);
+                return displayName;
+            }, originalPath, beforePublish, cancellationToken);
 
         private async Task<CaptureLoadReceipt> LoadAsync(
             CaptureLoadState expectedState, Func<Stream, CancellationToken, Task<string>> copy, string originalPath,
@@ -349,8 +360,8 @@ namespace XMAT.ApplicationServices
             await cleanup.ConfigureAwait(false);
         }
 
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(_dispatcher, action);
-        private Task InvokeAsync(Func<Task> action) => App.RunOnUiAsync(_dispatcher, action);
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => ApplicationDispatch.RunOnUiAsync(_dispatcher, action);
+        private Task InvokeAsync(Func<Task> action) => ApplicationDispatch.RunOnUiAsync(_dispatcher, action);
         private sealed record Device(DeviceType Type, string Name, CaptureType Capture);
 
         private sealed class Target(ICaptureDeviceContext context)

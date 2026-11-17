@@ -137,7 +137,10 @@ namespace XMAT.SharedInterfaces
         CaptureAnalysisScope Scope = CaptureAnalysisScope.ExplicitFilter);
 
     public sealed record CaptureReportArtifact(string RelativePath, long Length, string Sha256);
-    public sealed record CaptureReportDestination(Guid FolderId, string DirectoryName);
+    public sealed record CaptureReportFileReplacement(string RelativePath, FileOverwriteState Previous);
+    public sealed record CaptureReportDestination(
+        Guid FolderId, string DirectoryName, string ExistingDirectoryIdentity = null,
+        IReadOnlyList<CaptureReportFileReplacement> Files = null);
     public sealed record CaptureReportExportReceipt(
         Guid ReportId, Guid SourceId, Guid SnapshotId, Guid FolderId, string DirectoryName,
         long Length, int FileCount, bool Published);

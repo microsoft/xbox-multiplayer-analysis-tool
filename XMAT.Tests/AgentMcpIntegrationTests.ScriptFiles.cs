@@ -4,9 +4,6 @@
 
 using System.Text;
 using System.Text.Json;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using XMAT.AgentAccess;
@@ -193,48 +190,6 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void DesktopScriptExportGrantIsIndependentFromEditAndExecution()
-        {
-            _application.Run(owner =>
-            {
-                WpfTestHost.Show(owner, new Grid());
-                var model = new CaptureAppModel();
-                model.CaptureDeviceContexts.Add(new ScriptCaptureContext());
-                var host = new AgentAccessHost(model, Dispatcher.CurrentDispatcher);
-                AgentAccessWindow manager = null;
-                McpClient client = null;
-                try
-                {
-                    host.MarkReady();
-                    host.Enable();
-                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
-                    client = Complete(Connect(host));
-                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
-                    WpfTestHost.Pump();
-                    var sessions = (DataGrid)manager.FindName("Sessions");
-                    sessions.SelectedItem = sessions.Items.Cast<AgentSessionSnapshot>().Single();
-                    var capture = (CaptureDescriptor)((ComboBox)manager.FindName("CaptureTarget")).SelectedItem;
-                    ((CheckBox)manager.FindName("ScriptReadGrant")).IsChecked = true;
-                    ((CheckBox)manager.FindName("ScriptExportGrant")).IsChecked = true;
-                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    WpfTestHost.Pump();
-                    var session = Assert.Single(host.Runtime.GetSessions());
-                    Assert.Equal(2, session.Permissions.Count);
-                    Assert.Contains(new AgentPermission(AgentCapability.ScriptRead, AgentScope.Capture(capture.Id)), session.Permissions);
-                    Assert.Contains(new AgentPermission(AgentCapability.ScriptExport, AgentScope.Capture(capture.Id)), session.Permissions);
-                    Assert.DoesNotContain(session.Permissions, permission => permission.Capability is
-                        AgentCapability.ScriptEdit or AgentCapability.ScriptExecute or AgentCapability.FileWrite);
-                }
-                finally
-                {
-                    manager?.Close();
-                    if (client != null)
-                        Finish(client.DisposeAsync().AsTask());
-                    Finish(host.DisposeAsync().AsTask());
-                }
-            });
-        }
 
         private static Dictionary<string, object> ScriptFileArguments(
             Guid captureId, CaptureScriptDescriptor script, Guid folderId, string fileName, string key) => new()

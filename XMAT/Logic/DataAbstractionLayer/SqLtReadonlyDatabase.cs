@@ -32,7 +32,16 @@ namespace XMAT.DataAbstractionLayer
         public Task<IQuerySession> CreateQuerySessionAsync(CancellationToken cancellationToken = default) =>
             SqLtQuerySession.CreateAsync(_connection, cancellationToken);
 
+        public Task<IQuerySession> CreateQuerySessionAsync(
+            IQuerySnapshotProjection projection, CancellationToken cancellationToken = default) =>
+            SqLtQuerySession.CreateAsync(_connection, cancellationToken, projection);
+
         public void SaveToFile(string filepath) => SqLtDatabaseBackup.SaveToFile(_connection, filepath, sourceIdentity: Identity);
+        public void SaveToFile(string filepath, long maximumBytes, CancellationToken cancellationToken) =>
+            SqLtDatabaseBackup.SaveToFile(_connection, filepath, sourceIdentity: Identity,
+                maximumBytes: maximumBytes, cancellationToken: cancellationToken);
+        public void CreateSnapshotToFile(string filepath, long maximumBytes, CancellationToken cancellationToken) =>
+            SqLtDatabaseBackup.CreateSnapshot(_connection, filepath, maximumBytes, cancellationToken);
 
         // FILE_NAME_NORMALIZED with VOLUME_NAME_DOS, then with VOLUME_NAME_GUID for volumes without a drive letter. The
         // opened name is never used: it is not normalized, so it could still lead SQLite through a link.

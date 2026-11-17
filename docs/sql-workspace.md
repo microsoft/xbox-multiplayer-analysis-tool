@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Choose **Analysis > New SQL Query** to open a document in **SQL Queries**; the **Captures** workspace retains its device tabs, analysis views and splitter state. SQL always targets the explicitly selected active/current-loaded database, not the capture grid's device or visual filters. Stop all captures before running or refreshing schema; editing remains available during capture.
+Choose **Analysis > New SQL Query** to open a document in **SQL Queries**; the **Captures** workspace retains its device tabs, analysis views and splitter state. SQL always targets the explicitly selected active/current-loaded database, not the capture grid's device or visual filters. Active-source snapshots require stopped captures; immutable loaded-source queries do not stop unrelated capture. Editing remains available during capture.
 
 The local AvalonEdit editor provides highlighting, line numbers, schema search, table/column insertion, generated SELECTs, examples, basic alias-aware completion, and session-only history. **F5 / Ctrl+Enter** runs the selection when present, otherwise the document; **Ctrl+Space** opens completion. Open/save `.sql` files explicitly—opened files are never executed automatically, and history is not written to application settings. Unsaved documents use Save/Discard/Cancel on close. AvalonEdit 6.3.1.120 is MIT-licensed; its notice is included with the application.
 
@@ -11,3 +11,9 @@ Queries use the same read-only DAL snapshots as agents: exactly one result-produ
 Results use a virtualized ordinal grid with **1,000-row pages**, exact totals, duplicate/empty labels, typed NULL/INTEGER/REAL/TEXT/BLOB previews, and a bounded cell inspector. Paging is not a hidden SQL LIMIT. Selected row identities survive page changes; export **all rows** or **selected rows** as exact CSV/JSON from the completed immutable result, never by rerunning SQL. CSV quoting does not neutralize spreadsheet formulas, and unsanitized output may contain credentials/payloads. Human export uses its own file picker and overwrite/privacy consent.
 
 Temporary snapshots/results contain unencrypted capture data and add disk overhead beyond the result-store quota; successful replacement/document close/application shutdown releases only owned stores after work drains. The editor does not infer a source record for arbitrary joins or aggregates. SQLite errors are shown as supplied by the existing query contract; an exact editor error location is unavailable when the provider supplies no offset.
+
+[Agent Access](agent-access.md) uses the same provider-free DAL/query/result/export interfaces in desktop
+and headless hosts. Its global redacted mode projects a fresh private database **before** arbitrary SQL;
+pages, exact value chunks and CSV/JSON exports all read that projected immutable result. Human editor
+results are not redacted by that policy. Agent-origin Close uses explicit revision-bound SQL
+Save/Discard/Cancel choices through MCP rather than desktop dialogs; normal human Close is unchanged.

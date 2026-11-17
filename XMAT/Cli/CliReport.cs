@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Capabilities;
@@ -104,6 +105,7 @@ namespace XMAT.Cli
         internal IReadOnlyList<CliCommandHelp> Commands { get; set; }
 
         internal string Version { get; set; }
+        internal JsonElement? Agent { get; set; }
 
         // Records an error and its exit code. A cleanup failure (exit code 7) wins over every other outcome, so a later
         // failure or cancellation never replaces it.

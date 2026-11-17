@@ -21,7 +21,7 @@ namespace XMAT.Models
         internal IApplicationPreferences ApplicationPreferences =>
             AdministrationService(ref _applicationPreferences, () => new ApplicationPreferences(this, _dispatcher));
         internal IApplicationDiagnostics ApplicationDiagnostics =>
-            AdministrationService(ref _applicationDiagnostics, () => new ApplicationDiagnostics(CaptureFileExports));
+            AdministrationService(ref _applicationDiagnostics, () => new ApplicationDiagnostics(CaptureFileExports, hasDesktop: () => !IsHeadless));
         internal DesktopActions DesktopActions =>
             AdministrationService(ref _desktopActions, () => new DesktopActions(this, _dispatcher));
 

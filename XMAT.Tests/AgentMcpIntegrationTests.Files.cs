@@ -3,9 +3,6 @@
 // SPDX-License-Identifier: MIT
 
 using System.Text.Json;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using XMAT.AgentAccess;
@@ -211,49 +208,5 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void DesktopExportFolderGrant_IsSeparateFromSourceAndDoesNotGrantGeneralFileAccess()
-        {
-            _application.Run(owner =>
-            {
-                WpfTestHost.Show(owner, new Grid());
-                using var directory = new CaptureFileExportTests.DirectoryFixture();
-                var host = new AgentAccessHost(new CaptureAppModel(), Dispatcher.CurrentDispatcher);
-                McpClient client = null;
-                AgentAccessWindow window = null;
-                try
-                {
-                    var folder = Complete(host.RegisterExportFolderAsync(directory.Path));
-                    host.MarkReady();
-                    host.Enable();
-                    window = AgentAccessWindow.ShowOrActivate(owner, host);
-                    client = Complete(Connect(host));
-                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
-                    WpfTestHost.Pump();
-                    var sessions = (DataGrid)window.FindName("Sessions");
-                    sessions.SelectedItem = sessions.Items.Cast<AgentSessionSnapshot>().Single();
-                    var target = (ComboBox)window.FindName("ExportFolderTarget");
-                    target.SelectedItem = target.Items.Cast<ExportFolderDescriptor>().Single(item => item.Id == folder.Id);
-                    ((CheckBox)window.FindName("FileWriteGrant")).IsChecked = true;
-                    ((Button)window.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    WpfTestHost.Pump();
-                    var session = Assert.Single(host.Runtime.GetSessions());
-                    Assert.Equal(new AgentPermission(AgentCapability.FileWrite, AgentScope.ExportFolder(folder.Id)),
-                        Assert.Single(session.Permissions));
-                    Assert.DoesNotContain(session.Permissions, permission => permission.Capability is
-                        AgentCapability.RawDataRead or AgentCapability.QueryResultExport or AgentCapability.ScriptExecute);
-                    var tools = Complete(client.ListToolsAsync().AsTask());
-                    Assert.Contains(tools, tool => tool.Name == "xmat_save_query_result");
-                    Assert.DoesNotContain(tools, tool => tool.Name is "xmat_read_file" or "xmat_write_file");
-                }
-                finally
-                {
-                    window?.Close();
-                    if (client != null)
-                        Finish(client.DisposeAsync().AsTask());
-                    Finish(host.DisposeAsync().AsTask());
-                }
-            });
-        }
     }
 }

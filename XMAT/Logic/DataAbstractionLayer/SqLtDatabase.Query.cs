@@ -16,5 +16,9 @@ namespace XMAT.DataAbstractionLayer
 
         public Task<IQuerySession> CreateQuerySessionAsync(CancellationToken cancellationToken = default) =>
             SqLtQuerySession.CreateAsync(_connection, cancellationToken);
+
+        public Task<IQuerySession> CreateQuerySessionAsync(
+            IQuerySnapshotProjection projection, CancellationToken cancellationToken = default) =>
+            SqLtQuerySession.CreateAsync(_connection, cancellationToken, projection);
     }
 }

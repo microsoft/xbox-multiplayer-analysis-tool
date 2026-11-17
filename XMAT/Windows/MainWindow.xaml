@@ -92,6 +92,8 @@
                 <Separator/>
                 <MenuItem x:Name="ManageAgentAccess" Command="{x:Static local:AppCommands.ManageAgentAccess}"
                           Header="{x:Static local:AppCommands.ManageAgentAccessHeader}"/>
+                <MenuItem x:Name="TakeOverAgentResources" Click="TakeOverAgentResources_Click"/>
+                <MenuItem x:Name="SetupProxyTrust" Click="SetupProxyTrust_Click"/>
                 <MenuItem x:Name="ExportRootCert" Header="_Export Root Certificate to Desktop" Command="{x:Static local:AppCommands.ExportRootCert}" />
             </MenuItem>
             <MenuItem x:Name="HelpMenu" HorizontalAlignment="Left" Header="_Help">

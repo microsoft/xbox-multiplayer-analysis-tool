@@ -42,7 +42,11 @@ namespace XMAT.ApplicationServices
             _dispatcher = dispatcher;
             _ports = ports ?? ProxyPortPool.Shared;
             _save = save ?? (() => CaptureAppSettings.SerializeAsync(model));
-            _applyTheme = applyTheme ?? ThemeManager.ApplyTheme;
+            _applyTheme = applyTheme ?? (theme =>
+            {
+                if (!model.IsHeadless)
+                    ThemeManager.ApplyTheme(theme);
+            });
             _languages = languages ?? InstalledLanguages;
         }
 
@@ -160,12 +164,12 @@ namespace XMAT.ApplicationServices
                         // Once committed, finish the durable snapshot even if the caller disconnects.
                         await _save();
                         return new(committedRevision, current.Differences.Count > 0, true, true,
-                            current.LanguageRestartRequired);
+                            current.LanguageRestartRequired, ThemeRenderingDeferred: _model.IsHeadless);
                     }
                     catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
                     {
                         return new(committedRevision, current.Differences.Count > 0, true, false,
-                            current.LanguageRestartRequired, AdministrationFailure.PersistenceFailed);
+                            current.LanguageRestartRequired, AdministrationFailure.PersistenceFailed, _model.IsHeadless);
                     }
                 }
                 finally { _changing = false; }
@@ -304,6 +308,6 @@ namespace XMAT.ApplicationServices
         }
 
         private Task<T> InvokeAsync<T>(Func<Task<T>> action) =>
-            App.RunOnUiAsync(_dispatcher, action);
+            ApplicationDispatch.RunOnUiAsync(_dispatcher, action);
     }
 }

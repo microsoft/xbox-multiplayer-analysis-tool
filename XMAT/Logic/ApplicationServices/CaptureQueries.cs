@@ -45,6 +45,10 @@ namespace XMAT.ApplicationServices
         public Task<IQuerySession> CreateSessionAsync(Guid sourceId, CancellationToken cancellationToken = default) =>
             ReadSourceAsync(sourceId, source => source.CreateQuerySessionAsync(cancellationToken), cancellationToken);
 
+        public Task<IQuerySession> CreateSessionAsync(
+            Guid sourceId, IQuerySnapshotProjection projection, CancellationToken cancellationToken = default) =>
+            ReadSourceAsync(sourceId, source => source.CreateQuerySessionAsync(projection, cancellationToken), cancellationToken);
+
         internal Task<T> ReadSourceAsync<T>(
             Guid sourceId,
             Func<IQueryDatabase, Task<T>> action,
@@ -53,7 +57,8 @@ namespace XMAT.ApplicationServices
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var source = Resolve(sourceId);
-                if (!model.TryBeginCaptureDataOperation(out var lease, requireAllCapturesStopped: true))
+                if (!model.TryBeginCaptureDataOperation(out var lease,
+                    requireAllCapturesStopped: ReferenceEquals(source, model.ActiveDatabase)))
                 {
                     throw new QueryException(QueryError.SourceBusy, "Stop all captures and finish other capture/analysis operations first.");
                 }
@@ -76,7 +81,7 @@ namespace XMAT.ApplicationServices
 
         private Guid GetId(IQueryDatabase database) => _identities.GetValue(database, _ => new Identity()).Id;
         internal Guid GetSourceId(IQueryDatabase database) => GetId(database);
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(dispatcher, action);
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => ApplicationDispatch.RunOnUiAsync(dispatcher, action);
         private sealed class Identity { internal Guid Id { get; } = Guid.NewGuid(); }
     }
 }

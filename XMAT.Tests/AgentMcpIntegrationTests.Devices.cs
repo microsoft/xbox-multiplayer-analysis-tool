@@ -2,9 +2,6 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using XMAT.AgentAccess;
@@ -334,51 +331,5 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void DesktopDeviceGrants_AreApplicationCreationAndExactCaptureConfiguration()
-        {
-            _application.Run(owner =>
-            {
-                WpfTestHost.Show(owner, new Grid());
-                using var setup = new CaptureDeviceTestData();
-                var chosen = setup.Add(new(CaptureDeviceKind.GenericProxyDevice, CaptureType.WebProxy));
-                setup.Add(new(CaptureDeviceKind.WindowsHandheldOrRemoteDevice, CaptureType.WebProxy));
-                var host = new AgentAccessHost(setup.Model, Dispatcher.CurrentDispatcher, devices: setup.Devices);
-                AgentAccessWindow manager = null;
-                McpClient client = null;
-                try
-                {
-                    host.MarkReady();
-                    host.Enable();
-                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
-                    client = Complete(Connect(host));
-                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
-                    WpfTestHost.Pump();
-                    var sessions = (DataGrid)manager.FindName("Sessions");
-                    sessions.SelectedItem = sessions.Items.Cast<AgentSessionSnapshot>().Single();
-                    var targets = (ComboBox)manager.FindName("CaptureTarget");
-                    targets.SelectedItem = targets.Items.Cast<CaptureDescriptor>().Single(item => item.Id == chosen.CaptureId);
-                    ((CheckBox)manager.FindName("SummaryGrant")).IsChecked = true;
-                    ((CheckBox)manager.FindName("DeviceCreationGrant")).IsChecked = true;
-                    ((CheckBox)manager.FindName("DeviceConfigurationGrant")).IsChecked = true;
-                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    WpfTestHost.Pump();
-                    var session = Assert.Single(host.Runtime.GetSessions());
-                    Assert.Contains(new AgentPermission(AgentCapability.DeviceCreation, AgentScope.Application), session.Permissions);
-                    Assert.Contains(new AgentPermission(AgentCapability.DeviceConfiguration, AgentScope.Capture(chosen.CaptureId)),
-                        session.Permissions);
-                    Assert.Equal(3, session.Permissions.Count);
-                    Assert.DoesNotContain(session.Permissions, permission => permission.Capability is
-                        AgentCapability.CaptureControl or AgentCapability.ScriptExecute or AgentCapability.RawDataRead);
-                }
-                finally
-                {
-                    manager?.Close();
-                    if (client != null)
-                        Finish(client.DisposeAsync().AsTask());
-                    Finish(host.DisposeAsync().AsTask());
-                }
-            });
-        }
     }
 }

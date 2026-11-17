@@ -10,11 +10,10 @@ none of the exit codes below. Where the GUI and `xmat.exe` share a capability, s
 implemented once as a UI-free operation under `XMAT/Operations` and both are thin adapters over it, so a fix applies to
 both. Other capabilities move over time; the [capability table](#what-runs-headless) shows which ones run headless.
 
-Agents can use this standalone command line for offline file analysis. For SQL, live capture control, scripts,
-imports, detailed reports and other approved actions against a running desktop, use
-[Local Agent Access (MCP)](agent-access.md). Its stdio companion is `AgentBridge\XMAT.AgentBridge.exe`, not `xmat.exe`.
-Both routes use the same analysis operation; MCP supplies authorized immutable records rather than reopening an
-agent-supplied filename. Command-line support and connected-desktop permissions are separate contracts.
+Agents can use `analyze` for isolated offline file analysis, or `agent` commands to configure, launch and stop
+persistent desktop/headless [Agent Access (MCP)](agent-access.md). SQL, live capture, scripts, imports and detailed
+reports use MCP's shared application services, not another implementation inside the CLI. Its stdio companion is
+`AgentBridge\XMAT.AgentBridge.exe`, not `xmat.exe`. Direct CLI command coverage and MCP action availability are separate.
 
 ## Using xmat.exe
 
@@ -22,6 +21,12 @@ agent-supplied filename. Command-line support and connected-desktop permissions 
 xmat analyze INPUT --out DIR [--device ID] [--fail-on findings] [--max-input-mib N] [--max-data-mib N]
              [--max-record-mib N] [--max-records N]
 xmat doctor --for analyze
+xmat doctor --for agent
+xmat agent setup [--enable true|false] [--data redacted|complete] [--actions inspect|full] [--backups true|false] [--accept]
+xmat agent start [--mode headless|desktop]
+xmat agent status [--instance ID]
+xmat agent config --client copilot|claude|codex|gemini [--launch headless|desktop|none] [--instance ID]
+xmat agent stop --instance ID [--accept] [--save-capture ABS.xmatcap --overwrite | --discard-data] [--discard-sql] [--discard-scripts] [--disable-xbox-proxies]
 xmat help [COMMAND]
 xmat --version
 ```
@@ -105,7 +110,7 @@ xmat --version
   with `analysis.rules.work-limit`. These two limits measure time, so whether a run reaches them depends on the
   machine and its load; the installed patterns never fall back. The budget bounds rule evaluation, not xmat's total
   time or memory use, so in automation run xmat with time and memory limits.
-- Neither the JSON output nor the published files contain captured content (hosts, URLs, headers, bodies, Xbox user
+- Neither `analyze` JSON output nor its published summary files contain captured content (hosts, URLs, headers, bodies, Xbox user
   ids, IP addresses or device names) or local paths such as the input's; the only paths in them are artifact paths
   relative to `DIR`, such as `summary.json`. They hold rule names, levels and counts, service labels, ordinal device
   and console ids and the SHA-256 of the input. The input is never modified.
@@ -117,7 +122,8 @@ xmat --version
 - Commands, options, values and doctor targets that xmat does not know, including those planned for later releases,
   are usage errors (exit code 2). Error messages name only commands, options and values that xmat knows: an unknown
   word on the command line is never repeated, since it could be a path or a secret.
-- `xmat.exe` never starts the GUI and never reads or writes the GUI's settings and logs under `%APPDATA%`. The options
+- Offline `analyze`, help/version and doctor never construct the GUI or read/write its settings/logs. Explicit `agent`
+  commands have the separate policy/lifetime contract below. The options
   `--proxy-guard` and `--telemetry-sample` are reserved for the GUI and rejected (exit code 2).
 - Ctrl+C or Ctrl+Break cancels a run. xmat checks for cancellation while it works and just before each attempt to
   publish the results, which is the single rename of the staging folder to `DIR`. A run cancelled at one of these
@@ -131,7 +137,8 @@ xmat --version
 ## Output
 
 While standard output is open, every run that xmat completes writes exactly one JSON document (schema `xmat-cli/1`)
-to it, and standard error carries diagnostics without captured data. For example, from PowerShell:
+to it. Offline diagnostics contain no captured data; agent confirmations can include policy-projected host metadata
+and explicit local output paths. For example, from PowerShell:
 
 ```powershell
 $result = .\xmat.exe analyze capture.saz --out results | ConvertFrom-Json
@@ -169,6 +176,9 @@ empty. Once its command line is valid, `analyze` reports the effective input lim
 `architecture`, the process architecture such as `x64`) and `capabilities` (each with its `id`, `status` and
 `slice`); `help` reports `commands`, each with its `name`, `status` (`supported`), `usage` and `capabilities` (the ids
 of the capabilities that the command provides); and `--version` reports `version`.
+Agent commands add an `agent` object with their policy/configuration/instance/confirmation/requested-versus-completed
+result. These fields may include installation/output paths and host metadata; the offline summary privacy contract
+does not describe interactive MCP data sharing.
 
 If xmat cannot produce this document (an internal error), it writes a fixed fallback document instead, with only
 `schema`, `command`, `runId`, `status`, `exitCode`, `artifacts`, `cleanup`, empty `warnings` and the error
@@ -183,8 +193,8 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 | 0 | Success |
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
 | 3 | Invalid input or nothing to analyze: the input is missing, unreadable, unsupported, corrupt or over a safety limit, or `--device` names no device |
-| 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
-| 5 | Conflict: `--out` already exists |
+| 4 | Missing/damaged prerequisite, disabled/unavailable agent access, required acknowledgment/decisions or unavailable independent launch |
+| 5 | Conflict: `--out` already exists, concurrent policy change or a blocked/stale shutdown |
 | 6 | The operation failed, for example the output could not be written, or `--out` is on storage without Windows permissions (`cli.output.unprotected`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
@@ -204,6 +214,59 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
   `analysis.input.location-unsupported`, and writer sharing violations report `analysis.input.unreadable`; each is
   invalid input with exit code 3.
 
+## Agent setup and persistent hosts
+
+Initial policy is **disabled, redacted, Inspect and export, backups off**. Run `agent setup` to inspect current/
+proposed settings and the cloud/trust disclosure; it changes nothing without `--accept`. Setup proposes enablement;
+`--enable false` disables. Omitted data/action/backup choices retain saved values. Obtain the user's consent before
+enabling/broadening policy. Settings apply to every eligible current/future client, not one named CLI.
+
+Policy is stored atomically in `%APPDATA%\Microsoft\Xbox Multiplayer Analysis Tool\agent-access.json`, separately
+from ordinary application preferences. CLI setup touches only this neutral store and does not restore devices or
+initialize proxies, certificates, ETW, logs or WPF. Normal MCP Preferences cannot modify that policy.
+
+Local transport is not local inference: returned data can flow through the local client to its configured cloud
+model/provider and histories. Redaction is best effort, not confidentiality or a scripting sandbox. Full control
+includes trusted in-process C#. Client confirmations may be accepted by automation. Optional backups are local,
+unredacted native captures/file preimages, not complete undo. See the [complete disclosure](agent-access.md#trust-and-data-sharing).
+MCP routine controls do not add another XMAT confirmation. Actual data loss/overwrite, new C# activation,
+disruptive external or cross-client effects, broad host-list changes and raw exports under Redacted do.
+Client-native tool approvals are independent; CLI `setup --accept` and guarded `stop` decisions remain explicit.
+
+`agent config` generates actual install-relative bridge paths and client-compatible registration/JSON/TOML. It
+does not edit third-party files, auto-register servers or enable access. The default fallback is headless; `none`
+is connect-only, `desktop` launches a visible desktop when no eligible host exists. `/mcp` is client configuration/
+status, not a universal action confirmation. Installed `AGENTS.md` and the full guides ship beside the binaries;
+agents need an explicit reference or the client's trusted-workspace instruction discovery.
+
+`agent status` only reads bounded same-user process/discovery and saved-policy metadata. `agent start` coordinates
+launches per user/elevation, reuses an eligible host, and confirms exact process/instance readiness with a real MCP
+handshake. Disabled, starting/stopping, ambiguous or different-elevation presence prevents a launch-around.
+It launches only the trusted sibling desktop executable in an explicit internal mode, without shell/PATH lookup
+or silent elevation. `agent.ExternalLaunchRequired` means a job/sandbox prohibits independent lifetime: use an
+external Windows terminal, not containment workarounds. `agent.StartupTimeout` or cancellation can leave a
+starting host; inspect status rather than duplicating it. No existing host is killed.
+
+Persistent hosts survive bridge/client exit. Session-owned live-resource cleanup and private result ownership
+remain separate; a new connection does not inherit results/cursors. Disabled headless hosts retain their data and
+local presence; explicit local setup can re-enable access for recovery/stop. Modes do not share in-memory state.
+`doctor --for agent` checks installed host, bridge, instructions and x64 prerequisites without changing settings.
+
+`agent stop --instance ID` first returns shutdown state/required decisions without stopping. Add explicit
+`--accept`, plus required capture save/discard, SQL/script-draft discard acknowledgments and optional Xbox proxy
+disable choices. Save individual SQL/script drafts through MCP or the desktop before discarding if needed.
+`--overwrite` applies only to explicit `--save-capture`; output defaults to create-only. Stop calls the same MCP
+shutdown coordinator, stops/drains captures, performs enabled final backups, persists preferences and observes
+process exit. It never uses kill as graceful shutdown. Inspect is limited to sole-client idle headless housekeeping;
+broader shutdown needs Full control. Failed recovery/persistence/stale decisions leave the host alive, although
+already stopped captures or published files are not automatically undone.
+
+Agent diagnostic codes grow within `xmat-cli/1`: `agent.confirmation-required`, `agent.shutdown-decisions-required`,
+`agent.AccessDisabled`, `agent.NotReady`, `agent.Ambiguous`, `agent.WrongElevation`, `agent.ExternalLaunchRequired`,
+`agent.StartupFailed`, `agent.StartupTimeout`, `agent.HandshakeFailed`, `agent.shutdown-blocked`,
+`agent.policy.PolicyChanged`/`SaveFailed`, `agent.unavailable` and `agent.cancelled`. Inspect structured state before
+retrying; transport closure is not proof of process exit or rollback.
+
 ## What runs headless
 
 The capability registry (`XMAT/Operations/Capabilities/CapabilityRegistry.cs`) classifies every GUI entry point as
@@ -213,14 +276,20 @@ type, analyzer or preference is not classified, when non-UI code starts using GU
 the dispatcher, or when the table below no longer matches the registry. See
 [Headless Parity](../CONTRIBUTING.md#headless-parity) in CONTRIBUTING.md. The first capture slice (S4) keeps WebSocket
 handshakes and reports the frames it observed without their payloads; archiving the payloads is planned separately.
-This table describes standalone `xmat.exe`, not MCP availability. In particular, SQL and connected-session
-administration are classified as planned command-line surfaces (S9), while their running-desktop workflows already
-exist. This does not grant a CLI client the ability to approve its own MCP requests.
+This table describes direct `xmat.exe` commands, not MCP availability. SQL/live capture/scripts and other typed
+application actions run through persistent headless or desktop MCP, even where an individual direct CLI command is
+planned. Shared stateful dispatch has a separate exact dependency profile; offline bans remain unchanged. Global
+authorization and advisory client acknowledgment are separate; trusted automation may acknowledge its own requests.
 
 <!-- xmat-capabilities:begin -->
 | Capability | Command line | Headless |
 |---|---|---|
-| Manage connected desktop agent sessions and authorization (`agent-access.manage`) | (not available yet) | Planned (S9, XMAT-021) |
+| Configure global local-agent policy and client setup (`agent-access.manage`) | `xmat agent setup [--enable true\|false] [--data redacted\|complete] [--actions inspect\|full] [--backups true\|false] [--accept]` | Supported (S9) |
+| Take operator ownership of the selected capture/scripts without stopping them (`agent-access.take-over`) | (not available yet) | Planned (S9, XMAT-021) |
+| Generate client setup; never edit third-party client configuration (`agent.config`) | `xmat agent config --client copilot\|claude\|codex\|gemini [--launch headless\|desktop\|none] [--instance ID]` | Supported (S9) |
+| Launch or reuse a persistent identity-checked local host without enabling access (`agent.start`) | `xmat agent start [--mode headless\|desktop]` | Supported (S9) |
+| Inspect bounded local instance presence and saved policy (`agent.status`) | `xmat agent status [--instance ID]` | Supported (S9) |
+| Request guarded shutdown through the same MCP application workflow (`agent.stop`) | `xmat agent stop --instance ID [--accept] [--save-capture ABS.xmatcap --overwrite \| --discard-data] [--discard-sql] [--discard-scripts] [--disable-xbox-proxies]` | Supported (S9) |
 | Analyze with the LTA rule set, custom rules or other thresholds (`analysis.compatibility`) | (not available yet) | Planned (S1b, XMAT-021) |
 | Write the analysis HTML report (`analysis.html-report`) | (not available yet) | Planned (S3, XMAT-008) |
 | Analyze network traces (`analysis.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
@@ -243,7 +312,8 @@ exist. This does not grant a CLI client the ability to approve its own MCP reque
 | Archive WebSocket message payloads (`capture.websocket-payloads`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Capture an Xbox development kit (`capture.xbox`) | (not available yet) | Planned (S7, XMAT-021) |
 | Show or export the existing root certificate; never creates one (`certificate.export`) | (not available yet) | Planned (S5, XMAT-021) |
-| Check what a command needs before running it (`cli.doctor`) | `xmat doctor --for analyze` | Supported (S1) |
+| Explicit desktop HTTPS certificate/trust setup; Windows consent cannot be automated (`certificate.setup`) | (not available yet) | Planned (S5, XMAT-021) |
+| Check what a command needs before running it (`cli.doctor`) | `xmat doctor --for analyze\|agent` | Supported (S1) |
 | Ping an Xbox development kit or read its status (read-only) (`device.status`) | (not available yet) | Planned (S7, XMAT-021) |
 | Collect debug logs (`diagnostics.logs`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Show GDK for Xbox details (`environment.gdk`) | (not available yet) | Planned (S7, XMAT-021) |

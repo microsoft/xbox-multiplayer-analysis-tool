@@ -28,6 +28,10 @@ namespace XMAT.AgentAccess
         internal IReadOnlyList<AgentPermission> Requirements { get; }
         internal AgentOperationEffects Effects { get; }
         internal string ApprovalDetails { get; }
+        internal bool ConfirmationRequired { get; }
+        internal bool RawLocalOutput { get; }
+        internal IReadOnlyList<AgentScriptVersion> ScriptVersions { get; }
+        // Retained for legacy grant-based hosts; global policy uses consequence-based confirmation.
         internal bool RequiresApproval =>
             (Effects & SensitiveEffects) != 0 ||
             Requirements.Any(permission => permission.Capability is
@@ -40,7 +44,10 @@ namespace XMAT.AgentAccess
             IEnumerable<AgentPermission> requirements,
             AgentOperationEffects effects,
             string argumentsHash,
-            string approvalDetails = null)
+            string approvalDetails = null,
+            bool? confirmationRequired = null,
+            IEnumerable<AgentScriptVersion> scriptVersions = null,
+            bool rawLocalOutput = false)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(action);
             ArgumentException.ThrowIfNullOrWhiteSpace(argumentsHash);
@@ -83,7 +90,17 @@ namespace XMAT.AgentAccess
             Effects = effects;
             ApprovalDetails = approvalDetails;
             ArgumentsHash = argumentsHash;
-            Fingerprint = Hash(new { action, permissions, effects, argumentsHash });
+            ScriptVersions = Array.AsReadOnly((scriptVersions ?? []).Distinct().ToArray());
+            if (ScriptVersions.Any(version => version == null || version.Id == Guid.Empty ||
+                version.SourceHash?.Length != 64 || !version.SourceHash.All(char.IsAsciiHexDigit)) ||
+                ScriptVersions.Count != 0 && !effects.HasFlag(AgentOperationEffects.TrustedCodeExecution))
+                throw new ArgumentException("Script confirmations require exact executable source versions.", nameof(scriptVersions));
+            ConfirmationRequired = confirmationRequired ??
+                ((effects & (AgentOperationEffects.DataDeletion | AgentOperationEffects.FileOverwrite |
+                    AgentOperationEffects.ConsoleRestart)) != 0 ||
+                    effects.HasFlag(AgentOperationEffects.TrustedCodeExecution) && ScriptVersions.Count == 0);
+            RawLocalOutput = rawLocalOutput;
+            Fingerprint = Hash(new { action, permissions, effects, argumentsHash, ConfirmationRequired, ScriptVersions, RawLocalOutput });
         }
 
         internal static string Hash<T>(T arguments) =>
@@ -96,6 +113,9 @@ namespace XMAT.AgentAccess
             ArgumentsHash = source.ArgumentsHash;
             Requirements = source.Requirements;
             Effects = source.Effects;
+            ConfirmationRequired = source.ConfirmationRequired;
+            ScriptVersions = source.ScriptVersions;
+            RawLocalOutput = source.RawLocalOutput;
         }
 
         internal AgentOperationDescriptor WithoutApprovalDetails() => new(this);

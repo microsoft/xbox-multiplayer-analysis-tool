@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Text.Json;
 using XMAT.SharedInterfaces;
 
 namespace XMAT.AgentAccess
@@ -33,7 +33,7 @@ namespace XMAT.AgentAccess
                 {
                     if (entry.NavigationTargets.TryGetValue(key, out target))
                         return AgentJson.Encode(target);
-                    if (entry.NavigationTargets.Count >= Runtime.GetSession(session).Limits.ResponseRows)
+                    if (entry.NavigationTargets.Count >= Runtime.GetResponseLimits(session).ResponseRows)
                         throw new AgentAccessException(AgentAccessError.LimitExceeded);
                 }
                 bool IsOwned()

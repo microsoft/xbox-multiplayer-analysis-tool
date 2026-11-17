@@ -35,6 +35,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\XMAT.AgentBridge\Shared\*.cs" Link="Logic\AgentAccess\Connection\%(Filename)%(Extension)" />
     <Compile Remove="ViewModels\**" />
     <EmbeddedResource Remove="ViewModels\**" />
     <None Remove="ViewModels\**" />
@@ -49,13 +50,13 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
-  
+
   <ItemGroup>
     <Resource Include="Resources\html\xlta\*.html" />
     <Resource Include="Resources\html\xlta\*.css" />
     <Resource Include="Resources\html\xlta\*.js" />
   </ItemGroup>
-  
+
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
@@ -167,4 +168,10 @@
     </ItemGroup>
 
   <Import Project="..\XMAT.AgentBridge\AgentBridge.targets" />
+  <Import Project="Resources\AgentAccess\AgentInstructions.targets" />
+
+  <Target Name="PublishAgentConsoleHost" AfterTargets="Publish" Condition="'$(XmatPublishingConsoleHost)' != 'true'">
+    <MSBuild Projects="..\XMAT.Cli\XMAT.Cli.csproj" Targets="Publish"
+             Properties="Configuration=$(Configuration);Platform=x64;RuntimeIdentifier=win-x64;SelfContained=$(SelfContained);BuildProjectReferences=false;XmatPublishingConsoleHost=true;PublishDir=$([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))" />
+  </Target>
 </Project>

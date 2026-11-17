@@ -38,6 +38,6 @@ namespace XMAT.Cli
                 .ToList();
 
         // xmat doctor --for TARGET checks what a command needs from its installation; only analyze needs anything.
-        internal static bool IsDoctorTarget(string target) => target == CliCommands.Analyze;
+        internal static bool IsDoctorTarget(string target) => target is CliCommands.Analyze or CliCommands.Agent;
     }
 }

@@ -7,15 +7,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using XMAT.Models;
 using XMAT.NetworkTrace;
-using XMAT.NetworkTrace.Models;
-using XMAT.NetworkTrace.NTDE;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
@@ -37,10 +34,14 @@ namespace XMAT.ApplicationServices
         private string TableName => IsEtl ? NetworkTraceCaptureMethod.TableName : WebServiceCaptureMethod.TableName;
 
         public Task<CaptureImportTarget> GetTargetAsync(string fileName, CancellationToken cancellationToken = default) =>
-            InvokeAsync(() =>
+            InvokeAsync(async () =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                return Task.FromResult(Target(fileName));
+                var target = Target(fileName);
+                var replacesStoredRows = await HasStoredRowsAsync(target.DeviceName, cancellationToken);
+                if (Target(fileName) != target)
+                    throw new QueryException(QueryError.SourceChanged, "The import target changed during inspection.");
+                return target with { ReplacesStoredRows = replacesStoredRows };
             });
 
         private CaptureImportTarget Target(string fileName)
@@ -62,8 +63,19 @@ namespace XMAT.ApplicationServices
             var revision = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
                 new { sourceId, revisions })));
             return new(sourceId, fileName, name,
-                target == null ? null : model.CaptureCatalog.DescribeTarget(target).Id, revision);
+                target == null ? null : model.CaptureCatalog.DescribeTarget(target).Id, revision, false);
         }
+
+        private Task<bool> HasStoredRowsAsync(string deviceName, CancellationToken cancellationToken)
+        {
+            var table = model.ActiveDatabase.TableByName(TableName);
+            var field = IsEtl ? NetworkTraceCaptureMethod.FieldKey_DeviceName : WebServiceCaptureMethod.FieldKey_DeviceName;
+            return table == null ? Task.FromResult(false) : Task.Run(() =>
+                table.Dataset.HasRecords(new FieldValue<string>(field, deviceName)), cancellationToken);
+        }
+
+        private bool IsCurrent(CaptureImportTarget expected) =>
+            Target(expected.FileName) == (expected with { ReplacesStoredRows = false });
 
         public async Task<CaptureImportReceipt> ImportDesktopAsync(string path, CancellationToken cancellationToken = default)
         {
@@ -136,30 +148,11 @@ namespace XMAT.ApplicationServices
                     model.CaptureCatalog.DescribeTarget(target);
                     return Task.FromResult(target);
                 });
-                using var imported = await Task.Run(async () =>
-                {
-                    if (!IsEtl && context.CaptureController is WebServiceDeviceCaptureController web)
-                    {
-                        web.CancelExistingFiddlerImport();
-                        cancellationToken.ThrowIfCancellationRequested();
-                        return new Prepared(WebServiceCaptureMethod.PrepareFiddlerImport(
-                            path, web, maximumBytes, cancellationToken));
-                    }
-                    var stage = new NetworkTraceEventStage(maximumBytes, cancellationToken);
-                    try
-                    {
-                        await ReadEtlAsync(path, stage.Append, cancellationToken);
-                        stage.Complete();
-                        var packets = new NetworkTracePacketsCollection();
-                        foreach (var record in stage.Records(expected.DeviceName))
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            packets.AddFromDataRecord(record);
-                        }
-                        return new Prepared(stage, packets);
-                    }
-                    catch { stage.Dispose(); throw; }
-                }, cancellationToken);
+                var web = context.CaptureController as WebServiceDeviceCaptureController;
+                web?.CancelExistingFiddlerImport();
+                cancellationToken.ThrowIfCancellationRequested();
+                using var imported = await PreparedCaptureImport.PrepareAsync(path, captureType, expected.DeviceName,
+                    web, maximumBytes, readEtl, cancellationToken);
                 return await InvokeAsync(async () =>
                 {
                     Demand(expected, cancellationToken);
@@ -171,14 +164,24 @@ namespace XMAT.ApplicationServices
                             throw new QueryException(QueryError.SourceBusy, "Stop all captures and finish other data/analysis operations first.");
                         await beforePublish(cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
-                        if (Target(expected.FileName) != expected)
+                        if (!IsCurrent(expected) ||
+                            await HasStoredRowsAsync(expected.DeviceName, cancellationToken) != expected.ReplacesStoredRows)
                             throw new QueryException(QueryError.SourceChanged, "The import source or target changed.");
                         var database = model.ActiveDatabase;
                         var table = getTable?.Invoke() ?? database.TableByName(TableName);
                         if (table is not IImportedCaptureTable)
                             throw new CaptureFileException(CaptureFileFailure.Unavailable);
-                        await Task.Run(() => imported.Persist(
-                            table, expected.DeviceName, maximumBytes, cancellationToken), cancellationToken);
+                        await using var backup = await AgentMutationProtection.BeforeCaptureAsync(model, TableName,
+                            expected.DeviceName, "import-replacement", AgentAccess.AgentOperationDescriptor.Hash(expected), cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (!IsCurrent(expected))
+                            throw new QueryException(QueryError.SourceChanged, "The import target changed before replacement.");
+                        await Task.Run(() =>
+                        {
+                            backup.Demand();
+                            imported.Persist(table, expected.DeviceName, maximumBytes, cancellationToken);
+                        }, cancellationToken);
+                        backup.Committed();
 
                         // The transaction committed: finish publication even if cancellation arrived afterward.
                         imported.Apply(context.CaptureController, table);
@@ -224,25 +227,10 @@ namespace XMAT.ApplicationServices
             }
         }
 
-        private async Task ReadEtlAsync(string path, Action<string> append, CancellationToken token)
-        {
-            if (readEtl != null)
-            {
-                await readEtl(path, append, token);
-                return;
-            }
-            var engine = new LocalNetworkTraceEngineImpl();
-            EventHandler<string> handler = (_, record) => append(record);
-            engine.EventRecordAvailable += handler;
-            try
-            { await engine.ReadEventsFromFileAsync(path, token); }
-            finally { engine.EventRecordAvailable -= handler; }
-        }
-
         private void Demand(CaptureImportTarget expected, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (Target(expected.FileName) != expected)
+            if (!IsCurrent(expected))
                 throw new QueryException(QueryError.SourceChanged, "The import source or target changed.");
             if (!model.CanBeginCaptureDataOperation)
                 throw new QueryException(QueryError.SourceBusy, "Stop all captures and finish other data/analysis operations first.");
@@ -296,67 +284,9 @@ namespace XMAT.ApplicationServices
             }).ConfigureAwait(false);
         }
 
-        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => App.RunOnUiAsync(dispatcher, action);
-        private Task InvokeAsync(Func<Task> action) => App.RunOnUiAsync(dispatcher, action);
+        private Task<T> InvokeAsync<T>(Func<Task<T>> action) => ApplicationDispatch.RunOnUiAsync(dispatcher, action);
+        private Task InvokeAsync(Func<Task> action) => ApplicationDispatch.RunOnUiAsync(dispatcher, action);
 
-        private sealed class Prepared : IDisposable
-        {
-            private readonly WebServiceDeviceCaptureController.ImportedCaptures _web;
-            private readonly NetworkTraceEventStage _stage;
-            private readonly NetworkTracePacketsCollection _packets;
-            internal int Count => _web?.Connections.Count ?? _packets.Count;
-            internal Prepared(WebServiceDeviceCaptureController.ImportedCaptures web) { _web = web; }
-            internal Prepared(NetworkTraceEventStage stage, NetworkTracePacketsCollection packets)
-            { _stage = stage; _packets = packets; }
-            internal void Persist(IDataTable table, string name, long maximumBytes, CancellationToken token)
-            {
-                if (_web != null)
-                    WebServiceCaptureMethod.PersistFiddlerImport(_web, table, name, maximumBytes, token);
-                else
-                {
-                    var ids = ((IImportedCaptureTable)table).ReplaceImportedRows(
-                        new FieldValue<string>(NetworkTraceCaptureMethod.FieldKey_DeviceName, name),
-                        Rows(name, maximumBytes, token), token);
-                    for (var index = 0; index < _packets.Count; index++)
-                        _packets[index].RecordRowId = ids[index];
-                }
-            }
-
-            private IEnumerable<object[]> Rows(string name, long maximumBytes, CancellationToken token)
-            {
-                var remaining = maximumBytes;
-                foreach (var row in _stage.Rows(name))
-                {
-                    token.ThrowIfCancellationRequested();
-                    var size = 64L + row.Sum(value => value is string text
-                        ? Encoding.UTF8.GetByteCount(text) + (long)text.Count(character => character == '"') + 16 : 24);
-                    if (size > remaining)
-                        throw new QueryException(QueryError.ResultLimit, "The imported trace rows exceed the approved data limit.");
-                    remaining -= size;
-                    yield return row;
-                }
-            }
-            internal void Apply(IDeviceCaptureController controller, IDataTable table)
-            {
-                if (_web != null)
-                    ((WebServiceDeviceCaptureController)controller).ApplyImportedCaptures(_web, table);
-                else
-                    ((NetworkTraceCaptureController)controller).ApplyLoadedCaptures(_packets);
-            }
-            internal bool Notify(IDeviceCaptureController controller)
-            {
-                if (_web != null)
-                    return WebServiceCaptureMethod.NotifyFiddlerImport((WebServiceDeviceCaptureController)controller);
-                return CaptureFileImports.Notify(((NetworkTraceCaptureController)controller).NotifyLoadedCaptures);
-            }
-            public void Dispose()
-            {
-                try
-                { _stage?.Dispose(); }
-                catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
-                { PublicUtilities.AppLog(LogLevel.ERROR, $"Trace stage cleanup failed: {exception.GetType().Name}"); }
-            }
-        }
     }
 
     internal sealed class CaptureSazImports(

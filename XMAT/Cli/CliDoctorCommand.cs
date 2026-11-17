@@ -9,6 +9,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Text.Json;
+using XMAT.AgentAccess;
 using XMAT.Operations.Analysis;
 
 namespace XMAT.Cli
@@ -28,7 +29,15 @@ namespace XMAT.Cli
                 Architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
             };
             report.Doctor = doctor;
-            doctor.Checks.AddRange(CliPrerequisites.Check());
+            doctor.Checks.AddRange(request.Target == CliCommands.Agent
+                ? CliAgentCommand.CheckInstallation(AppContext.BaseDirectory) : CliPrerequisites.Check());
+            if (request.Target == CliCommands.Agent)
+                report.Agent = AgentJson.Encode(new
+                {
+                    guide = Path.Combine(AppContext.BaseDirectory, "AGENTS.md"),
+                    supportedModes = new[] { "headless", "desktop" },
+                    configurationChanged = false
+                });
             if (doctor.Checks.TrueForAll(check => check.Passed))
             {
                 report.SetExitCode(CliExitCodes.Success);

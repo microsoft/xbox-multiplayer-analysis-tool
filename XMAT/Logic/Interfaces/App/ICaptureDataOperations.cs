@@ -11,6 +11,8 @@ namespace XMAT.SharedInterfaces
     public sealed record CaptureClearReceipt(Guid CaptureId, long Revision, long CaptureEpoch, bool Cleared, bool ViewsNotified);
     public interface ICaptureDataOperations
     {
+        Task<bool> HasDataAsync(
+            Guid captureId, long expectedRevision, CancellationToken cancellationToken = default);
         Task<CaptureClearReceipt> ClearAsync(
             Guid captureId, long expectedRevision, CancellationToken cancellationToken = default);
     }

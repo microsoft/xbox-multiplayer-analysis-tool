@@ -25,7 +25,9 @@ namespace XMAT.AgentAccess
         AgentCaptureFileApplication captureFiles,
         AgentClearApplication clear,
         AgentAdministrationApplication administration,
-        Func<string> clientName)
+        Func<string> clientName,
+        AgentHostApplication lifecycle = null,
+        bool headless = false)
     {
         internal McpServerPrimitiveCollection<McpServerTool> Create()
         {
@@ -71,8 +73,23 @@ namespace XMAT.AgentAccess
                 tools.Add(tool);
             }
             foreach (var tool in new AgentAdministrationMcpTools(administration, session, runtime, Wrap).Create())
+                if (runtime.Policy == null || tool.ProtocolTool.Name is not ("xmat_get_desktop_lifecycle" or "xmat_request_desktop_lifecycle"))
+                    tools.Add(tool);
+            if (runtime.Policy != null && lifecycle != null)
+                foreach (var tool in lifecycle.Create(session, Wrap))
+                    tools.Add(tool);
+            if (runtime.Policy == null)
+                return tools;
+            tools.Add(Tool((Func<Guid, string, bool, Task<CallToolResult>>)ConfirmAsync,
+                "xmat_confirm_operation", "AGENT_TOOL_CONFIRM", false));
+            foreach (var tool in new AgentResourceApplication(runtime).Create(session, Wrap))
                 tools.Add(tool);
-            return tools;
+            foreach (var tool in new AgentStartupRecoveryApplication(runtime, new()).Create(session, Wrap))
+                tools.Add(tool);
+            var protectedTools = new McpServerPrimitiveCollection<McpServerTool>();
+            foreach (var tool in tools)
+                protectedTools.Add(new AgentMcpServerTool(tool, runtime, session));
+            return protectedTools;
         }
 
         internal static McpServerTool Tool(Delegate method, string name, string description, bool readOnly) =>
@@ -81,14 +98,24 @@ namespace XMAT.AgentAccess
                 Name = name,
                 Description = Localization.GetLocalizedString(description),
                 ReadOnly = readOnly,
-                Destructive = !readOnly,
+                Destructive = !readOnly && name is not ("xmat_add_device" or "xmat_set_pending_proxy_port" or
+                    "xmat_update_preferences" or "xmat_reveal_desktop_target" or "xmat_open_capture" or "xmat_load_capture" or
+                    "xmat_cancel_operation" or "xmat_release_query_result" or "xmat_release_query_export" or
+                    "xmat_release_data_result" or "xmat_release_script_validation"),
                 Idempotent = readOnly || name is "xmat_set_capture_running" or "xmat_update_script" or "xmat_set_script_enabled" or
                     "xmat_acknowledge_trace_recovery" or "xmat_add_device" or "xmat_remove_device" or "xmat_set_pending_proxy_port" or
                     "xmat_set_device_proxy" or "xmat_apply_proxy_port" or "xmat_save_query_result" or "xmat_save_capture" or
                     "xmat_save_script" or "xmat_load_script" or "xmat_load_capture" or "xmat_import_saz" or "xmat_import_etl" or "xmat_clear_capture" or
                     "xmat_update_host_policy" or "xmat_update_preferences" or "xmat_export_diagnostics" or
-                    "xmat_reveal_desktop_target" or "xmat_request_desktop_lifecycle" or "xmat_export_analysis_report",
-                OpenWorld = !readOnly,
+                    "xmat_reveal_desktop_target" or "xmat_request_desktop_lifecycle" or "xmat_export_analysis_report" or
+                    "xmat_confirm_operation" or "xmat_stop_host" or "xmat_take_over_resource" or "xmat_retry_resource_cleanup" or "xmat_open_capture" or
+                    "xmat_resolve_startup_recovery" or "xmat_cancel_operation" or "xmat_release_query_result" or
+                    "xmat_release_query_export" or "xmat_release_data_result" or "xmat_release_script_validation",
+                OpenWorld = !readOnly && name is not ("xmat_clear_capture" or "xmat_remove_device" or
+                    "xmat_set_pending_proxy_port" or "xmat_update_preferences" or "xmat_reveal_desktop_target" or
+                    "xmat_update_script" or "xmat_take_over_resource" or "xmat_release_query_result" or
+                    "xmat_release_query_export" or "xmat_release_data_result" or "xmat_release_script_validation") ||
+                    name is "xmat_get_device" or "xmat_get_proxy_options" or "xmat_get_diagnostics",
                 SerializerOptions = AgentJson.Options
             });
 
@@ -98,8 +125,23 @@ namespace XMAT.AgentAccess
             return Task.FromResult(AgentJson.Encode(new
             {
                 enabled = runtime.IsEnabled,
+                hostMode = headless ? "headless" : "desktop",
+                globalPolicy = runtime.Policy?.Settings,
                 session = runtime.GetSession(session),
-                supported = new[] { "capture-metadata", "web-proxy-start-stop", "network-trace-start-stop", "capture-prerequisites", "operation-status", "source-schema",
+                guide = System.IO.Path.Combine(AppContext.BaseDirectory, "AGENTS.md"),
+                confirmationsAreHumanAttestation = false,
+                confirmationPolicy = runtime.Policy == null ? "legacy" : "consequences",
+                dataFlow = "XMAT -> local MCP client -> configured model/provider, if cloud-backed",
+                supported = runtime.Policy != null ? new[]
+                {
+                    "global-policy", "best-effort-projection", "client-confirmations", "agent-only-backups", "typed-local-paths",
+                    "routine-controls-without-confirmation", "script-version-confirmations",
+                    "isolated-capture-open", "capture-metadata", "web-proxy-network-trace", "capture-prerequisites", "operation-status",
+                    "source-schema", "read-only-sql", "query-csv-json", "search-analysis", "scripts-compile-validation",
+                    "full-control-script-activation", "devices-proxy", "capture-import-clear", "reports-manifests",
+                    "websocket-inspection", "host-lists", "ordinary-preferences", "diagnostics-public-certificate",
+                    "guarded-host-shutdown", "revision-bound-resource-recovery", "startup-recovery", "desktop-navigation-when-available"
+                } : new[] { "capture-metadata", "web-proxy-start-stop", "network-trace-start-stop", "capture-prerequisites", "operation-status", "source-schema",
                     "read-only-sql", "query-csv-json-download", "source-summary-search", "structured-analysis",
                     "script-source", "compile-only-validation", "approved-script-activation",
                     "device-creation-removal", "device-configuration-inspection", "pending-proxy-port",
@@ -147,6 +189,9 @@ namespace XMAT.AgentAccess
 
         private Task<CallToolResult> CancelAsync(Guid operationId) => Wrap(async () =>
             AgentJson.Encode(new { cancellationRequested = await runtime.CancelAsync(session, operationId) }));
+
+        private Task<CallToolResult> ConfirmAsync(Guid operationId, string confirmationToken, bool accept) =>
+            Wrap(() => Task.FromResult(AgentJson.Encode(runtime.Confirm(session, operationId, confirmationToken, accept))));
 
         private async Task<CallToolResult> Wrap(Func<Task<JsonElement>> action)
         {

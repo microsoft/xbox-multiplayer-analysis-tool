@@ -30,7 +30,8 @@ namespace XMAT.SharedInterfaces
         FileRead,
         CaptureLoad,
         CaptureImport,
-        AnalysisReportExport
+        AnalysisReportExport,
+        HostHousekeeping
     }
 
     public enum AgentScopeKind { Application, Capture, Source, ExportFolder, InputFile }
@@ -89,7 +90,7 @@ namespace XMAT.SharedInterfaces
                 AgentCapability.ScriptExecute or AgentCapability.ScriptExport => scope.Kind == AgentScopeKind.Capture,
                 AgentCapability.HostPolicy or AgentCapability.Preferences or
                 AgentCapability.Diagnostics or AgentCapability.Navigation or
-                AgentCapability.Lifecycle or AgentCapability.DeviceCreation or AgentCapability.CaptureLoad =>
+                AgentCapability.Lifecycle or AgentCapability.DeviceCreation or AgentCapability.CaptureLoad or AgentCapability.HostHousekeeping =>
                     scope.Kind == AgentScopeKind.Application,
                 _ => false
             };
@@ -160,7 +161,11 @@ namespace XMAT.SharedInterfaces
         NoDefaultConsole,
         DestinationExists,
         InvalidPath,
-        InvalidCapture
+        InvalidCapture,
+        ProxyTrustRequired,
+        BackupFailed,
+        ShutdownDecisionRequired,
+        DesktopUnavailable
     }
 
     public sealed class AgentAccessException(

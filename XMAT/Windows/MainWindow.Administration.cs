@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -12,11 +14,68 @@ using XMAT.Models;
 using XMAT.NetworkTrace;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
+using XMAT.WebServiceCapture.Proxy;
 
 namespace XMAT
 {
     public partial class MainWindow
     {
+        private async void TakeOverAgentResources_Click(object sender, RoutedEventArgs e)
+        {
+            var model = CaptureAppModel.AppModel;
+            var target = model.SelectedDeviceContext;
+            if (target == null || target.IsReadOnly || !model.HasAgentAccess)
+                return;
+            try
+            {
+                var capture = model.CaptureCatalog.DescribeTarget(target);
+                var scripts = target.CaptureType == CaptureType.WebProxy
+                    ? await model.CaptureScripts.GetScriptsAsync(capture.Id) : [];
+                var owned = model.AgentAccess.Runtime.GetOwnedResources().Where(item =>
+                    item.Resource.Kind == AgentResourceKind.Capture && item.Resource.Id == capture.Id &&
+                        item.Revision == capture.CaptureEpoch.ToString(CultureInfo.InvariantCulture) ||
+                    item.Resource.Kind == AgentResourceKind.Script && scripts.Any(script => script.Id == item.Resource.Id &&
+                        item.Revision == script.Revision.ToString(CultureInfo.InvariantCulture))).ToArray();
+                if (owned.Length == 0)
+                {
+                    MessageBox.Show(this, Localization.GetLocalizedString("AGENT_OPERATOR_NO_OWNERSHIP"),
+                        Localization.GetLocalizedString("AGENT_OPERATOR_TAKEOVER"), MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+                if (MessageBox.Show(this, Localization.GetLocalizedString("AGENT_OPERATOR_TAKEOVER_WARNING", owned.Length),
+                    Localization.GetLocalizedString("AGENT_OPERATOR_TAKEOVER"), MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                    MessageBoxResult.No) != MessageBoxResult.Yes)
+                    return;
+                var changed = owned.Count(item => model.AgentAccess.Runtime.TakeOver(item.Resource, item.SessionId, item.Revision));
+                MessageBox.Show(this, Localization.GetLocalizedString("AGENT_OPERATOR_TAKEOVER_RESULT", changed, owned.Length),
+                    Localization.GetLocalizedString("AGENT_OPERATOR_TAKEOVER"), MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Agent ownership takeover failed: {exception.GetType().Name}");
+            }
+        }
+
+        private void SetupProxyTrust_Click(object sender, RoutedEventArgs e)
+        {
+            if (MessageBox.Show(this, Localization.GetLocalizedString("PROXY_TRUST_SETUP_WARNING"),
+                Localization.GetLocalizedString("PROXY_TRUST_SETUP"), MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                MessageBoxResult.No) != MessageBoxResult.Yes)
+                return;
+            try
+            {
+                if (!WebServiceProxy.Initialize(PublicUtilities.StorageDirectoryPath))
+                    throw new InvalidOperationException();
+                MessageBox.Show(this, Localization.GetLocalizedString("PROXY_TRUST_SETUP_COMPLETE"),
+                    Localization.GetLocalizedString("PROXY_TRUST_SETUP"), MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                MessageBox.Show(this, Localization.GetLocalizedString("PROXY_TRUST_SETUP_FAILED"),
+                    Localization.GetLocalizedString("PROXY_TRUST_SETUP"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
         private void ConfigureAgentDesktopActions()
         {
             var model = CaptureAppModel.AppModel;
@@ -35,11 +94,39 @@ namespace XMAT
                     !model.IsCaptureDataOperationRunning && !_analysisReportExportWorkflow.IsRunning,
                 () => !_isCloseInProgress && !_closeConfirmed);
             model.DesktopActions.ConfigureSourceNavigation(RevealAgentRecordAsync, RevealAgentReportAsync);
+            model.HostLifecycle.Configure(RequestPreparedAgentClose,
+                blocked => IsEnabled = !blocked,
+                () => !_isCloseInProgress && !_closeConfirmed && !_analysisReportExportWorkflow.IsRunning);
             model.PreferencesModel.PropertyChanged += (_, args) =>
             {
                 if (string.IsNullOrEmpty(args.PropertyName) || args.PropertyName == nameof(AppPreferencesModel.Theme))
                     ToggleDarkMode.IsChecked = model.PreferencesModel.Theme == "Dark";
             };
+        }
+
+        private async void RequestPreparedAgentClose()
+        {
+            try
+            {
+                _isCloseInProgress = true;
+                if (Application.Current is App { Runtime: not null } application)
+                    await application.Runtime.DisposeAsync();
+                else
+                {
+                    await _agentAccess.DisableAsync();
+                    await CaptureAppModel.AppModel.DisposeSqlWorkspaceAsync();
+                    await CaptureAppModel.AppModel.DisposeInvestigationAsync();
+                }
+                _closeConfirmed = true;
+                Close();
+            }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
+            {
+                CaptureAppModel.AppModel.HostLifecycle.CancelPrepared();
+                _agentAccess.ResumeRequests();
+                _isCloseInProgress = false;
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Prepared agent close failed: {exception.GetType().Name}");
+            }
         }
 
         private async Task<bool> RevealAgentRecordAsync(DesktopTargetProvenance provenance, CancellationToken token)

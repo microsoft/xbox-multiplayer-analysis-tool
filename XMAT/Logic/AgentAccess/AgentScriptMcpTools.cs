@@ -24,7 +24,7 @@ namespace XMAT.AgentAccess
                 "xmat_describe_scripting", "AGENT_TOOL_SCRIPT_SYMBOLS", true),
             AgentMcpTools.Tool((Func<Guid, Guid, long, long, int, CancellationToken, Task<CallToolResult>>)ReadAsync,
                 "xmat_read_script", "AGENT_TOOL_SCRIPT_READ", true),
-            AgentMcpTools.Tool((Func<Guid, Guid, long, string, string, string, CancellationToken, Task<CallToolResult>>)UpdateAsync,
+            AgentMcpTools.Tool((Func<Guid, Guid, long, string, string, string, bool, CancellationToken, Task<CallToolResult>>)UpdateAsync,
                 "xmat_update_script", "AGENT_TOOL_SCRIPT_UPDATE", false),
             AgentMcpTools.Tool((Func<Guid, Guid, long, string, string, CancellationToken, Task<CallToolResult>>)ValidateAsync,
                 "xmat_validate_script", "AGENT_TOOL_SCRIPT_VALIDATE", true),
@@ -34,12 +34,18 @@ namespace XMAT.AgentAccess
                 "xmat_get_script_diagnostics", "AGENT_TOOL_SCRIPT_DIAGNOSTICS", true),
             AgentMcpTools.Tool((Func<Guid, Task<CallToolResult>>)ReleaseAsync,
                 "xmat_release_script_validation", "AGENT_TOOL_SCRIPT_RELEASE", false),
-            AgentMcpTools.Tool((Func<Guid, Guid, long, string, Guid, string, string, CancellationToken, Task<CallToolResult>>)SaveFileAsync,
-                "xmat_save_script", "AGENT_TOOL_SCRIPT_SAVE_FILE", false),
+            runtime.Policy == null
+                ? AgentMcpTools.Tool((Func<Guid, Guid, long, string, Guid, string, string, CancellationToken, Task<CallToolResult>>)SaveFileAsync,
+                    "xmat_save_script", "AGENT_TOOL_SCRIPT_SAVE_FILE", false)
+                : AgentMcpTools.Tool((Func<Guid, Guid, long, string, string, string, bool, CancellationToken, Task<CallToolResult>>)SavePathAsync,
+                    "xmat_save_script", "AGENT_TOOL_SCRIPT_SAVE_FILE", false),
             AgentMcpTools.Tool((Func<int, Task<CallToolResult>>)InputsAsync,
                 "xmat_list_input_files", "AGENT_TOOL_INPUT_FILES", true),
-            AgentMcpTools.Tool((Func<Guid, Guid, long, string, Guid, string, CancellationToken, Task<CallToolResult>>)LoadFileAsync,
-                "xmat_load_script", "AGENT_TOOL_SCRIPT_LOAD_FILE", false)
+            runtime.Policy == null
+                ? AgentMcpTools.Tool((Func<Guid, Guid, long, string, Guid, string, CancellationToken, Task<CallToolResult>>)LoadFileAsync,
+                    "xmat_load_script", "AGENT_TOOL_SCRIPT_LOAD_FILE", false)
+                : AgentMcpTools.Tool((Func<Guid, Guid, long, string, string, string, CancellationToken, Task<CallToolResult>>)LoadPathAsync,
+                    "xmat_load_script", "AGENT_TOOL_SCRIPT_LOAD_FILE", false)
         ];
 
         private Task<CallToolResult> ListAsync(Guid captureId, string cursor = null, CancellationToken cancellationToken = default) =>
@@ -53,9 +59,9 @@ namespace XMAT.AgentAccess
 
         private Task<CallToolResult> UpdateAsync(
             Guid captureId, Guid scriptId, long expectedRevision, string expectedSourceHash, string source, string idempotencyKey,
-            CancellationToken cancellationToken = default) => wrap(async () =>
+            bool allowFilteredReplacement = false, CancellationToken cancellationToken = default) => wrap(async () =>
                 AgentJson.Encode(runtime.GetOperation(session, await application.UpdateAsync(session, captureId, scriptId,
-                    expectedRevision, expectedSourceHash, source, idempotencyKey, cancellationToken))));
+                    expectedRevision, expectedSourceHash, source, idempotencyKey, cancellationToken, allowFilteredReplacement))));
 
         private Task<CallToolResult> ValidateAsync(
             Guid captureId, Guid scriptId, long expectedRevision, string expectedSourceHash, string idempotencyKey,
@@ -87,5 +93,17 @@ namespace XMAT.AgentAccess
             Guid inputId, string idempotencyKey, CancellationToken cancellationToken = default) =>
             wrap(async () => AgentJson.Encode(runtime.GetOperation(session, await application.LoadFileAsync(
                 session, captureId, scriptId, expectedRevision, expectedSourceHash, inputId, idempotencyKey, cancellationToken))));
+
+        private Task<CallToolResult> SavePathAsync(
+            Guid captureId, Guid scriptId, long expectedRevision, string expectedSourceHash,
+            string path, string idempotencyKey, bool overwrite = false, CancellationToken cancellationToken = default) =>
+            wrap(async () => AgentJson.Encode(runtime.GetOperation(session, await application.SavePathAsync(
+                session, captureId, scriptId, expectedRevision, expectedSourceHash, path, idempotencyKey, overwrite, cancellationToken))));
+
+        private Task<CallToolResult> LoadPathAsync(
+            Guid captureId, Guid scriptId, long expectedRevision, string expectedSourceHash,
+            string path, string idempotencyKey, CancellationToken cancellationToken = default) =>
+            wrap(async () => AgentJson.Encode(runtime.GetOperation(session, await application.LoadPathAsync(
+                session, captureId, scriptId, expectedRevision, expectedSourceHash, path, idempotencyKey, cancellationToken))));
     }
 }

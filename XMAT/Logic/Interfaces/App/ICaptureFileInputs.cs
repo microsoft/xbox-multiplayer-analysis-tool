@@ -20,6 +20,7 @@ namespace XMAT.SharedInterfaces
         Task<InputFileDescriptor> RegisterAsync(
             string path, long maximumBytes, CancellationToken cancellationToken = default);
         IReadOnlyList<InputFileDescriptor> GetInputs();
+        string GetOriginalPath(Guid inputId) => null;
         Task ValidateAsync(Guid inputId, long maximumBytes, CancellationToken cancellationToken = default);
         Task<ScriptFileInput> ReadScriptAsync(
             Guid inputId, long maximumBytes, CancellationToken cancellationToken = default);

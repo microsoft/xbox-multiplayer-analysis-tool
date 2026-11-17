@@ -224,6 +224,8 @@ namespace XMAT.WebServiceCapture
         private readonly ProxyPortPool _portPool;
         private readonly IProxyDeviceConfiguration _deviceConfiguration;
         private readonly Func<IWebServiceProxy> _proxyFactory;
+        private readonly bool _usesDefaultProxyFactory;
+        private bool _deferProxyCreation;
         private ProxyPortPool.Reservation _portReservation;
         private ProxyPortPool.Reservation _pendingPortReservation;
         private string _portStatus;
@@ -290,6 +292,7 @@ namespace XMAT.WebServiceCapture
             _getClassifierIp4Addresses =
                 getClassifierIp4Addresses ?? GetAssignedUnicastIp4Addresses;
             _proxyFactory = proxyFactory ?? (() => WebServiceProxy.CreateProxy());
+            _usesDefaultProxyFactory = proxyFactory == null;
             HostListPolicy = hostListPolicy ?? new HostListPolicy();
             DeviceName = deviceName;
 
@@ -315,13 +318,17 @@ namespace XMAT.WebServiceCapture
 
         public void Initialize() => Initialize(false);
 
-        internal void Initialize(bool deferPortAllocation)
+        internal bool ProxyTrustSetupRequired => _deferProxyCreation && _usesDefaultProxyFactory &&
+            !WebServiceProxy.IsInitialized && !CertificateManager.HasUsableRoot();
+
+        internal void Initialize(bool deferPortAllocation, bool deferProxyCreation = false)
         {
             if (_initialized)
             {
                 throw new InvalidOperationException(Localization.GetLocalizedString("PROXY_OPERATION_BUSY"));
             }
             _initialized = true;
+            _deferProxyCreation = deferProxyCreation;
             CaptureMethod = WebServiceCaptureMethod.Method;
             _dataTable = (CaptureMethod as WebServiceCaptureMethod).WebProxyConnectionsTable;
 
@@ -331,7 +338,8 @@ namespace XMAT.WebServiceCapture
 
                 try
                 {
-                    _webProxy = _proxyFactory();
+                    if (!deferProxyCreation)
+                        InitializeProxy();
                 }
                 catch
                 {
@@ -339,17 +347,28 @@ namespace XMAT.WebServiceCapture
                     _portReservation = null;
                     throw;
                 }
-                _webProxy.BypassList = BypassList;
-                _webProxy.SslConnectionRequestPolicyAsync = WebProxy_ReceivedSslConnectionRequestAsync;
-                _webProxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
-                _webProxy.WebRequestPolicyAsync = WebProxy_ReceivedWebRequestAsync;
-                _webProxy.WebResponsePolicyAsync = WebProxy_ReceivedWebResponseAsync;
-                _webProxy.WebSocketMessage += WebProxy_WebSocketMessage;
                 if (!deferPortAllocation)
                 {
                     RestorePendingPort();
                 }
             }
+        }
+
+        private void InitializeProxy()
+        {
+            if (_webProxy != null)
+                return;
+            if (_deferProxyCreation && _usesDefaultProxyFactory &&
+                !WebServiceProxy.InitializeExisting(PublicUtilities.StorageDirectoryPath))
+                throw new CapturePrerequisiteException(CaptureOperationFailure.ProxyTrustRequired);
+            var proxy = _proxyFactory();
+            proxy.BypassList = BypassList;
+            proxy.SslConnectionRequestPolicyAsync = WebProxy_ReceivedSslConnectionRequestAsync;
+            proxy.CompletedSslConnectionRequest += WebProxy_CompletedSslConnectionRequest;
+            proxy.WebRequestPolicyAsync = WebProxy_ReceivedWebRequestAsync;
+            proxy.WebResponsePolicyAsync = WebProxy_ReceivedWebResponseAsync;
+            proxy.WebSocketMessage += WebProxy_WebSocketMessage;
+            _webProxy = proxy;
         }
 
         internal void RestoreCurrentPort(bool deferAllocation)
@@ -733,6 +752,9 @@ namespace XMAT.WebServiceCapture
             ClearAllCaptures();
         }
 
+        internal bool DeletesStoredRowsOnClose => _captureDataSource == CaptureDataSource.ActiveTable &&
+            _dataTable?.Dataset.HasRecords(new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName)) == true;
+
         public void LoadCaptures(IEnumerable<IDataset> tables)
         {
             using (var bo = PublicUtilities.BlockingOperation())
@@ -1046,6 +1068,7 @@ namespace XMAT.WebServiceCapture
 
         private async Task StartProxyCoreAsync(bool bShowProxyInformation, UInt16 port)
         {
+            InitializeProxy();
             var options = new WebServiceProxyOptions
             {
                 LogFilePath = $"{DeviceName.Replace(" ", "")}-wspe.log",
@@ -1301,7 +1324,8 @@ namespace XMAT.WebServiceCapture
             Exception proxyStopException = null;
             try
             {
-                await _webProxy.StopProxyAsync(progress);
+                if (_webProxy != null)
+                    await _webProxy.StopProxyAsync(progress);
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {

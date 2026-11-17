@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using CaptureAnalysisEngine;
+using XMAT.AgentAccess;
 using XMAT.ApplicationServices;
 using XMAT.SharedInterfaces;
 
@@ -13,6 +14,104 @@ namespace XMAT.Tests
 {
     public class CaptureReportFileExportTests
     {
+        [Fact]
+        public async Task ExplicitReplacementUsesTheCanonicalManifestAndPreservesUnrelatedFiles()
+        {
+            using var directory = new InvestigationDirectory();
+            await using var source = new InvestigationReportFiles(Path.Combine(directory.Path, "source"));
+            var output = Path.Combine(directory.Path, "report");
+            Directory.CreateDirectory(output);
+            foreach (var member in source.Manifest)
+                await File.WriteAllTextAsync(Path.Combine(output, member.RelativePath), "previous-" + member.RelativePath);
+            var unrelated = Path.Combine(output, "human-notes.txt");
+            await File.WriteAllTextAsync(unrelated, "preserve");
+            var exports = new CaptureFileExports();
+            var destination = await exports.PrepareReportDestinationAsync(output, source.Manifest, true);
+            var receipt = await exports.SaveReportAsync(source, destination, 65536, _ => Task.CompletedTask);
+            Assert.True(receipt.Published);
+            Assert.Equal("preserve", await File.ReadAllTextAsync(unrelated));
+            foreach (var member in source.Manifest)
+                Assert.Equal(member.Sha256, Convert.ToHexString(SHA256.HashData(
+                    await File.ReadAllBytesAsync(Path.Combine(output, member.RelativePath)))));
+            Assert.Equal(source.Manifest.Count + 1, Directory.GetFiles(output).Length);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task AllRequiredPreimagesCompleteBeforeTheFirstReportMemberIsReplaced(bool failBackup)
+        {
+            using var directory = new InvestigationDirectory();
+            await using var source = new InvestigationReportFiles(Path.Combine(directory.Path, "source"));
+            var output = Path.Combine(directory.Path, "report");
+            Directory.CreateDirectory(output);
+            var expected = new Dictionary<string, byte[]>();
+            foreach (var member in source.Manifest)
+            {
+                var previous = Encoding.UTF8.GetBytes("previous-" + member.RelativePath);
+                expected.Add(Path.Combine(output, member.RelativePath), previous);
+                await File.WriteAllBytesAsync(Path.Combine(output, member.RelativePath), previous);
+            }
+            var root = Path.Combine(directory.Path, "Backups");
+            if (failBackup)
+                await File.WriteAllTextAsync(root, "unavailable");
+            await using var policy = new AgentAccessPolicyService(new(Path.Combine(directory.Path, "policy.json")));
+            await policy.SaveAsync(new() { Enabled = true, AutomaticBackups = true }, 0);
+            using var origin = new AgentMutationProtection(Guid.NewGuid(), policy, new(root));
+            var exports = new CaptureFileExports();
+            var destination = await exports.PrepareReportDestinationAsync(output, source.Manifest, true);
+            var save = exports.SaveReportAsync(source, destination, 65536, _ => Task.CompletedTask);
+            if (failBackup)
+            {
+                Assert.Equal(AgentAccessError.BackupFailed, (await Assert.ThrowsAsync<AgentAccessException>(() => save)).Error);
+                foreach (var pair in expected)
+                    Assert.Equal(pair.Value, await File.ReadAllBytesAsync(pair.Key));
+            }
+            else
+            {
+                try
+                { await save; }
+                catch (AgentAccessException exception)
+                { throw new Xunit.Sdk.XunitException(exception.ProtectedResult?.GetRawText() ?? exception.Error.ToString()); }
+                Assert.Equal(expected.Count, origin.Backups.Count);
+                foreach (var backup in origin.Backups)
+                {
+                    using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(backup.Directory, "manifest.json")));
+                    var target = manifest.RootElement.GetProperty("originalPath").GetString();
+                    Assert.Equal(expected[target], await File.ReadAllBytesAsync(Path.Combine(backup.Directory, "previous-file.bin")));
+                    Assert.Equal("Committed", backup.ActionStatus);
+                }
+            }
+            Assert.DoesNotContain(Directory.GetFiles(output), path => Path.GetFileName(path).StartsWith(".xmat-export-", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public async Task PartialReplacementReportsCommittedMembersRatherThanClaimingNothingWasPublished()
+        {
+            using var directory = new InvestigationDirectory();
+            await using var source = new InvestigationReportFiles(Path.Combine(directory.Path, "source"));
+            Assert.True(source.Manifest.Count >= 2);
+            var output = Path.Combine(directory.Path, "report");
+            Directory.CreateDirectory(output);
+            foreach (var member in source.Manifest)
+                await File.WriteAllTextAsync(Path.Combine(output, member.RelativePath), "previous");
+            var exports = new CaptureFileExports();
+            var destination = await exports.PrepareReportDestinationAsync(output, source.Manifest, true);
+            var blocked = Path.Combine(output, source.Manifest[1].RelativePath);
+            File.SetAttributes(blocked, FileAttributes.ReadOnly);
+            try
+            {
+                var failure = await Assert.ThrowsAsync<AnalysisReportExportException>(() =>
+                    exports.SaveReportAsync(source, destination, 65536, _ => Task.CompletedTask));
+                Assert.Equal(AnalysisReportPublicationState.Unknown, failure.PublicationState);
+                Assert.Contains(source.Manifest[0].RelativePath, failure.PublishedFiles);
+                Assert.Equal("previous", await File.ReadAllTextAsync(blocked));
+                Assert.Equal(source.Manifest[0].Sha256, Convert.ToHexString(SHA256.HashData(
+                    await File.ReadAllBytesAsync(Path.Combine(output, source.Manifest[0].RelativePath)))));
+            }
+            finally { File.SetAttributes(blocked, FileAttributes.Normal); }
+        }
+
         [Fact]
         public async Task PublishesTheWholeHashedManifestNewOnlyAndKeepsUserOutputAfterSourceRelease()
         {

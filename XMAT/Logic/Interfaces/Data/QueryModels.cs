@@ -51,7 +51,8 @@ namespace XMAT.SharedInterfaces
         SourceBusy,
         SourceChanged,
         PageTooSmall,
-        InvalidValue
+        InvalidValue,
+        ProjectionUnavailable
     }
 
     public sealed class QueryException(QueryError error, string detail) : Exception(detail)

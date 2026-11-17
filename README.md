@@ -43,9 +43,13 @@ proxy can lose access to Xbox services.
 | Analyze Xbox service calls and export reports | [Live trace analysis](docs/live-trace-analysis.md) |
 | Analyze captures from scripts or CI without the GUI | [Command line](docs/cli.md) |
 | Query the active or loaded database interactively | [SQL workspace](docs/sql-workspace.md) |
-| Connect an agent to a running XMAT instance | [Local Agent Access (MCP)](docs/agent-access.md) |
+| Use an agent with desktop or persistent headless XMAT | [Local Agent Access (MCP)](docs/agent-access.md) |
 | Capture and analyze packets from a console or PC | [Network capture](docs/network-capture.md) |
 | Recover from proxy problems or collect diagnostic logs | [Troubleshooting](docs/troubleshooting.md) |
+
+Agent setup is global, local-only and disabled initially. Run `xmat help agent`, or open
+**Actions > Agent Access**. The installation includes `AGENTS.md` for runtime usage.
+Local transport does not stop a cloud-backed agent from forwarding returned data to its provider.
 
 ## Support and contributing
 

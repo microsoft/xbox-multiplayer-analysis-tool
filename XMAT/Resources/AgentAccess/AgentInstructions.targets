@@ -1,0 +1,12 @@
+<Project>
+  <ItemGroup>
+    <Content Include="$(MSBuildThisFileDirectory)AGENTS.md;$(MSBuildThisFileDirectory)CLAUDE.md;$(MSBuildThisFileDirectory)GEMINI.md"
+             Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)..\..\..\docs\*.md"
+             Link="docs\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)..\..\..\README.md;$(MSBuildThisFileDirectory)..\..\..\ARCHITECTURE.md;$(MSBuildThisFileDirectory)..\..\..\CONTRIBUTING.md;$(MSBuildThisFileDirectory)..\..\..\ROADMAP.md;$(MSBuildThisFileDirectory)..\..\..\SUPPORT.md;$(MSBuildThisFileDirectory)..\..\..\SECURITY.md;$(MSBuildThisFileDirectory)..\..\..\CODE_OF_CONDUCT.md"
+             Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)..\..\..\ReadmeImages\**\*"
+             Link="ReadmeImages\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -21,9 +21,9 @@ namespace XMAT.AgentAccess
         [
             AgentMcpTools.Tool((Func<CancellationToken, Task<CallToolResult>>)AnalyzersAsync,
                 "xmat_list_analyzers", "AGENT_TOOL_ANALYZERS", true),
-            AgentMcpTools.Tool((Func<Guid, CaptureDataKind, string, CaptureDataFilter, int?, long?, Task<CallToolResult>>)SearchAsync,
+            AgentMcpTools.Tool((Func<Guid, CaptureDataKind, string, AgentCaptureDataFilter, int?, long?, Task<CallToolResult>>)SearchAsync,
                 "xmat_search_captures", "AGENT_TOOL_SEARCH", true),
-            AgentMcpTools.Tool((Func<Guid, CaptureDataKind, string, CaptureDataFilter, int?, long?, Task<CallToolResult>>)AnalyzeAsync,
+            AgentMcpTools.Tool((Func<Guid, CaptureDataKind, string, AgentCaptureDataFilter, int?, long?, Task<CallToolResult>>)AnalyzeAsync,
                 "xmat_run_analysis", "AGENT_TOOL_ANALYZE", true),
             AgentMcpTools.Tool((Func<Guid, CaptureDataSection, string, Task<CallToolResult>>)PageAsync,
                 "xmat_get_data_page", "AGENT_TOOL_DATA_PAGE", true),
@@ -41,8 +41,11 @@ namespace XMAT.AgentAccess
                 "xmat_open_completed_report", "DATA_TOOL_REPORT_OPEN", true),
             AgentMcpTools.Tool((Func<Guid, string, CancellationToken, Task<CallToolResult>>)ManifestAsync,
                 "xmat_get_report_manifest", "DATA_TOOL_REPORT_MANIFEST", true),
-            AgentMcpTools.Tool((Func<Guid, Guid, string, string, CancellationToken, Task<CallToolResult>>)ExportReportAsync,
-                "xmat_export_analysis_report", "DATA_TOOL_REPORT_EXPORT", false),
+            runtime.Policy == null
+                ? AgentMcpTools.Tool((Func<Guid, Guid, string, string, CancellationToken, Task<CallToolResult>>)ExportReportAsync,
+                    "xmat_export_analysis_report", "DATA_TOOL_REPORT_EXPORT", false)
+                : AgentMcpTools.Tool((Func<Guid, string, string, bool, CancellationToken, Task<CallToolResult>>)ExportReportPathAsync,
+                    "xmat_export_analysis_report", "DATA_TOOL_REPORT_EXPORT", false),
             AgentMcpTools.Tool((Func<Guid, CaptureDetailKind, long, CancellationToken, Task<CallToolResult>>)NavigationAsync,
                 "xmat_prepare_data_navigation", "DATA_TOOL_NAVIGATION", true),
             AgentMcpTools.Tool((Func<Guid, Task<CallToolResult>>)ReleaseAsync,
@@ -53,19 +56,19 @@ namespace XMAT.AgentAccess
             wrap(() => application.ListAnalyzersAsync(session, cancellationToken));
 
         private Task<CallToolResult> SearchAsync(
-            Guid sourceId, CaptureDataKind kind, string idempotencyKey, CaptureDataFilter filter = null,
+            Guid sourceId, CaptureDataKind kind, string idempotencyKey, AgentCaptureDataFilter filter = null,
             int? timeoutSeconds = null, long? maximumResultBytes = null) =>
             RunAsync(sourceId, kind, idempotencyKey, filter, timeoutSeconds, maximumResultBytes, false);
 
         private Task<CallToolResult> AnalyzeAsync(
-            Guid sourceId, CaptureDataKind kind, string idempotencyKey, CaptureDataFilter filter = null,
+            Guid sourceId, CaptureDataKind kind, string idempotencyKey, AgentCaptureDataFilter filter = null,
             int? timeoutSeconds = null, long? maximumResultBytes = null) =>
             RunAsync(sourceId, kind, idempotencyKey, filter, timeoutSeconds, maximumResultBytes, true);
 
         private Task<CallToolResult> RunAsync(
-            Guid sourceId, CaptureDataKind kind, string key, CaptureDataFilter filter, int? seconds, long? bytes, bool analyze) =>
+            Guid sourceId, CaptureDataKind kind, string key, AgentCaptureDataFilter filter, int? seconds, long? bytes, bool analyze) =>
             wrap(() => Task.FromResult(AgentJson.Encode(runtime.GetOperation(session,
-                application.Run(session, sourceId, kind, filter, key, analyze, seconds, bytes)))));
+                application.Run(session, sourceId, kind, filter?.Resolve(runtime.DataPolicy), key, analyze, seconds, bytes)))));
 
         private Task<CallToolResult> PageAsync(
             Guid resultId, CaptureDataSection section = CaptureDataSection.Records, string cursor = null) =>
@@ -102,6 +105,11 @@ namespace XMAT.AgentAccess
             Guid resultId, Guid folderId, string directoryName, string idempotencyKey, CancellationToken cancellationToken = default) =>
             wrap(async () => AgentJson.Encode(runtime.GetOperation(session,
                 await application.ExportReportAsync(session, resultId, folderId, directoryName, idempotencyKey, cancellationToken))));
+
+        private Task<CallToolResult> ExportReportPathAsync(
+            Guid resultId, string path, string idempotencyKey, bool overwrite = false, CancellationToken cancellationToken = default) =>
+            wrap(async () => AgentJson.Encode(runtime.GetOperation(session,
+                await application.ExportReportPathAsync(session, resultId, path, idempotencyKey, overwrite, cancellationToken))));
 
         private Task<CallToolResult> NavigationAsync(
             Guid resultId, CaptureDetailKind kind, long itemId = 0, CancellationToken cancellationToken = default) =>

@@ -169,23 +169,8 @@ namespace XMAT.Models
 
         internal static void WriteSettingsFile(string path, string json)
         {
-            var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.WriteAllText(temporaryPath, json);
-                File.Move(temporaryPath, path, true);
-            }
-            finally
-            {
-                try
-                {
-                    File.Delete(temporaryPath);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    PublicUtilities.AppLog(LogLevel.ERROR, $"Could not remove temporary settings file: {ex}");
-                }
-            }
+            ApplicationServices.AtomicSettingsFile.Write(path, json, exception =>
+                PublicUtilities.AppLog(LogLevel.ERROR, $"Could not remove temporary settings file: {exception}"));
         }
 
         internal static void Deserialize(CaptureAppModel model)

@@ -87,7 +87,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private readonly Logger _logger = new();
         private static bool _isInitialized = false;
-        private static readonly CertificateManager _certManager = new(false);
+        private static readonly Lazy<CertificateManager> _certManager = new(() => new(false));
+        private static readonly object InitializationGate = new();
         private IHost _host;
         private InterceptedHttpHost _interceptedHost;
         private readonly InterceptedTunnelRegistry _interceptedTunnels = new();
@@ -108,16 +109,31 @@ namespace XMAT.WebServiceCapture.Proxy
 
         internal static bool Initialize(string certPath)
         {
-            if (_isInitialized)
+            lock (InitializationGate)
             {
-                throw new InvalidOperationException("Only call Initialize once.");
+                if (_isInitialized)
+                    throw new InvalidOperationException("Only call Initialize once.");
+                return InitializeCore(certPath, allowCreate: true);
             }
+        }
 
-            if (_certManager.Initialize())
+        internal static bool IsInitialized => Volatile.Read(ref _isInitialized);
+
+        internal static bool InitializeExisting(string certPath)
+        {
+            lock (InitializationGate)
             {
-                _certManager.ExportRootCertificate(certPath);
+                return _isInitialized || InitializeCore(certPath, allowCreate: false);
+            }
+        }
+
+        private static bool InitializeCore(string certPath, bool allowCreate)
+        {
+            if (CertManager.Initialize(allowCreate))
+            {
+                CertManager.ExportRootCertificate(certPath);
                 _isInitialized = true;
-                ProxyPublicRootCertificate.RegisterInitializedReader(_certManager.ReadPublicRootCertificate);
+                ProxyPublicRootCertificate.RegisterInitializedReader(CertManager.ReadPublicRootCertificate);
             }
 
             return _isInitialized;
@@ -156,7 +172,7 @@ namespace XMAT.WebServiceCapture.Proxy
                 InitialProxyRequestReader>();
         }
 
-        internal static CertificateManager CertManager { get { return _certManager; } }
+        internal static CertificateManager CertManager { get { return _certManager.Value; } }
 
         internal static WebServiceProxy CreateProxy()
         {
@@ -307,7 +323,7 @@ namespace XMAT.WebServiceCapture.Proxy
                     });
                     webBuilder.ConfigureServices(services =>
                     {
-                        services.AddSingleton(_certManager);
+                        services.AddSingleton(CertManager);
                         services.AddSingleton(_httpClient);
                         services.AddSingleton(_logger);
                         services.AddSingleton(this);
@@ -385,7 +401,7 @@ namespace XMAT.WebServiceCapture.Proxy
             string certificateHost = !string.IsNullOrWhiteSpace(hostName)
                 ? hostName
                 : tunnel?.ConnectRequest.Host ?? "localhost";
-            return _certManager.GetCertificateForHost(certificateHost);
+            return CertManager.GetCertificateForHost(certificateHost);
         }
 
         // Concurrent callers share one stop operation, and the first caller's progress wins.

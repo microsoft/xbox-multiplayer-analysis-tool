@@ -7,9 +7,6 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Text;
 using System.Text.Json;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -194,94 +191,6 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void DesktopWindowSupportsMultipleGrantsWithoutStoppingExistingOwnedCaptures()
-        {
-            _application.Run(owner =>
-            {
-                WpfTestHost.Show(owner, new Grid());
-                var model = new CaptureAppModel();
-                var chosen = new Context("chosen");
-                model.CaptureDeviceContexts.Add(chosen);
-                model.CaptureDeviceContexts.Add(new Context("not chosen"));
-                var operations = new TestOperations(model, Dispatcher.CurrentDispatcher);
-                var host = new AgentAccessHost(model, Dispatcher.CurrentDispatcher,
-                    operations);
-                AgentAccessWindow manager = null;
-                McpClient client = null;
-                try
-                {
-                    host.MarkReady();
-                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
-                    WpfTestHost.Pump();
-                    Assert.False(host.IsEnabled);
-                    Assert.Equal(Localization.GetLocalizedString("AGENT_ACCESS_TITLE"), manager.Title);
-                    var enable = (ToggleButton)manager.FindName("EnableAccess");
-                    enable.IsChecked = true;
-                    enable.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    Assert.True(host.IsEnabled);
-
-                    client = Complete(Connect(host));
-                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
-                    WpfTestHost.Pump();
-                    var sessions = (DataGrid)manager.FindName("Sessions");
-                    sessions.SelectedItem = sessions.Items.Cast<AgentSessionSnapshot>().Single();
-                    var targets = (ComboBox)manager.FindName("CaptureTarget");
-                    targets.SelectedItem = targets.Items.Cast<CaptureDescriptor>().Single(item => item.DeviceName == "chosen");
-                    ((CheckBox)manager.FindName("SummaryGrant")).IsChecked = true;
-                    ((CheckBox)manager.FindName("ControlGrant")).IsChecked = true;
-                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    WpfTestHost.Pump();
-                    var session = Assert.Single(host.Runtime.GetSessions());
-                    var target = (CaptureDescriptor)targets.SelectedItem;
-                    Assert.Contains(new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(target.Id)),
-                        session.Permissions);
-                    Assert.Equal(2, session.Permissions.Count);
-                    Assert.DoesNotContain(session.Permissions, permission => permission.Capability == AgentCapability.ScriptExecute);
-                    Assert.Same(manager, AgentAccessWindow.ShowOrActivate(owner, host));
-                    var connection = host.FindSession(session.Id);
-                    var start = Payload(Complete(client.CallToolAsync("xmat_set_capture_running",
-                        new Dictionary<string, object>
-                        {
-                            ["captureId"] = target.Id,
-                            ["expectedRevision"] = target.Revision,
-                            ["running"] = true,
-                            ["idempotencyKey"] = "retain-chosen"
-                        }).AsTask())).GetProperty("id").GetGuid();
-                    Assert.True(host.Runtime.Approve(start));
-                    Finish(host.Runtime.WaitForCompletionAsync(connection, start));
-                    Assert.True(chosen.Controller.IsRunning);
-
-                    targets.SelectedItem = targets.Items.Cast<CaptureDescriptor>().Single(item => item.DeviceName == "not chosen");
-                    var other = (CaptureDescriptor)targets.SelectedItem;
-                    ((CheckBox)manager.FindName("ControlGrant")).IsChecked = true;
-                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    CaptureDeviceTestData.PumpUntil(() => host.Runtime.GetSession(connection).Permissions.Contains(
-                        new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(other.Id))));
-                    Assert.Contains(new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(target.Id)),
-                        host.Runtime.GetSession(connection).Permissions);
-                    Assert.True(chosen.Controller.IsRunning);
-                    Assert.Equal(0, operations.StopCount);
-                    Assert.Equal(target.Id, Assert.Single(host.Runtime.GetOwnedResources()).Resource.Id);
-
-                    ((CheckBox)manager.FindName("ControlGrant")).IsChecked = false;
-                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    CaptureDeviceTestData.PumpUntil(() => !host.Runtime.GetSession(connection).Permissions.Contains(
-                        new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(other.Id))));
-                    Assert.Contains(new AgentPermission(AgentCapability.CaptureControl, AgentScope.Capture(target.Id)),
-                        host.Runtime.GetSession(connection).Permissions);
-                    Assert.True(chosen.Controller.IsRunning);
-                    Assert.Equal(0, operations.StopCount);
-                }
-                finally
-                {
-                    manager?.Close();
-                    if (client != null)
-                        Finish(client.DisposeAsync().AsTask());
-                    Finish(host.DisposeAsync().AsTask());
-                }
-            });
-        }
 
         [Fact]
         public void DisconnectRetainsManualListenerForRecoveryAndDoesNotAdoptAlreadyRunningHumanCapture()
@@ -489,7 +398,8 @@ namespace XMAT.Tests
             }
         }
 
-        private static async Task<McpClient> Connect(AgentAccessHost host, string name = "XMAT integration test")
+        private static async Task<McpClient> Connect(
+            AgentAccessHost host, string name = "XMAT integration test", McpClientOptions options = null)
         {
             using var process = Process.GetCurrentProcess();
             var diagnostics = new System.Collections.Concurrent.ConcurrentQueue<string>();
@@ -502,10 +412,9 @@ namespace XMAT.Tests
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             try
             {
-                return await McpClient.CreateAsync(transport, new McpClientOptions
-                {
-                    ClientInfo = new Implementation { Name = name, Version = "1.0" }
-                }, cancellationToken: timeout.Token);
+                options ??= new();
+                options.ClientInfo = new Implementation { Name = name, Version = "1.0" };
+                return await McpClient.CreateAsync(transport, options, cancellationToken: timeout.Token);
             }
             catch (Exception exception)
             {

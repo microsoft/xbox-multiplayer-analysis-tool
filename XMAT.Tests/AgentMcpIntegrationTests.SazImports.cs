@@ -3,15 +3,10 @@
 // SPDX-License-Identifier: MIT
 
 using System.Text.Json;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using XMAT.AgentAccess;
 using XMAT.ApplicationServices;
-using XMAT.DataAbstractionLayer;
-using XMAT.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using static XMAT.Tests.CaptureDeviceTestData;
@@ -243,65 +238,6 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void DesktopSazGrantsAreIndependentOfRawAccessAndUnavailableForLoadedSources()
-        {
-            _application.Run(owner =>
-            {
-                WpfTestHost.Show(owner, new Grid());
-                using var setup = new CaptureDeviceTestData();
-                using var directory = new CaptureFileExportTests.DirectoryFixture();
-                var path = Path.Combine(directory.Path, "capture.saz");
-                CaptureSazImportTests.WriteSaz(path);
-                var host = new AgentAccessHost(setup.Model, Dispatcher.CurrentDispatcher);
-                AgentAccessWindow manager = null;
-                McpClient client = null;
-                SqLtReadonlyDatabase loaded = null;
-                try
-                {
-                    var input = Complete(host.RegisterInputFileAsync(path));
-                    host.MarkReady();
-                    host.Enable();
-                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
-                    client = Complete(Connect(host));
-                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
-                    WpfTestHost.Pump();
-                    var sessions = (DataGrid)manager.FindName("Sessions");
-                    sessions.SelectedItem = sessions.Items.Cast<AgentSessionSnapshot>().Single();
-                    var source = Complete(host.GetSourcesAsync()).Single();
-                    var chooser = (ComboBox)manager.FindName("InputFileTarget");
-                    chooser.SelectedItem = chooser.Items.Cast<InputFileDescriptor>().Single(item => item.Id == input.Id);
-                    ((CheckBox)manager.FindName("FileReadGrant")).IsChecked = true;
-                    ((CheckBox)manager.FindName("CaptureImportGrant")).IsChecked = true;
-                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    WpfTestHost.Pump();
-                    var grants = host.Runtime.GetSessions().Single().Permissions;
-                    Assert.Equal(2, grants.Count);
-                    Assert.Contains(new AgentPermission(AgentCapability.CaptureImport, AgentScope.Source(source.Id)), grants);
-                    Assert.Contains(new AgentPermission(AgentCapability.FileRead, AgentScope.InputFile(input.Id)), grants);
-                    var tools = Complete(client.ListToolsAsync().AsTask());
-                    Assert.Contains(tools, tool => tool.Name == "xmat_import_saz");
-                    Assert.Contains(tools, tool => tool.Name == "xmat_import_etl");
-                    Assert.DoesNotContain(tools, tool => tool.Name == "xmat_read_file");
-                    var nativePath = Path.Combine(directory.Path, "loaded.xmatcap");
-                    setup.Database.SaveToFile(nativePath);
-                    setup.Model.LoadedDatabase = loaded = new SqLtReadonlyDatabase(nativePath);
-                    var sources = (ComboBox)manager.FindName("QuerySourceTarget");
-                    PumpUntil(() => sources.Items.Cast<QuerySourceDescriptor>().Any(item => item.Kind == QuerySourceKind.Loaded));
-                    sources.SelectedItem = sources.Items.Cast<QuerySourceDescriptor>().Single(item => item.Kind == QuerySourceKind.Loaded);
-                    Assert.False(((CheckBox)manager.FindName("CaptureImportGrant")).IsEnabled);
-                    Assert.False(((CheckBox)manager.FindName("CaptureImportGrant")).IsChecked);
-                }
-                finally
-                {
-                    manager?.Close();
-                    if (client != null)
-                        Finish(client.DisposeAsync().AsTask());
-                    Finish(host.DisposeAsync().AsTask());
-                    loaded?.Dispose();
-                }
-            });
-        }
 
         private static Dictionary<string, object> SazArguments(Guid input, Guid source, string key) =>
             new() { ["inputId"] = input, ["sourceId"] = source, ["idempotencyKey"] = key };

@@ -26,18 +26,20 @@ namespace XMAT.ApplicationServices
         private readonly Func<ApplicationDiagnosticPrerequisites> _prerequisites;
         private readonly Func<byte[]> _publicCertificate;
         private readonly Func<string> _logDirectory;
+        private readonly Func<bool> _hasDesktop;
         private readonly object _drainGate = new();
         private TaskCompletionSource _drained;
         private int _pendingExports;
 
         internal ApplicationDiagnostics(
             ICaptureFileExports folders, Func<ApplicationDiagnosticPrerequisites> prerequisites = null,
-            Func<byte[]> publicCertificate = null, Func<string> logDirectory = null)
+            Func<byte[]> publicCertificate = null, Func<string> logDirectory = null, Func<bool> hasDesktop = null)
         {
             _artifacts = new(folders);
             _prerequisites = prerequisites ?? ReadPrerequisites;
             _publicCertificate = publicCertificate ?? ProxyPublicRootCertificate.Read;
             _logDirectory = logDirectory ?? (() => Path.Combine(PublicUtilities.StorageDirectoryPath, "Logs"));
+            _hasDesktop = hasDesktop;
         }
 
         public Task<ApplicationDiagnosticSnapshot> InspectAsync(CancellationToken cancellationToken = default) =>
@@ -145,6 +147,8 @@ namespace XMAT.ApplicationServices
         private State Inspect()
         {
             var prerequisites = _prerequisites();
+            if (_hasDesktop != null)
+                prerequisites = prerequisites with { LocalDesktop = _hasDesktop() };
             var certificate = _publicCertificate();
             if (certificate is { Length: > MaximumCertificateBytes })
                 throw new AdministrationException(AdministrationFailure.LimitExceeded);

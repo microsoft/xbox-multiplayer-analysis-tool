@@ -48,14 +48,18 @@ namespace XMAT.WebServiceCapture
 
         public void Initialize(ICaptureAppModel appModel)
         {
-            _captureAppModel = appModel;
-
-            InitializeDataTables();
+            InitializeData(appModel);
 
             if (!WebServiceProxy.Initialize(PublicUtilities.StorageDirectoryPath))
             {
                 MessageBox.Show(@"Failed to initialize WebServiceProxy!");
             }
+        }
+
+        internal void InitializeData(ICaptureAppModel appModel)
+        {
+            _captureAppModel = appModel;
+            InitializeDataTables();
         }
 
         public void Shutdown()
@@ -79,8 +83,11 @@ namespace XMAT.WebServiceCapture
 
         private void InitializeDataTables()
         {
-            // TODO: expose these constants
-            WebProxyConnectionsTable = _captureAppModel.ActiveDatabase.CreateTable(
+            WebProxyConnectionsTable = CreateDataTable(_captureAppModel.ActiveDatabase);
+        }
+
+        internal static IDataTable CreateDataTable(IDatabase database) =>
+            database.CreateTable(
                 TableName,
                 new Field<string>(FieldKey_DeviceName),
                 new Field<Int64>(FieldKey_RequestNumber),
@@ -99,7 +106,6 @@ namespace XMAT.WebServiceCapture
                 new Field<string>(FieldKey_ResponseBody),
                 new Field<string>(FieldKey_ClientIP)
             );
-        }
 
         public async Task ImportFromFiddlerAsync(string fromFilePath, ICaptureDeviceContext context)
         {
@@ -144,7 +150,8 @@ namespace XMAT.WebServiceCapture
             string path, WebServiceDeviceCaptureController controller, long maximumBytes, CancellationToken cancellationToken)
         {
             FiddlerSazImportResult result;
-            try { result = FiddlerSazHandler.ImportSazFileWithDiagnostics(path, maximumBytes, cancellationToken); }
+            try
+            { result = FiddlerSazHandler.ImportSazFileWithDiagnostics(path, maximumBytes, cancellationToken); }
             catch (FiddlerSazHeaderLimitException exception)
             { throw new InvalidDataException(Localization.GetLocalizedString("WEBCAP_IMPORT_HEADER_LIMIT"), exception); }
             catch (SazArchiveException exception)
@@ -155,9 +162,9 @@ namespace XMAT.WebServiceCapture
             }
             var connections = result.Records;
             return new(connections,
-                controller.UpdateFilter(connections.Select(connection => connection.Host).Distinct().ToList()),
-                controller.UpdateFilter(connections.Select(connection => connection.Status).Distinct().ToList()),
-                controller.UpdateFilter(connections.Select(connection => connection.Method).Distinct().ToList()),
+                controller?.UpdateFilter(connections.Select(connection => connection.Host).Distinct().ToList()),
+                controller?.UpdateFilter(connections.Select(connection => connection.Status).Distinct().ToList()),
+                controller?.UpdateFilter(connections.Select(connection => connection.Method).Distinct().ToList()),
                 result.SkippedIncompleteFrames, result.SkippedMalformedHeaderLines);
         }
 

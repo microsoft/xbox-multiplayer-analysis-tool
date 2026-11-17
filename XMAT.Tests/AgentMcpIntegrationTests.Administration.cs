@@ -2,9 +2,6 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using XMAT.AgentAccess;
@@ -137,43 +134,5 @@ namespace XMAT.Tests
             });
         }
 
-        [Fact]
-        public void AccessWindowGrantsTheFiveApplicationCapabilitiesWithoutCaptureOrRawAccess()
-        {
-            _application.Run(owner =>
-            {
-                WpfTestHost.Show(owner, new Grid());
-                var model = new CaptureAppModel();
-                var host = new AgentAccessHost(model, Dispatcher.CurrentDispatcher);
-                AgentAccessWindow manager = null;
-                McpClient client = null;
-                try
-                {
-                    host.MarkReady();
-                    host.Enable();
-                    client = Complete(Connect(host));
-                    Complete(client.CallToolAsync("xmat_get_session").AsTask());
-                    manager = AgentAccessWindow.ShowOrActivate(owner, host);
-                    WpfTestHost.Pump();
-                    var sessions = (DataGrid)manager.FindName("Sessions");
-                    sessions.SelectedItem = sessions.Items.Cast<AgentSessionSnapshot>().Single();
-                    foreach (var name in new[] { "HostPolicyGrant", "PreferencesGrant", "DiagnosticsGrant", "NavigationGrant", "LifecycleGrant" })
-                        ((CheckBox)manager.FindName(name)).IsChecked = true;
-                    ((Button)manager.FindName("ApplyGrants")).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    var session = host.FindSession(host.Runtime.GetSessions().Single().Id);
-                    CaptureDeviceTestData.PumpUntil(() => host.Runtime.GetSession(session).Permissions.Count == 5);
-                    Assert.All(host.Runtime.GetSession(session).Permissions, permission => Assert.Equal(AgentScope.Application, permission.Scope));
-                    Assert.DoesNotContain(host.Runtime.GetSession(session).Permissions,
-                        permission => permission.Capability is AgentCapability.RawDataRead or AgentCapability.CaptureControl or AgentCapability.FileWrite);
-                }
-                finally
-                {
-                    manager?.Close();
-                    if (client != null)
-                        Finish(client.DisposeAsync().AsTask());
-                    Finish(host.DisposeAsync().AsTask());
-                }
-            });
-        }
     }
 }

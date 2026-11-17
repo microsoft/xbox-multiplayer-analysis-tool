@@ -40,8 +40,11 @@ namespace XMAT.AgentAccess
                 "xmat_release_query_export", "AGENT_TOOL_QUERY_EXPORT_RELEASE", false),
             AgentMcpTools.Tool((Func<int, Task<CallToolResult>>)FoldersAsync,
                 "xmat_list_export_folders", "AGENT_TOOL_EXPORT_FOLDERS", true),
-            AgentMcpTools.Tool((Func<Guid, Guid, string, QueryExportFormat, string, CancellationToken, Task<CallToolResult>>)SaveFileAsync,
-                "xmat_save_query_result", "AGENT_TOOL_QUERY_SAVE_FILE", false)
+            runtime.Policy == null
+                ? AgentMcpTools.Tool((Func<Guid, Guid, string, QueryExportFormat, string, CancellationToken, Task<CallToolResult>>)SaveFileAsync,
+                    "xmat_save_query_result", "AGENT_TOOL_QUERY_SAVE_FILE", false)
+                : AgentMcpTools.Tool((Func<Guid, string, QueryExportFormat, string, bool, CancellationToken, Task<CallToolResult>>)SavePathAsync,
+                    "xmat_save_query_result", "AGENT_TOOL_QUERY_SAVE_FILE", false)
         };
 
         private Task<CallToolResult> SourcesAsync(CancellationToken cancellationToken) =>
@@ -92,5 +95,11 @@ namespace XMAT.AgentAccess
             CancellationToken cancellationToken = default) => wrap(async () =>
                 AgentJson.Encode(runtime.GetOperation(session, await application.SaveFileAsync(
                     session, resultId, folderId, fileName, format, idempotencyKey, cancellationToken))));
+
+        private Task<CallToolResult> SavePathAsync(
+            Guid resultId, string path, QueryExportFormat format, string idempotencyKey, bool overwrite = false,
+            CancellationToken cancellationToken = default) => wrap(async () =>
+                AgentJson.Encode(runtime.GetOperation(session, await application.SavePathAsync(
+                    session, resultId, path, format, idempotencyKey, overwrite, cancellationToken))));
     }
 }

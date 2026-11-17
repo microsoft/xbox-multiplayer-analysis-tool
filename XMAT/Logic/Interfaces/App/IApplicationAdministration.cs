@@ -72,7 +72,7 @@ namespace XMAT.SharedInterfaces
         IReadOnlyList<ApplicationPreferenceDifference> Differences, bool LanguageRestartRequired);
     public sealed record ApplicationPreferenceChange(
         long Revision, bool Changed, bool Committed, bool Persisted, bool LanguageRestartRequired,
-        AdministrationFailure? Failure = null);
+        AdministrationFailure? Failure = null, bool ThemeRenderingDeferred = false);
 
     public interface IApplicationPreferences
     {
@@ -87,7 +87,7 @@ namespace XMAT.SharedInterfaces
     }
 
     public enum AdministrationArtifactKind { DiagnosticLogs, PublicRootCertificateDer, PublicRootCertificatePem }
-    public sealed record AdministrationDestination(Guid FolderId, string FileName);
+    public sealed record AdministrationDestination(Guid FolderId, string FileName, FileOverwriteState Overwrite = null);
     public sealed record ApplicationDiagnosticPrerequisites(
         string ApplicationVersion, string RuntimeVersion, string OperatingSystemVersion,
         bool Elevated, bool GdkAvailable, string GdkVersion, bool LocalDesktop = true);

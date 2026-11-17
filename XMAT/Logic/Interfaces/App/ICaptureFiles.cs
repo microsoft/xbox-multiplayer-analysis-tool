@@ -12,7 +12,8 @@ namespace XMAT.SharedInterfaces
     public enum CaptureArchiveFormat { CaptureDatabase, FiddlerSaz, SanitizedFiddlerSaz }
     public sealed record CaptureSanitization(
         int Sessions, int RedactedValues, int OmittedBodies, int OmittedHeaders, int WorkBudgetOmissions);
-    public sealed record CaptureFileDestination(Guid FolderId, string FileName, CaptureArchiveFormat Format);
+    public sealed record CaptureFileDestination(
+        Guid FolderId, string FileName, CaptureArchiveFormat Format, FileOverwriteState Overwrite = null);
     public sealed record CaptureArchiveReceipt(
         Guid SourceId, CaptureArchiveFormat Format, DateTimeOffset CapturedAt, long Length,
         string DeviceName = null, CaptureSanitization Sanitization = null);

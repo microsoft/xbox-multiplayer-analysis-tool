@@ -99,6 +99,15 @@ namespace XMAT.ApplicationServices
             using (operationLease)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var revision = _model.CaptureCatalog.DescribeTarget(target).Revision;
+                await using var backup = running && target.CaptureType == CaptureType.NetworkTrace
+                    ? await AgentMutationProtection.BeforeCaptureAsync(_model, NetworkTraceCaptureMethod.TableName,
+                        target.DeviceName, "network-trace-start-reset", AgentMutationProtection.Revision(revision), cancellationToken)
+                    : new AgentMutationProtection.Protection(null, null);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (_model.CaptureCatalog.DescribeTarget(target).Revision != revision)
+                    throw new QueryException(QueryError.SourceChanged, "The capture changed before its transition.");
+                backup.Demand();
                 using var transition = adapter.BeginTransition(running);
 
                 // Once a transition starts it must finish its rollback/drain even if the caller leaves.
@@ -112,6 +121,7 @@ namespace XMAT.ApplicationServices
                     {
                         await adapter.StopAsync(progress);
                     }
+                    backup.Committed();
                     _model.CaptureCatalog.SetRecoveryRequired(target, false);
                     return new(true, target.CaptureController.IsRunning, CaptureOperationFailure.None,
                         _model.CaptureCatalog.DescribeTarget(target).CaptureEpoch);
@@ -171,7 +181,7 @@ namespace XMAT.ApplicationServices
 
         private Task<T> InvokeAsync<T>(Func<Task<T>> action)
         {
-            return App.RunOnUiAsync(_dispatcher, action);
+            return ApplicationDispatch.RunOnUiAsync(_dispatcher, action);
         }
 
         private static ICaptureLifecycleAdapter CreateAdapter(ICaptureDeviceContext target)
@@ -200,6 +210,8 @@ namespace XMAT.ApplicationServices
                 {
                     return CaptureOperationFailure.PendingPortChange;
                 }
+                if (running && controller.ProxyTrustSetupRequired)
+                    return CaptureOperationFailure.ProxyTrustRequired;
                 if (running && target.DeviceType == DeviceType.XboxConsole &&
                     !GDKXHelper.IsGDKXInstalled(false))
                 {

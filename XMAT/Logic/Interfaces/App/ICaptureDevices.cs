@@ -72,7 +72,8 @@ namespace XMAT.SharedInterfaces
         CaptureDeviceEndpoint Endpoint,
         bool EndpointBelongsToCapture,
         CaptureDeviceFailure RemovalFailure,
-        CaptureDeviceFailure PendingPortFailure);
+        CaptureDeviceFailure PendingPortFailure,
+        bool RemovalDeletesStoredRows = false);
 
     public sealed record CaptureDeviceChange(
         Guid CaptureId,

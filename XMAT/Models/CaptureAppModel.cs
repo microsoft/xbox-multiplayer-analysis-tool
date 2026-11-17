@@ -142,11 +142,45 @@ namespace XMAT.Models
         internal ICaptureProxyOperations CaptureProxyOperations { get; }
         internal ICaptureFileExports CaptureFileExports { get; }
         internal ICaptureFileInputs CaptureFileInputs { get; }
+        internal ICaptureReadonlySources CaptureReadonlySources { get; }
+        internal ApplicationServices.ApplicationShutdown HostLifecycle { get; }
         internal ICaptureFileLoads CaptureFileLoads { get; }
         internal ICaptureSazImports CaptureSazImports { get; }
         internal ICaptureEtlImports CaptureEtlImports { get; }
         internal ICaptureFiles CaptureFiles { get; }
-        internal XMAT.AgentAccess.AgentAccessHost AgentAccess { get; }
+        private AgentAccess.AgentAccessHost _agentAccess;
+        private AgentAccess.AgentAccessPolicyService _agentPolicy;
+        private Guid? _agentInstanceId;
+        private readonly object _agentAccessGate = new();
+        internal AgentAccess.AgentAccessHost AgentAccess
+        {
+            get
+            {
+                lock (_agentAccessGate)
+                    return _agentAccess ??= new(this, _dispatcher, policy: _agentPolicy, instanceId: _agentInstanceId);
+            }
+        }
+        internal bool HasAgentAccess
+        {
+            get { lock (_agentAccessGate) { return _agentAccess != null; } }
+        }
+        internal bool IsHeadless { get; private set; }
+        internal bool DeferProxyCreation => _agentPolicy != null;
+
+        internal void ConfigureAgentPolicy(
+            AgentAccess.AgentAccessPolicyService policy, bool headless = false, Guid? instanceId = null)
+        {
+            ApplicationDispatch.VerifyUiAccess(_dispatcher);
+            ArgumentNullException.ThrowIfNull(policy);
+            lock (_agentAccessGate)
+            {
+                if (_agentAccess != null)
+                    throw new InvalidOperationException("Configure the agent policy before creating the host.");
+                _agentPolicy = policy;
+                _agentInstanceId = instanceId;
+                IsHeadless = headless;
+            }
+        }
 
         // Session-only Block and Bypass lists shared by every capture and analysis view of this
         // application instance. They are never saved with settings or captures.
@@ -196,7 +230,8 @@ namespace XMAT.Models
             !IsCaptureDataOperationRunning;
         internal bool CanModifyCaptureData =>
             !IsAnalysisRunning &&
-            !IsCaptureDataOperationRunning;
+            !IsCaptureDataOperationRunning &&
+            HostLifecycle?.IsClosing != true;
         internal bool CanBeginCaptureDataOperation =>
             CanModifyCaptureData &&
             !IsAnyCaptureRunning;
@@ -240,12 +275,13 @@ namespace XMAT.Models
             CaptureDevices = new ApplicationServices.CaptureDevices(this, _dispatcher);
             CaptureProxyOperations = new ApplicationServices.CaptureProxyOperations(this);
             CaptureFileExports = new ApplicationServices.CaptureFileExports(() =>
-                App.QueueOnUi<IReadOnlyList<string>>(_dispatcher, () => new[] { LoadedCaptureFilePath }).Task);
+                ApplicationDispatch.QueueOnUi<IReadOnlyList<string>>(_dispatcher, () => new[] { LoadedCaptureFilePath }).Task);
             CaptureFileInputs = new ApplicationServices.CaptureFileInputs();
             CaptureFileLoads = new ApplicationServices.CaptureFileLoads(this, _dispatcher, queries, CaptureFileInputs);
+            CaptureReadonlySources = new ApplicationServices.CaptureReadonlySources(CaptureFileInputs, CaptureFileLoads);
+            HostLifecycle = new(this, _dispatcher);
             CaptureSazImports = new ApplicationServices.CaptureSazImports(this, _dispatcher, queries, CaptureFileInputs);
             CaptureEtlImports = new ApplicationServices.CaptureEtlImports(this, _dispatcher, queries, CaptureFileInputs);
-            AgentAccess = new XMAT.AgentAccess.AgentAccessHost(this, _dispatcher);
             PreferencesModel = new();
             _captureDeviceContexts.CollectionChanged += CaptureDeviceContexts_CollectionChanged;
 
@@ -585,15 +621,9 @@ namespace XMAT.Models
         internal void InitializeDatabase()
         {
             ActiveDatabase = DataAbstractionLayer.DataAbstractionLayer.Database;
-            AppModel.ActiveDatabase.Initialize();
+            ActiveDatabase.Initialize();
 
-            // add the devices table
-            AppModel.CaptureDevicesTable = AppModel.ActiveDatabase.CreateTable(
-                @"CaptureDevices",
-                new Field<Int64>(@"DeviceType"),
-                new Field<string>(@"DeviceName"),
-                new Field<Int64>(@"CaptureType")
-            );
+            CaptureDevicesTable = ApplicationServices.CaptureDatabaseSchema.CreateDevices(ActiveDatabase);
         }
 
         internal void AddCaptureAnalyzer(ICaptureAnalyzer analyzer)
@@ -607,7 +637,7 @@ namespace XMAT.Models
             {
                 // since the analyzer failed to initialize, then we do not
                 // add it to our active set...
-                Console.WriteLine($"Error: {ex.Message}");
+                Console.Error.WriteLine($"Analyzer initialization failed ({ex.GetType().Name}).");
                 throw;
             }
         }
@@ -1064,7 +1094,7 @@ namespace XMAT.Models
                     readOnly,
                     serializedParameters,
                     deferPortAllocation,
-                    HostListPolicy);
+                    HostListPolicy, deferProxyCreation: DeferProxyCreation);
                 _captureDeviceContexts.Add(newCaptureDeviceModel);
 
                 if (!readOnly)

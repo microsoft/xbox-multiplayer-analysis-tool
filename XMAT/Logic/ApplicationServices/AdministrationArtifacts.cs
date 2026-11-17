@@ -18,6 +18,7 @@ namespace XMAT.ApplicationServices
         {
             using var directory = await OpenAsync(destination, cancellationToken);
             Validate(directory, destination, kind);
+            await CaptureFilePublication.ValidateAsync(directory, destination.FileName, destination.Overwrite, cancellationToken);
         }
 
         internal async Task<long> PublishAsync(
@@ -27,7 +28,8 @@ namespace XMAT.ApplicationServices
         {
             ArgumentNullException.ThrowIfNull(beforePublish);
             using var directory = await OpenAsync(destination, cancellationToken);
-            var path = Validate(directory, destination, kind);
+            Validate(directory, destination, kind);
+            await CaptureFilePublication.ValidateAsync(directory, destination.FileName, destination.Overwrite, cancellationToken);
             await using var file = directory.CreateTemporary();
             var published = false;
             try
@@ -36,11 +38,15 @@ namespace XMAT.ApplicationServices
                     await serialize(bounded, cancellationToken);
                 await file.FlushAsync(cancellationToken);
                 file.Flush(flushToDisk: true);
-                await beforePublish(cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                WindowsExportFolder.Publish(file, path);
+                await CaptureFilePublication.PublishAsync(directory, destination.FileName, destination.Overwrite,
+                    file, beforePublish, cancellationToken);
                 published = true;
                 return file.Length;
+            }
+            catch (CaptureFileException exception) when (exception.Failure == CaptureFileFailure.PublicationUncertain)
+            {
+                published = true;
+                throw;
             }
             finally
             {
@@ -84,7 +90,6 @@ namespace XMAT.ApplicationServices
             var path = directory.Destination(destination.FileName);
             if (!Path.GetExtension(path).Equals(extension, StringComparison.OrdinalIgnoreCase))
                 throw new CaptureFileException(CaptureFileFailure.InvalidPath);
-            WindowsExportFolder.DemandNew(path);
             return path;
         }
     }

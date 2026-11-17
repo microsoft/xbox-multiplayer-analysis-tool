@@ -64,8 +64,9 @@ namespace XMAT.ApplicationServices
             var handle = CreateFile(path, 0x81, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
             if (handle.IsInvalid)
             {
+                var error = Marshal.GetLastWin32Error();
                 handle.Dispose();
-                throw new CaptureFileException(CaptureFileFailure.Unavailable);
+                throw new CaptureFileException(CaptureFileFailure.Unavailable, nativeErrorCode: error);
             }
             _directories.Add(handle);
             if (!GetFileInformationByHandle(handle, out var info))
@@ -104,16 +105,17 @@ namespace XMAT.ApplicationServices
                 throw new CaptureFileException(CaptureFileFailure.DestinationExists);
         }
 
-        internal FileStream CreateTemporary()
+        internal FileStream CreateTemporary(bool readable = false)
         {
             var path = System.IO.Path.Combine(Path, $".xmat-export-{Guid.NewGuid():N}.tmp");
-            var handle = CreateFile(path, 0x40010080, 0, IntPtr.Zero, 1, 0x40000000, IntPtr.Zero);
+            var handle = CreateFile(path, readable ? 0xC0010080u : 0x40010080u, 0, IntPtr.Zero, 1, 0x40000000, IntPtr.Zero);
             if (handle.IsInvalid)
             {
+                var error = Marshal.GetLastWin32Error();
                 handle.Dispose();
-                throw new CaptureFileException(CaptureFileFailure.Unavailable);
+                throw new CaptureFileException(CaptureFileFailure.Unavailable, nativeErrorCode: error);
             }
-            return new FileStream(handle, FileAccess.Write, 4096, isAsync: true);
+            return new FileStream(handle, readable ? FileAccess.ReadWrite : FileAccess.Write, 4096, isAsync: true);
         }
 
         internal OwnedDirectory CreateTemporaryDirectory()
@@ -123,15 +125,17 @@ namespace XMAT.ApplicationServices
                 var path = System.IO.Path.Combine(Path, $".xmat-{Guid.NewGuid():N}"[..14]);
                 if (!CreateDirectoryNative(path, IntPtr.Zero))
                 {
-                    if (Marshal.GetLastWin32Error() is 80 or 183)
+                    var error = Marshal.GetLastWin32Error();
+                    if (error is 80 or 183)
                         continue;
-                    throw new CaptureFileException(CaptureFileFailure.Unavailable);
+                    throw new CaptureFileException(CaptureFileFailure.Unavailable, nativeErrorCode: error);
                 }
                 var handle = CreateFile(path, 0x10080, 1, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
                 if (handle.IsInvalid)
                 {
+                    var error = Marshal.GetLastWin32Error();
                     handle.Dispose();
-                    throw new CaptureFileException(CaptureFileFailure.Unavailable);
+                    throw new CaptureFileException(CaptureFileFailure.Unavailable, nativeErrorCode: error);
                 }
                 try
                 {
@@ -157,7 +161,7 @@ namespace XMAT.ApplicationServices
             try
             {
                 if (handle.IsInvalid)
-                    throw new CaptureFileException(CaptureFileFailure.Unavailable);
+                    throw new CaptureFileException(CaptureFileFailure.Unavailable, nativeErrorCode: Marshal.GetLastWin32Error());
                 if (!GetFileInformationByHandle(handle, out var info))
                     throw new Win32Exception(Marshal.GetLastWin32Error());
                 if ((info.Attributes & (0x10 | 0x400)) != 0)
@@ -178,27 +182,37 @@ namespace XMAT.ApplicationServices
             }
         }
 
-        internal static void Publish(FileStream file, string destination)
-            => PublishHandle(file.SafeFileHandle, destination);
-
-        private static void PublishHandle(SafeFileHandle handle, string destination)
+        internal static void Publish(FileStream file, string destination, bool replace = false)
         {
-            // FILE_RENAME_INFO has an aligned handle at 8 and its UTF-16 name at 20 on x64.
-            var name = Encoding.Unicode.GetBytes(destination + "\0");
-            var buffer = Marshal.AllocHGlobal(20 + name.Length);
+            var original = FinalName(file.SafeFileHandle);
             try
+            { PublishHandle(file.SafeFileHandle, destination, replace); }
+            catch (CaptureFileException)
             {
-                Marshal.Copy(new byte[20 + name.Length], 0, buffer, 20 + name.Length);
-                Marshal.WriteInt32(buffer, 16, name.Length - 2);
-                Marshal.Copy(name, 0, buffer + 20, name.Length);
-                if (!SetFileInformationByHandle(handle, 3, buffer, 20 + name.Length))
-                {
-                    var error = Marshal.GetLastWin32Error();
-                    throw new CaptureFileException(error is 80 or 183
-                        ? CaptureFileFailure.DestinationExists : CaptureFileFailure.Unavailable);
-                }
+                var current = FinalName(file.SafeFileHandle);
+                if (string.Equals(current, destination, StringComparison.OrdinalIgnoreCase))
+                    return;
+                if (original != null && string.Equals(current, original, StringComparison.OrdinalIgnoreCase))
+                    throw;
+                throw new CaptureFileException(CaptureFileFailure.PublicationUncertain, original, destination);
             }
-            finally { Marshal.FreeHGlobal(buffer); }
+        }
+
+        private static string FinalName(SafeFileHandle handle)
+        {
+            var name = new StringBuilder(512);
+            var count = GetFinalPathNameByHandle(handle, name, name.Capacity, 0);
+            return count > 0 && count < name.Capacity
+                ? name.ToString().Replace(@"\\?\", string.Empty, StringComparison.Ordinal) : null;
+        }
+
+        internal static string FilePath(FileStream file) => FinalName(file.SafeFileHandle);
+
+        private static void PublishHandle(SafeFileHandle handle, string destination, bool replace = false)
+        {
+            if (!WindowsFilePublication.TryPublish(handle, destination, replace, out var error))
+                throw new CaptureFileException(error is 80 or 183
+                    ? CaptureFileFailure.DestinationExists : CaptureFileFailure.Unavailable, nativeErrorCode: error);
         }
 
         internal static void DeleteTemporary(FileStream file)
@@ -206,8 +220,8 @@ namespace XMAT.ApplicationServices
 
         private static void DeleteHandle(SafeFileHandle handle)
         {
-            if (!TryDeleteHandle(handle, out _))
-                throw new CaptureFileException(CaptureFileFailure.Unavailable);
+            if (!TryDeleteHandle(handle, out var error))
+                throw new CaptureFileException(CaptureFileFailure.Unavailable, nativeErrorCode: error);
         }
 
         private static bool TryDeleteHandle(SafeFileHandle handle, out int error)
@@ -246,8 +260,9 @@ namespace XMAT.ApplicationServices
                     0xC0010080, 0, IntPtr.Zero, 1, 0x40200000, IntPtr.Zero);
                 if (file.IsInvalid)
                 {
+                    var error = Marshal.GetLastWin32Error();
                     file.Dispose();
-                    throw new CaptureFileException(CaptureFileFailure.Unavailable);
+                    throw new CaptureFileException(CaptureFileFailure.Unavailable, nativeErrorCode: error);
                 }
                 return new(file, FileAccess.ReadWrite, 4096, isAsync: true);
             }

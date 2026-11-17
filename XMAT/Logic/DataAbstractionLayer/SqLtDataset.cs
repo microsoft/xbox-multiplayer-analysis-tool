@@ -70,6 +70,26 @@ namespace XMAT.DataAbstractionLayer
             }
         }
 
+        public bool HasRecords(params IFieldValue[] fieldNamesAndValues)
+        {
+            lock (_gate)
+            {
+                ThrowIfDisposed();
+                using var command = _commandInterface.Connection.CreateCommand();
+                var conditions = fieldNamesAndValues.Select((value, index) =>
+                {
+                    var definition = (FieldDefinition)_fieldDefinitions[value.Name];
+                    var parameter = "$p" + index;
+                    command.Parameters.AddWithValue(parameter,
+                        _useLegacyTextValues ? definition.FieldValueAsParameter(value.Value) : value.Value ?? DBNull.Value);
+                    return QuoteIdentifier(definition.Name) + " = " + parameter;
+                }).ToArray();
+                command.CommandText = "SELECT EXISTS(SELECT 1 FROM " + QuoteIdentifier(_sourceTableName) +
+                    (conditions.Length == 0 ? string.Empty : " WHERE " + string.Join(" AND ", conditions)) + ")";
+                return (long)command.ExecuteScalar() != 0;
+            }
+        }
+
         public IEnumerable<IDataRecord> DataRecordsFrom(Int64 firstRowId, int limit)
         {
             lock (_gate)

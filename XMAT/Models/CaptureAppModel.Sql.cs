@@ -18,7 +18,7 @@ namespace XMAT.Models
         {
             get
             {
-                App.VerifyUiAccess(_dispatcher);
+                ApplicationDispatch.VerifyUiAccess(_dispatcher);
                 if (_sqlQueryWorkspace == null)
                 {
                     _sqlQueryWorkspace = new(CaptureQueries, _dispatcher,
@@ -33,11 +33,11 @@ namespace XMAT.Models
 
         private void SqlWorkspace_CapturePropertyChanged(object sender, PropertyChangedEventArgs e)
         {
-            if (!App.HasUiAccess(_dispatcher))
+            if (!ApplicationDispatch.HasUiAccess(_dispatcher))
             {
-                if (!App.IsUiShuttingDown(_dispatcher))
+                if (!ApplicationDispatch.IsUiShuttingDown(_dispatcher))
                 {
-                    App.PostToUi(_dispatcher, () => SqlWorkspace_CapturePropertyChanged(sender, e));
+                    ApplicationDispatch.PostToUi(_dispatcher, () => SqlWorkspace_CapturePropertyChanged(sender, e));
                 }
                 return;
             }
@@ -56,9 +56,9 @@ namespace XMAT.Models
 
         internal Task DisposeSqlWorkspaceAsync()
         {
-            if (!App.HasUiAccess(_dispatcher))
+            if (!ApplicationDispatch.HasUiAccess(_dispatcher))
             {
-                return App.QueueOnUi(_dispatcher, DisposeSqlWorkspaceAsync).Task.Unwrap();
+                return ApplicationDispatch.QueueOnUi(_dispatcher, DisposeSqlWorkspaceAsync).Task.Unwrap();
             }
             PropertyChanged -= SqlWorkspace_CapturePropertyChanged;
             return _sqlQueryWorkspace?.DisposeAsync().AsTask() ?? Task.CompletedTask;

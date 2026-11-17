@@ -61,6 +61,8 @@ namespace XMAT.Models
         private Decoder _inspectorDecoder;
         private int _timeoutSeconds = 60;
         private int _maximumResultMiB = 512;
+        internal Guid Id { get; } = Guid.NewGuid();
+        internal long TextRevision => _textRevision;
 
         internal SqlQueryDocumentModel(SqlQueryWorkspaceModel workspace, string untitledName)
         {
@@ -506,16 +508,41 @@ namespace XMAT.Models
             }, forClosing);
         });
 
+        internal Task<bool> SaveForAgentCloseAsync(
+            string path, long expectedRevision, CaptureLocalDestination destination, ICaptureFileExports exports,
+            CancellationToken operationCancellation = default) =>
+            _workspace.InvokeAsync(() =>
+            {
+                if (_textRevision != expectedRevision)
+                    throw new QueryException(QueryError.SourceChanged, "The SQL document changed.");
+                var text = Text;
+                return StartOperationAsync("SQL_FILE_SAVING", async cancellationToken =>
+                {
+                    await exports.SaveSqlDocumentAsync(text, destination, 16 * 1024 * 1024, token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (_textRevision != expectedRevision)
+                            throw new QueryException(QueryError.SourceChanged, "The SQL document changed before saving.");
+                        return Task.CompletedTask;
+                    }, cancellationToken);
+                    _savedText = text;
+                    _filePath = Path.GetFullPath(path);
+                    RaisePropertyChanged(nameof(FilePath));
+                    RaiseDocumentProperties();
+                }, true, true, operationCancellation);
+            });
+
         internal void ReportMessage(string message) => MessageText = message;
 
         private Task<bool> StartOperationAsync(
-            string messageKey, Func<CancellationToken, Task> action, bool allowSuspended = false)
+            string messageKey, Func<CancellationToken, Task> action, bool allowSuspended = false,
+            bool propagateFailure = false, CancellationToken operationCancellation = default)
         {
             if (_disposed || _isBusy || _suspended && !allowSuspended)
                 return Task.FromResult(false);
             var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var cancellation = new CancellationTokenSource();
-            _operation = completion.Task;
+            var cancellation = CancellationTokenSource.CreateLinkedTokenSource(operationCancellation);
+            _operation = propagateFailure ? CompletionWithoutFailureAsync(completion.Task) : completion.Task;
             _cancellation = cancellation;
             _isBusy = true;
             _isCancelling = false;
@@ -527,14 +554,17 @@ namespace XMAT.Models
             async Task PerformAsync()
             {
                 var succeeded = false;
+                Exception failure = null;
                 try
                 {
                     await action(cancellation.Token);
                     succeeded = true;
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException exception)
                 {
                     MessageText = Localization.GetLocalizedString("SQL_CANCELLED_PRESERVED");
+                    if (propagateFailure)
+                        failure = exception;
                 }
                 catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
                 {
@@ -549,6 +579,8 @@ namespace XMAT.Models
                     } : "SQL_FILE_ADVICE";
                     MessageText = Localization.GetLocalizedString("SQL_ERROR_PRESERVED",
                         exception.Message, Localization.GetLocalizedString(advice));
+                    if (propagateFailure)
+                        failure = exception;
                 }
                 finally
                 {
@@ -557,9 +589,19 @@ namespace XMAT.Models
                     _isCancelling = false;
                     cancellation.Dispose();
                     NotifyReadiness();
-                    completion.TrySetResult(succeeded);
+                    if (failure != null)
+                        completion.TrySetException(failure);
+                    else
+                        completion.TrySetResult(succeeded);
                 }
             }
+        }
+
+        private static async Task<bool> CompletionWithoutFailureAsync(Task<bool> operation)
+        {
+            try
+            { return await operation; }
+            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception)) { return false; }
         }
 
         public void Cancel()

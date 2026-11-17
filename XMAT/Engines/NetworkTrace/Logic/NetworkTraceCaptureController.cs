@@ -6,8 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Linq;
 using System.Globalization;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -245,10 +245,10 @@ namespace XMAT.NetworkTrace
                     if (!_disposed && generation == Volatile.Read(ref _viewGeneration))
                         NetworkTracePackets.AddFromDataRecord(record);
                 }
-                if (App.HasUiAccess(_dispatcher))
+                if (ApplicationDispatch.HasUiAccess(_dispatcher))
                     Publish();
                 else
-                    App.PostToUi(_dispatcher, Publish);
+                    ApplicationDispatch.PostToUi(_dispatcher, Publish);
             }
         }
 

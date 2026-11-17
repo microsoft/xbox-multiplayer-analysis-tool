@@ -15,5 +15,7 @@ namespace XMAT.SharedInterfaces
         IEnumerable<IDataRecord> DataRecordsFrom(Int64 firstRowId);
         IEnumerable<IDataRecord> DataRecordsFrom(Int64 firstRowId, int limit);
         IEnumerable<IDataRecord> DataRecordsWhen(params IFieldValue[] fieldNamesAndValues);
+        bool HasRecords(params IFieldValue[] fieldNamesAndValues) =>
+            System.Linq.Enumerable.Any(fieldNamesAndValues.Length == 0 ? DataRecords : DataRecordsWhen(fieldNamesAndValues));
     }
 }

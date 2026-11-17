@@ -55,6 +55,12 @@ namespace XMAT.Cli
                 {
                     report = CliDoctorCommand.Run(parsed.Request, runId);
                 }
+                else if (parsed.Request.Command == CliCommands.Agent)
+                {
+                    var cancellation = new CancellationTokenSource();
+                    signals = CliSignals.Register(cancellation);
+                    report = await CliAgentCommand.RunAsync(parsed.Request.Agent, runId, cancellation.Token).ConfigureAwait(false);
+                }
                 else if (parsed.Request.Command == CliCommands.Help)
                 {
                     report = CliHelp.Create(runId, parsed.Request.Topic);
