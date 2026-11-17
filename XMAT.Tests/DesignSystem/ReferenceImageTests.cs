@@ -126,9 +126,12 @@ namespace XMAT.Tests.DesignSystem
             return look;
         }
 
-        // ELEMENT laid out on its own, so the picture doesn't depend on the display's DPI, on BACKGROUND.
+        // ELEMENT laid out on its own at 96 DPI, on BACKGROUND. An element outside a window rounds its layout to the
+        // system DPI, which follows the scale of the primary display when Windows was signed in to, so the picture sets
+        // the element's DPI to the bitmap's instead; the pictures are then the same on any machine.
         private static BitmapSource Capture(FrameworkElement element, Brush background)
         {
+            VisualTreeHelper.SetRootDpi(element, new DpiScale(1, 1));
             double available = element.Width > 0 ? element.Width : double.PositiveInfinity;
             element.Measure(new Size(available, double.PositiveInfinity));
             element.Arrange(new Rect(element.DesiredSize));
