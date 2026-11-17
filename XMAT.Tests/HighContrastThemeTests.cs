@@ -140,12 +140,12 @@ namespace XMAT.Tests
                 foreach (var (text, background) in pairs)
                 {
                     double contrast = ContrastRatio(Find(text), Find(background));
-                    Assert.True(contrast >= 4.5, $"{name}: {text} on {background} is {contrast:F2}:1");
+                    Assert.True(contrast >= 4.5, $"COLOR-4: {name}: {text} on {background} is {contrast:F2}:1");
                 }
                 foreach (string status in Statuses)
                 {
                     double contrast = ContrastRatio(Find($"{status}FillBrush"), Find("SurfaceWellBrush"));
-                    Assert.True(contrast >= 3, $"{name}: {status} bar on the timeline is {contrast:F2}:1");
+                    Assert.True(contrast >= 3, $"COLOR-4: {name}: {status} bar on the timeline is {contrast:F2}:1");
                 }
             });
         }

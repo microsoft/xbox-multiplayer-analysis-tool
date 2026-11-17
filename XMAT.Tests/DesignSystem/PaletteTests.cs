@@ -25,7 +25,7 @@ namespace XMAT.Tests.DesignSystem
             string expected = PaletteGenerator.ToXaml(PaletteGenerator.Generate(PaletteGenerator.Load(PaletteGenerator.SettingsPath)));
             Assert.True(
                 File.Exists(PaletteGenerator.PalettePath) && Normalize(File.ReadAllText(PaletteGenerator.PalettePath)) == Normalize(expected),
-                $"{PaletteGenerator.PalettePath} doesn't match Palette.json. Regenerate it as {nameof(PaletteTests)} describes.");
+                $"COLOR-5: {PaletteGenerator.PalettePath} doesn't match Palette.json. Regenerate it as {nameof(PaletteTests)} describes.");
         }
 
         [Fact]

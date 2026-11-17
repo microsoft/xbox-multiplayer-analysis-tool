@@ -1,12 +1,25 @@
 <ds:Story x:Class="XMAT.DesignSystem.ButtonsStory"
           xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
           xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+          xmlns:sys="clr-namespace:System;assembly=mscorlib"
           xmlns:ds="clr-namespace:XMAT.DesignSystem"
           Title="Buttons"
           Summary="Buttons start an action. The standard button is outlined on the surface; icon buttons hold one glyph; toggle buttons stay pressed while their option is on."
           Section="Components"
           DefinedIn="XMAT/Styles/Buttons.xaml">
     <StackPanel>
+        <ds:StoryUsage>
+            <ds:StoryUsage.UseFor>
+                <sys:String>Starting an action, such as Add capture in a dialog's footer or Save in a panel.</sys:String>
+                <sys:String>Turning an option on and off among other buttons, with a toggle button, such as Wrap lines.</sys:String>
+            </ds:StoryUsage.UseFor>
+            <ds:StoryUsage.NotFor>
+                <sys:String>Going to another view: use a tab.</sys:String>
+                <sys:String>Choosing one of several options: use radio buttons or choice cards.</sys:String>
+                <sys:String>Turning a setting on or off in a form: use a check box.</sys:String>
+            </ds:StoryUsage.NotFor>
+        </ds:StoryUsage>
+
         <ds:StorySection Title="Standard button" StyleName="Button (default style)"
                          Description="For actions in dialogs and panels, such as Save in the host list manager.">
             <ds:StoryExample Caption="Rest">
@@ -86,5 +99,47 @@
                 </Border>
             </ds:StoryExample>
         </ds:StorySection>
+
+        <ds:StoryRules Description="What every button in XMAT follows. A Must rule names the tests that fail when XMAT breaks it, and their failures start with its ID. A Should rule is checked in review.">
+            <ds:StoryRule RuleId="BUTTON-1">
+                <ds:RuleExample Kind="Do" Caption="Each button says what happens.">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Delete capture" Margin="0,0,8,0"/>
+                        <Button Content="Cancel"/>
+                    </StackPanel>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="Yes and No send people back to read the question.">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Yes" Margin="0,0,8,0"/>
+                        <Button Content="No"/>
+                    </StackPanel>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="BUTTON-2">
+                <ds:RuleExample Kind="Do" Caption="Its tooltip says New capture, and Narrator reads the same.">
+                    <Button Style="{DynamicResource SoftIconButtonStyle}" ToolTip="New capture"
+                            AutomationProperties.Name="New capture">
+                        <Path Width="10" Height="10" Stretch="Uniform" Data="M 0,7 L 14,7 M 7,0 L 7,14"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    </Button>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="No tooltip, and Narrator reads only “button”.">
+                    <Button Style="{DynamicResource SoftIconButtonStyle}">
+                        <Path Width="10" Height="10" Stretch="Uniform" Data="M 0,7 L 14,7 M 7,0 L 7,14"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    </Button>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="BUTTON-3">
+                <ds:RuleExample Kind="Do" Caption="Wrap lines stays pressed while lines wrap.">
+                    <ToggleButton Content="Wrap lines" IsChecked="True"/>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="Save as a toggle button stays pressed after saving, as if something were still on.">
+                    <ToggleButton Content="Save" IsChecked="True"/>
+                </ds:RuleExample>
+            </ds:StoryRule>
+        </ds:StoryRules>
     </StackPanel>
 </ds:Story>

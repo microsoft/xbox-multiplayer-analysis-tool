@@ -92,5 +92,49 @@
 
         <ds:StorySection x:Name="ComponentSection" Title="Component colors" StyleName="ColorCatalog.ComponentColorGroups"
                          Description="Colors that belong to one component keep their own names. They follow the rules roles do: Light and Dark take palette steps, and High Contrast a contrast theme color."/>
+
+        <ds:StoryRules Description="What every view, style and theme follows. A Must rule names the tests that fail when XMAT breaks it, and their failures start with its ID. A Should rule is checked in review.">
+            <ds:StoryRule RuleId="COLOR-1">
+                <ds:RuleExample Kind="Do" Caption="SurfacePanelBrush and TextPrimaryBrush, so it's right in Light, Dark and high contrast.">
+                    <Border Padding="12,8" CornerRadius="4" BorderThickness="1"
+                            Background="{DynamicResource SurfacePanelBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}">
+                        <TextBlock Text="Request 59 · 200 OK" Foreground="{DynamicResource TextPrimaryBrush}"/>
+                    </Border>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="White and black written in, so it stays white in Dark and in a contrast theme.">
+                    <Border Padding="12,8" CornerRadius="4" BorderThickness="1" Background="White" BorderBrush="#FFD1D1D1">
+                        <TextBlock Text="Request 59 · 200 OK" Foreground="Black"/>
+                    </Border>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="COLOR-2"/>
+            <ds:StoryRule RuleId="COLOR-3">
+                <ds:RuleExample Kind="Do" Caption="A text color on its surface: TextSecondaryBrush on the panel.">
+                    <TextBlock Text="Duration: 89 ms" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="A border color used for text, far short of 4.5:1 in every theme.">
+                    <TextBlock Text="Duration: 89 ms" Foreground="{DynamicResource BorderSubtleBrush}"/>
+                </ds:RuleExample>
+            </ds:StoryRule>
+            <ds:StoryRule RuleId="COLOR-4"/>
+            <ds:StoryRule RuleId="COLOR-5"/>
+            <ds:StoryRule RuleId="COLOR-6"/>
+            <ds:StoryRule RuleId="COLOR-7">
+                <ds:RuleExample Kind="Do" Caption="The icon and the words say it's a warning, whatever the colors.">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE7BA;" Margin="0,0,6,0" VerticalAlignment="Center" FontFamily="Segoe MDL2 Assets"
+                                   Foreground="{DynamicResource WarningTextBrush}"/>
+                        <TextBlock Text="429 Too many requests" Foreground="{DynamicResource WarningTextBrush}"/>
+                    </StackPanel>
+                </ds:RuleExample>
+                <ds:RuleExample Kind="Dont" Caption="Only the dot's color says it's a warning, which is lost without color vision or in a contrast theme.">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="8" Height="8" Margin="0,0,6,0" VerticalAlignment="Center"
+                                 Fill="{DynamicResource WarningFillBrush}"/>
+                        <TextBlock Text="Request 63"/>
+                    </StackPanel>
+                </ds:RuleExample>
+            </ds:StoryRule>
+        </ds:StoryRules>
     </StackPanel>
 </ds:Story>

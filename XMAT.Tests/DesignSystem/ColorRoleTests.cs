@@ -66,12 +66,18 @@ namespace XMAT.Tests.DesignSystem
         public void EveryTheme_DefinesEveryRole_AndTheNewLookThemesMatch()
         {
             Dictionary<string, string> light = Colors("LightTheme.xaml");
+            Dictionary<string, string> dark = Colors("DarkTheme.xaml");
             foreach (string theme in new[] { "LightTheme.xaml", "DarkTheme.xaml", "HighContrastTheme.xaml" })
             {
-                Assert.Empty(Roles.Except(Colors(theme).Keys));
+                string[] missing = Roles.Except(Colors(theme).Keys).ToArray();
+                Assert.True(missing.Length == 0, $"COLOR-6: {theme} doesn't define {string.Join(", ", missing)}.");
             }
 
-            Assert.Equal(light.Keys.OrderBy(key => key), Colors("DarkTheme.xaml").Keys.OrderBy(key => key));
+            string[] lightOnly = light.Keys.Except(dark.Keys).OrderBy(key => key).ToArray();
+            string[] darkOnly = dark.Keys.Except(light.Keys).OrderBy(key => key).ToArray();
+            Assert.True(lightOnly.Length == 0 && darkOnly.Length == 0,
+                $"COLOR-6: Light and Dark define different colors. Only Light: {string.Join(", ", lightOnly)}. " +
+                $"Only Dark: {string.Join(", ", darkOnly)}.");
         }
 
         // A new-look color is a palette step; only the clear and the black and white overlays are written as values.
@@ -86,7 +92,7 @@ namespace XMAT.Tests.DesignSystem
             {
                 Match step = Regex.Match(color.Value, @"^\{StaticResource (\w+)\}$");
                 Assert.True(step.Success ? steps.Contains(step.Groups[1].Value) : allowed.IsMatch(color.Value),
-                    $"{theme}: {color.Parent.Attribute(Xaml + "Key")?.Value} is {color.Value}, not a palette step.");
+                    $"COLOR-5: {theme}: {color.Parent.Attribute(Xaml + "Key")?.Value} is {color.Value}, not a palette step.");
             }
         }
 
@@ -161,7 +167,7 @@ namespace XMAT.Tests.DesignSystem
                 {
                     double contrast = Contrast(Hex(pair.Foreground), Hex(pair.Surface));
                     Assert.True(contrast >= group.Needs,
-                        $"{theme}: {pair.Foreground} on {pair.Surface} is {contrast:F2}:1, short of {group.Needs}:1");
+                        $"COLOR-3: {theme}: {pair.Foreground} on {pair.Surface} is {contrast:F2}:1, short of {group.Needs}:1");
                 }
             }
         }
@@ -177,13 +183,20 @@ namespace XMAT.Tests.DesignSystem
             foreach (string theme in new[] { "LightTheme.xaml", "DarkTheme.xaml", "HighContrastTheme.xaml" })
             {
                 Dictionary<string, string> colors = Colors(theme);
-                Assert.Empty(colors.Keys.Except(listed).Except(HighContrastOnly(theme)).OrderBy(key => key));
-                Assert.Empty(ColorCatalog.ComponentColors.Select(color => color.Key).Except(colors.Keys));
+                string[] unlisted = colors.Keys.Except(listed).Except(HighContrastOnly(theme)).OrderBy(key => key).ToArray();
+                Assert.True(unlisted.Length == 0,
+                    $"COLOR-6: {theme} defines {string.Join(", ", unlisted)}, which ColorCatalog doesn't list. List each " +
+                    "with what it is for.");
+                string[] missing = ColorCatalog.ComponentColors.Select(color => color.Key).Except(colors.Keys).ToArray();
+                Assert.True(missing.Length == 0,
+                    $"COLOR-6: {theme} doesn't define the component colors {string.Join(", ", missing)}.");
             }
 
-            Assert.DoesNotContain(Roles.GroupBy(role => role), group => group.Count() > 1);
+            string[] repeated = Roles.GroupBy(role => role).Where(group => group.Count() > 1).Select(group => group.Key)
+                .ToArray();
+            Assert.True(repeated.Length == 0, $"COLOR-6: ColorCatalog lists {string.Join(", ", repeated)} more than once.");
             Assert.All(ColorCatalog.Roles.Concat(ColorCatalog.ComponentColors),
-                role => Assert.False(string.IsNullOrWhiteSpace(role.Use), $"{role.Key} doesn't say what it is for."));
+                role => Assert.False(string.IsNullOrWhiteSpace(role.Use), $"COLOR-6: {role.Key} doesn't say what it is for."));
         }
 
         // The High Contrast theme also gives the original look's colors a system color, since both looks use it.

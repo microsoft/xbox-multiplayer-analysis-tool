@@ -5,6 +5,24 @@ Dark and High Contrast themes and a color can be changed in one place. Their con
 per component. Tests in `XMAT.Tests/DesignSystem` and `XMAT.Tests/HighContrastThemeTests.cs` check the rules on this
 page.
 
+## Rules
+
+Each rule has an ID that never changes: its page's prefix and a number, such as `COLOR-3` on the Color page or
+`BUTTON-2` on the Buttons page. A **Must** rule names the tests that fail when XMAT breaks it, and their failures start
+with its ID, so a failure points at the rule. A **Should** rule is checked in review, and becomes a Must once a test
+checks it. The rules on this page are tagged with their IDs.
+
+[`XMAT.DesignSystem/RuleCatalog.cs`](../XMAT.DesignSystem/RuleCatalog.cs) lists every rule with why it holds and the
+tests that check it. The design system app shows each page's rules with live examples of following them and breaking
+them. To add a rule:
+
+1. Add it to `RuleCatalog.cs` with its page's prefix and the next number, saying what it is and why.
+2. Show it on its page with a `ds:StoryRule`. When it can be shown, give it a `ds:RuleExample` with `Kind="Do"` and
+   one with `Kind="Dont"`, each with a caption that says what to notice.
+3. For a Must rule, name the tests that check it, and start their failure messages with its ID. A check of the
+   product's source goes in `XMAT.Tests/DesignSystem/ProductRuleTests.cs`, which lists any use the rule allows, with
+   why.
+
 ## Colors
 
 Colors come in three layers:
@@ -71,17 +89,20 @@ report's expanders. They follow the same rules as roles.
 
 ### Rules
 
-- Views and styles use roles and component colors, never palette steps or color values.
-- The Light and Dark themes take every color from the palette. Only `Transparent` and black or white overlays, such as
-  `#38FFFFFF`, are written as values.
-- The Light, Dark and High Contrast themes define every role, and the High Contrast theme defines every key of the
-  other themes.
-- Every color the themes define is a role or a component color in `ColorCatalog`, with what it is for, so the Color
-  page shows it.
-- Text meets a 4.5:1 contrast ratio on every surface it appears on, and the outlines that identify controls meet 3:1
-  on the surfaces they sit on. `ColorCatalog.ContrastGroups` lists the pairs and the ratio each group needs. Status
-  labels also meet 4.5:1 on their fills.
-- `Palette.xaml` matches `Palette.json`.
+- **COLOR-1** Views and styles use roles and component colors, never palette steps or color values.
+  `ProductRuleTests` lists the few colors the product writes in, with why, such as shadows and colors that come from
+  data.
+- **COLOR-2** Views take theme colors with `DynamicResource`, so they follow theme changes.
+- **COLOR-3** Text meets a 4.5:1 contrast ratio on every surface it appears on, and the outlines that identify
+  controls meet 3:1 on the surfaces they sit on. `ColorCatalog.ContrastGroups` lists the pairs and the ratio each
+  group needs. Status labels also meet 4.5:1 on their fills.
+- **COLOR-4** Text stays readable in every Windows contrast theme.
+- **COLOR-5** The Light and Dark themes take every color from the palette, and `Palette.xaml` matches `Palette.json`.
+  Only `Transparent` and black or white overlays, such as `#38FFFFFF`, are written as values.
+- **COLOR-6** The Light, Dark and High Contrast themes define every role, and the High Contrast theme defines every
+  key of the other themes. Every color the themes define is a role or a component color in `ColorCatalog`, with what
+  it is for, so the Color page shows it.
+- **COLOR-7** Color is never the only signal: a status also has text or an icon.
 - Don't alias a key with `<StaticResource x:Key="..." ResourceKey="..."/>` in a theme file: WPF resolves such aliases
   in compiled dictionaries to the wrong resource. Define a brush on the same palette step instead.
 
@@ -152,14 +173,22 @@ files of their own as they are worked on.
 - A new component gets its own file in `XMAT/Styles`. Merge it in `NewLook.xaml`, and add it to
   `XMAT.Tests/NewLookMarkup.cs` so tests can read its styles.
 
+### Buttons
+
+- **BUTTON-1** Label a button with the action it takes, using a verb, such as Add capture or Delete. Not OK, Yes or
+  No.
+- **BUTTON-2** A button that shows only an icon has a tooltip and an accessible name that say what it does.
+- **BUTTON-3** Use a toggle button for an option that stays on, such as Wrap lines, and a standard button for an
+  action.
+
 ## The design system app
 
 The design system app, `XMAT.DesignSystem`, has a page for each foundation and component, listed under their sections:
 **Foundations**, such as color, read from the files that define them, and **Components**, with what each is for, the
-files that define it, and examples of it in the states it can be set to, such as disabled, checked or running. Hover,
-press and keyboard focus show live. The settings above a page preview it in Light or Dark, in a Windows contrast theme,
-and with Comfort view on or off. The app runs from source and isn't part of XMAT's release build. Run it from the
-repository root:
+files that define it, and examples of it in the states it can be set to, such as disabled, checked or running. Each
+page ends with its rules. Hover, press and keyboard focus show live. The settings above a page preview it in Light or
+Dark, in a Windows contrast theme, and with Comfort view on or off. The app runs from source and isn't part of XMAT's
+release build. Run it from the repository root:
 
 ```powershell
 dotnet run --project XMAT.DesignSystem -p:Platform=x64
@@ -172,16 +201,19 @@ Pages are XAML files in [`XMAT.DesignSystem/Stories`](../XMAT.DesignSystem/Stori
 1. Create `<Name>Story.xaml` with `ds:Story` as its root, setting `Title`, `Summary`, its `Section` (`Foundations`,
    `Components`, `Patterns` or `Layouts`) and `DefinedIn`: the files that define what it shows, relative to the
    repository and separated by commas, such as `XMAT/Styles/Buttons.xaml`.
-2. Add a `ds:StorySection` for each variant, with a `Title`, a `Description` and the `StyleName` it uses, holding a
+2. Follow the pages' outline, leaving out what doesn't apply. A component's page starts with a `ds:StoryUsage`: what
+   it is for, and what it isn't for with what to use instead.
+3. Add a `ds:StorySection` for each variant, with a `Title`, a `Description` and the `StyleName` it uses, holding a
    `ds:StoryExample` for each state, with a `Caption`. Build examples the way views do, so a page shows how to use
    the component. XMAT's controls are in `clr-namespace:XMAT;assembly=XboxMultiplayerAnalysisTool`. A foundation
    page builds its examples from the files that define the foundation, as the Color page reads the themes, so it
    can't fall behind them.
-3. Take the new look's resources with `DynamicResource`. A page loads before it joins the window that holds them, so
+4. End with a `ds:StoryRules` holding the page's rules, as [Rules](#rules) describes.
+5. Take the new look's resources with `DynamicResource`. A page loads before it joins the window that holds them, so
    a `StaticResource` wouldn't find them.
-4. Add the page to `XMAT.DesignSystem/StoryCatalog.cs`, with the other pages of its section. `DesignSystemWindowTests`
+6. Add the page to `XMAT.DesignSystem/StoryCatalog.cs`, with the other pages of its section. `DesignSystemWindowTests`
    checks that every page is in a section, names files that exist and shows its examples.
-5. Run the design system tests. `StoryCoverageTests` asks for the styles the page now shows to be removed from
+7. Run the design system tests. `StoryCoverageTests` asks for the styles the page now shows to be removed from
    `XMAT.Tests/DesignSystem/UncoveredStyles.txt`, and `ReferenceImageTests` asks for the page's pictures; create them
    as below.
 
@@ -190,6 +222,12 @@ Pages are XAML files in [`XMAT.DesignSystem/Stories`](../XMAT.DesignSystem/Stori
 - **Every color is on the Color page.** `ColorRoleTests` fails when a theme defines a color that `ColorCatalog`
   doesn't list, when a theme misses one it lists, or when one of its contrast pairs falls short of the ratio its group
   needs: 4.5:1 for text, 3:1 for outlines.
+- **The rules hold together.** `RuleCatalogTests` fails when a rule's ID doesn't name its page, when a Must rule names
+  no test, a test that doesn't exist or one whose failures don't cite its ID, or when a page doesn't show its rules,
+  each with a Do and a Don't example when it has examples.
+- **The product follows the rules.** `ProductRuleTests` reads the product's XAML and C#, and its failures cite the rule
+  broken: a color written in (COLOR-1), a theme color taken with `StaticResource` (COLOR-2), or a button that shows only
+  an icon without a tooltip and a name (BUTTON-2). Its lists of the uses a rule allows only shrink.
 - **Every style is on a page.** `StoryCoverageTests` opens every page, with its menus and dropdowns open, and fails
   when a style of the new look appears on none. Styles that no page shows yet are listed in
   `XMAT.Tests/DesignSystem/UncoveredStyles.txt`; the list only shrinks, because a new style comes with its example.
