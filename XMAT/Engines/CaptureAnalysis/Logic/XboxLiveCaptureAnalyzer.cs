@@ -125,7 +125,8 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 new AnalyzeCaptureRequest(
                     AnalysisInput.FromRecords(
                         controller.GetCaptureRecords(),
-                        controller.DeviceName),
+                        controller.DeviceName,
+                        controller.RecordedShaping),
                     new AnalysisOptions(
                         ProduceLegacyReports: true,
                         ProcessFilter: analysisRun.ProcessFilter)),
@@ -172,6 +173,14 @@ namespace XMAT.XboxLiveCaptureAnalysis
                     model.SourceStamp = analysisResultsModel.SourceStamp;
                     analysisResultsModel.Reports.Add(model);
                 }
+            }
+
+            if (result.Value.Summary.Shaping != null)
+            {
+                NetworkShapingReport.WriteBanner(
+                    analysisRunStorageDirectory,
+                    Localization.GetLocalizedString("ANALYSIS_NETWORK_SHAPING_BANNER"),
+                    Localization.GetLocalizedString("ANALYSIS_NETWORK_SHAPING_LINK"));
             }
 
             // Written before completion lists the artifacts, so report export keeps the scope with the report.

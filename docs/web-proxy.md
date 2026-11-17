@@ -111,6 +111,61 @@ using the old endpoint, confirm that in the popup, then update its settings to t
 new endpoint shown by XMAT. Different apps can use independently configured generic
 listeners, but two global proxy endpoints do not duplicate the same device traffic.
 
+## Network shaping
+
+Choose **Network Shaping** in a capture tab to limit download/upload bandwidth and add latency or jitter.
+Changes apply to open connections without restarting capture. The toolbar always shows the current mode.
+Rates use decimal kbps (1000 bits/second); **0 means unlimited**. Latency is **added round-trip time**:
+half is applied in each direction. Jitter is a bounded RTT variation, not packet reordering.
+
+| Preset | Download | Upload | Added RTT |
+|---|---:|---:|---:|
+| min | 192 kbps | 192 kbps | 75 ms |
+| avg | 1000 kbps | 700 kbps | 50 ms |
+| exc | 35000 kbps | 10000 kbps | 30 ms |
+
+These names approximate the bandwidth/latency portions of xbstress presets, **not their packet loss**.
+Custom values support 0-1000000 kbps, 0-10000 ms RTT, and jitter no greater than the RTT.
+Bandwidth is shared across all connections using that capture's listener, independently per direction.
+It is not a separate allowance for every HTTP request or device; use separate listeners when separate budgets
+are required. The pacer allows up to about 50 ms of burst credit to absorb timer scheduling delays.
+
+Only the **client-to-XMAT leg** is shaped: HTTP/1.1, intercepted HTTPS including HTTP/2, opaque bypass tunnels
+and proxied WebSockets. CONNECT and TLS handshakes also incur latency. XMAT-to-origin traffic is not shaped.
+Timestamped queues pipeline latency rather than adding a delay to every sequential read. Shaping buffers are
+bounded to 4 MiB of pooled chunks per listener, plus pipe buffers; backpressure applies when queues fill.
+Disabling shaping wakes waiting transfers and removes pacing/latency from subsequent slices.
+
+**Broken** rejects new proxy connections; existing connections continue without shaping. **Disconnect** also
+aborts existing proxy connections and rejects new ones until another mode is selected. Neither mode disconnects
+the console's network link. UDP, game/peer traffic, traffic outside the explicit proxy, and true packet loss,
+corruption, duplication or reordering are not simulated. Use xbstress on a supported development kit or a
+separately configured network emulator when those conditions are required.
+
+The default total upload deadline remains **120 seconds**. Slow uploads can exceed it: a 32 MiB body takes
+about 1398 seconds at 192 kbps before contention. Stop capture to explicitly set the total deadline to
+**1-1800 seconds** in the dialog or use `--body-timeout-seconds` in the CLI. The **30-second inactivity guard**,
+32 MiB body limit and 128 MiB aggregate request-buffer budget remain unchanged. Title and server deadlines
+are independent. XMAT warns when a maximum-size upload at the configured uplink would exceed the total deadline;
+parallel uploads share the bandwidth and can take longer. No deadline is automatically relaxed.
+
+Native captures record profiles and timestamped changes. SAZ export adds an XMAT-specific
+`xmat/network-shaping.json` manifest and session flags; sanitized exports retain the same identifier-free history.
+Export includes history only for devices whose rows are actually written. Analysis displays a warning because
+timing and rate findings can be affected, and CLI summaries include `networkShaping`. Importing a capture **never
+turns shaping on**. A SAZ combining several listeners retains anonymous histories, not identifying device labels;
+other SAZ tools may ignore or discard this extension. History is capped at 4096 changes per live controller.
+Clearing captured data also clears imported/past history, but keeps the currently selected shaping condition
+as the start of the new history. An explicit nondefault upload deadline is recorded even when shaping is off.
+
+Development kits and PC applications must already route their traffic to the explicit proxy. This does not add
+a proxy-routing facility to consumer retail consoles or shape an entire RETAIL network connection. Exact
+XR-074-05/06 procedures and the required meaning of RETAIL still need confirmation from the certification owner;
+these controls are not a claim that those unpublished cases have been satisfied.
+
+The [foreground CLI command and timed JSON schedules](cli.md#foreground-proxy-capture) provide the same core
+without changing system settings or requiring a driver.
+
 ## Inspect requests and responses
 
 1. Launch an app on the kit, such as the ATG NetRumble sample.

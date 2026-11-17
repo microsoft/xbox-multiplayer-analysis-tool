@@ -27,6 +27,37 @@ namespace XMAT.Tests
     public class WebServiceDeviceCaptureControllerTests
     {
         [Fact]
+        public async Task ImportedShapingIsVisibleButNeverActivated()
+        {
+            var recorded = new NetworkShapingController();
+            recorded.Apply(NetworkShapingProfile.Preset("min"));
+            var controller = CreateController(new PreferencesModel());
+            controller.ImportedShaping = NetworkShapingMetadata.From(recorded, 1800);
+            Assert.Equal(NetworkShapingMode.Off, controller.Shaping.Current.Mode);
+            Assert.Equal(120, controller.BodyTimeoutSeconds);
+            Assert.Equal(Localization.GetLocalizedString("SHAPING_RECORDED"), controller.ShapingStatusText);
+            Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 120)).Succeeded);
+            Assert.NotNull(controller.RecordedShaping);
+            Assert.Equal(NetworkShapingMode.Off, controller.Shaping.Current.Mode);
+        }
+
+        [Fact]
+        public async Task ClearingCaptureDropsOldHistoryButPreservesTheCurrentCondition()
+        {
+            var controller = CreateController(new PreferencesModel());
+            await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("min"), 120);
+            controller.ImportedShaping = controller.RecordedShaping;
+            await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 120);
+            controller.ClearAllCaptures();
+            Assert.Null(controller.ImportedShaping);
+            Assert.Null(controller.RecordedShaping);
+            await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("avg"), 120);
+            controller.ClearAllCaptures();
+            Assert.Equal(NetworkShapingProfile.Preset("avg"), controller.Shaping.Current);
+            Assert.Single(Assert.Single(controller.RecordedShaping.Traces).Changes);
+        }
+
+        [Fact]
         public async Task CanCloseAsync_WithPromptDisabled_SkipsProxyCheckAndPrompt()
         {
             var preferences = new PreferencesModel { PromptToDisableOnClose = false };

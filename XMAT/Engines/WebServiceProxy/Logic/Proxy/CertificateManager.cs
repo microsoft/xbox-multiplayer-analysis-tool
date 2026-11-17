@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -50,14 +51,40 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
+        internal CertificateManager(X509Certificate2 rootCertificate)
+        {
+            ArgumentNullException.ThrowIfNull(rootCertificate);
+            if (!rootCertificate.HasPrivateKey ||
+                rootCertificate.NotAfter.ToUniversalTime() <= DateTime.UtcNow ||
+                rootCertificate.NotBefore.ToUniversalTime() > DateTime.UtcNow ||
+                rootCertificate.Extensions.OfType<X509BasicConstraintsExtension>()
+                    .All(extension => !extension.CertificateAuthority))
+            {
+                throw new ArgumentException("A currently valid CA certificate with its private key is required.");
+            }
+            _rootCert = rootCertificate; // The caller retains ownership of the supplied CA.
+        }
+
         public void Dispose()
         {
             _rootStore?.Close();
             _myStore?.Close();
+            if (_rootStore == null)
+            {
+                foreach (X509Certificate2 certificate in _certCache.Values)
+                {
+                    certificate.Dispose();
+                }
+                _certCache.Clear();
+            }
         }
 
         public bool Initialize()
         {
+            if (_rootStore == null)
+            {
+                return _rootCert != null;
+            }
             bool success = CreateRootCertificate();
 
             if (success)
@@ -90,19 +117,40 @@ namespace XMAT.WebServiceCapture.Proxy
         {
             hostname = GetHostname(hostname);
 
-            return _certCache.GetOrAdd(hostname, host =>
+            if (_certCache.TryGetValue(hostname, out X509Certificate2 cached))
             {
-                X509Certificate2 cert = CreateHostCertificate(host);
-                _myStore?.Add(cert);
-                return cert;
-            });
+                return cached;
+            }
+            lock (_rootLock)
+            {
+                if (_certCache.TryGetValue(hostname, out cached))
+                {
+                    return cached;
+                }
+                X509Certificate2 cert = CreateHostCertificate(hostname);
+                try
+                {
+                    _myStore?.Add(cert);
+                    _certCache[hostname] = cert;
+                    return cert;
+                }
+                catch
+                {
+                    cert.Dispose();
+                    throw;
+                }
+            }
         }
 
         public bool CreateRootCertificate()
         {
             lock (_rootLock)
             {
-if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
+                if (_rootStore == null)
+                {
+                    return _rootCert != null && _rootCert.NotAfter > DateTime.UtcNow;
+                }
+                if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(HostCertValidityYears))
                     return true;
 
                 var certs = _rootStore.Certificates.Find(
@@ -172,7 +220,7 @@ if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(Ho
 
         public X509Certificate2 CreateHostCertificate(string hostname)
         {
-            RSA rsa = RSA.Create(2048);
+            using RSA rsa = RSA.Create(2048);
 
             CertificateRequest req = new CertificateRequest(
                 $"CN={hostname}, O={IssuerName}",
@@ -217,20 +265,28 @@ if (_rootCert != null && _rootCert.NotAfter >= DateTimeOffset.UtcNow.AddYears(Ho
             {
                 notAfter = issuerNotAfter;
             }
+            DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddYears(-1);
+            DateTimeOffset issuerNotBefore = _rootCert.NotBefore;
+            if (notBefore < issuerNotBefore)
+            {
+                notBefore = issuerNotBefore;
+            }
 
-            X509Certificate2 cert = req.Create(
+            using X509Certificate2 cert = req.Create(
                 _rootCert,
-                DateTimeOffset.UtcNow.AddYears(-1),
+                notBefore,
                 notAfter,
                 serial);
 
-            X509Certificate2 certWithKey = cert.CopyWithPrivateKey(rsa);
+            using X509Certificate2 certWithKey = cert.CopyWithPrivateKey(rsa);
             certWithKey.FriendlyName = hostname;
 
+            // Schannel needs a key container. Without PersistKeySet the loaded certificate owns its deletion.
             X509Certificate2 certWithExportableKey = X509CertificateLoader.LoadPkcs12(
                 certWithKey.Export(X509ContentType.Pfx, CertPassword),
                 CertPassword,
-                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet);
+                X509KeyStorageFlags.Exportable |
+                    (_rootStore == null ? X509KeyStorageFlags.DefaultKeySet : X509KeyStorageFlags.PersistKeySet));
             return certWithExportableKey;
         }
 

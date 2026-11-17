@@ -16,6 +16,7 @@ using System.Xml;
 using System.Xml.Linq;
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
+using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.Processes;
 using XMAT.WebServiceCapture.Models;
@@ -26,7 +27,8 @@ namespace XMAT.WebServiceCapture
         ProxyConnectionsCollection Records,
         int SkippedIncompleteFrames,
         int SkippedMalformedHeaderLines,
-        ImportedCaptureSource Source);
+        ImportedCaptureSource Source,
+        NetworkShapingMetadata Shaping = null);
 
     internal sealed class FiddlerSazHeaderLimitException : Exception
     {
@@ -728,6 +730,7 @@ namespace XMAT.WebServiceCapture
             var skippedIncompleteFrames = 0;
             var skippedMalformedHeaderLines = 0;
             SqLtFileIdentity sourceIdentity;
+            NetworkShapingMetadata shaping;
 
             // Open the SAZ, checking its directory before ZipArchive reads it
             using (var input = new FileStream(
@@ -745,6 +748,7 @@ namespace XMAT.WebServiceCapture
                     input,
                     ZipArchiveMode.Read,
                     true);
+                shaping = NetworkShapingMetadata.ReadArchive(archive);
 
                 // Group the archive entries by frame number
                 var result = from e in archive.Entries
@@ -803,7 +807,8 @@ namespace XMAT.WebServiceCapture
                 list,
                 skippedIncompleteFrames,
                 skippedMalformedHeaderLines,
-                new ImportedCaptureSource(sourcePath, sourceIdentity));
+                new ImportedCaptureSource(sourcePath, sourceIdentity),
+                shaping);
         }
 
         private static SazHeaderFields ReadHeaders(
@@ -1107,8 +1112,9 @@ namespace XMAT.WebServiceCapture
 
         // The SAZ writer of the shared export operation, sanitizing when asked. Frames are numbered in export order and
         // zero-padded to the digits of expectedRows, so repeated request numbers never collide; SID stays the row id.
-        internal static ICaptureExportWriter CreateExportWriter(string stagedPath, bool sanitized, long expectedRows) =>
-            new SazExportWriter(stagedPath, sanitized, expectedRows);
+        internal static ICaptureExportWriter CreateExportWriter(
+            string stagedPath, bool sanitized, long expectedRows, Func<RawExportRow, NetworkShapingMetadata> shaping = null) =>
+            new SazExportWriter(stagedPath, sanitized, expectedRows, shaping);
 
         private sealed class SazExportWriter : ICaptureExportWriter
         {
@@ -1117,9 +1123,13 @@ namespace XMAT.WebServiceCapture
             private readonly string _frameFormat;
             private SazSanitizer _sanitizer;
             private long _rows;
+            private readonly Func<RawExportRow, NetworkShapingMetadata> _shaping;
+            private readonly HashSet<NetworkShapingMetadata> _recordedShaping = new();
 
-            internal SazExportWriter(string path, bool sanitized, long expectedRows)
+            internal SazExportWriter(
+                string path, bool sanitized, long expectedRows, Func<RawExportRow, NetworkShapingMetadata> shaping)
             {
+                _shaping = shaping;
                 FileStream stream = null;
                 Writing(() => stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None));
                 _archive = new ZipArchive(stream, ZipArchiveMode.Create);
@@ -1169,6 +1179,12 @@ namespace XMAT.WebServiceCapture
                 // Either archive carries the session's header history, so an import keeps it.
                 metadata.SessionFlags[HeadersUninspectableFlag] =
                     ((long)headerProvenance).ToString(CultureInfo.InvariantCulture);
+                NetworkShapingMetadata shaping = _shaping?.Invoke(row);
+                if (shaping != null)
+                {
+                    _recordedShaping.Add(shaping);
+                    metadata.SessionFlags["x-xmat-network-shaping"] = NetworkShapingMetadata.ArchiveEntry;
+                }
 
                 SanitizedHttpMessage request;
                 SanitizedHttpMessage? response;
@@ -1254,6 +1270,16 @@ namespace XMAT.WebServiceCapture
             public ExportWriteSummary Complete(CancellationToken cancellationToken)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                string shaping = NetworkShapingMetadata.Serialize(NetworkShapingMetadata.Combine(_recordedShaping));
+                if (shaping != null)
+                {
+                    Writing(() =>
+                    {
+                        using Stream stream = _archive.CreateEntry(NetworkShapingMetadata.ArchiveEntry).Open();
+                        byte[] bytes = Encoding.UTF8.GetBytes(shaping);
+                        stream.Write(bytes);
+                    });
+                }
                 Writing(_archive.Dispose);
                 return new ExportWriteSummary(
                     _rows,

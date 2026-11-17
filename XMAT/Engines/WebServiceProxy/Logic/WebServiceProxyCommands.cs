@@ -21,6 +21,10 @@ namespace XMAT.WebServiceCapture
         // parameter is that row itself, never one found again by its tab or number.
         public static readonly RoutedUICommand ViewVerifyDiff =
             new("View verification differences", "ViewVerifyDiff", typeof(WebServiceProxyCommands));
+
+        public static readonly RoutedUICommand NetworkShaping =
+            new("Network Shaping", "NetworkShaping", typeof(WebServiceProxyCommands));
+
         public static readonly RoutedUICommand ChangePort =
             new("Change Proxy Port", "ChangePort", typeof(WebServiceProxyCommands));
         public static readonly RoutedUICommand DiscardPortChange =

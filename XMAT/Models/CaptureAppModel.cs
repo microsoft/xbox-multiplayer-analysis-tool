@@ -711,7 +711,8 @@ namespace XMAT.Models
                 @"CaptureDevices",
                 new Field<Int64>(@"DeviceType"),
                 new Field<string>(@"DeviceName"),
-                new Field<Int64>(@"CaptureType")
+                new Field<Int64>(@"CaptureType"),
+                new Field<string>(Operations.Captures.NetworkShapingMetadata.DeviceField)
             );
         }
 
@@ -774,6 +775,11 @@ namespace XMAT.Models
                             hostListPolicy: HostListPolicy,
                             attachLiveRows: false);
                     staged.Add(device);
+                    if (device.CaptureController is WebServiceDeviceCaptureController shapingController)
+                    {
+                        shapingController.ImportedShaping = Operations.Captures.NetworkShapingMetadata.Parse(
+                            record.Str(Operations.Captures.NetworkShapingMetadata.DeviceField));
+                    }
                     var datasets = new List<IDataset>();
                     foreach (string tableName in
                         opened.TableNames().Where(name =>
@@ -928,8 +934,7 @@ namespace XMAT.Models
                 (
                     WebServiceDeviceCaptureController target,
                     WebServiceDeviceCaptureController source) =>
-                    () => target.ReplaceLoadedCapturesFrom(
-                        source),
+                    () => target.ReplaceLoadedCapturesFrom(source),
                 (
                     NetworkTraceCaptureController target,
                     NetworkTraceCaptureController source) =>
@@ -1188,10 +1193,20 @@ namespace XMAT.Models
 
                 if (!readOnly)
                 {
-                    AppModel.CaptureDevicesTable.AddRow(
+                    long deviceRow = AppModel.CaptureDevicesTable.AddRow(
                         (Int64)deviceType,
                         deviceName,
-                        (Int64)captureType);
+                        (Int64)captureType,
+                        string.Empty);
+                    if (newCaptureDeviceModel.CaptureController is WebServiceDeviceCaptureController shapingController)
+                    {
+                        shapingController.ShapingMetadataChanged += (_, _) =>
+                            CaptureDevicesTable.UpdateRow(
+                                deviceRow,
+                                new FieldValue<string>(
+                                    Operations.Captures.NetworkShapingMetadata.DeviceField,
+                                    Operations.Captures.NetworkShapingMetadata.Serialize(shapingController.RecordedShaping)));
+                    }
                 }
 
                 InvalidateCommands();

@@ -57,6 +57,7 @@ namespace XMAT.Cli
         internal int TotalCalls { get; set; }
 
         internal int TotalFindings { get; set; }
+        internal NetworkShapingMetadata Shaping { get; set; }
 
         // The validated process selectors of a run whose command line was valid; null otherwise, and then the JSON has no
         // processFilter. ProcessScope holds the counts once session selection completed.
@@ -264,6 +265,7 @@ namespace XMAT.Cli
         internal CliAnalysisReport Analysis { get; set; }
 
         internal CliExportReport Export { get; set; }
+        internal CaptureProxyResult Capture { get; set; }
 
         internal CliReplayReport Replay { get; set; }
 

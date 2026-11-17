@@ -37,7 +37,9 @@ namespace XMAT
             lock (_lifetimeLock)
             {
                 EnsureCanInitialize();
-                string logsPath = Path.Combine(PublicUtilities.StorageDirectoryPath, "Logs");
+                string logsPath = Path.IsPathFullyQualified(nameOfLogFile)
+                    ? Path.GetDirectoryName(nameOfLogFile)
+                    : Path.Combine(PublicUtilities.StorageDirectoryPath, "Logs");
                 Directory.CreateDirectory(logsPath);
                 string finalPath = Path.Combine(logsPath, nameOfLogFile);
                 InitLog(new FileStream(finalPath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite), level);
@@ -66,8 +68,6 @@ namespace XMAT
                         {
                             foreach (string line in lines.GetConsumingEnumerable())
                             {
-                                if (level < CurrentLogLevel)
-                                    continue;
                                 writer.WriteLine(line);
                             }
                         }
@@ -83,6 +83,10 @@ namespace XMAT
 
         internal void Log(int id, LogLevel level, string value)
         {
+            if (level < CurrentLogLevel)
+            {
+                return;
+            }
             lock (_lifetimeLock)
             {
                 // Calls made during or after shutdown are intentionally ignored, before the queue is touched.

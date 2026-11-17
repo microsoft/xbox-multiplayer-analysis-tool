@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -13,6 +15,48 @@ namespace XMAT.Tests
     public class CertificateManagerTests
     {
         private static readonly TimeSpan CertificateExpirationTolerance = TimeSpan.FromMinutes(1);
+
+        [Fact]
+        public async Task SuppliedAuthorityIssuesUsableTlsCertificateWithinItsValidity()
+        {
+            using RSA rsa = RSA.Create(2048);
+            var request = new CertificateRequest("CN=XMAT synthetic CA", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+            using X509Certificate2 root = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+            using var manager = new CertificateManager(root);
+            X509Certificate2 leaf = manager.GetCertificateForHost("localhost");
+            Assert.True(leaf.HasPrivateKey);
+            Assert.InRange(leaf.NotBefore, root.NotBefore, root.NotAfter);
+            Assert.InRange(leaf.NotAfter, root.NotBefore, root.NotAfter);
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            Task server = ServeAsync();
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port, cancellation.Token);
+            using var tls = new SslStream(client.GetStream(), false, (_, _, _, _) => true);
+            await Task.WhenAll(server, tls.AuthenticateAsClientAsync(
+                new SslClientAuthenticationOptions { TargetHost = "localhost" }, cancellation.Token));
+            string keyName;
+            CngProvider provider;
+            using (RSA privateKey = leaf.GetRSAPrivateKey())
+            {
+                var cng = Assert.IsType<RSACng>(privateKey);
+                keyName = cng.Key.KeyName;
+                provider = cng.Key.Provider;
+            }
+            Assert.True(CngKey.Exists(keyName, provider));
+            manager.Dispose();
+            Assert.False(CngKey.Exists(keyName, provider));
+
+            async Task ServeAsync()
+            {
+                using TcpClient accepted = await listener.AcceptTcpClientAsync(cancellation.Token);
+                using var serverTls = new SslStream(accepted.GetStream());
+                await serverTls.AuthenticateAsServerAsync(
+                    new SslServerAuthenticationOptions { ServerCertificate = leaf }, cancellation.Token);
+            }
+        }
 
         [Fact]
         public void CreateRootCertificate_ReturnsTrue_WhenCachedRootCertCanIssueHostCertificates()

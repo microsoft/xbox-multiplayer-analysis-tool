@@ -47,6 +47,9 @@ xmat curl INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--in
           [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]...
           [--unconditional] [--http-version auto|1.1] [--allow-origin-change] [--accept-stored-text]
           [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]
+xmat capture --port N --duration-seconds N --out FILE.xmatcap [--listen IP] [--root-pfx FILE]
+             [--shape off|min|avg|exc|broken|disconnect] [--down-kbps N] [--up-kbps N]
+             [--latency-ms N] [--jitter-ms N] [--body-timeout-seconds N] [--shape-profile FILE]
 xmat doctor --for analyze
 xmat help [COMMAND]
 xmat --version
@@ -56,6 +59,57 @@ After parsing `replay`, `compose`, `curl` or `save-request`, xmat first checks t
 or volume target, without reading input or touching the file system. It then reads, freezes and admits the input. Only
 an admitted run tries to reserve private output; that later step discovers a missing parent, an existing output or a
 reservation-time storage failure.
+
+### Foreground proxy capture
+
+`capture` listens on `127.0.0.1` by default. Choose a specific PC address with `--listen IP` for a development kit
+or another PC; `0.0.0.0` accepts connections on all IPv4 interfaces. Configure the client to use that explicit proxy
+separately. This command never changes system proxy settings, certificates, firewall rules or console settings,
+and does not require an administrator or a packet driver. Routing a consumer retail console through it is not provided.
+
+The required duration is 1-86400 seconds. At normal expiry the listener stops and a new private `.xmatcap` file
+is published atomically; an existing file is never overwritten. Its parent directory must already exist and support
+Windows permissions. Readiness is printed to stderr; stdout remains one final `xmat-cli/1` JSON document, with a
+`capture` object containing record count, file size, SHA-256, protection status and optional `networkShaping` history.
+**Ctrl+C cancels and publishes nothing**, matching analyze/export. Interrupted or failed runs remove their private
+staging files; cleanup failures return exit 7. Captures contain raw traffic and should be treated as sensitive.
+The recorder stops with a failure rather than publishing an incomplete result if it exceeds 100000 sessions,
+64 MiB in one projected update, or 512 MiB of cumulative projected data. These are capture limits, not analysis limits.
+
+Without `--root-pfx`, HTTPS/WSS CONNECT tunnels are forwarded and shaped but not decrypted; only their CONNECT
+records are saved. Inspection requires an explicit **passwordless CA PFX containing its private key**, whose public
+root the client already trusts. Protect this input file with private Windows permissions. The certificate is loaded
+ephemerally; xmat never imports it into a store. Windows TLS requires temporary private-key containers for generated
+host certificates: these are deleted on normal certificate disposal, but forced termination may leave orphaned
+key files. This is separate from trust-store installation. There is no implicit reuse of the GUI's certificate or preferences.
+Scripts, automatic device configuration, process attribution, WebSocket payload archiving and interactive stop/save
+are not part of this foreground command.
+
+For example, `xmat capture --port 8888 --duration-seconds 120 --out shaped.xmatcap --shape min
+--body-timeout-seconds 1800` applies the min preset while preserving a bounded total upload deadline.
+See [network shaping](web-proxy.md#network-shaping) for rates, RTT semantics and scope.
+`--shape-profile FILE` accepts the following JSON instead of the shaping flags:
+
+```json
+{
+  "version": 1,
+  "initial": { "mode": "shape", "downKbps": 1000, "upKbps": 700, "latencyMs": 50, "jitterMs": 0 },
+  "bodyTimeoutSeconds": 120,
+  "schedule": [
+    { "afterSeconds": 30, "profile": { "mode": "broken" } },
+    { "afterSeconds": 45, "profile": { "mode": "disconnect" } },
+    { "afterSeconds": 60, "profile": { "mode": "off" } }
+  ]
+}
+```
+
+Times are relative to listener readiness, strictly increasing and before the requested end time. At most 1024
+changes and 256 KiB of profile JSON are accepted. Unknown properties are rejected. Live changes affect existing
+connections; `broken` rejects only new connections, while `disconnect` also aborts existing ones.
+The GUI and CLI share profile validation and the shaping operation; GUI preferences are never CLI defaults.
+`analyze` and `export` preserve the recorded conditions without activating them, including sanitized SAZ export.
+
+### Analyze and export
 
 - `xmat analyze` reads a Fiddler archive (`.saz`) or an XMAT capture (`.xmatcap`), recognized by its content, and runs
   the Xbox Live service call rules on it. It writes `summary.json` (schema `xmat-analysis/1`) to `DIR`, which must not
@@ -908,9 +962,10 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Choose the device and capture method (`capture.add-device`) | (not available yet) | Planned (S5, XMAT-021) |
 | Clear captured data (`capture.clear`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Delete sessions from a capture (`capture.delete-sessions`) | (none) | GUI only by policy (S11, XMAT). Policy exception: deleting captured sessions is irreversible, so it stays a confirmed action in the capture list; headless runs export the sessions to keep instead |
-| Capture an explicit-proxy (generic) device (`capture.generic`) | (not available yet) | Planned (S5, XMAT-021) |
+| Capture an explicit-proxy (generic) device (`capture.generic`) | `xmat capture --port N --duration-seconds N --out FILE [--listen IP] [--root-pfx FILE] [--shape off\|min\|avg\|exc\|broken\|disconnect] [--down-kbps N] [--up-kbps N] [--latency-ms N] [--jitter-ms N] [--body-timeout-seconds N] [--shape-profile FILE]` | Supported (S5) |
 | Block or bypass hosts during capture (`capture.host-lists`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Capture this PC (`capture.local-pc`) | (not available yet) | Planned (S6, XMAT-021) |
+| Shape capture bandwidth and latency (`capture.network-shaping`) | `xmat capture --port N --duration-seconds N --out FILE [--listen IP] [--root-pfx FILE] [--shape off\|min\|avg\|exc\|broken\|disconnect] [--down-kbps N] [--up-kbps N] [--latency-ms N] [--jitter-ms N] [--body-timeout-seconds N] [--shape-profile FILE]` | Supported (S8a) |
 | Capture low-level network traces (`capture.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Filter captured sessions by client process (`capture.process-filter`) | `xmat analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...`<br>`xmat export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S9) |
 | Stream responses and limit how much of each response body a capture keeps (`capture.response-streaming`) | (not available yet) | Planned (S8a, XMAT-021) |

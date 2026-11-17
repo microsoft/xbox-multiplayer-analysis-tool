@@ -1,0 +1,26 @@
+<Window x:Class="XMAT.WebServiceCapture.NetworkShapingWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="440" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        Foreground="{DynamicResource PrimaryForegroundBrush}">
+  <StackPanel Margin="16">
+    <TextBlock x:Name="Instructions" TextWrapping="Wrap" Margin="0,0,0,12"/>
+    <ComboBox x:Name="Preset" SelectionChanged="Preset_SelectionChanged" Margin="0,0,0,8"/>
+    <Label x:Name="DownLabel" Target="{Binding ElementName=Down}"/>
+    <TextBox x:Name="Down"/>
+    <Label x:Name="UpLabel" Target="{Binding ElementName=Up}"/>
+    <TextBox x:Name="Up"/>
+    <Label x:Name="LatencyLabel" Target="{Binding ElementName=Latency}"/>
+    <TextBox x:Name="Latency"/>
+    <Label x:Name="JitterLabel" Target="{Binding ElementName=Jitter}"/>
+    <TextBox x:Name="Jitter"/>
+    <Label x:Name="TimeoutLabel" Target="{Binding ElementName=Timeout}"/>
+    <TextBox x:Name="Timeout"/>
+    <TextBlock x:Name="ValidationMessage" TextWrapping="Wrap" Margin="0,8,0,8"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button x:Name="ApplyButton" Padding="12,4" Margin="0,0,8,0" IsDefault="True" Click="Apply_Click"/>
+      <Button x:Name="CancelButton" Padding="12,4" IsCancel="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>

@@ -156,6 +156,71 @@ namespace XMAT.WebServiceCapture
         public ObservableCollection<CheckedListItem> MethodFilterList { get; set; }
         public WebSocketMessagesCollection WebSocketMessages { get; }
         public string DeviceName { get; }
+        public NetworkShapingController Shaping { get; } = new();
+        public int BodyTimeoutSeconds { get; private set; } = 120;
+        private NetworkShapingMetadata _importedShaping;
+        internal event EventHandler ShapingMetadataChanged;
+        internal NetworkShapingMetadata ImportedShaping
+        {
+            get => _importedShaping;
+            set
+            {
+                if (ReferenceEquals(_importedShaping, value))
+                {
+                    return;
+                }
+                _importedShaping = value;
+                try
+                {
+                    ShapingMetadataChanged?.Invoke(this, EventArgs.Empty);
+                }
+                finally
+                {
+                    NotifyPropertyChangesSafely(nameof(ShapingStatusText));
+                }
+            }
+        }
+        internal NetworkShapingMetadata RecordedShaping =>
+            NetworkShapingMetadata.Combine(new[]
+            {
+                ImportedShaping,
+                _readOnly ? null : NetworkShapingMetadata.From(Shaping, BodyTimeoutSeconds),
+            });
+        public string ShapingStatusText => _readOnly ||
+            (Shaping.Current.Mode == NetworkShapingMode.Off && RecordedShaping != null)
+            ? Localization.GetLocalizedString(RecordedShaping == null ? "SHAPING_OFF" : "SHAPING_RECORDED")
+            : Shaping.Current.Mode == NetworkShapingMode.Shape
+                ? Localization.GetLocalizedString(
+                    "SHAPING_ACTIVE", Shaping.Current.DownKbps, Shaping.Current.UpKbps,
+                    Shaping.Current.LatencyMs, Shaping.Current.JitterMs)
+                : Localization.GetLocalizedString("SHAPING_" + Shaping.Current.Mode.ToString().ToUpperInvariant());
+
+        internal async Task<Operations.OperationResult<NetworkShapingProfile>> ConfigureShapingAsync(
+            NetworkShapingProfile profile,
+            int bodyTimeoutSeconds)
+        {
+            if (_readOnly || IsTransitioning || (IsRunning && BodyTimeoutSeconds != bodyTimeoutSeconds))
+            {
+                return Operations.OperationResult<NetworkShapingProfile>.Failure(
+                    Operations.OperationOutcome.InvalidInput,
+                    new Operations.OperationDiagnostic(
+                        "capture.shaping.running-timeout",
+                        Operations.OperationDiagnosticSeverity.Error,
+                        "A running capture cannot change its body deadline; stop the capture first."));
+            }
+            int previous = BodyTimeoutSeconds;
+            BodyTimeoutSeconds = bodyTimeoutSeconds;
+            var result = await new SetNetworkShapingOperation().ExecuteAsync(
+                new SetNetworkShapingRequest(Shaping, profile, bodyTimeoutSeconds),
+                Operations.OperationContext.None,
+                CancellationToken.None);
+            if (!result.Succeeded)
+            {
+                BodyTimeoutSeconds = previous;
+            }
+            RaisePropertyChange(nameof(ShapingStatusText));
+            return result;
+        }
         internal bool CanDeleteSessions =>
             !_readOnly &&
             _captureDataSource == CaptureDataSource.ActiveTable &&
@@ -437,6 +502,7 @@ namespace XMAT.WebServiceCapture
                     new Dictionary<string, object>(StringComparer.Ordinal)
                     {
                         ["DeviceType"] = (long)_deviceType,
+                        [NetworkShapingMetadata.DeviceField] = NetworkShapingMetadata.Serialize(RecordedShaping),
                         ["DeviceName"] = DeviceName,
                         ["CaptureType"] = (long)CaptureType.WebProxy,
                     }),
@@ -659,6 +725,11 @@ namespace XMAT.WebServiceCapture
             _proxyFactory = proxyFactory ?? (() => WebServiceProxy.CreateProxy());
             HostListPolicy = hostListPolicy ?? new HostListPolicy();
             DeviceName = deviceName;
+            Shaping.Changed += (_, _) =>
+            {
+                NotifyPropertyChangesSafely(nameof(ShapingStatusText));
+                ShapingMetadataChanged?.Invoke(this, EventArgs.Empty);
+            };
 
             _deviceType = deviceType;
             _readOnly = readOnly;
@@ -1101,6 +1172,7 @@ namespace XMAT.WebServiceCapture
             HostFilterList = source.HostFilterList;
             MethodFilterList = source.MethodFilterList;
             ProcessFilter = source.ProcessFilter;
+            _importedShaping = source._importedShaping;
             _selectedConnectionModel = null;
             _selectedWebSocketMessage = null;
             NotifyPropertyChangesSafely(
@@ -1109,6 +1181,7 @@ namespace XMAT.WebServiceCapture
                 nameof(HostFilterList),
                 nameof(MethodFilterList),
                 nameof(ProcessFilter),
+                nameof(ShapingStatusText),
                 nameof(SelectedConnectionModel),
                 nameof(SelectedWebSocketMessage));
         }
@@ -1341,7 +1414,9 @@ namespace XMAT.WebServiceCapture
             var options = new WebServiceProxyOptions
             {
                 LogFilePath = $"{DeviceName.Replace(" ", "")}-wspe.log",
-                Port = port
+                Port = port,
+                Shaping = Shaping,
+                BodyTimeoutSeconds = BodyTimeoutSeconds,
             };
 
             _captureCallbacks.StartAccepting();
@@ -2783,6 +2858,11 @@ namespace XMAT.WebServiceCapture
                         new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName));
                 }
                 _loadedCaptureDataset = null;
+                _importedShaping = null;
+                if (!Shaping.ResetHistory())
+                {
+                    PublicUtilities.AppLog(LogLevel.ERROR, "Cleared capture data, but its shaping-history notification failed.");
+                }
             }
         }
 
@@ -2814,7 +2894,9 @@ namespace XMAT.WebServiceCapture
 
                     // convert what we can from a Fiddler file into a bunch of
                     // proxy connection models...
-                    ProxyConnections = FiddlerSazHandler.ImportSazFile(fromFilePath, cancelToken);
+                    FiddlerSazImportResult imported = FiddlerSazHandler.ImportSazFileWithDiagnostics(fromFilePath, cancelToken);
+                    ProxyConnections = imported.Records;
+                    ImportedShaping = imported.Shaping;
 
                     // ...and then do the actual adding to the table
                     ImportCapturesToTable(

@@ -9,6 +9,7 @@ using System.Globalization;
 using System.Linq;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Captures;
 using XMAT.Operations.Export;
 using XMAT.Operations.CaptureFiles;
 using XMAT.Operations.Processes;
@@ -25,6 +26,7 @@ namespace XMAT.Cli
         internal const string Curl = "curl";
         internal const string Doctor = "doctor";
         internal const string Export = "export";
+        internal const string Capture = "capture";
         internal const string Help = "help";
         internal const string MarkCaptureText = "mark-capture-text";
         internal const string Replay = "replay";
@@ -33,7 +35,7 @@ namespace XMAT.Cli
 
         // The commands xmat.exe runs. Each one needs a Supported capability in the registry (XMAT.Tests/Cli checks it).
         internal static IReadOnlyList<string> Implemented { get; } =
-            new[] { Analyze, Compose, Curl, Doctor, Export, MarkCaptureText, Replay, SaveRequest };
+            new[] { Analyze, Capture, Compose, Curl, Doctor, Export, MarkCaptureText, Replay, SaveRequest };
     }
 
     internal sealed record CliRequest(
@@ -50,7 +52,9 @@ namespace XMAT.Cli
         CaptureExportFormat? Format = null,
         CaptureSelectionSpec Selection = null,
         CaptureTextInterpretation? Interpretation = null,
-        int MaxInputMib = 0);
+        int MaxInputMib = 0,
+        CaptureProxyRequest Capture = null,
+        string ShapingProfilePath = null);
 
     // What xmat replay, compose and save-request send or save, as their command lines give it. Headers and RemoveHeaders
     // keep the order they were given in; BodyFile and RequestFile are read when the run starts. Selection is the --request
@@ -576,6 +580,10 @@ namespace XMAT.Cli
             if (first == CliCommands.Export)
             {
                 return ParseExport(args);
+            }
+            if (first == CliCommands.Capture)
+            {
+                return CliCaptureCommand.Parse(args);
             }
 
             if (first == CliCommands.MarkCaptureText)

@@ -199,6 +199,7 @@ namespace XMAT.Cli
             }
 
             report.Analysis.ProcessScope = result.Value?.ProcessScope;
+            report.Analysis.Shaping = result.Value?.Summary?.Shaping;
 
             report.ApplyOutcome(result, "cli.analysis.failed", "The analysis did not complete.");
             if (result.Succeeded && failOnFindings && report.Analysis.TotalFindings > 0)

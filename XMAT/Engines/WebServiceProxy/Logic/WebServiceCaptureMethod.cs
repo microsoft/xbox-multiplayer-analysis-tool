@@ -166,7 +166,8 @@ namespace XMAT.WebServiceCapture
                         import.SkippedIncompleteFrames,
                     SkippedMalformedHeaderLines:
                         import.SkippedMalformedHeaderLines,
-                    Source: import.Source);
+                    Source: import.Source,
+                    Shaping: import.Shaping);
             });
 
             captureController.PrepareForActiveCaptureData();
@@ -177,6 +178,9 @@ namespace XMAT.WebServiceCapture
             LoadedCaptureDatabaseRegistry.AssignImported(
                 captureController,
                 imported.Source);
+            TryNotifyCaptureReplacement(
+                () => captureController.ImportedShaping = imported.Shaping,
+                logError);
             TryNotifyCaptureReplacement(
                 () => captureController.SetImportNotice(
                     imported.SkippedIncompleteFrames > 0 ||

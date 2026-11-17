@@ -38,16 +38,27 @@ namespace XMAT.Operations.Export
                             snapshot.DeviceFields,
                             snapshot.DeviceDescriptors,
                             markLiteral: snapshot.TextSource?.Semantics == CaptureTextSemantics.Literal),
-                        CaptureExportFormat.Saz => FiddlerSazHandler.CreateExportWriter(
-                            path,
-                            sanitized: false,
-                            expectedRows: expectedRows),
-                        CaptureExportFormat.SanitizedSaz => FiddlerSazHandler.CreateExportWriter(
-                            path,
-                            sanitized: true,
-                            expectedRows: expectedRows),
+                        CaptureExportFormat.Saz => CreateSazWriter(path, false, expectedRows, snapshot),
+                        CaptureExportFormat.SanitizedSaz => CreateSazWriter(path, true, expectedRows, snapshot),
                         _ => throw new ArgumentOutOfRangeException(nameof(format)),
                     };
+
+        private static ICaptureExportWriter CreateSazWriter(
+            string path, bool sanitized, long expectedRows, ICaptureExportSnapshot snapshot)
+        {
+            var history = snapshot.DeviceDescriptors.Values
+                .GroupBy(descriptor => descriptor.Values.TryGetValue("DeviceName", out object value)
+                    ? value as string ?? string.Empty : string.Empty)
+                .ToDictionary(
+                    group => group.Key,
+                    group => NetworkShapingMetadata.Combine(group.Select(descriptor =>
+                        NetworkShapingMetadata.Parse(descriptor.Values.TryGetValue(
+                            NetworkShapingMetadata.DeviceField, out object value) ? value as string : null))));
+            return FiddlerSazHandler.CreateExportWriter(path, sanitized, expectedRows, row =>
+                row.Values.TryGetValue(WebServiceCaptureMethod.FieldKey_DeviceName, out object name) &&
+                name is string device && history.TryGetValue(device, out NetworkShapingMetadata metadata)
+                    ? metadata : null);
+        }
 
         internal const string SelectPhase = "export.select";
         internal const string ReadPhase = "export.read";
