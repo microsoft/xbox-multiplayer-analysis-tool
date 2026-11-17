@@ -40,5 +40,31 @@ namespace XMAT.Tests.Operations.Captures
                 File.Delete(path);
             }
         }
+
+        [Fact]
+        public void ResponseHeadersAreChargedInStoredUtf8Bytes()
+        {
+            string path = Path.Join(Path.GetTempPath(), "XMAT-recorder-" + Guid.NewGuid().ToString("N") + ".db");
+            try
+            {
+                using (var recorder = new ProxyCaptureRecorder(path))
+                {
+                    var response = new ServerResponse
+                    {
+                        Version = "HTTP/1.1",
+                        Status = "200",
+                        // One UTF-16 code unit but three UTF-8 bytes each: only the stored size exceeds the limit.
+                        StatusDescription = new string('\u20AC', (int)(ProxyCaptureRecorder.MaximumUpdateBytes / 3) + 1),
+                    };
+
+                    Assert.False(recorder.RecordResponse(new ClientRequest { RequestNumber = 1 }, response, DateTime.UtcNow));
+                    Assert.True(recorder.Failure.Task.IsCompleted);
+                }
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
     }
 }

@@ -200,5 +200,61 @@ namespace XMAT.Tests.Operations.Export
             using var archive = ZipFile.OpenRead(path);
             Assert.Null(archive.GetEntry(NetworkShapingMetadata.ArchiveEntry));
         }
+
+        [Fact]
+        public async Task DevicesWhoseHistoriesTogetherExceedTheLimitsAreAnalyzedWithoutThemAndNotPutInOneArchive()
+        {
+            using var directory = new ExportTestDirectory();
+            var controller = new NetworkShapingController();
+            controller.Apply(NetworkShapingProfile.Preset("min"));
+            NetworkShapingTrace trace = Assert.Single(NetworkShapingMetadata.From(controller, 120).Traces);
+            NetworkShapingMetadata History(int traces) => new(1, Enumerable.Repeat(trace, traces).ToArray());
+            const int half = NetworkShapingMetadata.MaximumTraces / 2;
+            Assert.True(NetworkShapingMetadata.FitsLimits(NetworkShapingMetadata.Combine([History(half), History(half)])));
+            Assert.False(NetworkShapingMetadata.FitsLimits(NetworkShapingMetadata.Combine([History(half), History(half + 1)])));
+
+            Dictionary<string, object> Device(long id, string name, int traces) => new(DeviceRow(id, name).Values)
+            {
+                [NetworkShapingMetadata.DeviceField] = NetworkShapingMetadata.Serialize(History(traces)),
+            };
+            var other = new Dictionary<string, object>(Values(2))
+            {
+                [WebServiceCaptureMethod.FieldKey_DeviceName] = "Other PC",
+            };
+            using var snapshot = new FakeExportSnapshot([Session(1), Session(2, deviceId: "d2")], [Row(1), Row(2, other)])
+            {
+                DeviceFields = CaptureExportSnapshot.StandardDeviceFields,
+                DeviceDescriptors = new Dictionary<string, RawExportRow>
+                {
+                    ["d1"] = new(default, 1, 0, Device(1, "Export PC", half)),
+                    ["d2"] = new(default, 2, 0, Device(2, "Other PC", half + 1)),
+                },
+            };
+            var operation = new ExportCaptureSessionsOperation();
+            string native = directory.PathOf("devices.xmatcap");
+            string saz = directory.PathOf("devices.saz");
+            var exported = await operation.ExecuteAsync(
+                new ExportCaptureRequest(
+                    null, snapshot, null, Selection(), CaptureExportFormat.Xmatcap, native,
+                    false, AnalysisLimits.Default, false),
+                OperationContext.None, CancellationToken.None);
+            Assert.True(exported.Succeeded, string.Join(", ", exported.Diagnostics.Select(item => item.Code)));
+
+            var combined = await operation.ExecuteAsync(
+                new ExportCaptureRequest(
+                    native, null, null, Selection(), CaptureExportFormat.Saz, saz,
+                    false, AnalysisLimits.Default, false),
+                OperationContext.None, CancellationToken.None);
+            Assert.Equal(OperationOutcome.InvalidInput, combined.Outcome);
+            Assert.Equal(CaptureExportErrorCodes.InputLimit, Assert.Single(combined.Diagnostics).Code);
+            Assert.False(File.Exists(saz));
+
+            var analysis = await new AnalyzeCaptureOperation().ExecuteAsync(
+                new AnalyzeCaptureRequest(AnalysisInput.FromFile(native), new AnalysisOptions()),
+                OperationContext.None, CancellationToken.None);
+            Assert.Null(analysis.Value.Summary.Shaping);
+            Assert.Contains(analysis.Diagnostics, diagnostic => diagnostic.Code == "analysis.network-shaped");
+            Assert.Contains(analysis.Diagnostics, diagnostic => diagnostic.Code == "analysis.network-shaping.omitted");
+        }
     }
 }

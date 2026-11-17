@@ -40,6 +40,13 @@ namespace XMAT.Operations.Captures
             return traces.Length == 0 ? null : new(1, traces);
         }
 
+        // Each device's history is within the limits, but a combination of several can exceed one; Serialize refuses it.
+        internal static bool FitsLimits(NetworkShapingMetadata metadata) =>
+            metadata == null ||
+            metadata.Traces.Count <= MaximumTraces &&
+            metadata.Traces.Sum(trace => trace.Changes.Count) <= MaximumChanges &&
+            Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(metadata, NetworkShapingPlan.JsonOptions)) <= MaximumBytes;
+
         internal static string Serialize(NetworkShapingMetadata metadata)
         {
             if (metadata == null)

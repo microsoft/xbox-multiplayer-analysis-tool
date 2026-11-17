@@ -1182,7 +1182,13 @@ namespace XMAT.WebServiceCapture
                 NetworkShapingMetadata shaping = _shaping?.Invoke(row);
                 if (shaping != null)
                 {
-                    _recordedShaping.Add(shaping);
+                    // One archive holds every written device's history, so refuse before writing a session that
+                    // would make the combination exceed what Complete can store.
+                    if (_recordedShaping.Add(shaping) &&
+                        !NetworkShapingMetadata.FitsLimits(NetworkShapingMetadata.Combine(_recordedShaping)))
+                    {
+                        throw new CaptureExportException(CaptureExportErrorCodes.InputLimit, OperationOutcome.InvalidInput);
+                    }
                     metadata.SessionFlags["x-xmat-network-shaping"] = NetworkShapingMetadata.ArchiveEntry;
                 }
 

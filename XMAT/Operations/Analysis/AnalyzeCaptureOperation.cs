@@ -348,7 +348,16 @@ namespace XMAT.Operations.Analysis
                     "analysis.network-shaped",
                     OperationDiagnosticSeverity.Warning,
                     "Network shaping was recorded; timing and rate findings reflect simulated conditions."));
-                if (options.ProduceLegacyReports)
+                if (!NetworkShapingMetadata.FitsLimits(shaping))
+                {
+                    diagnostics.Add(new OperationDiagnostic(
+                        "analysis.network-shaping.omitted",
+                        OperationDiagnosticSeverity.Warning,
+                        "The devices' network shaping histories together exceed their limits and are not reported; " +
+                        "analyze one device at a time to report them."));
+                    shaping = null;
+                }
+                else if (options.ProduceLegacyReports)
                 {
                     NetworkShapingReport.WriteMetadata(context.WorkingDirectory, shaping);
                 }

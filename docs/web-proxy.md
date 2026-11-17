@@ -162,7 +162,11 @@ Clearing captured data also clears imported/past history, but keeps the currentl
 as the start of the new history. An explicit nondefault upload deadline is recorded even when shaping is off.
 Changing the upload deadline starts a new history entry, so traffic captured earlier keeps its original deadline.
 A capture keeps at most 64 such entries and 16384 changes in total; a change that would exceed either limit is
-refused with a message to clear the capture first, and the current condition stays in effect.
+refused with a message to clear the capture first, and the current condition stays in effect. One Fiddler archive or
+analysis holds the histories of all its devices together, within the same limits and 4 MiB: a SAZ export of devices
+whose histories together exceed them is refused (`export.input.limit`), and analysis omits them, adding the warning
+`analysis.network-shaping.omitted` to `analysis.network-shaped`. Export or analyze one device at a time (`--device`)
+to keep them.
 
 Development kits and PC applications must already route their traffic to the explicit proxy. This does not add
 a proxy-routing facility to consumer retail consoles or shape an entire RETAIL network connection. Exact

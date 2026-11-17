@@ -82,9 +82,10 @@ namespace XMAT.Operations.Captures
         internal bool RecordResponse(ClientRequest request, ServerResponse response, DateTime timestamp) => Guard(() =>
         {
             byte[] bodyBytes = response.BodyBytes ?? Array.Empty<byte>();
+            string headers = response.FirstLineAndHeaders;
             // Reserve the projected size first: a response body has no proxy cap, so encoding it before the
             // limit check could exhaust memory instead of stopping the capture.
-            CheckBudget(response.FirstLineAndHeaders.Length + Base64Length(bodyBytes));
+            CheckBudget(Encoding.UTF8.GetByteCount(headers) + Base64Length(bodyBytes));
             string body = Convert.ToBase64String(bodyBytes);
             using var command = _connection.CreateCommand();
             command.CommandText = $"UPDATE {WebServiceCaptureMethod.TableName} SET " +
@@ -94,7 +95,7 @@ namespace XMAT.Operations.Captures
                 $"\"{WebServiceCaptureMethod.FieldKey_ResponseBody}\"=$body WHERE id=$id";
             command.Parameters.AddWithValue("$time", Time(timestamp));
             command.Parameters.AddWithValue("$status", response.Status);
-            command.Parameters.AddWithValue("$headers", response.FirstLineAndHeaders);
+            command.Parameters.AddWithValue("$headers", headers);
             command.Parameters.AddWithValue("$body", body);
             command.Parameters.AddWithValue("$id", request.RequestNumber);
             command.ExecuteNonQuery();

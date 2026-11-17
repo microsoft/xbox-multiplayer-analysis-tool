@@ -264,9 +264,10 @@ Capture failures use stable codes and never echo paths or values:
   (`.saz`) or, only with `--format sanitized-saz`, a sanitized Fiddler archive. The format otherwise follows `FILE`'s
   extension, and one that does not agree with it is a usage error. It reads `INPUT` with `analyze`'s reader and
   limits and never changes it, but equal limits do not mean equal codes: the reader's diagnostics keep their
-  `analysis.*` codes, except that an input over a limit is `export.input.limit`, and session data that cannot be
-  exported is `export.input.invalid-http` (an HTTP message that a sanitized archive cannot rewrite, or start-line or
-  header text that a Fiddler archive can store neither as Latin-1 nor as UTF-8, such as an unpaired surrogate) or
+  `analysis.*` codes, except that an input over a limit is `export.input.limit`, as is a Fiddler archive of devices
+  whose [network shaping](web-proxy.md#network-shaping) histories together exceed its limits, and session data that
+  cannot be exported is `export.input.invalid-http` (an HTTP message that a sanitized archive cannot rewrite, or start-line
+  or header text that a Fiddler archive can store neither as Latin-1 nor as UTF-8, such as an unpaired surrogate) or
   `export.input.invalid-body` (a stored body or value that is not valid data), all with exit code 3. A sanitized
   archive needs a capture whose text format is known: an unmarked XMAT capture is refused before anything is written
   (`capture.text.ambiguous-export`, exit code 3); export a copy marked with `xmat mark-capture-text` instead. An
