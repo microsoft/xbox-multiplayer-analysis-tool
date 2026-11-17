@@ -228,6 +228,31 @@ namespace XMAT.Tests.Cli
         }
 
         [Fact]
+        public async Task CapturedServiceCallsAreAnalyzed()
+        {
+            using var directory = new CliTestDirectory();
+            await using var origin = await LoopbackOrigin.StartAsync();
+            int port = AvailablePort();
+            using XmatChild child = XmatProcess.Start(
+                XmatProcess.CliDirectory, directory.Root, "capture",
+                "--port", port.ToString(), "--duration-seconds", "2", "--out", "capture.xmatcap");
+            await WaitForListenerAsync(child, port);
+            using var client = Client(port);
+            using var request = new HttpRequestMessage(HttpMethod.Get, origin.Url("/users"));
+            // The rules analyze Xbox services calls only; this header marks the request as one.
+            request.Headers.Add("x-xbl-api-build-version", "adk");
+            using HttpResponseMessage response = await client.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+            CliAssert.ExitCode(0, await child.CompleteAsync());
+
+            XmatRun analysis = await XmatProcess.RunAsync(
+                directory.Root, "analyze", "capture.xmatcap", "--out", "analysis");
+
+            CliAssert.ExitCode(0, analysis);
+            Assert.Equal(1, analysis.Json().GetProperty("totals").GetProperty("calls").GetInt32());
+        }
+
+        [Fact]
         public async Task EmptyBlockedCaptureStillKeepsHistoryForHeadlessAnalysis()
         {
             using var directory = new CliTestDirectory();

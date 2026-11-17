@@ -20,6 +20,7 @@ namespace XMAT.Operations.Captures
     {
         internal const long MaximumUpdateBytes = 64L * 1024 * 1024;
         internal const long MaximumCaptureBytes = 512L * 1024 * 1024;
+        private const string DeviceName = "Proxy capture";
 
         private readonly object _gate = new();
         private readonly SqliteConnection _connection;
@@ -46,7 +47,7 @@ namespace XMAT.Operations.Captures
                     $"CREATE TABLE {WebServiceCaptureMethod.TableName} (id INTEGER PRIMARY KEY," +
                     string.Join(",", WebProxyCaptureSchema.Fields.Select(field =>
                         $"\"{field.Name}\" {(field.ValueType == typeof(long) ? "INTEGER" : "TEXT")}")) + ")");
-                Execute("INSERT INTO CaptureDevices VALUES (1, 0, 'Proxy capture', 0, NULL)");
+                Execute($"INSERT INTO CaptureDevices VALUES (1, 0, '{DeviceName}', 0, NULL)");
                 using var command = _connection.CreateCommand();
                 command.CommandText = "UPDATE CaptureDevices SET DeviceType=$device, CaptureType=$capture";
                 command.Parameters.AddWithValue("$device", (long)SharedInterfaces.DeviceType.GenericProxyDevice);
@@ -64,8 +65,9 @@ namespace XMAT.Operations.Captures
         {
             proxy.ReceivedSslConnectionRequest += (_, args) =>
                 args.AcceptConnection &= RecordRequest(args.Request, args.Timestamp, args.ConnectionID, args.ClientIP);
+            // As in the GUI, web requests are attributed to the capture device so analysis counts them as one console.
             proxy.ReceivedWebRequest += (_, args) =>
-                args.AcceptRequest &= RecordRequest(args.Request, args.Timestamp, args.ConnectionID, string.Empty);
+                args.AcceptRequest &= RecordRequest(args.Request, args.Timestamp, args.ConnectionID, DeviceName);
             proxy.ReceivedWebResponse += (_, args) => args.SendResponse &= RecordResponse(args.Request, args.Response, args.Timestamp);
             proxy.CompletedSslConnectionRequest += (_, args) => Guard(() =>
             {
@@ -111,7 +113,7 @@ namespace XMAT.Operations.Captures
             EnsureBudget(Base64Length(bodyBytes));
             var values = new Dictionary<string, object>
             {
-                [WebServiceCaptureMethod.FieldKey_DeviceName] = "Proxy capture",
+                [WebServiceCaptureMethod.FieldKey_DeviceName] = DeviceName,
                 [WebServiceCaptureMethod.FieldKey_RequestNumber] = (long)request.RequestNumber,
                 [WebServiceCaptureMethod.FieldKey_ConnectionId] = (long)connection,
                 [WebServiceCaptureMethod.FieldKey_RequestTimestamp] = Time(timestamp),
