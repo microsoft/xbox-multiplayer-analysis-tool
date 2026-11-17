@@ -328,6 +328,120 @@ namespace XMAT.Tests
             Assert.Equal("chunked", capture.RequestHeaders["Transfer-Encoding"]);
         }
 
+        // With a bound that its body fits, FromCapture is FromCapture: the same method, URL, origin, header lines and
+        // body, shown the same way, for text, binary, encoded, chunked and empty bodies.
+        [Theory]
+        [InlineData("POST", "/text", "plain text", "")]
+        [InlineData("POST", "/binary", "\u0001\u0002", "")]
+        [InlineData("POST", "/encoded", "zipped", "Content-Encoding: gzip\r\n")]
+        [InlineData("GET", "/empty", "", "X-Test: one\r\nX-Test: two\r\n")]
+        public void FromCapture_WithABoundItsBodyFits_IsFromCapture(string method, string path, string body, string headers)
+        {
+            ProxyConnectionModel capture = Capture(method, path, Encoding.UTF8.GetBytes(body), headers);
+
+            RequestReplayDraft unbounded = RequestReplayDraft.FromCapture(capture);
+            RequestReplayDraft bounded = RequestReplayDraft.FromCapture(capture, 64 * 1024, CancellationToken.None);
+
+            Assert.Equal(
+                (unbounded.Method, unbounded.Url, unbounded.HeadersText, unbounded.BodyText, unbounded.BodyIsBase64),
+                (bounded.Method, bounded.Url, bounded.HeadersText, bounded.BodyText, bounded.BodyIsBase64));
+            Assert.Equal(unbounded.GetBodyBytes(), bounded.GetBodyBytes());
+            bounded.Url = "https://other.example/";
+            Assert.True(bounded.ChangesOrigin);
+
+            RequestReplayDraft chunked = RequestReplayDraft.FromCapture(
+                ImportedCapture("/", "4\r\nWiki\r\n0\r\n\r\n"u8.ToArray(), "Transfer-Encoding: chunked\r\n"), 64 * 1024, CancellationToken.None);
+            Assert.Equal(("Wiki", false), (chunked.BodyText, chunked.BodyIsBase64));
+        }
+
+        // A body larger than the bound stays its exact bytes, decoded from chunked framing as always, and no text or
+        // Base64 is made of it: drafting an 8 MiB text body allocates far less than its Base64 or text would take.
+        [Fact]
+        public void FromCapture_WithABound_HoldsALargerBodyAsItsBytes()
+        {
+            byte[] body = Encoding.ASCII.GetBytes(new string('a', 8 * 1024 * 1024));
+            ProxyConnectionModel capture = Capture("PUT", "/large", body, "Content-Type: text/plain\r\n");
+            RequestReplayDraft.FromCapture(Capture("PUT", "/warm", "warm"u8.ToArray()), 1, CancellationToken.None);
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            RequestReplayDraft draft = RequestReplayDraft.FromCapture(capture, 64 * 1024, CancellationToken.None);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.True(allocated < 1024 * 1024, $"Drafting the large body allocated {allocated} bytes.");
+            Assert.True(draft.BodyIsBase64);
+            Assert.Same(body, draft.GetBodyBytes());
+            Assert.Equal("https://example.com:8443/large", draft.Url);
+
+            byte[] decoded = Encoding.ASCII.GetBytes(new string('b', 70_000));
+            byte[] framed = [.. Encoding.ASCII.GetBytes($"{decoded.Length:X}\r\n"), .. decoded, .. "\r\n0\r\n\r\n"u8];
+            RequestReplayDraft chunked = RequestReplayDraft.FromCapture(
+                ImportedCapture("/", framed, "Transfer-Encoding: chunked\r\n"), 64 * 1024, CancellationToken.None);
+            Assert.True(chunked.BodyIsBase64);
+            Assert.Equal(decoded, chunked.GetBodyBytes());
+        }
+
+        // A cancelled draft stops with OperationCanceledException, whatever its body: text, encoded, empty, or larger
+        // than the bound and held as bytes.
+        [Fact]
+        public void FromCapture_WithABound_StopsWhenCancelled()
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            ProxyConnectionModel[] captures =
+            {
+                Capture("POST", "/text", "body"u8.ToArray()),
+                Capture("POST", "/encoded", "body"u8.ToArray(), "Content-Encoding: gzip\r\n"),
+                Capture("GET", "/empty", []),
+                Capture("PUT", "/held", new byte[100]),
+            };
+
+            Assert.All(captures, capture => Assert.Throws<OperationCanceledException>(
+                () => RequestReplayDraft.FromCapture(capture, 64, cancellation.Token)));
+        }
+
+        // A draft cancelled before it starts stops before its body is decoded. Malformed chunked framing, which
+        // decoding refuses, gives OperationCanceledException, not FormatException, and a large chunked body is never
+        // decoded.
+        [Fact]
+        public void FromCapture_WithABound_StopsWhenCancelled_BeforeDecodingTheBody()
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            ProxyConnectionModel malformed = ImportedCapture("/", "4\r\nWiki\r\nZ\r\n\r\n"u8.ToArray(), "Transfer-Encoding: chunked\r\n");
+
+            Assert.Throws<OperationCanceledException>(() => RequestReplayDraft.FromCapture(malformed, 64, cancellation.Token));
+
+            byte[] decoded = Encoding.ASCII.GetBytes(new string('c', 4 * 1024 * 1024));
+            byte[] framed = [.. Encoding.ASCII.GetBytes($"{decoded.Length:X}\r\n"), .. decoded, .. "\r\n0\r\n\r\n"u8];
+            ProxyConnectionModel large = ImportedCapture("/", framed, "Transfer-Encoding: chunked\r\n");
+            Assert.Throws<OperationCanceledException>(() => RequestReplayDraft.FromCapture(large, 64, cancellation.Token));
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            Assert.Throws<OperationCanceledException>(() => RequestReplayDraft.FromCapture(large, 64, cancellation.Token));
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.True(allocated < 1024 * 1024, $"A cancelled draft allocated {allocated} bytes.");
+            Assert.Equal(framed, large.RequestBody);
+        }
+
+        // The authority that a preview shows is the one that FromCapture sends to: the port only when it is not the
+        // scheme's default, and an IPv6 host in brackets.
+        [Theory]
+        [InlineData("https", "example.com:8443", "https://example.com:8443")]
+        [InlineData("https", "example.com:443", "https://example.com")]
+        [InlineData("http", "example.test:80", "http://example.test")]
+        [InlineData("http", "example.test", "http://example.test")]
+        [InlineData("http", "[::1]:8080", "http://[::1]:8080")]
+        [InlineData("http", "[2001:db8::1]", "http://[2001:db8::1]")]
+        public void CaptureAuthority_IsTheAuthorityThatFromCaptureSendsTo(string scheme, string authority, string expected)
+        {
+            var capture = new ProxyConnectionModel(7, "200", DateTime.UtcNow, TimeSpan.Zero, scheme, authority, "GET", "/path?q=1",
+                "GET /path?q=1 HTTP/1.1\r\n\r\n", [], "HTTP/1.1 200 OK\r\n\r\n", [], "127.0.0.1");
+
+            Assert.Equal(expected, RequestReplayDraft.CaptureAuthority(capture));
+            Assert.Equal(expected + "/path?q=1", RequestReplayDraft.FromCapture(capture).Url);
+        }
+
         private static ProxyConnectionModel ImportedCapture(string target, byte[] body, string headers = "")
         {
             using var stream = new MemoryStream();

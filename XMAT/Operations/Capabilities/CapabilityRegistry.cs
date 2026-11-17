@@ -36,6 +36,7 @@ namespace XMAT.Operations.Capabilities
         private const string ComposerXaml = "Engines/WebServiceProxy/Windows/RequestComposerWindow.xaml";
         private const string SequenceRangeXaml = "Engines/WebServiceProxy/Windows/SequenceRangeWindow.xaml";
         private const string VerifyDiffXaml = "Engines/WebServiceProxy/Windows/VerifyDiffWindow.xaml";
+        private const string MultipartFormXaml = "Engines/WebServiceProxy/Windows/MultipartFormWindow.xaml";
 
         private const string AppCommandsPrefix = "XMAT.AppCommands.";
         private const string ProxyCommandsPrefix = "XMAT.WebServiceCapture.WebServiceProxyCommands.";
@@ -235,9 +236,9 @@ namespace XMAT.Operations.Capabilities
             // of a URL with '#' (SequenceRangeWindow).
             Capability.Supported(
                 "request.replay", "Replay captured requests, as captured or edited", "S9",
-                cli: "replay INPUT --request SPEC --out DIR [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
+                cli: "replay INPUT --request SPEC --out DIR [--save-saz] [--device ID] [--repeat N] [--parallel N] [--unconditional] " +
                     "[--verify] [--verify-diff] [--url URL | --origin URL] [--method METHOD] [--header \"NAME: VALUE\"]... " +
-                    "[--remove-header NAME]... [--body-file FILE] [--follow-redirects N] [--timeout SECONDS] " +
+                    "[--remove-header NAME]... [--body-file FILE] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] " +
                     "[--allow-unsafe-methods] [--allow-origin-change] [--allow-connect-to] [--max-input-mib N] " +
                     "[--max-data-mib N] [--max-record-mib N] [--max-records N]",
@@ -252,6 +253,16 @@ namespace XMAT.Operations.Capabilities
                     Click(ComposerXaml, "CancelSend_Click"),
                     Click(ComposerXaml, "UploadFile_Click"),
                     Click(ComposerXaml, "ClearBody_Click"),
+                    // Build form: a multipart body, made by the same builder as --form (MultipartForm).
+                    Click(ComposerXaml, "BuildForm_Click"),
+                    Window("XMAT.WebServiceCapture.MultipartFormWindow"),
+                    Click(MultipartFormXaml, "AddText_Click"),
+                    Click(MultipartFormXaml, "AddFile_Click"),
+                    Click(MultipartFormXaml, "RemovePart_Click"),
+                    Click(MultipartFormXaml, "MoveUp_Click"),
+                    Click(MultipartFormXaml, "MoveDown_Click"),
+                    Click(MultipartFormXaml, "UseForm_Click"),
+                    Click(MultipartFormXaml, "CancelWork_Click"),
                     Click(ComposerXaml, "Close_Click"),
                     Command(ProxyCommandsPrefix + "ViewVerifyDiff"),
                     Window("XMAT.WebServiceCapture.VerifyDiffWindow"),
@@ -259,9 +270,9 @@ namespace XMAT.Operations.Capabilities
                 }),
             Capability.Supported(
                 "request.compose", "Compose and send a new request", "S9",
-                cli: "compose --url URL | --request-file FILE --out DIR [--sequence START-END] [--method METHOD] " +
+                cli: "compose --url URL | --request-file FILE --out DIR [--save-saz] [--sequence START-END] [--method METHOD] " +
                     "[--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] [--body-file FILE] " +
-                    "[--empty-body] [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
+                    "[--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--repeat N] [--parallel N] [--follow-redirects N] [--timeout SECONDS] " +
                     "[--max-response-mib N] [--http-version auto|1.1|2] [--connect-to IP:PORT] [--allow-unsafe-methods] " +
                     "[--allow-origin-change] [--allow-connect-to]",
                 operation: ReplayOperation,
@@ -279,7 +290,7 @@ namespace XMAT.Operations.Capabilities
                 "request.save", "Save requests as request files, without sending them", "S9",
                 cli: "save-request INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--device ID] " +
                     "[--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... [--clear-headers] " +
-                    "[--body-file FILE] [--empty-body] [--unconditional] [--http-version auto|1.1|2] [--include-sensitive] " +
+                    "[--body-file FILE] [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto|1.1|2] [--include-sensitive] " +
                     "[--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
                 operation: ReplayOperation,
                 gui: new[]
@@ -298,7 +309,7 @@ namespace XMAT.Operations.Capabilities
                 "request.curl", "Export requests as cURL scripts for PowerShell 7, without sending them", "S9",
                 cli: "curl INPUT --request SPEC | --request-file FILE | --url URL --out DIR [--include-sensitive] " +
                     "[--device ID] [--method METHOD] [--header \"NAME: VALUE\"]... [--remove-header NAME]... " +
-                    "[--clear-headers] [--body-file FILE] [--empty-body] [--unconditional] [--http-version auto|1.1] " +
+                    "[--clear-headers] [--body-file FILE] [--empty-body] [--form NAME=VALUE|NAME=@FILE]... [--form-string NAME=VALUE]... [--form-type N=TYPE]... [--unconditional] [--http-version auto|1.1] " +
                     "[--allow-origin-change] [--max-input-mib N] [--max-data-mib N] [--max-record-mib N] [--max-records N]",
                 operation: ReplayOperation,
                 gui: new[]
@@ -444,6 +455,11 @@ namespace XMAT.Operations.Capabilities
             Capability.GuiOnly(
                 "view.capture-viewers", "Capture viewers",
                 "Presentation: filters, timeline and the request, response, WebSocket and packet views"),
+            Capability.GuiOnly(
+                "view.composer-history", "Composer history",
+                "Presentation: session-only navigation over rows already in the Replays tab; sends go through " +
+                    "request.replay, and headless runs keep no session",
+                gui: new[] { Click(ComposerXaml, "History_Click") }),
         };
 
         private static string[] ExportEntryPoints(string fileCommand) => new[]

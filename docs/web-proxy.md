@@ -288,6 +288,12 @@ response limit for each request. Cancelling or timing out cannot undo changes al
 processed by the server. To send the request outside XMAT, use **Copy as cURL** or
 **Save as cURL script** (see below).
 
+Before anything is asked or sent, the composer checks the request in the background, as
+it was when you clicked **Send**, and the status line says so. **Cancel request** stops
+the check: nothing is asked, sent, or recorded, and the status line says "Not sent:
+cancelled before sending." Closing the composer also stops the check: nothing is asked,
+sent, or recorded, and the closed composer says nothing further.
+
 To send a request that was never captured, select **Actions > Compose a New Request**.
 The composer opens with an empty GET request and works the same way.
 
@@ -400,10 +406,12 @@ number to its width: `http://example.com/#/?a=#` from `08` to `11` sends `/08/?a
 the body is sent as it is. Write `%23` for a literal `#` in the URL. A `#` in the
 scheme, host, or port is refused, so numbers never lead to other hosts.
 
-The requests are checked before anything is sent and go out one at a time, at most
-10,000 of them. When they need confirmation, one question covers them all and says how
-many there are. **Cancel request** stops before the next request: the requests already
-sent stay in the **XMAT Replays** tab. The composer shows the last response only.
+The requests are checked before anything is sent: the request first, then the run with
+the numbers that you chose, each in the background, which **Cancel request** stops. They
+go out one at a time, at most 10,000 of them. When they need confirmation, one question
+covers them all and says how many there are. **Cancel request** stops before the next
+request: the requests already sent stay in the **XMAT Replays** tab. The composer shows
+the last response only.
 
 ### Upload a body from a file
 
@@ -412,7 +420,65 @@ is read once, when you choose it: later changes to it are not sent, and the comp
 keeps only its bytes and its name. Headers such as `Content-Type` are not changed.
 **Clear body** removes the uploaded body. A file that cannot be read leaves the body as
 it was, and so does **Cancel request** during the upload. Fiddler's `<@INCLUDE@>` tokens
-and multipart forms are not supported: such text is sent as typed, and no file is read.
+are not supported: such text is sent as typed, and no file is read. To send a
+`multipart/form-data` form, use **Build form** (see below).
+
+### Build a multipart form
+
+**Build form...** builds the body as a `multipart/form-data` form (RFC 7578) from text
+and file parts, in the order that you list them, the same way as `xmat` with `--form`.
+It opens a dialog that shows the request's method, which a form never changes; for GET
+and HEAD, which usually have no body, the dialog says so. Add the parts, then select
+**Use form**; **Close** or Esc changes nothing.
+
+- **Parts.** **Add text part** adds the name, type, and value as typed; **Add file
+  part...** adds the name and type with the bytes of a file that you pick. **Remove**,
+  **Move up**, and **Move down** edit the list. Names can repeat; a form has at most 128
+  parts and 64 MiB. A name has 1 to 256 printable ASCII characters, and a type, which
+  is optional, is a media type such as `text/plain; charset=utf-8`; each one is
+  checked as you type it. A file part without a type is sent as
+  `application/octet-stream`, and a text part without one has no `Content-Type`.
+- **Text** is sent as UTF-8, without a byte order mark, with its line breaks as typed.
+  A type never changes that, so a `charset` in it must be UTF-8. Text that is not valid
+  Unicode is refused when you select **Use form**. Text that starts with `@` or holds
+  `<@INCLUDE@>` is sent as typed: only **Add file part** reads a file.
+- **Files** are read once, when you add them, in the background: later changes to a
+  file are not sent, and the composer keeps only its bytes and its name, never its
+  folder. A file that does not fit in what is left of 64 MiB is refused before it is
+  read. The file name is sent with each non-ASCII byte of its UTF-8, and each `%`,
+  percent-encoded, such as `%25` for `%`; a server may or may not decode it.
+- **Use form** builds the form in the background and puts it in the composer: the
+  body, shown only by its number of parts and size, and its `Content-Type`,
+  `multipart/form-data; boundary=` with a random boundary, in the headers in place of
+  every `Content-Type` line. The other headers keep their names, values, and order, one
+  `Name: value` per line. `Content-Length` is set when the request is sent; a
+  `Content-Encoding` header is not changed, so remove it unless the form is encoded
+  that way. Nothing is sent.
+- **When it fails.** **Use form** changes nothing, and says why, when the form would be
+  larger than 64 MiB, a text is not valid, the composer's headers are not valid, or a
+  `Connection` header names `Content-Type`, which would drop the form's `Content-Type`
+  from the request. **Cancel** stops reading a file or building the form, and changes
+  nothing either. After a failure or **Cancel**, the parts stay in the dialog to try
+  again, and files are not read again.
+- **Closing.** Closing the dialog also stops reading a file or building the form, and
+  discards what you changed in the dialog since you last selected **Use form**: the
+  composer keeps the form that it last took, if any, and **Build form** opens with that
+  form's parts. Closing the composer closes the dialog and releases the form's parts.
+- **An edit, not a new request.** The method, the URL, the transport options,
+  **Inspect session**, the response, and the parts that a request file left out stay
+  as they are: a form does not supply a left-out body or headers, so select **Use this
+  body** and **Use these headers** afterward. **Open request** and **Load** ask before
+  they replace a request with a form.
+- **Editing it again.** While the body is still that form, **Build form** opens with its
+  parts, and files are not read again. Editing the method, the URL, or the headers
+  keeps them, and does not build the form again. Any other body forgets them: **Upload
+  File**, **Clear body**, **Empty body**, **Open request**, **Load**, and a dragged
+  request, and so does closing the composer. **Use this body** keeps them.
+- **Before it is sent or saved.** While the body is a form, **Send**, **Copy as cURL**,
+  **Save as cURL script**, and **Save request as** refuse when a `Connection` header
+  names `Content-Type`, and change no header: remove `Content-Type` from it first.
+  Otherwise the form is sent, exported, and saved as its exact bytes, like an uploaded
+  file.
 
 ### Drag a request into the composer
 
@@ -422,10 +488,41 @@ recorded without their body cannot be dragged. The composer loads a copy of the 
 as it was when the drag began, clears the previous response, and sends nothing. If you
 have edited the request in the composer, it asks before replacing it. A drop keeps the
 **HTTP version**, **Connect to another endpoint**, and **Follow same-origin redirects**
-as they are, so changing only those asks nothing here; opening a request file still asks
-about them, since it resets them. Only requests dragged from XMAT can be dropped; text,
-links, and files are refused, and nothing can be dropped while the composer sends or
-reads a file.
+as they are, so changing only those asks nothing here; opening a request file or loading
+a request from history still asks about them, since both reset them. Only requests
+dragged from XMAT can be dropped; text, links, and files are refused, and nothing can be
+dropped while the composer sends or reads a file.
+
+### Load a request from history
+
+**History** lists the requests that the **XMAT Replays** tab recorded in this session,
+newest first: every send from a composer and every request that **Replay** sent,
+including those that failed or were recorded without their body. It keeps the latest
+200 and is never saved: it is empty when XMAT starts, and opening a saved capture adds
+nothing to it. The list is the same in every composer. Each entry shows its tab and
+request number, its time, method, URL, and status, shortened when they are long, with
+any character that could hide or reorder text shown as `\uXXXX`.
+
+- **Load** loads the request in place of the request in the editors, as **Edit and
+  resend** would, clears the previous response, and sends nothing. It resets the
+  transport options: **HTTP version** to **Automatic**, **Connect to another endpoint**
+  off, without an endpoint, and **Follow same-origin redirects** off, with *N* back to
+  10; **Inspect session** stays as it is. If you have edited the request or changed
+  these options, XMAT asks first, No by default. The request is prepared in the
+  background: **Cancel request**, or closing the composer, stops it and loads nothing.
+  A body larger than 64 KiB is kept as its exact bytes and shown only by its size:
+  **Copy as cURL** does not copy it, and **Save as cURL script** saves it whole.
+  **Load** is not available for CONNECT tunnels, protocol upgrades, and requests
+  recorded without their body.
+- **Show in Replays** selects the request in its tab, also when it cannot be loaded.
+- **Clear history** empties the history in every composer. The requests stay in the
+  **XMAT Replays** tab, and a request that you loaded stays in its composer.
+
+A request leaves the history when it leaves its tab, for example when you close the
+tab, and once 200 newer requests have been recorded. XMAT looks for the request again
+when you select **Load** or **Show in Replays**, and again just before it loads it, so
+neither acts on a request that is gone; the status line says so instead. Loading grants
+no permission: sending the request, and exporting it for curl, ask as they always do.
 
 ### Open and save request files
 
@@ -472,14 +569,14 @@ any permission.
   nothing. Before it discards your edits, XMAT asks whether to replace the current
   request: edits to the request since it was loaded, even only supplying a part that
   its file left out, and changes to these transport options from what the composer
-  started with or the last opened file set, including changes made before you dragged
-  in a request. Declining keeps everything as it was, and no answer is a permission to
-  send. Text in the file, such as Fiddler's `<@INCLUDE@>`, is used as it is, and no
-  other file is read. The composer shows only the file's name, never its folder, with
-  any character that could hide or reorder text shown as `\uXXXX`, and the **XMAT
-  Replays** tab records each send as coming from that file name. A file never grants a
-  permission: sending still asks for every confirmation that it needs, and the file's
-  URL is the origin that a changed URL is checked against.
+  started with, the last opened file, or the last request loaded from history set,
+  including changes made before you dragged in a request. Declining keeps everything as
+  it was, and no answer is a permission to send. Text in the file, such as Fiddler's
+  `<@INCLUDE@>`, is used as it is, and no other file is read. The composer shows only
+  the file's name, never its folder, with any character that could hide or reorder text
+  shown as `\uXXXX`, and the **XMAT Replays** tab records each send as coming from that
+  file name. A file never grants a permission: sending still asks for every confirmation
+  that it needs, and the file's URL is the origin that a changed URL is checked against.
 - **A large body is not shown.** The editor shows a body of at most 64 KiB from a
   request file. A larger body is kept as its exact bytes, which the composer sends and
   saves as they are, and shown only by the file's name and the body's size, never as
@@ -527,7 +624,10 @@ response, or without one when the request failed or timed out. **Replay of** in 
 request details shows where it comes from: the tab and request number of the captured
 request, or that the request was composed from scratch. This link is kept in memory
 only. You can inspect and analyze replays like captured traffic, and edit and resend
-them.
+them. Each row's `Host` header, host, and port are the ones that XMAT sent, in ASCII:
+an international host name in its IDN (punycode) form, such as `xn--bcher-kva.example`,
+an IPv6 address in brackets without its zone, and the port only when it is not the
+scheme's default.
 
 When you cancel a replay, the requests already recorded stay in the tab, and XMAT tells
 you how many there are. The request that was being sent when you cancelled is not
@@ -553,6 +653,15 @@ captures and exports never show it as an empty body. A request whose body was no
 is never sent again, from the GUI or with `xmat replay`. After the replay, XMAT tells
 you how many bodies were not kept. Close the tab to make room for new bodies: the next
 replay starts a new one.
+
+A send whose response is larger than the response size limit, 16 MiB, also gets its
+row, with the status and headers but no body, since the body never came. Its note says
+that the response body was not kept, and its `X-XMAT-Response-Body-Not-Kept` header
+gives the size that the response declared in `Content-Length`, which XMAT did not
+check, or `unknown` when it declared none, as a chunked response does, so the row never
+looks like an empty response, also in saved captures and exports. As for a body that
+did not fit, the body preview says that the body was not kept, and a replay of the row
+with **Reissue and verify** counts it as not verified.
 
 While a replay or a send from the composer is in progress, XMAT does not load, import,
 save, or export captures, analyze, start a capture, or close tabs; **Cancel replay**

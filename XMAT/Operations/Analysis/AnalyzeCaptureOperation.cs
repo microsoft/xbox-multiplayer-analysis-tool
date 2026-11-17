@@ -957,8 +957,7 @@ namespace XMAT.Operations.Analysis
                     [WebServiceCaptureMethod.FieldKey_RequestTimestamp] =
                         ProxyConnectionModel.ToDateTimeString(model.RequestTime),
                     [WebServiceCaptureMethod.FieldKey_ResponseTimestamp] =
-                        ProxyConnectionModel.ToDateTimeString(
-                            model.RequestTime + model.Duration),
+                        ProxyConnectionModel.ToDateTimeString(model.ResponseDoneTime),
                     [WebServiceCaptureMethod.FieldKey_RequestScheme] =
                         model.Scheme ?? string.Empty,
                     [WebServiceCaptureMethod.FieldKey_RequestHost] =

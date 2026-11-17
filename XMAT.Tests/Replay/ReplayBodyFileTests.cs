@@ -28,6 +28,37 @@ namespace XMAT.Tests.Replay
             Assert.Equal(accepted ? bytes : null, read.Body);
         }
 
+        // A file read with a budget, as a multipart form's files are (CliRequestBody): with no budget left, only an empty file
+        // is read, and a longer one, or a stream that grows past the budget, is refused; a negative budget is a mistake.
+        [Fact]
+        public async Task Read_WithNoBudgetLeft_ReadsOnlyAnEmptyFile()
+        {
+            string path = Path.Join(AppContext.BaseDirectory, "HeadlessTestArtifacts", "Replay", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(path);
+            try
+            {
+                string empty = Path.Join(path, "empty.bin");
+                string one = Path.Join(path, "one.bin");
+                File.WriteAllBytes(empty, Array.Empty<byte>());
+                File.WriteAllBytes(one, new byte[] { 1 });
+                using var growing = new ReportedLengthStream(new byte[] { 1 }, 0);
+
+                ReplayBodyRead emptyRead = await ReplayBodyFile.ReadAsync(empty, 0, CancellationToken.None);
+                ReplayBodyRead oneRead = await ReplayBodyFile.ReadAsync(one, 0, CancellationToken.None);
+                ReplayBodyRead grown = await ReplayBodyFile.ReadAsync(growing, 0, CancellationToken.None);
+
+                Assert.Equal(Array.Empty<byte>(), emptyRead.Body);
+                Assert.Equal((null, ReplayBodyFile.TooLargeCode), (oneRead.Body, oneRead.Code));
+                Assert.Equal((null, ReplayBodyFile.TooLargeCode), (grown.Body, grown.Code));
+                Assert.Equal(new byte[] { 1 }, (await ReplayBodyFile.ReadAsync(one, 1, CancellationToken.None)).Body);
+                await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => ReplayBodyFile.ReadAsync(one, -1, CancellationToken.None));
+            }
+            finally
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+
         [Fact]
         public async Task Read_StopsWhenCancelled()
         {

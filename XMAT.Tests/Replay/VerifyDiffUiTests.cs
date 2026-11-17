@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -545,6 +546,38 @@ namespace XMAT.Tests.Replay
                 Assert.All(
                     new[] { "DetailText", "BodyDiffText", "JsonDiffText" },
                     name => Assert.Equal(string.Empty, Shown(window, name)));
+            }
+            finally
+            {
+                window?.Close();
+                await RemoveAllAsync(model);
+            }
+        });
+
+        // The two boxes of differences are named for automation, each beginning as its tab's header reads, before anything
+        // has made a tab's automation peer and while both are still empty, since the window has not yet shown the text that
+        // it prepares: a TextBox takes no name from the header of the tab that holds it, nor from its text. Both are asked
+        // before either is checked.
+        [Fact]
+        public Task TheWindow_NamesItsBoxesOfDifferencesForAutomation_AsTheirTabsRead() => _application.RunAsync(async () =>
+        {
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            VerifyDiffWindow window = null;
+            try
+            {
+                WebServiceDeviceCaptureController replays = ReplaysOf(model);
+                Add(Recorder(replays, VerifyDiffLimits.MaxRetainedBytes), TextDiff("two"));
+                ProxyConnectionModel row = Assert.Single(replays.ProxyConnections);
+                window = new VerifyDiffWindow(row, replays);
+                (string Tab, string Box)[] boxes = { ("BodyTab", "BodyDiffText"), ("JsonTab", "JsonDiffText") };
+
+                Assert.All(
+                    boxes, box => Assert.Null(UIElementAutomationPeer.FromElement(Assert.IsType<TabItem>(window.FindName(box.Tab)))));
+                Assert.All(boxes, box => Assert.Equal(string.Empty, Shown(window, box.Box)));
+                Assert.Equal(
+                    new[] { "Body differences", "JSON differences" },
+                    boxes.Select(box => UIElementAutomationPeer.CreatePeerForElement(
+                        Assert.IsType<TextBox>(window.FindName(box.Box))).GetName()).ToArray());
             }
             finally
             {

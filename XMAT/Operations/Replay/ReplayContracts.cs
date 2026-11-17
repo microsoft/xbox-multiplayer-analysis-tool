@@ -84,7 +84,10 @@ namespace XMAT.Operations.Replay
     // Changes applied to every selected request before anything is sent. Url replaces the whole URL (one request only);
     // Origin replaces the scheme, host and port and keeps each request's path and query. An edit that supplies a part that
     // a request file left out completes it (Method, Url, Body); ClearHeaders replaces every header line with none, which
-    // completes a header block that a file left out, before RemoveHeaders and SetHeaders apply.
+    // completes a header block that a file left out, before RemoveHeaders and SetHeaders apply. Form is a built multipart
+    // form, in place of Body: its Content-Type replaces every Content-Type line, then it completes the body
+    // (MultipartForm.ApplyTo), which a request whose header block is left out, or whose Connection nominates Content-Type,
+    // refuses.
     internal sealed record ReplayEdits(
         string Url = null,
         string Origin = null,
@@ -93,7 +96,8 @@ namespace XMAT.Operations.Replay
         IReadOnlyList<string> RemoveHeaders = null,
         byte[] Body = null,
         bool Unconditional = false,
-        bool ClearHeaders = false)
+        bool ClearHeaders = false,
+        MultipartFormBody Form = null)
     {
         internal static ReplayEdits None { get; } = new();
     }

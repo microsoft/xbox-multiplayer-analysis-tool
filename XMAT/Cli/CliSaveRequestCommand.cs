@@ -40,22 +40,18 @@ namespace XMAT.Cli
                 SaveRequest = new CliSaveRequestReport(save, request.Input != null ? request.Limits ?? CliLimits.Default : null),
             };
 
-            // The body file and the request file are read before anything is reserved; their paths and content never reach
-            // the output, and a file that cannot be used is refused with exit code 3.
-            byte[] body = null;
+            // The body (the --body-file, or the --form files) and the request file are read before anything is reserved;
+            // their paths and content never reach the output, and a file that cannot be used is refused with exit code 3.
+            CliRequestBody requestBody;
             RequestFileReadResult file = null;
             try
             {
-                if (save.BodyFile != null)
+                (requestBody, CliFailure bodyFailure) =
+                    await CliRequestBody.PrepareAsync(save, cancellationToken).ConfigureAwait(false);
+                if (bodyFailure != null)
                 {
-                    ReplayBodyRead read = await ReplayBodyFile.ReadAsync(save.BodyFile, cancellationToken).ConfigureAwait(false);
-                    if (!read.Succeeded)
-                    {
-                        report.Fail(CliExitCodes.InvalidInput, read.Code, CliReplayCommand.BodyFileMessage(read.Code));
-                        return report;
-                    }
-
-                    body = read.Body;
+                    report.Fail(bodyFailure.ExitCode, bodyFailure.Code, bodyFailure.Message);
+                    return report;
                 }
 
                 if (save.RequestFile != null)
@@ -114,7 +110,7 @@ namespace XMAT.Cli
                 await CliStagedRun.CompleteAsync(
                     report,
                     output,
-                    token => Task.FromResult(Save(request, body, file, output, report, token)),
+                    token => Task.FromResult(Save(request, requestBody, file, output, report, token)),
                     null,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -136,7 +132,7 @@ namespace XMAT.Cli
         // Writes every request file inside the staging folder; null when the run saved nothing (the report says why).
         private static IReadOnlyList<CliStagedFile> Save(
             CliRequest request,
-            byte[] body,
+            CliRequestBody requestBody,
             RequestFileReadResult file,
             CliOutputFolder output,
             CliReport report,
@@ -146,7 +142,7 @@ namespace XMAT.Cli
             HeadlessStorage.Configure(output.WorkPath);
             CliReplay save = request.Replay;
             OperationResult<ReplayExport> prepared =
-                new ReplayOperation().PrepareForExport(CreateRequest(request, body, file?.Content), cancellationToken);
+                new ReplayOperation().PrepareForExport(CreateRequest(request, requestBody, file?.Content), cancellationToken);
             foreach (OperationDiagnostic diagnostic in prepared.Diagnostics)
             {
                 if (diagnostic.Severity == OperationDiagnosticSeverity.Warning)
@@ -233,7 +229,7 @@ namespace XMAT.Cli
 
         // The source and edits of save-request and curl: a capture file's selection, a request file's request, or a new one
         // whose URL is the --url edit.
-        internal static ReplayRequest CreateRequest(CliRequest request, byte[] body, RequestFileContent file)
+        internal static ReplayRequest CreateRequest(CliRequest request, CliRequestBody requestBody, RequestFileContent file)
         {
             CliReplay save = request.Replay;
             var edits = new ReplayEdits(
@@ -241,7 +237,8 @@ namespace XMAT.Cli
                 Method: save.Method,
                 SetHeaders: save.Headers,
                 RemoveHeaders: save.RemoveHeaders,
-                Body: save.EmptyBody ? Array.Empty<byte>() : body,
+                Body: save.EmptyBody ? Array.Empty<byte>() : requestBody.Body,
+                Form: requestBody.Form,
                 Unconditional: save.Unconditional,
                 ClearHeaders: save.ClearHeaders);
             if (request.Input != null)

@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Automation;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
@@ -55,6 +56,11 @@ namespace XMAT.WebServiceCapture
             IdentityText.Text = Localization.GetLocalizedString("VERIFY_DIFF_IDENTITY", _number, _tabName, row.ReplaySource);
             BodyTab.Header = Localization.GetLocalizedString("VERIFY_DIFF_BODY_TAB");
             JsonTab.Header = Localization.GetLocalizedString("VERIFY_DIFF_JSON_TAB");
+            // Each box of differences has its own name for automation, which begins as its tab's header reads: a TextBox
+            // takes no name from the header of the tab that holds it, nor from its text, which is empty while the
+            // differences are being prepared.
+            AutomationProperties.SetName(BodyDiffText, Localization.GetLocalizedString("VERIFY_DIFF_BODY_FIELD"));
+            AutomationProperties.SetName(JsonDiffText, Localization.GetLocalizedString("VERIFY_DIFF_JSON_FIELD"));
             CloseButton.Content = Localization.GetLocalizedString("VERIFY_DIFF_CLOSE");
             ShowMessage(Localization.GetLocalizedString("VERIFY_DIFF_PENDING"));
 

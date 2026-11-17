@@ -373,11 +373,12 @@ namespace XMAT.Operations.Replay
             return (buffer.ToArray(), false);
         }
 
-        // The request in HTTP/1.1 form, with the Host and Content-Length values the HTTP stack sends.
+        // The request in HTTP/1.1 form, with the Host and Content-Length values the HTTP stack sends: Host is the URL's
+        // authority in ASCII (ReplayAuthority).
         private static ReplayMessage DescribeRequest(HttpRequestMessage request, byte[] body, Version version)
         {
             Uri uri = request.RequestUri;
-            var headers = new List<KeyValuePair<string, string>> { new("Host", uri.Authority) };
+            var headers = new List<KeyValuePair<string, string>> { new("Host", ReplayAuthority.Ascii(uri)) };
             headers.AddRange(Flatten(request.Headers.NonValidated));
             var contentHeaders = request.Content == null
                 ? new List<KeyValuePair<string, string>>()

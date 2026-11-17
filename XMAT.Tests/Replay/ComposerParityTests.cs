@@ -5,6 +5,8 @@
 using System.Diagnostics;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using XMAT.Models;
@@ -1021,6 +1023,45 @@ namespace XMAT.Tests.Replay
                 }
             });
         }
+
+        // The range's two numbers are named for automation as their labels read without the access key, before anything has
+        // made the labels' automation peers, as a screen reader that starts at the focused number finds them: a TextBox
+        // takes no name from a Label's Target, and the one that LabeledBy gives needs the label's peer. Both are asked
+        // before either is checked. Each label still targets its number, for its access key, and labels it for automation.
+        [Fact]
+        public Task RangeDialog_NamesItsNumbersForAutomation_AsTheirLabelsRead() => _application.RunAsync(async () =>
+        {
+            var dialog = new SequenceRangeWindow();
+            try
+            {
+                (string Label, string Field, string Name)[] fields =
+                {
+                    ("StartLabel", "StartBox", "Start At"),
+                    ("EndLabel", "EndBox", "End At"),
+                };
+
+                Assert.All(fields, field => Assert.Null(UIElementAutomationPeer.FromElement(Find<Label>(dialog, field.Label))));
+                Assert.Equal(
+                    fields.Select(field => field.Name).ToArray(),
+                    fields.Select(field => UIElementAutomationPeer.CreatePeerForElement(Find<TextBox>(dialog, field.Field)).GetName())
+                        .ToArray());
+
+                // A label's Target names a number that comes after it in the dialog, which its binding finds once the
+                // dialog's dispatcher has run.
+                await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                Assert.All(fields, field =>
+                {
+                    var label = Find<Label>(dialog, field.Label);
+                    var number = Find<TextBox>(dialog, field.Field);
+                    Assert.Same(number, label.Target);
+                    Assert.Same(label, AutomationProperties.GetLabeledBy(number));
+                });
+            }
+            finally
+            {
+                dialog.Close();
+            }
+        });
 
         // A drag carries an opaque id in XMAT's own format only, never the request's headers or body, and lends one
         // replayable request: the only selected row, past the system's drag distance.
