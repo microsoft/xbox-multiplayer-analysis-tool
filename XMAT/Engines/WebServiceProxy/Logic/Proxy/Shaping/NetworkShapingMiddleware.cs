@@ -136,7 +136,7 @@ namespace XMAT.WebServiceCapture.Proxy
                     while (queue.Reader.TryRead(out Chunk remaining))
                     {
                         // The consumer never took ownership of these queued buffers.
-                        remaining.Dispose();
+                        using var abandoned = remaining;
                     }
                     await destination.CompleteAsync(failure).ConfigureAwait(false);
                 }

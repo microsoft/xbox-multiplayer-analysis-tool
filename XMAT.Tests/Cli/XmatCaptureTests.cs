@@ -46,7 +46,7 @@ namespace XMAT.Tests.Cli
             request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
             request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign, true));
             using X509Certificate2 root = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
-            File.WriteAllBytes(Path.Combine(directory.Root, "root.pfx"), root.Export(X509ContentType.Pfx));
+            File.WriteAllBytes(Path.Join(directory.Root, "root.pfx"), root.Export(X509ContentType.Pfx));
             byte[] body = new byte[32 * 1024];
             Array.Fill(body, (byte)42);
             await using var origin = await LoopbackOrigin.StartAsync(
@@ -68,7 +68,7 @@ namespace XMAT.Tests.Cli
             Assert.Equal(body, await response.Content.ReadAsByteArrayAsync());
             XmatRun run = await child.CompleteAsync();
             CliAssert.ExitCode(0, run);
-            using var capture = new SqLtReadonlyDatabase(Path.Combine(directory.Root, "capture.xmatcap"));
+            using var capture = new SqLtReadonlyDatabase(Path.Join(directory.Root, "capture.xmatcap"));
             var row = Assert.Single(capture.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords,
                 row => row.Str(WebServiceCaptureMethod.FieldKey_RequestMethod) == "POST");
             Assert.Equal(body, Convert.FromBase64String(row.Str(WebServiceCaptureMethod.FieldKey_RequestBody)));
@@ -82,10 +82,10 @@ namespace XMAT.Tests.Cli
         {
             using var directory = new CliTestDirectory();
             // A normal-length output can require a staging path beyond Windows' classic limit.
-            int padding = Math.Max(1, 240 - Path.Combine(directory.Root, "capture.xmatcap").Length - 1);
-            string folder = Path.Combine(directory.Root, new string('p', padding));
+            int padding = Math.Max(1, 240 - Path.Join(directory.Root, "capture.xmatcap").Length - 1);
+            string folder = Path.Join(directory.Root, new string('p', padding));
             Directory.CreateDirectory(folder);
-            string output = Path.Combine(folder, "capture.xmatcap");
+            string output = Path.Join(folder, "capture.xmatcap");
             byte[] body = Encoding.UTF8.GetBytes("synthetic capture body");
             await using var origin = await LoopbackOrigin.StartAsync(
                 context => context.Response.Body.WriteAsync(body).AsTask());
@@ -146,7 +146,7 @@ namespace XMAT.Tests.Cli
             Assert.Empty(origin.Requests);
             XmatRun run = await child.CompleteAsync();
             CliAssert.ExitCode(0, run);
-            using var capture = new SqLtReadonlyDatabase(Path.Combine(directory.Root, "capture.xmatcap"));
+            using var capture = new SqLtReadonlyDatabase(Path.Join(directory.Root, "capture.xmatcap"));
             NetworkShapingMetadata history = NetworkShapingMetadata.Parse(
                 Assert.Single(capture.TableByName("CaptureDevices").Dataset.DataRecords).Str(NetworkShapingMetadata.DeviceField));
             Assert.Equal(1, Assert.Single(history.Traces).BodyTimeoutSeconds);
@@ -160,14 +160,15 @@ namespace XMAT.Tests.Cli
             byte[] body = Enumerable.Range(0, 128 * 1024).Select(index => (byte)(index % 251)).ToArray();
             await using var origin = await LoopbackOrigin.StartAsync(
                 context => context.Response.Body.WriteAsync(body).AsTask());
-            File.WriteAllText(Path.Combine(directory.Root, "profile.json"), """
+            File.WriteAllText(Path.Join(directory.Root, "profile.json"), """
                 {"version":1,"initial":{"mode":"shape","downKbps":1000},
                  "schedule":[{"afterSeconds":2,"profile":{"mode":"off"}}],"bodyTimeoutSeconds":1800}
                 """);
             int port = AvailablePort();
+            // Both requests and the inter-phase wait must fit even at the allowed timing bounds.
             using XmatChild child = XmatProcess.Start(
                 XmatProcess.CliDirectory, directory.Root, "capture",
-                "--port", port.ToString(), "--duration-seconds", "4", "--out", "capture.xmatcap",
+                "--port", port.ToString(), "--duration-seconds", "10", "--out", "capture.xmatcap",
                 "--shape-profile", "profile.json");
             await WaitForListenerAsync(child, port);
             using var client = Client(port);
@@ -187,7 +188,7 @@ namespace XMAT.Tests.Cli
             Assert.DoesNotContain(directory.Name, run.Stdout + run.Stderr);
             Assert.Equal(new[] { "capture.xmatcap", "profile.json" }, directory.Entries());
             Assert.Equal(body, origin.Requests.First().Body);
-            using var capture = new SqLtReadonlyDatabase(Path.Combine(directory.Root, "capture.xmatcap"));
+            using var capture = new SqLtReadonlyDatabase(Path.Join(directory.Root, "capture.xmatcap"));
             var rows = capture.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords.ToArray();
             Assert.Equal(2, rows.Length);
             Assert.Equal(body, Convert.FromBase64String(rows[0].Str(WebServiceCaptureMethod.FieldKey_RequestBody)));
@@ -239,7 +240,7 @@ namespace XMAT.Tests.Cli
             CliAssert.ExitCode(0, run);
             Assert.Contains(run.Json().GetProperty("warnings").EnumerateArray(),
                 warning => warning.GetProperty("code").GetString() == "capture.tls.opaque");
-            using var capture = new SqLtReadonlyDatabase(Path.Combine(directory.Root, "capture.xmatcap"));
+            using var capture = new SqLtReadonlyDatabase(Path.Join(directory.Root, "capture.xmatcap"));
             var row = Assert.Single(capture.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
             Assert.Equal("CONNECT", row.Str(WebServiceCaptureMethod.FieldKey_RequestMethod));
             Assert.Empty(row.Str(WebServiceCaptureMethod.FieldKey_RequestBody));

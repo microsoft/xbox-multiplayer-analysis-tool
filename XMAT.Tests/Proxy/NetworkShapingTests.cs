@@ -244,6 +244,8 @@ namespace XMAT.Tests.Proxy
                 }
                 catch (Exception ex) when (ex is WebSocketException or OperationCanceledException)
                 {
+                    // Disconnecting the client ends the synthetic origin's receive.
+                    return;
                 }
             }, useTls: true, useWebSockets: true);
             var shaping = new NetworkShapingController();
@@ -283,6 +285,8 @@ namespace XMAT.Tests.Proxy
                 }
                 catch (Exception ex) when (ex is WebSocketException or OperationCanceledException)
                 {
+                    // Disconnecting the client ends the synthetic origin's receive.
+                    return;
                 }
             }, useWebSockets: true);
             var shaping = new NetworkShapingController();

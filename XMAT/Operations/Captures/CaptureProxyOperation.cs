@@ -84,7 +84,7 @@ namespace XMAT.Operations.Captures
                         diagnostics.AddRange(initial.Diagnostics);
                         using var recorder = new ProxyCaptureRecorder(staged);
                         recorder.Attach(proxy);
-                        string log = Path.Combine(Path.GetDirectoryName(staged), "capture.log");
+                        string log = Path.Join(Path.GetDirectoryName(staged), "capture.log");
                         using var running = CancellationTokenSource.CreateLinkedTokenSource(token);
                         Task schedule = Task.CompletedTask;
                         try

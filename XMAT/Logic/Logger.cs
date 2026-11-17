@@ -37,11 +37,12 @@ namespace XMAT
             lock (_lifetimeLock)
             {
                 EnsureCanInitialize();
-                string logsPath = Path.IsPathFullyQualified(nameOfLogFile)
+                bool fullyQualified = Path.IsPathFullyQualified(nameOfLogFile);
+                string logsPath = fullyQualified
                     ? Path.GetDirectoryName(nameOfLogFile)
-                    : Path.Combine(PublicUtilities.StorageDirectoryPath, "Logs");
+                    : Path.Join(PublicUtilities.StorageDirectoryPath, "Logs");
                 Directory.CreateDirectory(logsPath);
-                string finalPath = Path.Combine(logsPath, nameOfLogFile);
+                string finalPath = fullyQualified ? nameOfLogFile : Path.Join(logsPath, nameOfLogFile);
                 InitLog(new FileStream(finalPath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite), level);
             }
         }

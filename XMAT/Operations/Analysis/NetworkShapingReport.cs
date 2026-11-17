@@ -19,14 +19,14 @@ namespace XMAT.Operations.Analysis
                 return;
             }
             File.WriteAllText(
-                Path.Combine(directory, "network-shaping.json"),
+                Path.Join(directory, "network-shaping.json"),
                 NetworkShapingMetadata.Serialize(metadata),
                 new UTF8Encoding(false));
         }
 
         internal static void WriteBanner(string directory, string text, string linkText)
         {
-            string path = Path.Combine(directory, "index.html");
+            string path = Path.Join(directory, "index.html");
             if (!File.Exists(path))
             {
                 return;
