@@ -65,6 +65,13 @@ namespace XMAT.Tests.Fixtures
         // punycode, so its IDN conversion fails (Uri.IdnHost throws). Every character is Latin-1.
         internal const string IdnTooLongHost =
             "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabc\u00e9\u00e9\u00e9\u00e9.example.test";
+
+        // A host that Uri parses as a Basic (UNC) name instead of a DNS one: its first label, 60 letters and a U+00E9, fails
+        // Uri's preliminary DNS check (61 characters and the four of xn-- exceed 63), so Uri keeps the name as written, and
+        // its IdnHost returns that Unicode text without throwing. It has no ASCII form, though reading its IDN host succeeds.
+        // Every character is Latin-1.
+        internal const string NonAsciiBasicHost =
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefgh\u00e9.example.test";
         private const string PresenceHost = "userpresence.xboxlive.com";
         private static readonly DateTime SyntheticStartUtc =
             new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);

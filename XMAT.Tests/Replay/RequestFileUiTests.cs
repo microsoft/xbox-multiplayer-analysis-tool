@@ -92,6 +92,7 @@ namespace XMAT.Tests.Replay
                 Find<TextBox>(window, "UrlBox").Text = server.Origin + "/orders";
                 Find<TextBox>(window, "HeadersBox").Text = "X-Test: typed";
                 Find<TextBox>(window, "BodyBox").Text = "typed";
+                Find<TextBlock>(window, "StatusText").Text = "-";
                 await window.SendAsync();
                 Assert.Equal(incomplete, Status(window));
 
@@ -105,6 +106,7 @@ namespace XMAT.Tests.Replay
                 Assert.Equal(notExported, script.ToolTip);
                 await window.CopyAsCurlAsync();
                 Assert.Equal(notExported, Status(window));
+                Find<TextBlock>(window, "StatusText").Text = "-";
                 await window.SaveCurlScriptAsync();
                 Assert.Equal(notExported, Status(window));
 
@@ -493,6 +495,130 @@ namespace XMAT.Tests.Replay
 
                 Assert.Equal(2, questions.Count);
                 Assert.Equal(Localization.GetLocalizedString("COMPOSER_OPENED", "other.xmat-request.json"), Status(window));
+            }
+            finally
+            {
+                window.Close();
+                Directory.Delete(directory, recursive: true);
+            }
+        });
+
+        // Raw mode saves no request file, and asks for no path. Raw mode is always an edit, even one that changes nothing in a
+        // file just opened and has both of its boxes empty: opening a file asks first, and declining keeps Raw mode and its
+        // text exactly. Accepting opens the file in Parsed mode, with the raw editors cleared and the file's HTTP version.
+        [Fact]
+        public Task InRawMode_NoFileIsSaved_AndOpeningAFileAsksFirst_ThenOpensItInParsedMode() => _application.RunAsync(async () =>
+        {
+            string directory = FixtureDirectory();
+            var questions = new List<string>();
+            bool replace = false;
+            var window = RequestComposerWindow.ForNewRequest(
+                confirm: message =>
+                {
+                    questions.Add(message);
+                    return replace;
+                });
+            window.ChooseSavePath = () => throw new Xunit.Sdk.XunitException("Raw mode saves no request file.");
+            try
+            {
+                string first = Path.Join(directory, "first.xmat-request.json");
+                string other = Path.Join(directory, "other.xmat-request.json");
+                File.WriteAllText(
+                    first, RequestFileJson("content", "GET", "http://127.0.0.1:9/first", "auto", "[[\"X-From\", \"file\"]]", ""));
+                File.WriteAllText(other, RequestFileJson("content", "POST", "http://127.0.0.1:9/other", "2", "[]", "body"));
+                window.ChooseRequestFile = () => first;
+                await window.OpenRequestAsync();
+                await window.SwitchModeAsync();
+                Assert.Empty(questions);
+                var target = Find<TextBox>(window, "RawTargetBox");
+                var head = Find<TextBox>(window, "RawHeadBox");
+                string converted = head.Text;
+
+                await window.SaveRequestAsync();
+
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_SAVE_RAW"), Status(window));
+
+                window.ChooseRequestFile = () => other;
+                await window.OpenRequestAsync();
+
+                string asked = Localization.GetLocalizedString("COMPOSER_REPLACE_EDITED_FILE", "other.xmat-request.json");
+                Assert.Equal(asked, Assert.Single(questions));
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_OPEN_CANCELLED"), Status(window));
+                Assert.Equal((Visibility.Visible, "http://127.0.0.1:9", converted), (head.Visibility, target.Text, head.Text));
+                Assert.Equal(ReplayHttpVersion.Http11, Transport(window).Item1);
+
+                target.Text = "";
+                head.Text = "";
+                await window.OpenRequestAsync();
+
+                Assert.Equal(new[] { asked, asked }, questions);
+                Assert.Equal((Visibility.Visible, "", ""), (head.Visibility, target.Text, head.Text));
+
+                replace = true;
+                await window.OpenRequestAsync();
+
+                Assert.Equal(3, questions.Count);
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_OPENED", "other.xmat-request.json"), Status(window));
+                Assert.Equal(("POST", "http://127.0.0.1:9/other", "", "body"), Editors(window));
+                Assert.Equal(Visibility.Collapsed, head.Visibility);
+                Assert.Equal(ReplayHttpVersion.Http2, Transport(window).Item1);
+                Assert.True(Find<ComboBox>(window, "HttpVersionBox").IsEnabled);
+            }
+            finally
+            {
+                window.Close();
+                Directory.Delete(directory, recursive: true);
+            }
+        });
+
+        // A conversion never moves what Open request compares with: a file opened and taken through Raw mode and back without
+        // an edit is still as opened, so opening a file asks nothing, and a request edited before the round trip is still
+        // edited after it.
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public Task ARoundTripThroughRawMode_LeavesTheRequestAsEditedAsItWas(bool edited) => _application.RunAsync(async () =>
+        {
+            string directory = FixtureDirectory();
+            var questions = new List<string>();
+            var window = RequestComposerWindow.ForNewRequest(confirm: Answer(questions, false));
+            try
+            {
+                string path = Path.Join(directory, "saved.xmat-request.json");
+                File.WriteAllText(
+                    path,
+                    RequestFileJson(
+                        "content", "POST", "http://127.0.0.1:9/items/7?page=2", "1.1", "[[\"X-From\", \"file\"]]", "aGVsbG8="));
+                window.ChooseRequestFile = () => path;
+                await window.OpenRequestAsync();
+                Assert.Equal(Localization.GetLocalizedString("COMPOSER_OPENED", "saved.xmat-request.json"), Status(window));
+                Assert.Equal(("POST", "http://127.0.0.1:9/items/7?page=2", "X-From: file", "hello"), Editors(window));
+                if (edited)
+                {
+                    Find<TextBox>(window, "UrlBox").Text = "http://127.0.0.1:9/edited";
+                }
+
+                (string, string, string, string) shown = Editors(window);
+
+                await window.SwitchModeAsync();
+                Assert.Equal(RequestComposerWindow.ComposerMode.Raw, window.Mode);
+                await window.SwitchModeAsync();
+                Assert.Equal(RequestComposerWindow.ComposerMode.Parsed, window.Mode);
+                Assert.Empty(questions);
+                Assert.Equal(shown, Editors(window));
+
+                await window.OpenRequestAsync();
+
+                Assert.Equal(
+                    edited
+                        ? new[] { Localization.GetLocalizedString("COMPOSER_REPLACE_EDITED_FILE", "saved.xmat-request.json") }
+                        : Array.Empty<string>(),
+                    questions);
+                Assert.Equal(
+                    edited
+                        ? Localization.GetLocalizedString("COMPOSER_OPEN_CANCELLED")
+                        : Localization.GetLocalizedString("COMPOSER_OPENED", "saved.xmat-request.json"),
+                    Status(window));
             }
             finally
             {

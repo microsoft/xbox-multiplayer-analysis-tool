@@ -8,6 +8,9 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using XMAT.Operations;
+using XMAT.Operations.Replay;
+using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -214,6 +217,36 @@ namespace XMAT.Tests
             var draft = new RequestReplayDraft { Url = "http://[::1]:8080/test" };
             using var request = draft.CreateRequest();
             Assert.Equal("[::1]", request.RequestUri.Host);
+        }
+
+        [Theory]
+        [InlineData("fe80::1%12", "http://[fe80::1%12]:8080/path?q=1")]
+        [InlineData("fe80::1%Ethernet", "http://[fe80::1%Ethernet]:8080/path?q=1")]
+        [InlineData("fe80::1%25Ethernet", "http://[fe80::1%25Ethernet]:8080/path?q=1")]
+        [InlineData("fe80::1%0", "http://[fe80::1%0]:8080/path?q=1")]
+        public void FromCapture_KeepsTheStoredIpv6ZoneBeforeNormalization(string host, string expected)
+        {
+            var capture = new ProxyConnectionModel(new StoredCaptureRecord(host, "/path?q=1"));
+
+            Assert.True(RequestReplayDraft.CanReplay(capture));
+            RequestReplayDraft draft = RequestReplayDraft.FromCapture(capture);
+
+            Assert.Equal(expected, draft.Url);
+            Assert.Equal(expected, draft.CapturedOrigin.OriginalString);
+            draft.Url = "http://[fe80::1]:8080/path?q=1";
+            Assert.True(draft.ChangesOrigin);
+        }
+
+        [Fact]
+        public void FromCapture_KeepsAnAbsoluteTargetsZoneAheadOfTheStoredHost()
+        {
+            const string Target = "http://[fe80::1%25Ethernet]:8081/absolute?q=%25";
+            var capture = new ProxyConnectionModel(new StoredCaptureRecord("fe80::2%other-interface", Target));
+
+            RequestReplayDraft draft = RequestReplayDraft.FromCapture(capture);
+
+            Assert.Equal(Target, draft.Url);
+            Assert.Equal(Target, draft.CapturedOrigin.OriginalString);
         }
 
         [Theory]
@@ -424,8 +457,8 @@ namespace XMAT.Tests
             Assert.Equal(framed, large.RequestBody);
         }
 
-        // The authority that a preview shows is the one that FromCapture sends to: the port only when it is not the
-        // scheme's default, and an IPv6 host in brackets.
+        // The authority that a preview shows is the one that FromCapture keeps: the port only when it is not the
+        // scheme's default, and an IPv6 host in brackets with its stored zone.
         [Theory]
         [InlineData("https", "example.com:8443", "https://example.com:8443")]
         [InlineData("https", "example.com:443", "https://example.com")]
@@ -433,13 +466,116 @@ namespace XMAT.Tests
         [InlineData("http", "example.test", "http://example.test")]
         [InlineData("http", "[::1]:8080", "http://[::1]:8080")]
         [InlineData("http", "[2001:db8::1]", "http://[2001:db8::1]")]
-        public void CaptureAuthority_IsTheAuthorityThatFromCaptureSendsTo(string scheme, string authority, string expected)
+        [InlineData("http", "[fe80::1%12]:8080", "http://[fe80::1%12]:8080")]
+        [InlineData("http", "[fe80::1%2518]", "http://[fe80::1%2518]")]
+        [InlineData("http", "Example.Test.:8080", "http://example.test.:8080")]
+        [InlineData("http", "b\u00fccher.example:8080", "http://b\u00fccher.example:8080")]
+        [InlineData("http", "127.0.0.1:8080", "http://127.0.0.1:8080")]
+        public void CaptureAuthority_IsTheAuthorityThatFromCaptureKeeps(string scheme, string authority, string expected)
         {
             var capture = new ProxyConnectionModel(7, "200", DateTime.UtcNow, TimeSpan.Zero, scheme, authority, "GET", "/path?q=1",
                 "GET /path?q=1 HTTP/1.1\r\n\r\n", [], "HTTP/1.1 200 OK\r\n\r\n", [], "127.0.0.1");
 
             Assert.Equal(expected, RequestReplayDraft.CaptureAuthority(capture));
             Assert.Equal(expected + "/path?q=1", RequestReplayDraft.FromCapture(capture).Url);
+        }
+
+        [Theory]
+        [InlineData("b.test?x", "8080")]
+        [InlineData("b.test?x", "")]
+        [InlineData("evil.test?.xboxlive.com", "8080")]
+        [InlineData("evil.test?.xboxlive.com", "")]
+        [InlineData("b.test/", "8080")]
+        [InlineData("b.test#x", "")]
+        [InlineData("b.test/x", "")]
+        [InlineData("fe80::1%a@[2001:db8::1", "")]
+        [InlineData("[::1]:9", "")]
+        [InlineData("b.test", "-1")]
+        [InlineData("@b.test", "8080")]
+        [InlineData("@b.test", "")]
+        [InlineData("[::1]:", "")]
+        [InlineData("b.test/.", "")]
+        [InlineData("b.test/..", "")]
+        [InlineData("b.test/%2e", "")]
+        public async Task StoredHostThatChangesWhenParsed_IsUnreadableAndCannotBecomeADestination(
+            string host,
+            string port)
+        {
+            var capture = new ProxyConnectionModel(
+                new StoredCaptureRecord(
+                    host,
+                    "/path",
+                    port,
+                    global::XMAT.DataAbstractionLayer.CaptureTextSource.Literal));
+
+            Assert.Equal(ReplayCaptureDestinationStatus.Unreadable, ReplayDestination.ClassifyCaptureDestination(capture));
+            Assert.False(ReplayDestination.IsScopedIpv6(capture));
+            UriFormatException exception =
+                Assert.Throws<UriFormatException>(() => RequestReplayDraft.FromCapture(capture));
+            Assert.Equal("The captured host and port do not make a URL authority.", exception.Message);
+            Assert.DoesNotContain(host, exception.Message, StringComparison.Ordinal);
+
+            int senders = 0;
+            var operation = new ReplayOperation
+            {
+                SenderFactory = () =>
+                {
+                    senders++;
+                    throw new InvalidOperationException("A malformed stored authority must not create a sender.");
+                },
+            };
+            OperationResult<ReplayResult> result = await operation.ExecuteAsync(
+                new ReplayRequest(ReplaySource.FromCaptures(new[] { capture })),
+                OperationContext.None,
+                CancellationToken.None);
+            Assert.Equal("replay.request.malformed", Assert.Single(result.Diagnostics).Code);
+            Assert.Equal(0, senders);
+        }
+
+        [Fact]
+        public void NativeZoneOutsideTheImportProjectionGrammar_RemainsScopedData()
+        {
+            var capture = new ProxyConnectionModel(new StoredCaptureRecord("fe80::1%a?x", "/path", "8080"));
+
+            Assert.Equal("http://[fe80::1%a?x]:8080", RequestReplayDraft.CaptureAuthority(capture));
+            Assert.Equal(ReplayCaptureDestinationStatus.ScopedIpv6, ReplayDestination.ClassifyCaptureDestination(capture));
+        }
+
+        private sealed class StoredCaptureRecord(
+            string host,
+            string path,
+            string port = "8080",
+            global::XMAT.DataAbstractionLayer.CaptureTextSource textSource = null) :
+            IDataRecord,
+            ICaptureTextSourceProvider
+        {
+            public int RowId => 7;
+
+            public global::XMAT.DataAbstractionLayer.CaptureTextSource CaptureTextSource { get; } = textSource;
+
+            public long Int(string fieldName) =>
+                fieldName == WebServiceCaptureMethod.FieldKey_RequestNumber ? 1 : 0;
+
+            public string Str(string fieldName) =>
+                fieldName switch
+                {
+                    WebServiceCaptureMethod.FieldKey_RequestTimestamp =>
+                        ProxyConnectionModel.ToDateTimeString(DateTime.UnixEpoch),
+                    WebServiceCaptureMethod.FieldKey_ResponseTimestamp =>
+                        ProxyConnectionModel.ToDateTimeString(DateTime.UnixEpoch.AddMilliseconds(1)),
+                    WebServiceCaptureMethod.FieldKey_RequestScheme => "http",
+                    WebServiceCaptureMethod.FieldKey_RequestHost => host,
+                    WebServiceCaptureMethod.FieldKey_RequestPort => port,
+                    WebServiceCaptureMethod.FieldKey_RequestMethod => "GET",
+                    WebServiceCaptureMethod.FieldKey_RequestPath => path,
+                    WebServiceCaptureMethod.FieldKey_RequestStatus => "200",
+                    WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders =>
+                        $"GET {path} HTTP/1.1\r\n\r\n",
+                    WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders =>
+                        "HTTP/1.1 200 OK\r\n\r\n",
+                    WebServiceCaptureMethod.FieldKey_ClientIP => "127.0.0.1",
+                    _ => string.Empty,
+                };
         }
 
         private static ProxyConnectionModel ImportedCapture(string target, byte[] body, string headers = "")

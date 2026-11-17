@@ -20,7 +20,6 @@ namespace XMAT.Tests.Replay
         [InlineData("http://b\u00fccher.example/default-port", "xn--bcher-kva.example")]
         [InlineData("http://example.test:80/explicit-default-port", "example.test")]
         [InlineData("http://[::1]:{port}/v6", "[::1]:{port}")]
-        [InlineData("http://[fe80::1%251]:{port}/zone", "[fe80::1]:{port}")]
         [InlineData("http://EXAMPLE.test:{port}/case", "example.test:{port}")]
         [InlineData("http://127.0.0.1:{port}/v4", "127.0.0.1:{port}")]
         public async Task TheRecordedHost_IsTheHostThatWasSent(string template, string expected)
@@ -44,6 +43,15 @@ namespace XMAT.Tests.Replay
             Assert.True(HostAuthority.TryParse(sent, out string host, out int? sentPort));
             Assert.Equal((host, sentPort?.ToString(CultureInfo.InvariantCulture) ?? ""), (row.Host, row.Port));
             Assert.Contains("\r\nHost: " + sent + "\r\n", row.RequestLineAndHeaders, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void ScopedIpv6Authority_IsScopeLessOnlyAsWireData()
+        {
+            var uri = new Uri("http://[fe80::1%251]:8081/zone");
+
+            Assert.True(ReplayDestination.IsScopedIpv6(uri));
+            Assert.Equal("[fe80::1]:8081", ReplayAuthority.Ascii(uri));
         }
     }
 }

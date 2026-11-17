@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -29,7 +30,8 @@ namespace XMAT.WebServiceCapture
     /// latest response separately from capture. Every send is also recorded in the Replays tab. A request can also be opened
     /// from a request file and saved as one, without sending it, and exported for curl, without sending it: copied as a
     /// command or saved as a script. A request that the Replays tab recorded in this session can be loaded again from the
-    /// history. Its body can be built as a multipart form, from text and file parts (MultipartFormWindow).
+    /// history. Its body can be built as a multipart form, from text and file parts (MultipartFormWindow). In Raw mode, the
+    /// request is edited as the text of one HTTP/1.1 request instead: a target origin, a head and the body.
     /// </summary>
     public partial class RequestComposerWindow : Window
     {
@@ -58,6 +60,18 @@ namespace XMAT.WebServiceCapture
         // The largest body of a request file that the editor shows. A larger one stays its exact bytes, shown by their size
         // (ShowBody): the editor would hold its text, or its Base64, a third larger, made on the UI thread.
         private const int MaxShownBodyBytes = 64 * 1024;
+
+        // The most header names that a conversion's question lists, then how many more, and the most characters of each
+        // (UntrustedText): a name is a token of any length.
+        private const int MaxShownNames = 20;
+        private const int MaxShownNameChars = 100;
+
+        // The largest body in the editor, in characters, that the counts line counts on the UI thread (64 Ki); a larger one
+        // is counted off the UI thread, when a send, Fix Content-Length or a conversion checks it.
+        private const int MaxCountedBodyChars = 64 * 1024;
+
+        // The most bytes that a raw request's body can have: an entity of 64 MiB and 1 MiB of chunk framing.
+        private const long MaxRawBodyBytes = (long)RawRequest.MaxEntityBytes + RawRequest.MaxChunkFramingBytes;
 
         // The command that Copy as cURL renders is UTF-8 text; bytes that are not are never copied.
         private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
@@ -102,6 +116,13 @@ namespace XMAT.WebServiceCapture
         // set them (EditorState), to tell whether the user has edited them since.
         private EditorState _loaded;
 
+        // The mode that the editors show: Parsed at construction and after every load, or Raw. While Raw mode shows HTTP/1.1
+        // only, the HTTP version chosen for Parsed mode is kept, and comes back with Parsed mode. And the counts line's
+        // update, once an edit of the head or the body has queued it (ScheduleCounts).
+        private ComposerMode _mode;
+        private ReplayHttpVersion _parsedHttpVersion;
+        private DispatcherOperation _countsUpdate;
+
         // The history view while its menu is open (OpenHistoryView): its one subscription to the history, the rebuild that a
         // change queued, if any, and the number of the opening, which closing advances, so that work queued for an earlier
         // opening does nothing.
@@ -112,10 +133,12 @@ namespace XMAT.WebServiceCapture
 
         // What the window is doing; it starts nothing else meanwhile. Preparing covers asking the user about a send, which
         // numbers to send and whether to send it, or asking which file to upload or open, whether to replace an edited
-        // request, or where and how to save it or a cURL script, and whether to export it, and the Build form dialog while it
-        // is open. ReadingFile covers reading a body or request file, or preparing a request that Load takes from the
-        // history, Checking checking a send, making the editor's body into bytes for Use this body, checking a request before
-        // saving it, or preparing a cURL command or script, and WritingFile saving a request file or a cURL script.
+        // request, whether a conversion to the other mode may lose what it lists, or where and how to save it or a cURL
+        // script, and whether to export it, and the Build form dialog while it is open. ReadingFile covers reading a body or
+        // request file, or preparing a request that Load takes from the history, Checking checking a send, converting the
+        // request to the other mode, measuring the body for Fix Content-Length, making the editor's body into bytes for Use
+        // this body, checking a request before saving it, or preparing a cURL command or script, and WritingFile saving a
+        // request file or a cURL script.
         private enum ComposerState
         {
             Idle,
@@ -126,11 +149,21 @@ namespace XMAT.WebServiceCapture
             WritingFile,
         }
 
+        // How the editors show the request: Parsed mode edits it as fields, from which XMAT builds
+        // what it sends; Raw mode edits it as the text of one HTTP/1.1 request, a target origin, a head and the body, which a
+        // raw send prepares into the bytes that it sends.
+        internal enum ComposerMode
+        {
+            Parsed,
+            Raw,
+        }
+
         // The draft is built before the base Window constructor registers this window with the application: a capture
         // that cannot be replayed must not leave a hidden window behind that keeps XMAT running after its last close.
         // recording is where sends are recorded, as edited replays of the capture in the tab named sourceName; without it
         // nothing is recorded, which only tests do. confirm asks the user a question with the message, Yes or No; without
-        // it, the window asks in a message box whose default answer is No (ShowQuestion).
+        // it, the window asks in a message box whose default answer is No (ShowQuestion). A row of the Replays tab keeps the
+        // origin that its request was captured or saved for, or first sent to (WithRecordedOrigin).
         internal RequestComposerWindow(
             ProxyConnectionModel capture,
             RequestReplayClient client = null,
@@ -138,7 +171,7 @@ namespace XMAT.WebServiceCapture
             ReplayRecordingTarget recording = null,
             string sourceName = null)
             : this(
-                RequestReplayDraft.FromCapture(capture),
+                WithRecordedOrigin(RequestReplayDraft.FromCapture(capture), capture.Replay?.Origin),
                 client,
                 confirm,
                 recording,
@@ -152,6 +185,28 @@ namespace XMAT.WebServiceCapture
             Func<string, bool> confirm = null,
             ReplayRecordingTarget recording = null) =>
             new(new RequestReplayDraft(), client, confirm, recording, ReplayProvenance.Composed);
+
+        // The application's composer for a new request: its sends are recorded in the Replays tab of the
+        // application's own model (CaptureConnectionView.ApplicationReplayTarget).
+        internal static RequestComposerWindow ForApplication(Dispatcher dispatcher) =>
+            ForNewRequest(recording: CaptureConnectionView.ApplicationReplayTarget(dispatcher));
+
+        // Compose: the application's composer, owned by owner and shown. MainWindow's Compose command only
+        // forwards here; the composer is returned for tests.
+        internal static RequestComposerWindow OpenForApplication(Window owner)
+        {
+            ArgumentNullException.ThrowIfNull(owner);
+            RequestComposerWindow composer = ForApplication(owner.Dispatcher);
+            composer.Owner = owner;
+            composer.Show();
+            return composer;
+        }
+
+        // Where the window records its sends, or null for nowhere, which only tests make: such a window sends nothing in
+        // Raw mode.
+        internal ReplayRecordingTarget RecordingTarget => _recording;
+
+        internal bool HasRecordingTarget => _recording != null;
 
         private RequestComposerWindow(
             RequestReplayDraft draft,
@@ -184,6 +239,22 @@ namespace XMAT.WebServiceCapture
             AutomationProperties.SetName(UrlBox, Localization.GetLocalizedString("COMPOSER_URL_FIELD"));
             AutomationProperties.SetName(HeadersBox, Localization.GetLocalizedString("COMPOSER_HEADERS_FIELD"));
             AutomationProperties.SetName(BodyBox, Localization.GetLocalizedString("COMPOSER_BODY_FIELD"));
+            // Raw mode's fields are named the same way, and read with their hints, which are also their tooltips; its warning
+            // panel has a name of its own. The mode button is named by its content (ShowMode).
+            RawWarningText.Text = Localization.GetLocalizedString("COMPOSER_RAW_WARNING");
+            AutomationProperties.SetName(RawWarningPanel, Localization.GetLocalizedString("COMPOSER_RAW_WARNING_NAME"));
+            RawTargetLabel.Content = Localization.GetLocalizedString("COMPOSER_RAW_TARGET");
+            RawTargetBox.ToolTip = Localization.GetLocalizedString("COMPOSER_RAW_TARGET_HINT");
+            AutomationProperties.SetName(RawTargetBox, Localization.GetLocalizedString("COMPOSER_RAW_TARGET_FIELD"));
+            AutomationProperties.SetHelpText(RawTargetBox, Localization.GetLocalizedString("COMPOSER_RAW_TARGET_HINT"));
+            RawHeadLabel.Content = Localization.GetLocalizedString("COMPOSER_RAW_HEAD");
+            RawHeadBox.ToolTip = Localization.GetLocalizedString("COMPOSER_RAW_HEAD_HINT");
+            AutomationProperties.SetName(RawHeadBox, Localization.GetLocalizedString("COMPOSER_RAW_HEAD_FIELD"));
+            AutomationProperties.SetHelpText(RawHeadBox, Localization.GetLocalizedString("COMPOSER_RAW_HEAD_HINT"));
+            FixContentLengthButton.Content = Localization.GetLocalizedString("COMPOSER_RAW_FIX_LENGTH");
+            FixContentLengthButton.ToolTip = Localization.GetLocalizedString("COMPOSER_RAW_FIX_LENGTH_HINT");
+            AutomationProperties.SetHelpText(
+                FixContentLengthButton, Localization.GetLocalizedString("COMPOSER_RAW_FIX_LENGTH_HINT"));
             Base64Box.Content = Localization.GetLocalizedString("COMPOSER_BASE64");
             UploadFileButton.Content = Localization.GetLocalizedString("COMPOSER_UPLOAD_FILE");
             UploadFileButton.ToolTip = Localization.GetLocalizedString("COMPOSER_UPLOAD_FILE_HINT");
@@ -282,11 +353,16 @@ namespace XMAT.WebServiceCapture
         // (CheckSequence), over the same request and the transport that the first check parsed, never the controls again.
         // Cancel request or closing the window stops either check (RunSendCheckAsync). The one question for the whole run
         // is worded from what the checks found; then the run is recorded and sent, and why the operation refused it, if it
-        // did, is worded off the UI thread too (RunRefusalText).
+        // did, is worded off the UI thread too (RunRefusalText). In Raw mode, Send sends the raw request (SendRawAsync).
         internal async Task SendAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
+            if (_mode == ComposerMode.Raw)
+            {
+                await SendRawAsync();
+                return;
+            }
 
             UpdateDraft();
             RequestReplayDraft draft = _draft.WithUrl(_draft.Url);
@@ -358,6 +434,14 @@ namespace XMAT.WebServiceCapture
                     return;
             }
 
+            await RunPlanAsync(plan, maxRedirects, confirmed, provenance, inspect);
+        }
+
+        // Sends a checked plan, Parsed or raw, and records it: confirmed says that the user accepted what its preview said it
+        // needs. Nothing is sent without the recording, when the window has a recording target.
+        private async Task RunPlanAsync(
+            ReplayPlanPreview plan, int maxRedirects, bool confirmed, ReplayProvenance provenance, bool inspect)
+        {
             using var cancellation = new CancellationTokenSource();
             // The recording keeps the Replays tab from being closed or replaced until the run ends; closing XMAT cancels
             // the run through cancellation and waits for it. While XMAT is busy or exiting nothing is sent, so nothing goes
@@ -396,8 +480,11 @@ namespace XMAT.WebServiceCapture
                 }
                 catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
                 {
-                    // The Replays tab could not take a send, which ended the run.
-                    PublicUtilities.AppLog(LogLevel.ERROR, $"Composer send stopped: {exception.GetType().FullName}");
+                    // The Replays tab could not take a send, which ended the run. The log line names the exception's type
+                    // only, never its message, and is written also when the window was closed meanwhile, which then shows
+                    // nothing: it is the only report of that failure.
+                    (LogSendStopped ?? (line => PublicUtilities.AppLog(LogLevel.ERROR, line)))(
+                        "Composer send stopped: " + exception.GetType().FullName);
                 }
 
                 // Why the operation refused the run once it was sent, worded off the UI thread before the window shows it:
@@ -414,6 +501,9 @@ namespace XMAT.WebServiceCapture
                 _sendingCancellation = null;
                 EndState();
             }
+
+            if (recording != null)
+                RunEnded?.Invoke(recording.Recorder);
 
             // Closing cancels the run, but it may have ended first: a closed window shows and selects nothing.
             if (_closed)
@@ -501,11 +591,37 @@ namespace XMAT.WebServiceCapture
 
         internal Func<OperationDiagnostic, ReplayPlanPreview, string> ExplainRunRefusal { get; set; }
 
+        // Test seam: where the line that a send which ended with an exception logs goes, "Composer send stopped: " and the
+        // exception's type, never its message; by default the application log, at ERROR.
+        internal Action<string> LogSendStopped { get; set; }
+
+        // Test seam: given, on the UI thread, the recorder of each run that was recorded once the run has ended, also when
+        // the window was closed meanwhile, so a test can read what it kept (LastItem, LastItemRecorded, NotRecorded); null
+        // in production.
+        internal Action<ReplayRecorder> RunEnded { get; set; }
+
         // Test seam: the time against which the client certificate list and the question mark a certificate as expired or
         // not yet valid; by default the time now.
         internal Func<DateTimeOffset> Clock { get; set; }
 
         private DateTimeOffset Now => Clock?.Invoke() ?? DateTimeOffset.Now;
+
+        // Test seams for Raw mode's work off the UI thread: how a draft's body is counted and checked, by default
+        // RequestReplayDraft.TryCountBody, which the counts line also calls on the UI thread, for a body in the editor of at
+        // most 64 Ki characters only; how a raw request is prepared, by default RawRequest.Prepare itself, so its signature,
+        // the limits included, which the window leaves null for Raw mode's own; the characters of a text or Base64 body that
+        // RawBodyBytes builds between two checks of the token; and what it calls after each slice.
+        internal Func<RequestReplayDraft, CancellationToken, BodyCount> CountBody { get; set; }
+
+        internal Func<string, ReadOnlyMemory<byte>, ReplayRawTarget, CancellationToken, RawImageLimits, RawImageResult>
+            PrepareRaw { get; set; }
+
+        internal int BodySliceChars { get; set; } = RawBodyBytes.DefaultSliceChars;
+
+        internal Action<int> AfterBodySlice { get; set; }
+
+        // The mode that the editors show.
+        internal ComposerMode Mode => _mode;
 
         // The client that sends. The window disposes the client that it created once it is closed and no run uses it.
         internal RequestReplayClient Client => _client;
@@ -535,9 +651,14 @@ namespace XMAT.WebServiceCapture
 
         // What a check of Send found: why nothing is sent, as the status says it (Refusal); otherwise the transport that it
         // parsed and checked, which for a URL with '#' is the one that the check of its numbers takes (CheckSequence), and
-        // the plan that it previewed, if any, with what the question shows of it, which the check made too (Question).
+        // the plan that it previewed, if any, with what the question shows of it, which the check made too (Question, or for
+        // a raw send RawQuestion).
         internal sealed record SendCheck(
-            string Refusal, ReplayTransportOptions Transport, ReplayPlanPreview Plan, PlanQuestion Question)
+            string Refusal,
+            ReplayTransportOptions Transport,
+            ReplayPlanPreview Plan,
+            PlanQuestion Question,
+            RawQuestion RawQuestion = null)
         {
             internal static SendCheck Refused(string refusal) => new(refusal, null, null, null);
         }
@@ -597,7 +718,8 @@ namespace XMAT.WebServiceCapture
         // no result, and one that it gives once it was stopped is not used (Stopped). Null when nothing is to be sent: the
         // check was stopped, which the status says unless the window closed, or it refused the request, which the status
         // says in the check's words. Otherwise what it found, with the status as it was before the check (shown).
-        private async Task<SendCheck> RunSendCheckAsync(Func<CancellationToken, SendCheck> work, string shown)
+        private async Task<SendCheck> RunSendCheckAsync(
+            Func<CancellationToken, SendCheck> work, string shown, string stoppedKey = "COMPOSER_SEND_PREPARE_CANCELLED")
         {
             using var checking = new CancellationTokenSource();
             CancellationToken token = checking.Token;
@@ -627,7 +749,7 @@ namespace XMAT.WebServiceCapture
                 return null;
             if (stopped)
             {
-                StatusText.Text = Localization.GetLocalizedString("COMPOSER_SEND_PREPARE_CANCELLED");
+                StatusText.Text = Localization.GetLocalizedString(stoppedKey);
                 return null;
             }
 
@@ -671,15 +793,17 @@ namespace XMAT.WebServiceCapture
         // (TryParseTransport), then the proxy of Upstream proxy as typed (TryParseProxy), each refused in fixed words that
         // never repeat the text, then Client certificate without a certificate chosen (TryParseClientCertificate), with
         // Automatically authenticate with Windows as it was; a part that a request file left out, which is never sent as the
-        // placeholder that the editors show for it; then, for a URL with '#', that only its path or query has one, with the
-        // transport that the check of its numbers takes once the user chose them (CheckSequence); otherwise that the request
-        // can be built, with what is wrong worded as building it says it, then the plan, as sending checks it, which refuses
-        // a proxy together with an endpoint, a client certificate or Windows authentication, Windows authentication with an
-        // endpoint, HTTP/2 only or the request's own Authorization header, and either credential for anything but one HTTPS
-        // origin (Previewed). Pure: it reads only what it is given, and the client, which makes an operation of its own for
-        // each check. The token is checked before each step and before the result is given, so a stopped check gives none.
-        // CreateRequestToSend and Preview take no token: a cancel that comes while either runs waits for it to return, as
-        // long as the request makes it.
+        // placeholder that the editors show for it; then, for a URL with '#', before its numbers are asked for, stored text
+        // from a capture without the text-format marker, that only its path or query has a '#', and a destination that is an
+        // IPv6 address with a zone, which no number changes, the first and last in the operation's order and in the words
+        // that the composer gives its codes (PlanError), with the transport that the check of its numbers takes once the user
+        // chose them (CheckSequence); otherwise that the request can be built, with what is wrong worded as building it says
+        // it, then the plan, as sending checks it, which refuses a proxy together with an endpoint, a client certificate or
+        // Windows authentication, Windows authentication with an endpoint, HTTP/2 only or the request's own Authorization
+        // header, and either credential for anything but one HTTPS origin (Previewed). Pure: it reads only what it is given,
+        // and the client, which makes an operation of its own for each check. The token is checked before each step and
+        // before the result is given, so a stopped check gives none. CreateRequestToSend and Preview take no token: a cancel
+        // that comes while either runs waits for it to return, as long as the request makes it.
         internal static SendCheck CheckSend(FrozenSend send, RequestReplayClient client, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(send);
@@ -703,8 +827,14 @@ namespace XMAT.WebServiceCapture
                 cancellationToken.ThrowIfCancellationRequested();
                 if (send.Numbered)
                 {
+                    if (send.Draft.CaptureTextSource?.Semantics != CaptureTextSemantics.Literal)
+                        return SendCheck.Refused(
+                            ErrorText(Localization.GetLocalizedString("REPLAY_CAPTURE_TEXT_AMBIGUOUS")));
                     if (!ReplaySequence.IsPathAndQueryTemplate(send.Draft.Url))
                         return SendCheck.Refused(Localization.GetLocalizedString("COMPOSER_SEQUENCE_INVALID"));
+                    if (ReplayDestination.IsScopedIpv6(send.Draft.Url))
+                        return SendCheck.Refused(
+                            ErrorText(Localization.GetLocalizedString("REPLAY_DESTINATION_SCOPED_IPV6")));
                     cancellationToken.ThrowIfCancellationRequested();
                     return new SendCheck(null, transport, null, null);
                 }
@@ -777,19 +907,36 @@ namespace XMAT.WebServiceCapture
             diagnostics.Count > 0 ? diagnostics[0] : null;
 
         // Why the operation refused a run once it was sent, as the status says it: as PlanError words its first diagnostic,
-        // which for a sequence builds the widest request again. SendAsync runs it off the UI thread.
+        // which for a sequence builds the widest request again, or for a raw plan as RawRefusalText words it. SendAsync runs
+        // it off the UI thread.
         internal static string RunRefusalText(OperationDiagnostic diagnostic, ReplayPlanPreview plan)
         {
             ArgumentNullException.ThrowIfNull(plan);
-            return ErrorText(PlanError(diagnostic, plan.Template, plan.Sequence));
+            return plan.UsesRaw
+                ? RawRefusalText(diagnostic)
+                : ErrorText(PlanError(diagnostic, plan.Template, plan.Sequence));
         }
+
+        // Why a raw send was refused, by its check or as it was sent: each Raw mode code in its fixed text (RawSendWording),
+        // Connect to another endpoint's codes in Raw mode's words, stored text from a capture without the text-format marker
+        // as Edit and resend refuses it (StoredTextRefusalText), never with the command line's flag, and any other code, such
+        // as an origin change that was not allowed, in the operation's own words.
+        private static string RawRefusalText(OperationDiagnostic diagnostic) => ErrorText(diagnostic?.Code switch
+        {
+            ReplayOperation.ConnectToHttpsCode => Localization.GetLocalizedString("COMPOSER_RAW_CONNECT_TO_HTTPS"),
+            ReplayOperation.ConnectToDeniedCode => Localization.GetLocalizedString("COMPOSER_CONNECT_TO_DENIED"),
+            ReplayOperation.StoredTextAmbiguousCode => StoredTextRefusalText(ReplayOperation.StoredTextAmbiguousCode),
+            string code when RawSendWording.KeyOf(code) != null => RawSendWording.CodeText(code),
+            _ => diagnostic?.Message ?? Localization.GetLocalizedString("COMPOSER_FAILED"),
+        });
 
         // Why the operation refused a run: what the composer says itself about Fiddler's control headers, the transport
         // options, Upstream proxy's included, a client certificate (ClientCertificateRefusalKey), Windows authentication
         // (WindowsAuthRefusalKey), stored text from a capture without the text-format marker, as Edit and resend refuses
-        // it, and a part that a request file left out; for a sequence whose request cannot be built, what building it with
-        // the widest number says, as a single send says it; otherwise the operation's message, such as a run that is too
-        // large. Building the widest request parses it, so this runs off the UI thread only (Previewed, RunRefusalText).
+        // it, a destination with an IPv6 zone, in the words of the shared diagnostic, and a part that a request file left
+        // out; for a sequence whose request cannot be built, what building it with the widest number says, as a single send
+        // says it; otherwise the operation's message, such as a run that is too large. Building the widest request parses
+        // it, so this runs off the UI thread only (Previewed, RunRefusalText).
         private static string PlanError(OperationDiagnostic diagnostic, RequestReplayDraft draft, ReplaySequence sequence)
         {
             string explained = diagnostic?.Code switch
@@ -801,6 +948,7 @@ namespace XMAT.WebServiceCapture
                 ReplayOperation.ProxyConnectToCode => "COMPOSER_PROXY_CONNECT_TO",
                 ReplayOperation.ProxyPolicyCode => "COMPOSER_PROXY_POLICY",
                 ReplayOperation.StoredTextAmbiguousCode => "REPLAY_CAPTURE_TEXT_AMBIGUOUS",
+                ReplayDestination.ScopedIpv6Code => "REPLAY_DESTINATION_SCOPED_IPV6",
                 _ => ClientCertificateRefusalKey(diagnostic?.Code) ?? WindowsAuthRefusalKey(diagnostic?.Code),
             };
             if (explained != null)
@@ -871,14 +1019,14 @@ namespace XMAT.WebServiceCapture
         // The one confirmation of a run, put together on the UI thread from the texts that the check of the run made off it
         // (PlanQuestion), never from the plan's own strings: how many requests, with which method and to where, the method
         // and the URL bounded and escaped, while the run sends both whole; that they may change server data, as the whole
-        // method says (UsesUnsafeMethod), or send captured credentials to another origin; that they go to another endpoint
-        // than the address of the URL's host, which it names with the URL's origin, bounded and escaped, so that nothing is
-        // parsed to ask; that they go through an upstream proxy, which it names as the check parsed it, with what the proxy
-        // receives and that only a proxy trusted with the requests' credentials should be used; that a client certificate
-        // may be offered, which it describes as chosen at Send, to the one origin that the check found (CredentialOrigin),
-        // bounded and escaped; that the challenges of that one origin may be answered with the Windows credentials that XMAT
-        // runs with, over HTTP/1.1 only, whatever HTTP version is chosen; and that redirects, when followed, are more
-        // requests.
+        // method says (UsesUnsafeMethod), or send their headers, credentials included, to another origin than the one they
+        // were captured or loaded for; that they go to another endpoint than the address of the URL's host, which it names
+        // with the URL's origin, bounded and escaped, so that nothing is parsed to ask; that they go through an upstream
+        // proxy, which it names as the check parsed it, with what the proxy receives and that only a proxy trusted with the
+        // requests' credentials should be used; that a client certificate may be offered, which it describes as chosen at
+        // Send, to the one origin that the check found (CredentialOrigin), bounded and escaped; that the challenges of that
+        // one origin may be answered with the Windows credentials that XMAT runs with, over HTTP/1.1 only, whatever HTTP
+        // version is chosen; and that redirects, when followed, are more requests.
         internal static string ConfirmationMessage(ReplayPlanPreview plan, int maxRedirects, PlanQuestion question)
         {
             ArgumentNullException.ThrowIfNull(plan);
@@ -932,7 +1080,9 @@ namespace XMAT.WebServiceCapture
         // Says how the run went, from what it did and the words that SendAsync found for them, never parsing anything. One
         // request shows its response and status, or why it has none; a sequence counts its requests and shows the last
         // response; a run that the operation refused says why (refusal, worded off the UI thread by RunRefusalText). Then
-        // what the Replays tab did with the sends.
+        // what the Replays tab did with the sends. A run that ended with an exception, or that stopped because the tab did
+        // not take a send, says how the last send that the recorder was given went (ItemStatus), never an exception's
+        // message, then whether that send's own row is in the tab.
         private void ShowOutcome(
             ReplayPlanPreview plan,
             RequestReplayBatchResult sent,
@@ -941,19 +1091,34 @@ namespace XMAT.WebServiceCapture
             int maxRedirects,
             bool cancelled)
         {
+            ReplayRecorder recorder = recording?.Recorder;
             if (sent == null)
             {
-                StatusText.Text = WithRecording(ErrorText(Localization.GetLocalizedString("COMPOSER_FAILED")), recording);
+                StatusText.Text = recorder?.LastItem is ReplayItemResult stopped
+                    ? ItemStatus(stopped, plan) + " " + LastItemRecordingText(recorder)
+                    : WithRecording(ErrorText(Localization.GetLocalizedString("COMPOSER_FAILED")), recording);
+                return;
+            }
+
+            if (recorder is { NotRecorded: > 0, LastItem: ReplayItemResult notRecorded })
+            {
+                StatusText.Text = WithRecording(ItemStatus(notRecorded, plan), recording);
                 return;
             }
 
             if (cancelled)
             {
-                // A cancelled send usually has no row in the Replays tab, though it may have reached the server.
-                StatusText.Text = plan.Sequence == null
-                    ? CancelledText(recording)
-                    : WithRecording(
-                        Localization.GetLocalizedString("COMPOSER_SEQUENCE_CANCELLED", sent.Sends, plan.Sends), recording);
+                // A cancelled Parsed send usually has no row in the Replays tab, though it may have reached the server. A raw
+                // send that began has its row, with its write state, and is worded from it; one cancelled before it began
+                // sent nothing and has no row.
+                StatusText.Text = plan.UsesRaw
+                    ? recorder?.LastItem is ReplayItemResult began
+                        ? WithRecording(ItemStatus(began, plan), recording)
+                        : Localization.GetLocalizedString("COMPOSER_RAW_CANCELLED_NOT_BEGUN")
+                    : plan.Sequence == null
+                        ? CancelledText(recording)
+                        : WithRecording(
+                            Localization.GetLocalizedString("COMPOSER_SEQUENCE_CANCELLED", sent.Sends, plan.Sends), recording);
                 return;
             }
 
@@ -997,23 +1162,104 @@ namespace XMAT.WebServiceCapture
         // the words of its code only (ProxyFailureText), never in an exception's message, which can name the proxy, and so
         // does a send that could offer a client certificate (certified), answer challenges with Windows authentication
         // (windowsAuth) or both, in words that say where they go; any other send says it as it always did.
-        private static string SendStatus(
-            ReplayExchange exchange, bool proxied, bool certified, bool windowsAuth) => exchange?.Outcome switch
+        private static string SendStatus(ReplayExchange exchange, bool proxied, bool certified, bool windowsAuth) =>
+            StatusOf(
+                new SendFacts(
+                    exchange?.Outcome,
+                    exchange?.StatusCode ?? 0,
+                    exchange?.Duration ?? TimeSpan.Zero,
+                    exchange?.Response?.Body.LongLength ?? 0,
+                    exchange?.Code,
+                    exchange?.Error?.Message,
+                    exchange?.Raw == true,
+                    exchange?.RequestWrite,
+                    exchange?.RequestBytesWritten,
+                    exchange?.ResponseFraming),
+                proxied,
+                certified,
+                windowsAuth);
+
+        // The status of the send that the recorder was given last (ReplayRecorder.LastItem), worded as SendStatus words its
+        // exchange, from what the item recorded of it. An item keeps no exception, so a failure that SendStatus would word by
+        // its exception's message is worded as one that could not be sent (COMPOSER_FAILED).
+        private static string ItemStatus(ReplayItemResult item, ReplayPlanPreview plan) =>
+            StatusOf(
+                new SendFacts(
+                    item.Outcome,
+                    item.StatusCode,
+                    item.Duration,
+                    item.ResponseBytes,
+                    item.Code,
+                    Error: null,
+                    item.Raw,
+                    item.RequestWrite,
+                    item.RequestBytesWritten,
+                    item.ResponseFraming),
+                plan.UsesProxy,
+                plan.UsesClientCertificate,
+                plan.UsesWindowsAuth);
+
+        private static string StatusOf(SendFacts sent, bool proxied, bool certified, bool windowsAuth) =>
+            sent.Raw ? RawStatusOf(sent) : sent.Outcome switch
+            {
+                ReplayOutcome.Completed => CompletedText(sent),
+                ReplayOutcome.TimedOut => Localization.GetLocalizedString("COMPOSER_TIMEOUT"),
+                ReplayOutcome.TooLarge => ErrorText(Localization.GetLocalizedString("COMPOSER_TOO_LARGE")),
+                _ when proxied => ErrorText(ProxyFailureText(sent.Code)),
+                _ when certified && windowsAuth =>
+                    ErrorText(Localization.GetLocalizedString("COMPOSER_CLIENT_CERT_WINDOWS_AUTH_FAILED")),
+                _ when certified => ErrorText(Localization.GetLocalizedString("COMPOSER_CLIENT_CERT_FAILED")),
+                _ when windowsAuth => ErrorText(Localization.GetLocalizedString("COMPOSER_WINDOWS_AUTH_FAILED")),
+                _ => ErrorText(sent.Error ?? Localization.GetLocalizedString("COMPOSER_FAILED")),
+            };
+
+        // A raw send's status: its outcome in the words of its code, never an exception's message, then what XMAT
+        // knows of the request's write (RawSendWording.WriteSentence), which a completed send, and a response too large to
+        // keep, add only when the write was not complete. A completed response that ended with the connection says that it
+        // may be incomplete, and a cancelled send says what its cancellation means, without the error prefix.
+        private static string RawStatusOf(SendFacts sent)
         {
-            ReplayOutcome.Completed => Localization.GetLocalizedString(
-                "COMPOSER_COMPLETED",
-                exchange.StatusCode,
-                exchange.Duration.TotalMilliseconds.ToString("F0"),
-                exchange.Response.Body.Length),
-            ReplayOutcome.TimedOut => Localization.GetLocalizedString("COMPOSER_TIMEOUT"),
-            ReplayOutcome.TooLarge => ErrorText(Localization.GetLocalizedString("COMPOSER_TOO_LARGE")),
-            _ when proxied => ErrorText(ProxyFailureText(exchange?.Code)),
-            _ when certified && windowsAuth =>
-                ErrorText(Localization.GetLocalizedString("COMPOSER_CLIENT_CERT_WINDOWS_AUTH_FAILED")),
-            _ when certified => ErrorText(Localization.GetLocalizedString("COMPOSER_CLIENT_CERT_FAILED")),
-            _ when windowsAuth => ErrorText(Localization.GetLocalizedString("COMPOSER_WINDOWS_AUTH_FAILED")),
-            _ => ErrorText(exchange?.Error?.Message ?? Localization.GetLocalizedString("COMPOSER_FAILED")),
-        };
+            string write = RawSendWording.WriteSentence(sent.RequestWrite, sent.BytesWritten);
+            bool complete = sent.RequestWrite == RawWriteState.Complete;
+            IEnumerable<string> parts = sent.Outcome switch
+            {
+                ReplayOutcome.Completed => new[]
+                {
+                    CompletedText(sent),
+                    sent.ResponseFraming == RawResponseReader.CloseFraming
+                        ? Localization.GetLocalizedString("COMPOSER_RAW_CLOSE_DELIMITED")
+                        : null,
+                    complete ? null : write,
+                },
+                ReplayOutcome.TooLarge => new[]
+                {
+                    ErrorText(Localization.GetLocalizedString("COMPOSER_TOO_LARGE")), complete ? null : write,
+                },
+                ReplayOutcome.TimedOut => new[] { Localization.GetLocalizedString("COMPOSER_TIMEOUT"), write },
+                _ when sent.Code == RawCodes.SendCancelled => new[] { RawSendWording.CodeText(sent.Code), write },
+                _ => new[] { ErrorText(RawSendWording.CodeText(sent.Code)), write },
+            };
+            return string.Join(" ", parts.Where(part => part != null));
+        }
+
+        private static string CompletedText(SendFacts sent) => Localization.GetLocalizedString(
+            "COMPOSER_COMPLETED", sent.StatusCode, sent.Duration.TotalMilliseconds.ToString("F0"), sent.ResponseBytes);
+
+        // What a send's status is worded from, which an exchange and the item that records it both have (SendStatus,
+        // ItemStatus): its outcome, the response's status code, the duration, the response body's bytes and the code; the
+        // message of the exception that only an exchange keeps; and for a raw send, its write state, the bytes that its write
+        // calls handed to the connection and the response's framing.
+        private readonly record struct SendFacts(
+            ReplayOutcome? Outcome,
+            int StatusCode,
+            TimeSpan Duration,
+            long ResponseBytes,
+            string Code,
+            string Error,
+            bool Raw = false,
+            string RequestWrite = null,
+            long? BytesWritten = null,
+            string ResponseFraming = null);
 
         // Why a send through an upstream proxy got no response, by its code: an HTTP 407 was received
         // (Proxy Authentication Required), from the proxy or from inside its tunnel, which XMAT never answers or retries; the
@@ -1027,13 +1273,15 @@ namespace XMAT.WebServiceCapture
             _ => "COMPOSER_PROXY_FAILED",
         });
 
-        // Why a redirect response is the result, when following redirects stopped at it; null otherwise.
+        // Why a redirect response is the result, when following redirects stopped at it; null otherwise. XMAT never follows
+        // a redirect to an IPv6 address with a zone, which it sends nothing to.
         private static string RedirectStopText(string code, int maxRedirects) => code switch
         {
             ReplaySender.RedirectOriginChangeCode => Localization.GetLocalizedString("COMPOSER_REDIRECT_ORIGIN"),
             ReplaySender.RedirectInsecureCode => Localization.GetLocalizedString("COMPOSER_REDIRECT_INSECURE"),
             ReplaySender.RedirectUnsupportedCode => Localization.GetLocalizedString("COMPOSER_REDIRECT_UNSUPPORTED"),
             ReplaySender.RedirectLimitCode => Localization.GetLocalizedString("COMPOSER_REDIRECT_LIMIT_REACHED", maxRedirects),
+            ReplayDestination.ScopedIpv6Code => Localization.GetLocalizedString("COMPOSER_REDIRECT_SCOPED_IPV6"),
             _ => null,
         };
 
@@ -1058,7 +1306,7 @@ namespace XMAT.WebServiceCapture
         }
 
         // The status followed by what the Replays tab did with the send: recorded, recorded without bodies that did not
-        // fit, or not recorded because the tab was closed.
+        // fit, or not recorded because the tab could not take a send, which stopped the run.
         private static string WithRecording(string status, ReplayRecording recording)
         {
             ReplayRecorder recorder = recording?.Recorder;
@@ -1073,6 +1321,17 @@ namespace XMAT.WebServiceCapture
             };
             return note == null ? status : status + " " + note;
         }
+
+        // Whether the row of the send that the recorder was given last is in the Replays tab (LastItemRecorded), for a run
+        // that ended with an exception: that send's row, never an earlier send's, which can be in the tab although this one
+        // is not.
+        private static string LastItemRecordingText(ReplayRecorder recorder) =>
+            !recorder.LastItemRecorded
+                ? Localization.GetLocalizedString("COMPOSER_NOT_RECORDED", recorder.Destination)
+                : recorder.OmittedBodies > 0
+                    ? Localization.GetLocalizedString(
+                        "COMPOSER_RECORDED_WITHOUT_BODIES", recorder.Destination, recorder.BodyBudgetBytes / (1024 * 1024))
+                    : Localization.GetLocalizedString("COMPOSER_RECORDED", recorder.Destination);
 
         // A cancelled send that the Replays tab has no row for: it may still have reached the server.
         private static string CancelledText(ReplayRecording recording) =>
@@ -1116,6 +1375,9 @@ namespace XMAT.WebServiceCapture
             CloseHistoryView();
             // The response's preview stops now, not when the view is unloaded later: a closed window shows nothing.
             ResponseView.StopPreview();
+            // And so does the counts line's update.
+            _countsUpdate?.Abort();
+            _countsUpdate = null;
             // A run or read in progress releases the client once it has ended (EndState): it may still be using it.
             ReleaseClient();
             base.OnClosed(e);
@@ -1169,6 +1431,16 @@ namespace XMAT.WebServiceCapture
             string source = null,
             string heldBodyKey = null)
         {
+            // Every load enters Parsed mode: the raw editors are cleared, and the HTTP version chosen for Parsed mode comes
+            // back, as Open request and Load reset it (ResetTransport) or as a drop keeps it.
+            if (_mode == ComposerMode.Raw)
+            {
+                _mode = ComposerMode.Parsed;
+                RawTargetBox.Text = "";
+                RawHeadBox.Text = "";
+                SelectVersion(_parsedHttpVersion);
+            }
+
             if (heldBody != null)
                 draft.SetBodyBytes(heldBody);
             _draft = draft;
@@ -1181,9 +1453,16 @@ namespace XMAT.WebServiceCapture
             UrlBox.Text = draft.Url;
             HeadersBox.Text = draft.HeadersText;
             ShowBody();
-            ShowOmissions();
+            ShowMode();
             _loaded = CurrentEditors();
         }
+
+        // A request made from a row, with the origin that the row's send was captured or saved for, or first sent to, which
+        // its row of the Replays tab keeps (ReplayProvenance.Origin): Edit and resend, a drop and Load restore it, so that
+        // sending the request to another origin asks first. A row that keeps none, such as a row of a saved capture, keeps
+        // its own URL's origin, as FromCapture makes it.
+        private static RequestReplayDraft WithRecordedOrigin(RequestReplayDraft draft, Uri recordedOrigin) =>
+            recordedOrigin == null ? draft : draft.WithCapturedOrigin(recordedOrigin);
 
         // The body editor; or, for an uploaded file or a body larger than the editor shows, from a request file or the
         // Replays tab, where it comes from and the body's size, since the editor would show the text or Base64 of a body
@@ -1210,6 +1489,7 @@ namespace XMAT.WebServiceCapture
                 : null;
             Base64Box.IsEnabled = !fromFile;
             UpdateCurlAvailability();
+            ScheduleCounts();
         }
 
         private void SetBusy(bool busy)
@@ -1218,18 +1498,19 @@ namespace XMAT.WebServiceCapture
             OmissionsPanel.IsEnabled = !busy;
             SendButton.IsEnabled = !busy;
             OpenRequestButton.IsEnabled = !busy;
-            SaveRequestButton.IsEnabled = !busy;
+            SaveRequestButton.IsEnabled = !busy && _mode == ComposerMode.Parsed;
             CancelSendButton.IsEnabled = busy;
             UpdateCurlAvailability();
         }
 
         // Copy as cURL and Save as cURL script export one request as it is, for the inbox curl.exe, so neither is available,
-        // and each button says why, for a request that still leaves out a part of its request file, which the command would
-        // send as its placeholder, or with an option that curl would not apply as XMAT does (UnsupportedCurlOption). Copy as
-        // cURL also copies a body of at most 64 KiB: a body that the window holds as bytes, from an uploaded file or a
-        // request file, makes it unavailable by its length; any other body is measured when it is prepared, off the UI
-        // thread. Availability costs nothing here: nothing is decoded on the UI thread, and RequestCurlExporter.Prepare makes
-        // the exact checks, which give the same reasons.
+        // and each button says why, in Raw mode, since curl would build a request of its own rather than send the prepared
+        // bytes, and for a request that still leaves out a part of its request file, which the command would send as its
+        // placeholder, or with an option that curl would not apply as XMAT does (UnsupportedCurlOption). Copy as cURL also
+        // copies a body of at most 64 KiB: a body that the window holds as bytes, from an uploaded file or a request file,
+        // makes it unavailable by its length; any other body is measured when it is prepared, off the UI thread.
+        // Availability costs nothing here: nothing is decoded on the UI thread, and RequestCurlExporter.Prepare makes the
+        // exact checks, which give the same reasons.
         private void UpdateCurlAvailability()
         {
             bool idle = _state == ComposerState.Idle;
@@ -1242,13 +1523,15 @@ namespace XMAT.WebServiceCapture
         }
 
         private string CurlUnavailableText(bool copying) =>
-            _draft?.Omissions.Any == true
-                ? Localization.GetLocalizedString("COMPOSER_CURL_INCOMPLETE", PendingParts(_draft.Omissions))
-                : UnsupportedCurlOption() is CurlUnsupported unsupported
-                    ? UnsupportedCurlText(unsupported)
-                    : copying && _fileBody?.LongLength > RequestCurlExporter.MaxPasteableBodyBytes
-                        ? Localization.GetLocalizedString("COMPOSER_COPY_CURL_LARGE_BODY")
-                        : null;
+            _mode == ComposerMode.Raw
+                ? UnsupportedCurlText(CurlUnsupported.Raw)
+                : _draft?.Omissions.Any == true
+                    ? Localization.GetLocalizedString("COMPOSER_CURL_INCOMPLETE", PendingParts(_draft.Omissions))
+                    : UnsupportedCurlOption() is CurlUnsupported unsupported
+                        ? UnsupportedCurlText(unsupported)
+                        : copying && _fileBody?.LongLength > RequestCurlExporter.MaxPasteableBodyBytes
+                            ? Localization.GetLocalizedString("COMPOSER_COPY_CURL_LARGE_BODY")
+                            : null;
 
         // The option that makes a cURL export unsupported now, as RequestCurlExporter.Prepare names it: a URL with '#', which
         // sends one request per number; redirects followed, which curl would follow its own way; HTTP/2 only, which the
@@ -1283,12 +1566,19 @@ namespace XMAT.WebServiceCapture
                 CurlUnsupported.Proxy => "COMPOSER_CURL_PROXY",
                 CurlUnsupported.ClientCertificate => "COMPOSER_CURL_CLIENT_CERT",
                 CurlUnsupported.WindowsAuth => "COMPOSER_CURL_WINDOWS_AUTH",
+                CurlUnsupported.Raw => "COMPOSER_CURL_RAW",
                 _ => "COMPOSER_CURL_UNSUPPORTED",
             });
 
         // Automatic unless HTTP/1.1 only or HTTP/2 only is chosen.
         private ReplayHttpVersion SelectedHttpVersion =>
             HttpVersionBox.SelectedItem is ComboBoxItem { Tag: ReplayHttpVersion version } ? version : ReplayHttpVersion.Auto;
+
+        // Chooses an HTTP version in the selector; Automatic for any version that it does not list.
+        private void SelectVersion(ReplayHttpVersion httpVersion) =>
+            HttpVersionBox.SelectedItem = HttpVersionBox.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => item.Tag is ReplayHttpVersion version && version == httpVersion) ??
+                HttpVersionBox.Items[0];
 
         // The transport that the controls choose now, or false when Connect to another endpoint is on with text that is not
         // an IP address and port (TryParseTransport), Upstream proxy with text that is not a proxy (TryParseProxy), or Client
@@ -1518,6 +1808,8 @@ namespace XMAT.WebServiceCapture
                 _draft.SetBodyFormat(Base64Box.IsChecked == true);
                 BodyBox.Text = _draft.BodyText;
                 _bodyTextInEditor = BodyBox.Text;
+                if (_mode == ComposerMode.Raw)
+                    StatusText.Text = Localization.GetLocalizedString("COMPOSER_RAW_LENGTH_UNCHANGED");
             }
             catch (Exception exception) when (IsInputError(exception))
             {
@@ -1602,7 +1894,8 @@ namespace XMAT.WebServiceCapture
                 _fileBodyKey = "COMPOSER_BODY_FILE";
                 _formSeed = null;
                 ShowBody();
-                StatusText.Text = Localization.GetLocalizedString("COMPOSER_UPLOADED", name, read.Body.LongLength);
+                StatusText.Text = WithLengthUnchanged(
+                    Localization.GetLocalizedString("COMPOSER_UPLOADED", name, read.Body.LongLength));
             }
         }
 
@@ -1618,7 +1911,16 @@ namespace XMAT.WebServiceCapture
             _draft.BodyText = "";
             _draft.BodyIsBase64 = false;
             ShowBody();
+            if (_mode == ComposerMode.Raw)
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_RAW_LENGTH_UNCHANGED");
         }
+
+        // In Raw mode, a change of the body never touches the head, so its Content-Length stays as it was, and the status
+        // says so: Upload File, Clear body and Base64 change only the body.
+        private string WithLengthUnchanged(string status) =>
+            _mode == ComposerMode.Raw
+                ? status + " " + Localization.GetLocalizedString("COMPOSER_RAW_LENGTH_UNCHANGED")
+                : status;
 
         private string ChooseBodyFileInDialog()
         {
@@ -1634,10 +1936,11 @@ namespace XMAT.WebServiceCapture
         // Build form: opens the dialog that builds a multipart form for the body (MultipartFormWindow), modal and owned by the
         // window, with the parts of the form that the body still is, if any, or none. There, Use form changes the header
         // text, the body and the parts in one step (CommitForm); nothing else that the dialog does changes the request. The
-        // window does nothing else until the dialog closes, and closing the window closes it.
+        // window does nothing else until the dialog closes, and closing the window closes it. Raw mode has no Build form: its
+        // body and framing are written as they are sent.
         internal void BuildForm()
         {
-            if (_state != ComposerState.Idle || _closed)
+            if (_state != ComposerState.Idle || _closed || _mode == ComposerMode.Raw)
                 return;
             var dialog = new MultipartFormWindow(MethodBox.Text, _formSeed, () => HeadersBox.Text, CommitForm);
             _formDialog = dialog;
@@ -1838,12 +2141,14 @@ namespace XMAT.WebServiceCapture
         // A request file carries the HTTP version and no other transport, and Load from the history none at all, which is
         // Automatic: Connect to another endpoint goes back to off, without an endpoint, Upstream proxy, Client certificate
         // and Automatically authenticate with Windows too (ResetProxy, ResetClientCertificate, ResetWindowsAuth), and Follow
-        // same-origin redirects to off, with at most 10 when it is selected again. Inspect session stays as it is.
+        // same-origin redirects to off, with at most 10 when it is selected again. Inspect session stays as it is. In Raw
+        // mode, which shows HTTP/1.1 only, the version is kept for Parsed mode, which the load then enters (LoadDraft).
         private void ResetTransport(ReplayHttpVersion httpVersion)
         {
-            HttpVersionBox.SelectedItem = HttpVersionBox.Items.OfType<ComboBoxItem>()
-                .FirstOrDefault(item => item.Tag is ReplayHttpVersion version && version == httpVersion) ??
-                HttpVersionBox.Items[0];
+            if (_mode == ComposerMode.Raw)
+                _parsedHttpVersion = httpVersion;
+            else
+                SelectVersion(httpVersion);
             ConnectToBox.IsChecked = false;
             ConnectToText.Text = "";
             FollowRedirectsBox.IsChecked = false;
@@ -2122,11 +2427,18 @@ namespace XMAT.WebServiceCapture
         // permission when the URL goes to another origin than the request was captured or loaded for. The file is written
         // off the UI thread too, privately and never in place of another file, with the whole URL. The window is busy while
         // it checks or writes, and closing it or Cancel request stops either: a check stopped even once it ended asks
-        // nothing and saves nothing. The request in the editors is never changed, whatever happens.
+        // nothing and saves nothing. The request in the editors is never changed, whatever happens. A request file holds a
+        // parsed request, so Raw mode saves nothing: Edit as parsed first.
         internal async Task SaveRequestAsync()
         {
             if (_state != ComposerState.Idle || _closed)
                 return;
+            if (_mode == ComposerMode.Raw)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_SAVE_RAW");
+                return;
+            }
+
             if (RefusesStoredText(_draft.CaptureTextSource, ReplayOperation.StoredTextAmbiguousExportCode))
                 return;
 
@@ -2369,7 +2681,7 @@ namespace XMAT.WebServiceCapture
             RequestReplayDraft draft;
             try
             {
-                draft = RequestReplayDraft.FromCapture(session.Capture);
+                draft = WithRecordedOrigin(RequestReplayDraft.FromCapture(session.Capture), session.RecordedOrigin);
             }
             catch (Exception exception) when (exception is ArgumentException or FormatException or OverflowException)
             {
@@ -2436,6 +2748,852 @@ namespace XMAT.WebServiceCapture
             e.Effects = DropSession(e.Data) ? DragDropEffects.Copy : DragDropEffects.None;
             e.Handled = true;
         }
+
+        // Edit as raw text, or Edit as parsed: converts the request to the other mode off the UI thread,
+        // as Checking, while the window is busy; Cancel request or closing the window stops it, and a conversion stopped even
+        // once it ended applies nothing. What the other mode cannot keep is listed in a question, Yes or No with No by
+        // default, and No changes nothing; a conversion that loses nothing asks nothing. The editors, the mode, the controls
+        // that depend on it, the HTTP version selector included, and the body change together, in one step, and only if the
+        // editors still hold what was converted. A conversion never changes where the request comes from, its captured
+        // origin, the parts that a request file left out or the baseline that Open request, Load and a drop compare with
+        // (EditorState): a request edited before a conversion is still edited after it.
+        internal async Task SwitchModeAsync()
+        {
+            if (_state != ComposerState.Idle || _closed)
+                return;
+            if (_mode == ComposerMode.Parsed)
+                await EditAsRawAsync();
+            else
+                await EditAsParsedAsync();
+        }
+
+        // Parsed to Raw. What Raw mode cannot honor is refused first, on the UI thread, without parsing anything
+        // (RawConversionRefusal). Then, off the UI thread, the body is counted and checked (CountBody), never decoded or
+        // copied, and the request is rendered as raw text (RawConversion.FromDraft): the URL's origin for the target box, the
+        // request line, Host first, the header lines that Parsed mode sends, and Content-Length for the body. The body stays
+        // the window's, its bytes and its editor; only a form's parts are not kept. The HTTP version chosen for Parsed mode
+        // is kept while the selector shows HTTP/1.1 only.
+        private async Task EditAsRawAsync()
+        {
+            UpdateDraft();
+            string refused = RawConversionRefusal();
+            if (refused != null)
+            {
+                StatusText.Text = refused;
+                return;
+            }
+
+            RequestReplayDraft draft = _draft.WithUrl(_draft.Url);
+            bool form = _formSeed != null;
+            EditorState frozen = CurrentEditors();
+            RawSeams seams = Seams;
+            Conversion converted = await RunRawWorkAsync<Conversion>(
+                token => ToRaw(draft, form, seams, token),
+                found => found.Refusal,
+                "COMPOSER_RAW_CONVERTING",
+                "COMPOSER_CONVERT_CANCELLED");
+            if (converted == null || !MayApply(converted.Losses, "COMPOSER_RAW_CONVERT_QUESTION", frozen))
+                return;
+
+            _parsedHttpVersion = SelectedHttpVersion;
+            _mode = ComposerMode.Raw;
+            SelectVersion(ReplayHttpVersion.Http11);
+            RawTargetBox.Text = converted.Raw.TargetText;
+            RawHeadBox.Text = converted.Raw.HeadText;
+            if (_formSeed != null)
+            {
+                // The form's parts are not kept: the body stays the form's bytes, shown as such.
+                _formSeed = null;
+                _fileBodyKey = "COMPOSER_BODY_FORM_BYTES";
+                ShowBody();
+            }
+
+            ShowMode();
+            ScheduleCounts();
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_RAW_EDITING");
+        }
+
+        // Raw to Parsed. Off the UI thread: the target origin (ReplayRawTarget.TryParse); the body, counted and
+        // checked (CountBody), then built in slices (RawBodyBytes); the raw request as the conversion reads it
+        // (RawRequest.ParseForEditor), which checks its limits, head syntax, version, request-target, routing and framing;
+        // and the request that Parsed mode edits (RawConversion.ToDraft), with the captured origin of the window's draft. A
+        // refusal keeps Raw mode and everything in it. Fields that only a raw send refuses are converted, and Parsed mode's
+        // own checks apply to them. The body stays the window's, its bytes and its editor, but a chunked body becomes its
+        // decoded bytes, shown as a captured body is. The HTTP version chosen for Parsed mode comes back.
+        private async Task EditAsParsedAsync()
+        {
+            UpdateDraft();
+            string targetText = RawTargetBox.Text;
+            string headText = RawHeadBox.Text;
+            RequestReplayDraft draft = _draft.WithUrl(_draft.Url);
+            byte[] held = _fileBody;
+            bool versionAutomatic = _parsedHttpVersion == ReplayHttpVersion.Auto;
+            EditorState frozen = CurrentEditors();
+            RawSeams seams = Seams;
+            Conversion converted = await RunRawWorkAsync<Conversion>(
+                token => ToParsed(targetText, headText, draft, held, versionAutomatic, seams, token),
+                found => found.Refusal,
+                "COMPOSER_PARSED_CONVERTING",
+                "COMPOSER_CONVERT_CANCELLED");
+            if (converted == null || !MayApply(converted.Losses, "COMPOSER_PARSED_CONVERT_QUESTION", frozen))
+                return;
+
+            RequestReplayDraft parsed = converted.Parsed;
+            _mode = ComposerMode.Parsed;
+            _draft = parsed;
+            MethodBox.Text = parsed.Method;
+            UrlBox.Text = parsed.Url;
+            HeadersBox.Text = parsed.HeadersText;
+            RawTargetBox.Text = "";
+            RawHeadBox.Text = "";
+            SelectVersion(_parsedHttpVersion);
+            if (converted.Decoded)
+            {
+                _fileBody = converted.Held;
+                _fileName = null;
+                _fileBodyKey = converted.Held == null ? null : "COMPOSER_BODY_DECODED";
+                _formSeed = null;
+                ShowBody();
+            }
+
+            ShowMode();
+            StatusText.Text = Localization.GetLocalizedString("COMPOSER_PARSED_EDITING");
+        }
+
+        // Why Raw mode cannot take the request as the window holds it, known without parsing anything, in this order:
+        // a part that a request file left out, whose placeholder is not data; a URL with '#', which sends one request
+        // per number; HTTP/2 only; Follow same-origin redirects; Upstream proxy, Client certificate and Automatically
+        // authenticate with Windows, in that order, so that no option is dropped unasked. Null when none of them is so.
+        private string RawConversionRefusal()
+        {
+            if (_draft.Omissions.Any)
+                return Localization.GetLocalizedString("COMPOSER_RAW_CONVERT_OMITTED", PendingParts(_draft.Omissions));
+            string key = _draft.Url.Contains(ReplaySequence.Placeholder) ? "COMPOSER_RAW_CONVERT_NUMBERED"
+                : SelectedHttpVersion == ReplayHttpVersion.Http2 ? "COMPOSER_RAW_CONVERT_HTTP2"
+                : FollowRedirectsBox.IsChecked == true ? "COMPOSER_RAW_CONVERT_REDIRECTS"
+                : ProxyBox.IsChecked == true ? "COMPOSER_RAW_CONVERT_PROXY"
+                : ClientCertificateBox.IsChecked == true ? "COMPOSER_RAW_CONVERT_CLIENT_CERT"
+                : WindowsAuthBox.IsChecked == true ? "COMPOSER_RAW_CONVERT_WINDOWS_AUTH"
+                : null;
+            return key == null ? null : Localization.GetLocalizedString(key);
+        }
+
+        // Whether a conversion that found these losses may be applied: asked first, as Preparing, when it loses anything,
+        // Yes or No with No by default; and only if the editors still hold what was converted (frozen), which only a test's
+        // confirm can change meanwhile. The status says why not.
+        private bool MayApply(string losses, string questionKey, EditorState frozen)
+        {
+            if (losses != null)
+            {
+                bool accepted;
+                _state = ComposerState.Preparing;
+                try
+                {
+                    accepted = _confirm(Localization.GetLocalizedString(questionKey, losses));
+                }
+                finally
+                {
+                    EndState();
+                }
+
+                if (_closed)
+                    return false;
+                if (!accepted)
+                {
+                    StatusText.Text = Localization.GetLocalizedString("COMPOSER_CONVERT_CANCELLED");
+                    return false;
+                }
+            }
+
+            if (CurrentEditors() != frozen)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_CONVERT_CHANGED");
+                return false;
+            }
+
+            return true;
+        }
+
+        // Runs a conversion's work, or Fix Content-Length's, off the UI thread, as Checking: the window is busy and says what
+        // it does (busyKey), and Cancel request or closing the window stops the work (_checkingCancellation). A stopped run
+        // gives no result, and one that it gives once it was stopped is not used (Stopped): the status then says stoppedKey,
+        // unless the window closed. Null when nothing is to be applied, also when the work refused, which the status says in
+        // its words (refusal).
+        private async Task<T> RunRawWorkAsync<T>(
+            Func<CancellationToken, T> work, Func<T, string> refusal, string busyKey, string stoppedKey)
+            where T : class
+        {
+            using var checking = new CancellationTokenSource();
+            CancellationToken token = checking.Token;
+            _checkingCancellation = checking;
+            _state = ComposerState.Checking;
+            SetBusy(true);
+            StatusText.Text = Localization.GetLocalizedString(busyKey);
+            T found = null;
+            bool stopped;
+            try
+            {
+                found = await Task.Run(() => work(token), token);
+            }
+            catch (OperationCanceledException) when (checking.IsCancellationRequested)
+            {
+                // Cancelled, or the window closed: nothing is applied.
+            }
+            finally
+            {
+                // Work that ended by the time that the user cancelled applies nothing either.
+                stopped = Stopped(checking, _checkingCancellation);
+                _checkingCancellation = null;
+                EndState();
+            }
+
+            if (_closed)
+                return null;
+            if (stopped || found == null)
+            {
+                StatusText.Text = Localization.GetLocalizedString(stoppedKey);
+                return null;
+            }
+
+            string refused = refusal(found);
+            if (refused != null)
+            {
+                StatusText.Text = refused;
+                return null;
+            }
+
+            return found;
+        }
+
+        // Parsed to Raw's work off the UI thread, over the frozen copy of the draft: the body is
+        // counted and checked first, but not walked when it is text of more than 64 Mi characters, which is over the body
+        // limit by its length alone; then FromDraft renders the head with that count, or refuses, worded by why. The token
+        // is checked before the result is given, so a stopped conversion gives none.
+        private static Conversion ToRaw(RequestReplayDraft draft, bool form, RawSeams seams, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!draft.BodyIsBase64 && draft.BodyText.Length > RawRequest.MaxEntityBytes)
+                return Conversion.Refused(Localization.GetLocalizedString("COMPOSER_RAW_CONVERT_LIMITS"));
+            BodyCount counted = seams.Count(draft, token);
+            if (counted.Problem != BodyProblem.None)
+            {
+                return Conversion.Refused(Localization.GetLocalizedString(
+                    counted.Problem == BodyProblem.NotText ? "COMPOSER_CONVERT_BODY_TEXT" : "COMPOSER_CONVERT_BODY_BASE64"));
+            }
+
+            RawFromDraftResult rendered = RawConversion.FromDraft(draft, counted.Length, form, token);
+            if (rendered.Refusal is RawFromDraftRefusal refusal)
+                return Conversion.Refused(Localization.GetLocalizedString(RawRefusalKey(refusal)));
+            string losses = Losses(rendered.Value.Disclosures);
+            token.ThrowIfCancellationRequested();
+            return new Conversion(null, losses, rendered.Value, null, null, false);
+        }
+
+        // Why FromDraft refused, as the status says it.
+        private static string RawRefusalKey(RawFromDraftRefusal refusal) => refusal switch
+        {
+            RawFromDraftRefusal.Url => "COMPOSER_RAW_CONVERT_URL",
+            RawFromDraftRefusal.Target => "COMPOSER_RAW_CONVERT_TARGET",
+            RawFromDraftRefusal.Method => "COMPOSER_RAW_CONVERT_METHOD",
+            RawFromDraftRefusal.Headers => "COMPOSER_RAW_CONVERT_HEADERS",
+            RawFromDraftRefusal.Limits => "COMPOSER_RAW_CONVERT_LIMITS",
+            _ => throw new ArgumentOutOfRangeException(nameof(refusal)),
+        };
+
+        // Raw to Parsed's work off the UI thread, over the frozen target, head and body: the target origin; the
+        // body, counted and checked, then built in slices with the token checked before each (RawBodyBytes); the raw request
+        // as ParseForEditor reads it; then the request that Parsed mode edits (ToDraft), with the frozen draft's captured
+        // origin. Its body becomes the window's again, but for a chunked body, which stays decoded, and is held as its bytes
+        // when it is larger than the editor shows. Every refusal keeps Raw mode, worded by its code, with the head's line for
+        // a fault in the head.
+        private static Conversion ToParsed(
+            string targetText,
+            string headText,
+            RequestReplayDraft draft,
+            byte[] held,
+            bool versionAutomatic,
+            RawSeams seams,
+            CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!ReplayRawTarget.TryParse(targetText, out ReplayRawTarget target))
+                return Conversion.Refused(ParsedRefusal(Localization.GetLocalizedString("COMPOSER_RAW_ORIGIN"), null));
+            BodyCount counted = seams.Count(draft, token);
+            if (counted.Problem != BodyProblem.None)
+            {
+                return Conversion.Refused(Localization.GetLocalizedString(
+                    counted.Problem == BodyProblem.NotText ? "COMPOSER_CONVERT_BODY_TEXT" : "COMPOSER_CONVERT_BODY_BASE64"));
+            }
+
+            if (counted.Length > MaxRawBodyBytes)
+                return Conversion.Refused(ParsedRefusal(RawSendWording.CodeText(RawCodes.InputTooLarge), null));
+            RawBodySource source = RawBodySource.Of(draft, held);
+            byte[] body = RawBodyBytes.Build(source, counted, token, seams.SliceChars, seams.AfterSlice);
+            RawEditorParseResult read = RawRequest.ParseForEditor(headText, body, target, token);
+            if (read.Code != null)
+                return Conversion.Refused(ParsedRefusal(RawSendWording.CodeText(read.Code), read.Line));
+            RawToDraftResult converted = RawConversion.ToDraft(read.Parse, draft, MaxShownBodyBytes, versionAutomatic, token);
+            if (converted.Code != null)
+                return Conversion.Refused(ParsedRefusal(RawSendWording.CodeText(converted.Code), null));
+
+            RequestReplayDraft parsed = converted.Value.Draft;
+            bool decoded = read.Parse.Framing == RawFraming.Chunked;
+            byte[] decodedHeld = null;
+            if (decoded)
+            {
+                decodedHeld = read.Parse.EntityLength > MaxShownBodyBytes ? parsed.GetBodyBytes() : null;
+            }
+            else if (held != null)
+            {
+                parsed.SetBodyBytes(held);
+            }
+            else
+            {
+                parsed.BodyText = source.Text;
+                parsed.BodyIsBase64 = source.Base64;
+            }
+
+            string losses = Losses(converted.Value.Disclosures);
+            token.ThrowIfCancellationRequested();
+            return new Conversion(null, losses, null, parsed, decodedHeld, decoded);
+        }
+
+        // A refusal of Raw to Parsed as the status says it: the raw request stays as it is, then what refused, with the
+        // head's line for a fault in the head.
+        private static string ParsedRefusal(string text, int? line) =>
+            Localization.GetLocalizedString("COMPOSER_PARSED_CONVERT_REFUSED", WithLine(text, line));
+
+        // A refusal's text, then the head's line of the fault, if it has one (COMPOSER_RAW_AT_LINE).
+        private static string WithLine(string text, int? line) =>
+            line == null ? text : text + " " + Localization.GetLocalizedString("COMPOSER_RAW_AT_LINE", line.Value);
+
+        // The losses that a conversion's question lists, one per line, each in its fixed words, with what
+        // comes from the request bounded and escaped (UntrustedText), off the UI thread; null when it loses nothing.
+        private static string Losses(IReadOnlyList<RawDisclosure> disclosures) =>
+            disclosures.Count == 0 ? null : string.Join("\n", disclosures.Select(LossText));
+
+        private static string LossText(RawDisclosure disclosure) => disclosure.Kind switch
+        {
+            RawDisclosureKind.LeftOut =>
+                Localization.GetLocalizedString("COMPOSER_RAW_LOSS_LEFT_OUT", ShownNames(disclosure.Detail)),
+            RawDisclosureKind.HostWritten => Localization.GetLocalizedString(
+                "COMPOSER_RAW_LOSS_HOST", UntrustedText.Show(disclosure.Detail, MaxShownOriginChars)),
+            // The length as FromDraft writes it, decimal digits, shown as a number.
+            RawDisclosureKind.LengthWritten => Localization.GetLocalizedString(
+                "COMPOSER_RAW_LOSS_LENGTH", long.Parse(disclosure.Detail, NumberStyles.None, CultureInfo.InvariantCulture)),
+            RawDisclosureKind.Spacing => Localization.GetLocalizedString("COMPOSER_RAW_LOSS_SPACING"),
+            RawDisclosureKind.TargetEscaped => Localization.GetLocalizedString(
+                "COMPOSER_RAW_LOSS_TARGET", UntrustedText.Show(disclosure.Detail, MaxShownUrlChars)),
+            RawDisclosureKind.FormParts => Localization.GetLocalizedString("COMPOSER_RAW_LOSS_FORM"),
+            RawDisclosureKind.ChunkedDecoded => Localization.GetLocalizedString("COMPOSER_PARSED_LOSS_CHUNKED"),
+            RawDisclosureKind.AbsoluteTarget => Localization.GetLocalizedString("COMPOSER_PARSED_LOSS_ABSOLUTE"),
+            RawDisclosureKind.TargetNormalized => Localization.GetLocalizedString(
+                "COMPOSER_PARSED_LOSS_TARGET", UntrustedText.Show(disclosure.Detail, MaxShownUrlChars)),
+            RawDisclosureKind.NotSentByParsed =>
+                Localization.GetLocalizedString("COMPOSER_PARSED_LOSS_NOT_SENT", ShownNames(disclosure.Detail)),
+            RawDisclosureKind.VersionAutomatic => Localization.GetLocalizedString("COMPOSER_PARSED_LOSS_VERSION"),
+            _ => throw new ArgumentOutOfRangeException(nameof(disclosure)),
+        };
+
+        // Header names as RawConversion lists them, ", " between them, as a question shows them: at most 20, each bounded
+        // and escaped, then how many more there are.
+        private static string ShownNames(string names)
+        {
+            string[] all = names.Split(", ");
+            string shown = string.Join(
+                ", ", all.Take(MaxShownNames).Select(name => UntrustedText.Show(name, MaxShownNameChars)));
+            return all.Length <= MaxShownNames
+                ? shown
+                : Localization.GetLocalizedString("COMPOSER_CONVERT_NAMES_MORE", shown, all.Length - MaxShownNames);
+        }
+
+        // Fix Content-Length: sets the value of the head's one Content-Length field to the body's length in bytes,
+        // keeping the field's name, the spaces around its value and every other character of the head, line breaks included,
+        // and never touching the body. Off the UI thread, as Checking: the body is counted and checked (CountBody); the head
+        // is fixed (RawRequest.FixContentLength), which needs exactly one Content-Length field and no Transfer-Encoding; then
+        // the result is checked in full, as a send would check it: the target origin (ReplayRawTarget.TryParse), then the
+        // request (PrepareRaw), whose image is dropped at once, so that none outlives the check. The fix is an explicit edit
+        // and stays applied when the request still cannot be sent; the status then says why. Cancel request or closing the
+        // window stops it, and a fix found by then changes nothing.
+        internal async Task FixContentLengthAsync()
+        {
+            if (_state != ComposerState.Idle || _closed || _mode != ComposerMode.Raw)
+                return;
+
+            UpdateDraft();
+            string targetText = RawTargetBox.Text;
+            string headText = RawHeadBox.Text;
+            RequestReplayDraft draft = _draft.WithUrl(_draft.Url);
+            byte[] held = _fileBody;
+            EditorState frozen = CurrentEditors();
+            RawSeams seams = Seams;
+            FixedLength found = await RunRawWorkAsync<FixedLength>(
+                token => FixLength(targetText, headText, draft, held, seams, token),
+                fix => fix.Refusal,
+                "COMPOSER_RAW_FIXING_LENGTH",
+                "COMPOSER_RAW_LENGTH_UNCHANGED");
+            if (found == null)
+                return;
+            if (CurrentEditors() != frozen)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_RAW_LENGTH_UNCHANGED");
+                return;
+            }
+
+            RawHeadBox.Text = found.Head;
+            StatusText.Text = found.Remaining == null
+                ? Localization.GetLocalizedString("COMPOSER_RAW_FIXED_LENGTH", found.Length)
+                : Localization.GetLocalizedString("COMPOSER_RAW_FIXED_LENGTH_INVALID", found.Length, found.Remaining);
+        }
+
+        // Fix Content-Length's work off the UI thread, over the frozen target, head and body. The token is checked before the
+        // result is given, so a stopped fix gives none.
+        private static FixedLength FixLength(
+            string targetText, string headText, RequestReplayDraft draft, byte[] held, RawSeams seams, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            BodyCount counted = seams.Count(draft, token);
+            if (counted.Problem != BodyProblem.None)
+            {
+                return FixedLength.Refused(Localization.GetLocalizedString(
+                    counted.Problem == BodyProblem.NotText ? "COMPOSER_RAW_FIX_BODY_TEXT" : "COMPOSER_RAW_FIX_BODY_BASE64"));
+            }
+
+            RawTextResult fixedHead = RawRequest.FixContentLength(headText, counted.Length, token);
+            if (fixedHead.Code != null)
+                return FixedLength.Refused(WithLine(RawSendWording.CodeText(fixedHead.Code), fixedHead.Line));
+            string remaining = null;
+            if (!ReplayRawTarget.TryParse(targetText, out ReplayRawTarget target))
+            {
+                remaining = Localization.GetLocalizedString("COMPOSER_RAW_ORIGIN");
+            }
+            else if (counted.Length > MaxRawBodyBytes)
+            {
+                remaining = RawSendWording.CodeText(RawCodes.InputTooLarge);
+            }
+            else
+            {
+                byte[] body = RawBodyBytes.Build(
+                    RawBodySource.Of(draft, held), counted, token, seams.SliceChars, seams.AfterSlice);
+                RawImageResult prepared = seams.Prepare(fixedHead.Text, body, target, token, null);
+                remaining = prepared.Code == null ? null : WithLine(RawSendWording.CodeText(prepared.Code), prepared.Line);
+            }
+
+            token.ThrowIfCancellationRequested();
+            return new FixedLength(null, fixedHead.Text, counted.Length, remaining);
+        }
+
+        // A raw send. A window without a recording target, which only tests make, sends nothing in Raw mode: a raw
+        // send that begins always gets its row in the Replays tab. Everything that the send uses is frozen at its entry,
+        // on the UI thread, without parsing anything (FrozenRawSend). A request whose stored text came from an XMAT capture
+        // without the text-format marker is refused next, as Edit and resend refuses it (RefusesStoredText), by the source of
+        // that frozen copy, which is the source that the check and the run would use, before anything is checked, asked or
+        // sent; the operation refuses it too (ReplaySource.RawTextSource). Then the copy is checked off the UI thread, up to
+        // the first refusal (CheckRawSend), and the one question, always asked, is put together from the texts that the check
+        // made (RawConfirmationMessage). Yes sends the image that the check prepared, with exactly the permissions that its
+        // plan uses (ComposerOptions), and records it whatever its outcome (RunPlanAsync).
+        private async Task SendRawAsync()
+        {
+            if (_recording == null)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_RAW_NOT_RECORDED");
+                return;
+            }
+
+            UpdateDraft();
+            var send = new FrozenRawSend(
+                RawTargetBox.Text,
+                RawHeadBox.Text,
+                _draft.WithUrl(_draft.Url),
+                _fileBody,
+                ConnectToBox.IsChecked == true,
+                ConnectToText.Text);
+            if (RefusesStoredText(send.Draft.CaptureTextSource, ReplayOperation.StoredTextAmbiguousCode))
+                return;
+
+            bool inspect = InspectSessionBox.IsChecked == true;
+            ReplayProvenance provenance = _provenance;
+            RequestReplayClient client = _client;
+            RawSeams seams = Seams;
+            SendCheck found = await RunSendCheckAsync(
+                token => CheckRawSend(send, client, seams, token), StatusText.Text, "COMPOSER_RAW_CANCELLED_NOT_BEGUN");
+            if (found == null)
+                return;
+
+            // Cancel request, or closing the window, while XMAT asks sends nothing, as declining does.
+            using var asking = new CancellationTokenSource();
+            _checkingCancellation = asking;
+            bool confirmed = false;
+            _state = ComposerState.Preparing;
+            try
+            {
+                confirmed = _confirm(RawConfirmationMessage(found.Plan, found.RawQuestion));
+            }
+            catch (Exception exception) when (IsInputError(exception))
+            {
+                ShowError(exception);
+            }
+            finally
+            {
+                _checkingCancellation = null;
+                EndState();
+            }
+
+            if (_closed)
+                return;
+            if (asking.IsCancellationRequested)
+            {
+                StatusText.Text = Localization.GetLocalizedString("COMPOSER_RAW_CANCELLED_NOT_BEGUN");
+                return;
+            }
+
+            if (confirmed)
+                await RunPlanAsync(found.Plan, 0, confirmed, provenance, inspect);
+        }
+
+        // What a raw send froze at its entry, on the UI thread, without parsing anything: the target box and the
+        // head as typed; a copy of the request, for its body, as text or Base64, its captured origin and the source of its
+        // stored text, which a raw send inherits; the body held as bytes, if any, which the window never changes in place; and
+        // Connect to another endpoint, with its text.
+        internal sealed record FrozenRawSend(
+            string TargetText, string HeadText, RequestReplayDraft Draft, byte[] Held, bool ConnectTo, string Endpoint);
+
+        // A raw send's check, off the UI thread, over what it froze, in the order of its refusals: the target
+        // origin (COMPOSER_RAW_ORIGIN); the endpoint as typed (COMPOSER_CONNECT_TO_INVALID); the body, counted and checked,
+        // within Raw mode's limit before any of it is built, then built in slices (RawBodyBytes); the request, prepared into
+        // the image that is sent (PrepareRaw, by default RawRequest.Prepare), worded by its code; the plan, as the run checks
+        // it before it sends, with the copy's captured origin and stored-text source (RequestReplayClient.PreviewRaw); and the
+        // question's texts (RawQuestion). The token is checked between the steps and before the result is given, so a stopped
+        // check gives none.
+        private static SendCheck CheckRawSend(
+            FrozenRawSend send, RequestReplayClient client, RawSeams seams, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!ReplayRawTarget.TryParse(send.TargetText, out ReplayRawTarget target))
+                return SendCheck.Refused(ErrorText(Localization.GetLocalizedString("COMPOSER_RAW_ORIGIN")));
+            if (!TryParseTransport(ReplayHttpVersion.Http11, send.ConnectTo, send.Endpoint, out ReplayTransportOptions transport))
+                return SendCheck.Refused(ErrorText(Localization.GetLocalizedString("COMPOSER_CONNECT_TO_INVALID")));
+            BodyCount counted = seams.Count(send.Draft, token);
+            if (counted.Problem != BodyProblem.None)
+            {
+                return SendCheck.Refused(ErrorText(Localization.GetLocalizedString(
+                    counted.Problem == BodyProblem.NotText ? "COMPOSER_RAW_BODY_TEXT" : "COMPOSER_RAW_BODY_BASE64")));
+            }
+
+            if (counted.Length > MaxRawBodyBytes)
+                return SendCheck.Refused(ErrorText(RawSendWording.CodeText(RawCodes.InputTooLarge)));
+            byte[] body = RawBodyBytes.Build(
+                RawBodySource.Of(send.Draft, send.Held), counted, token, seams.SliceChars, seams.AfterSlice);
+            RawImageResult prepared = seams.Prepare(send.HeadText, body, target, token, null);
+            if (prepared.Code != null)
+                return SendCheck.Refused(ErrorText(WithLine(RawSendWording.CodeText(prepared.Code), prepared.Line)));
+            token.ThrowIfCancellationRequested();
+            OperationResult<ReplayPlanPreview> preview = client.PreviewRaw(
+                prepared.Image, send.Draft.CapturedOrigin, send.Draft.CaptureTextSource, transport.ConnectTo, token);
+            if (!preview.Succeeded)
+                return SendCheck.Refused(RawRefusalText(FirstDiagnostic(preview.Diagnostics)));
+            RawQuestion question = RawQuestion.Of(preview.Value);
+            token.ThrowIfCancellationRequested();
+            return new SendCheck(null, preview.Value.Transport, preview.Value, null, question);
+        }
+
+        // That check with the window's default seams, which tests call as they call CheckSend: the source of the frozen copy's
+        // stored text reaches the operation even where the window's own refusal (SendRawAsync) would come first.
+        internal static SendCheck CheckRawSend(FrozenRawSend send, RequestReplayClient client, CancellationToken token) =>
+            CheckRawSend(
+                send, client, new RawSeams(CountDraftBody, RawRequest.Prepare, RawBodyBytes.DefaultSliceChars, null), token);
+
+        // What the one question of a raw send shows, made by its check from the plan, off the UI thread: the
+        // target origin, in ASCII, with an international host's Unicode spelling after it; the request line, its method
+        // bounded to 64 characters and its request-target to 512, escaped; the head's bytes and field lines, with the line
+        // breaks typed as LF that are sent as CRLF; the body's bytes and framing; the endpoint of Connect to another
+        // endpoint; and the method, for a GET or OPTIONS request with a body. Display only: the run gets the plan, never
+        // these texts, and no text shows the head itself or the image's hash.
+        internal sealed record RawQuestion(
+            string Origin, string RequestLine, string Head, string Body, string ConnectTo, string Method)
+        {
+            internal static RawQuestion Of(ReplayPlanPreview plan)
+            {
+                ArgumentNullException.ThrowIfNull(plan);
+                RawRequestImage image = plan.Raw ??
+                    throw new ArgumentException("The plan is not a raw request's.", nameof(plan));
+                string head = image.ConvertedLineFeeds == 0
+                    ? Localization.GetLocalizedString("COMPOSER_CONFIRM_RAW_HEAD", image.HeadLength, image.FieldCount)
+                    : Localization.GetLocalizedString(
+                        "COMPOSER_CONFIRM_RAW_HEAD_LF", image.HeadLength, image.FieldCount, image.ConvertedLineFeeds);
+                long wireBody = image.Length - image.HeadLength;
+                string body = image.Framing switch
+                {
+                    RawFraming.ContentLength => Localization.GetLocalizedString("COMPOSER_CONFIRM_RAW_LENGTH", wireBody),
+                    RawFraming.Chunked => Localization.GetLocalizedString(
+                        "COMPOSER_CONFIRM_RAW_CHUNKED", wireBody, image.EntityLength),
+                    _ => Localization.GetLocalizedString("COMPOSER_CONFIRM_RAW_NO_BODY"),
+                };
+                return new RawQuestion(
+                    RawOriginText(image.Target),
+                    UntrustedText.Show(image.Method, MaxShownMethodChars) + " " +
+                        UntrustedText.Show(image.RequestTarget, MaxShownUrlChars) + " HTTP/1.1",
+                    head,
+                    body,
+                    plan.UsesConnectTo ? plan.Transport.ConnectTo.ToString() : null,
+                    UntrustedText.Show(image.Method, MaxShownMethodChars));
+            }
+        }
+
+        // A raw target origin as a question or a status names it: scheme://host:port, in ASCII, first; for an
+        // international host name, its Unicode spelling then follows in parentheses, bounded and escaped, never alone.
+        private static string RawOriginText(ReplayRawTarget target)
+        {
+            string ascii = target.ToString();
+            string unicode = null;
+            if (!target.IsIPLiteral)
+            {
+                try
+                {
+                    unicode = new IdnMapping().GetUnicode(target.Host);
+                }
+                catch (ArgumentException)
+                {
+                    // Not a name that IDN can show in Unicode: the ASCII form alone names it.
+                }
+            }
+
+            return unicode == null || string.Equals(unicode, target.Host, StringComparison.OrdinalIgnoreCase)
+                ? ascii
+                : Localization.GetLocalizedString(
+                    "COMPOSER_CONFIRM_RAW_ORIGIN_IDN", ascii, UntrustedText.Show(unicode, MaxShownOriginChars));
+        }
+
+        // The one question of a raw send, always asked, put together on the UI thread from the texts that its
+        // check made (RawQuestion), never from the plan's own strings: what is sent and where, the request line, the head and
+        // the body, and what a front end and the server behind it can still read differently; then, each from its own
+        // condition, that the request may change server data or send its headers to another origin, that a GET or OPTIONS
+        // request with a body may be read as another request, and that it goes to another endpoint; then whether to send
+        // it. Yes or No, with No by default.
+        internal static string RawConfirmationMessage(ReplayPlanPreview plan, RawQuestion question)
+        {
+            ArgumentNullException.ThrowIfNull(plan);
+            ArgumentNullException.ThrowIfNull(question);
+            var paragraphs = new List<string>
+            {
+                Localization.GetLocalizedString(
+                    "COMPOSER_CONFIRM_RAW", plan.Raw.Length, question.Origin, question.RequestLine, question.Head, question.Body),
+            };
+            if (plan.UsesUnsafeMethod || plan.ChangesOrigin)
+                paragraphs.Add(Localization.GetLocalizedString("COMPOSER_CONFIRM_RAW_RISK"));
+            if (plan.UsesUnsafeMethod && !RequestReplayDraft.IsUnsafeMethod(plan.Raw.Method))
+                paragraphs.Add(Localization.GetLocalizedString("COMPOSER_CONFIRM_RAW_BODY", question.Method));
+            if (plan.UsesConnectTo)
+            {
+                paragraphs.Add(
+                    Localization.GetLocalizedString("COMPOSER_CONFIRM_RAW_CONNECT_TO", question.ConnectTo, question.Origin));
+            }
+
+            paragraphs.Add(Localization.GetLocalizedString("COMPOSER_CONFIRM_RAW_SEND"));
+            return string.Join("\n\n", paragraphs);
+        }
+
+        // Shows what the mode edits and which controls it uses. Raw mode shows its warning, the target
+        // origin, the head, its counts line and Fix Content-Length in place of the method, the URL and the headers, which keep
+        // their text for Parsed mode, and its own notice in place of Parsed mode's. The options that Raw mode never uses are
+        // disabled there, each with the reason in its tooltip, which shows while it is disabled, and keep their values for
+        // Parsed mode: the HTTP version, which shows HTTP/1.1 only, Follow same-origin redirects, Upstream proxy, Client
+        // certificate, Automatically authenticate with Windows, Build form and Save request as. Both cURL exports are
+        // unavailable in Raw mode (CurlUnavailableText).
+        private void ShowMode()
+        {
+            bool raw = _mode == ComposerMode.Raw;
+            Visibility parsedOnly = raw ? Visibility.Collapsed : Visibility.Visible;
+            Visibility rawOnly = raw ? Visibility.Visible : Visibility.Collapsed;
+            string modeHint = Hint(raw, "COMPOSER_MODE_PARSED_HINT", "COMPOSER_MODE_RAW_HINT");
+            ModeButton.Content = Hint(raw, "COMPOSER_MODE_PARSED", "COMPOSER_MODE_RAW");
+            ModeButton.ToolTip = modeHint;
+            AutomationProperties.SetHelpText(ModeButton, modeHint);
+            ReplayNotice.Text = Hint(raw, "COMPOSER_RAW_NOTICE", "COMPOSER_NOTICE");
+            RawWarningPanel.Visibility = rawOnly;
+            MethodLabel.Visibility = parsedOnly;
+            MethodBox.Visibility = parsedOnly;
+            UrlLabel.Visibility = parsedOnly;
+            UrlBox.Visibility = parsedOnly;
+            HeadersLabel.Visibility = parsedOnly;
+            HeadersBox.Visibility = parsedOnly;
+            RawTargetLabel.Visibility = rawOnly;
+            RawTargetBox.Visibility = rawOnly;
+            RawHeadLabel.Visibility = rawOnly;
+            RawHeadBox.Visibility = rawOnly;
+            RawCountsText.Visibility = rawOnly;
+            FixContentLengthButton.Visibility = rawOnly;
+            HttpVersionBox.IsEnabled = !raw;
+            HttpVersionBox.ToolTip = Hint(raw, "COMPOSER_RAW_OFF_HTTP_VERSION", "COMPOSER_HTTP_VERSION_HINT");
+            FollowRedirectsBox.IsEnabled = !raw;
+            FollowRedirectsBox.ToolTip = Hint(raw, "COMPOSER_RAW_OFF_REDIRECTS", "COMPOSER_FOLLOW_REDIRECTS_HINT");
+            RedirectLimitBox.IsEnabled = !raw && FollowRedirectsBox.IsChecked == true;
+            RedirectLimitBox.ToolTip = Hint(raw, "COMPOSER_RAW_OFF_REDIRECTS", "COMPOSER_REDIRECT_LIMIT");
+            ProxyBox.IsEnabled = !raw;
+            ProxyBox.ToolTip = Hint(raw, "COMPOSER_RAW_OFF_PROXY", "COMPOSER_PROXY_HINT");
+            ProxyText.IsEnabled = !raw && ProxyBox.IsChecked == true;
+            ProxyText.ToolTip = ProxyBox.ToolTip;
+            ClientCertificateBox.IsEnabled = !raw;
+            ClientCertificateBox.ToolTip = Hint(raw, "COMPOSER_RAW_OFF_CLIENT_CERT", "COMPOSER_CLIENT_CERT_HINT");
+            ClientCertificateList.IsEnabled = !raw && ClientCertificateBox.IsChecked == true;
+            ClientCertificateList.ToolTip = ClientCertificateBox.ToolTip;
+            WindowsAuthBox.IsEnabled = !raw;
+            WindowsAuthBox.ToolTip = Hint(raw, "COMPOSER_RAW_OFF_WINDOWS_AUTH", "COMPOSER_WINDOWS_AUTH_HINT");
+            BuildFormButton.IsEnabled = !raw;
+            BuildFormButton.ToolTip = Hint(raw, "COMPOSER_RAW_OFF_BUILD_FORM", "COMPOSER_BUILD_FORM_HINT");
+            SaveRequestButton.IsEnabled = !raw && _state == ComposerState.Idle;
+            SaveRequestButton.ToolTip = Hint(raw, "COMPOSER_SAVE_RAW", "COMPOSER_SAVE_REQUEST_HINT");
+            ShowOmissions();
+        }
+
+        // The text of the mode's key: rawKey's in Raw mode, parsedKey's in Parsed mode.
+        private static string Hint(bool raw, string rawKey, string parsedKey) =>
+            Localization.GetLocalizedString(raw ? rawKey : parsedKey);
+
+        // The counts line under the head, worked out again after an edit of the head or the body, at Background
+        // priority, so that typing never waits for it, and only once for edits made meanwhile.
+        private void ScheduleCounts()
+        {
+            if (_mode != ComposerMode.Raw || _closed || _countsUpdate != null)
+                return;
+            _countsUpdate = Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(ShowCounts));
+        }
+
+        private void ShowCounts()
+        {
+            _countsUpdate = null;
+            if (_mode != ComposerMode.Raw || _closed)
+                return;
+            RawCountsText.Text = RawCounts();
+        }
+
+        // What the counts line says: the head's bytes and field lines against Raw mode's limits, as RawRequest.CountHead
+        // counts them without allocating in proportion to the head, with the line breaks typed as LF that are sent as CRLF,
+        // then the body (RawBodyFigure); or that the head is over a limit, without counting a head of more than 65,536
+        // characters, which is over by its length alone. A head with a character outside ASCII, which Raw mode does not send,
+        // says so too.
+        private string RawCounts()
+        {
+            string head = RawHeadBox.Text;
+            if (head.Length > RawRequest.MaxHeadBytes)
+                return RawCountsOver();
+            RawHeadCounts counts = RawRequest.CountHead(head);
+            string line = counts.OverLimit
+                ? RawCountsOver()
+                : counts.LineFeedsToConvert > 0
+                    ? Localization.GetLocalizedString(
+                        "COMPOSER_RAW_COUNTS_LF",
+                        counts.HeadBytes,
+                        RawRequest.MaxHeadBytes,
+                        counts.FieldLines,
+                        RawRequest.MaxFieldLines,
+                        counts.LineFeedsToConvert,
+                        RawBodyFigure())
+                    : Localization.GetLocalizedString(
+                        "COMPOSER_RAW_COUNTS",
+                        counts.HeadBytes,
+                        RawRequest.MaxHeadBytes,
+                        counts.FieldLines,
+                        RawRequest.MaxFieldLines,
+                        RawBodyFigure());
+            return Ascii.IsValid(head) ? line : line + " " + Localization.GetLocalizedString("COMPOSER_RAW_COUNTS_NON_ASCII");
+        }
+
+        private static string RawCountsOver() => Localization.GetLocalizedString(
+            "COMPOSER_RAW_COUNTS_OVER", RawRequest.MaxHeadBytes, RawRequest.MaxRequestLineBytes, RawRequest.MaxFieldLines);
+
+        // The counts line's body: a body that the window holds as bytes by its length; a body in the editor of at most 64 Ki
+        // characters as CountBody counts it, on the UI thread, with a text body's line breaks by kind, which are sent as they
+        // are; and a larger body as one that is counted when a send, Fix Content-Length or a conversion checks it, off the UI
+        // thread, so that it is never counted, decoded or checked here.
+        private string RawBodyFigure()
+        {
+            if (_fileBody != null)
+                return Localization.GetLocalizedString("COMPOSER_RAW_COUNTS_BODY", _fileBody.LongLength);
+            if (BodyBox.Text.Length > MaxCountedBodyChars)
+                return Localization.GetLocalizedString("COMPOSER_RAW_COUNTS_BODY_LATER");
+            UpdateDraft();
+            BodyCount count = (CountBody ?? CountDraftBody)(_draft, CancellationToken.None);
+            if (count.Problem != BodyProblem.None)
+                return Localization.GetLocalizedString("COMPOSER_RAW_COUNTS_BODY_INVALID");
+            string figure = Localization.GetLocalizedString("COMPOSER_RAW_COUNTS_BODY", count.Length);
+            if (_draft.BodyIsBase64)
+                return figure;
+            (int crlf, int lf, int cr) = LineBreaks(_draft.BodyText);
+            return crlf + lf + cr == 0
+                ? figure
+                : figure + " " + Localization.GetLocalizedString("COMPOSER_RAW_BODY_BREAKS", crlf, lf, cr);
+        }
+
+        // The line breaks of a text, by kind: CRLF, then LF and CR alone.
+        private static (int Crlf, int Lf, int Cr) LineBreaks(string text)
+        {
+            int crlf = 0;
+            int lf = 0;
+            int cr = 0;
+            for (int index = 0; index < text.Length; index++)
+            {
+                if (text[index] == '\r')
+                {
+                    if (index + 1 < text.Length && text[index + 1] == '\n')
+                    {
+                        crlf++;
+                        index++;
+                    }
+                    else
+                    {
+                        cr++;
+                    }
+                }
+                else if (text[index] == '\n')
+                {
+                    lf++;
+                }
+            }
+
+            return (crlf, lf, cr);
+        }
+
+        // What a conversion found off the UI thread: why it refused, as the status says it (Refusal); otherwise the losses
+        // that its question lists, worded there (Losses; null for none), and what it applies: the raw text (Raw), or the
+        // request that Parsed mode edits (Parsed), whose body was decoded from chunks only when Decoded says so, and is held
+        // as its bytes (Held) when it is larger than the editor shows.
+        private sealed record Conversion(
+            string Refusal, string Losses, RawFromDraft Raw, RequestReplayDraft Parsed, byte[] Held, bool Decoded)
+        {
+            internal static Conversion Refused(string refusal) => new(refusal, null, null, null, null, false);
+        }
+
+        // What Fix Content-Length found off the UI thread: why it refused, as the status says it (Refusal); otherwise the
+        // head with the body's length in it (Head), that length, and why the request still cannot be sent, if it cannot
+        // (Remaining).
+        private sealed record FixedLength(string Refusal, string Head, long Length, string Remaining)
+        {
+            internal static FixedLength Refused(string refusal) => new(refusal, null, 0, null);
+        }
+
+        // The Raw mode seams as the window holds them when it freezes a piece of work, which reads nothing else of the
+        // window.
+        private sealed record RawSeams(
+            Func<RequestReplayDraft, CancellationToken, BodyCount> Count,
+            Func<string, ReadOnlyMemory<byte>, ReplayRawTarget, CancellationToken, RawImageLimits, RawImageResult>
+                Prepare,
+            int SliceChars,
+            Action<int> AfterSlice);
+
+        private RawSeams Seams =>
+            new(CountBody ?? CountDraftBody, PrepareRaw ?? RawRequest.Prepare, BodySliceChars, AfterBodySlice);
+
+        private static BodyCount CountDraftBody(RequestReplayDraft draft, CancellationToken token) =>
+            draft.TryCountBody(token);
+
+        private async void ModeButton_Click(object sender, RoutedEventArgs e) => await SwitchModeAsync();
+
+        private async void FixContentLength_Click(object sender, RoutedEventArgs e) => await FixContentLengthAsync();
+
+        private void RawHeadBox_TextChanged(object sender, TextChangedEventArgs e) => ScheduleCounts();
+
+        private void BodyBox_TextChanged(object sender, TextChangedEventArgs e) => ScheduleCounts();
 
         // History: the requests that the Replays tab recorded in this session (ReplayHistory), newest first, in a menu that
         // lists them from the history as it is when the menu opens, and keeps them current while it is open. Each entry
@@ -2517,12 +3675,14 @@ namespace XMAT.WebServiceCapture
             items.Add(HistoryAction("HistoryClear", "COMPOSER_HISTORY_CLEAR", null, HistoryClear_Click));
         }
 
-        // An entry, which shows its previews. Its Load is unavailable, and says why, for a request that cannot be sent again;
+        // An entry, which shows its previews, and, for a raw send's row, Raw mode and what XMAT wrote of its request
+        // (ReplayHistoryPreview.RawMarker). Its Load is unavailable, and says why, for a request that cannot be sent again,
+        // and for one whose destination is an IPv6 address with a zone, or cannot be read (ReplayHistoryPreview.LoadReason);
         // its Show in Replays is offered whatever Load can do.
         private MenuItem HistoryItem(ReplayHistoryPreview preview)
         {
             string shown = Localization.GetLocalizedString(
-                "COMPOSER_HISTORY_ITEM",
+                preview.RawMarker == null ? "COMPOSER_HISTORY_ITEM" : "COMPOSER_HISTORY_ITEM_RAW",
                 preview.TabNamePreview,
                 preview.RequestNumber,
                 preview.RequestTime,
@@ -2530,15 +3690,21 @@ namespace XMAT.WebServiceCapture
                 preview.UrlPreview,
                 string.IsNullOrEmpty(preview.StatusPreview)
                     ? Localization.GetLocalizedString("COMPOSER_HISTORY_NO_RESPONSE")
-                    : Localization.GetLocalizedString("COMPOSER_HISTORY_STATUS", preview.StatusPreview));
+                    : Localization.GetLocalizedString("COMPOSER_HISTORY_STATUS", preview.StatusPreview),
+                preview.RawMarker);
             // A text block as the header, not text, in which the menu would take an underscore for an access key; a long
             // preview is cut short there, and shown whole in the tooltip.
             var header = new TextBlock { Text = shown, MaxWidth = 640, TextTrimming = TextTrimming.CharacterEllipsis };
             var item = new MenuItem { Header = header, ToolTip = shown, Tag = preview.Entry };
             AutomationProperties.SetName(item, shown);
             MenuItem load = HistoryAction("HistoryLoad", "COMPOSER_HISTORY_LOAD", preview.Entry, HistoryLoad_Click);
-            string loadHelp = Localization.GetLocalizedString(
-                preview.CanLoad ? "COMPOSER_HISTORY_LOAD_HINT" : "COMPOSER_HISTORY_CANNOT_LOAD");
+            string loadHelp = Localization.GetLocalizedString(preview.LoadReason switch
+            {
+                ReplayHistoryLoadReason.None => "COMPOSER_HISTORY_LOAD_HINT",
+                ReplayHistoryLoadReason.ScopedIpv6 => "COMPOSER_HISTORY_CANNOT_LOAD_SCOPED_IPV6",
+                ReplayHistoryLoadReason.UnreadableDestination => "COMPOSER_HISTORY_CANNOT_LOAD_DESTINATION",
+                _ => "COMPOSER_HISTORY_CANNOT_LOAD",
+            });
             load.IsEnabled = preview.CanLoad;
             load.ToolTip = loadHelp;
             ToolTipService.SetShowOnDisabled(load, true);
@@ -2559,16 +3725,16 @@ namespace XMAT.WebServiceCapture
 
         // Load: loads the request of a history entry in place of the request in the editors, as Edit and resend loads a
         // captured request: from the entry's row in the Replays tab, never from what the menu shows. Refused while the window
-        // is busy, and for an entry that is no longer in the Replays tab or in the history, or a request that cannot be sent
-        // again. The request is prepared off the UI thread (RequestReplayDraft.FromCapture) while the window is busy; Cancel
-        // request or closing the window stops that, and a request prepared by then is neither asked about nor loaded. A body
-        // larger than the editor shows stays its exact bytes, shown by their size (MaxShownBodyBytes). The entry's row is
-        // found again once the request is prepared, and again just before it is loaded, after asking, when the user has
-        // edited the request or the transport options (EditorState), whether to replace them: No by default, and no
-        // permission to send. Loading resets the transport options before the request becomes the editors' baseline, keeps
-        // Inspect session, clears the previous response and sends nothing: a send or an export then asks for every
-        // permission that it needs, as always. A load that does not happen leaves the request, its transport options and the
-        // response as they were.
+        // is busy, and for an entry that is no longer in the Replays tab or in the history, or a request that its entry says
+        // cannot be loaded (HistoryRefusalKey). The request is prepared off the UI thread (RequestReplayDraft.FromCapture)
+        // while the window is busy; Cancel request or closing the window stops that, and a request prepared by then is neither
+        // asked about nor loaded. A body larger than the editor shows stays its exact bytes, shown by their size
+        // (MaxShownBodyBytes). The entry's row is found again once the request is prepared, and again just before it is
+        // loaded, after asking, when the user has edited the request or the transport options (EditorState), whether to
+        // replace them: No by default, and no permission to send. Loading resets the transport options before the request
+        // becomes the editors' baseline, keeps Inspect session, clears the previous response and sends nothing: a send or an
+        // export then asks for every permission that it needs, as always. A load that does not happen leaves the request,
+        // its transport options and the response as they were.
         internal async Task LoadFromHistoryAsync(ReplayHistoryEntry entry)
         {
             if (_closed)
@@ -2586,9 +3752,9 @@ namespace XMAT.WebServiceCapture
                 return;
             }
 
-            if (!RequestReplayDraft.CanReplay(row))
+            if (HistoryRefusalKey(row) is string refused)
             {
-                StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_UNSUPPORTED");
+                StatusText.Text = Localization.GetLocalizedString(refused);
                 return;
             }
 
@@ -2682,17 +3848,36 @@ namespace XMAT.WebServiceCapture
                 Localization.GetLocalizedString("COMPOSER_HISTORY_ROW", source, number),
                 "COMPOSER_BODY_REPLAYS_ROW");
             ClearResponse();
-            StatusText.Text = Localization.GetLocalizedString("COMPOSER_HISTORY_LOADED", source, number);
+            // A raw send's row loads as its normalized view, in Parsed mode, and the status says so, with what XMAT wrote of
+            // its request (RawSendWording.LoadedStatus).
+            StatusText.Text = RawSendWording.LoadedStatus(row.SentRaw, row.RawRequestWrite, source, number) ??
+                Localization.GetLocalizedString("COMPOSER_HISTORY_LOADED", source, number);
         }
 
-        // Makes a row of the Replays tab into the request that Load loads, off the UI thread: a body larger than the editor
-        // shows comes back as its exact bytes (held), of which nothing else is made.
+        // Why Load refuses a row, for the reason that its entry gives (ReplayHistory's preview): a request that cannot be
+        // sent again, a destination that is an IPv6 address with a zone, or one that cannot be read within the history's
+        // bounds; null when it can be loaded.
+        private static string HistoryRefusalKey(ProxyConnectionModel row)
+        {
+            if (!RequestReplayDraft.CanReplay(row))
+                return "COMPOSER_HISTORY_UNSUPPORTED";
+            return ReplayDestination.ClassifyCaptureDestination(row) switch
+            {
+                ReplayCaptureDestinationStatus.Loadable => null,
+                ReplayCaptureDestinationStatus.ScopedIpv6 => "COMPOSER_HISTORY_UNSUPPORTED_SCOPED_IPV6",
+                _ => "COMPOSER_HISTORY_UNSUPPORTED_DESTINATION",
+            };
+        }
+
+        // Makes a row of the Replays tab into the request that Load loads, off the UI thread, with the origin that the row
+        // keeps (WithRecordedOrigin): a body larger than the editor shows comes back as its exact bytes (held), of which
+        // nothing else is made.
         private static (RequestReplayDraft Draft, byte[] Held) PrepareFromHistory(
             Func<ProxyConnectionModel, int, CancellationToken, RequestReplayDraft> prepare,
             ProxyConnectionModel row,
             CancellationToken token)
         {
-            RequestReplayDraft draft = prepare(row, MaxShownBodyBytes, token);
+            RequestReplayDraft draft = WithRecordedOrigin(prepare(row, MaxShownBodyBytes, token), row.Replay?.Origin);
             return (draft, draft.GetBodyLength() > MaxShownBodyBytes ? draft.GetBodyBytes() : null);
         }
 
@@ -2729,7 +3914,7 @@ namespace XMAT.WebServiceCapture
             new(MethodBox.Text, UrlBox.Text, HeadersBox.Text, BodyBox.Text, Base64Box.IsChecked == true, _fileBody,
                 _draft.Omissions,
                 new TransportState(
-                    HttpVersion: SelectedHttpVersion,
+                    HttpVersion: _mode == ComposerMode.Raw ? _parsedHttpVersion : SelectedHttpVersion,
                     ConnectTo: ConnectToBox.IsChecked == true,
                     Endpoint: ConnectToText.Text,
                     FollowRedirects: FollowRedirectsBox.IsChecked == true,
@@ -2738,7 +3923,10 @@ namespace XMAT.WebServiceCapture
                     ProxyText: ProxyText.Text,
                     ClientCertificate: ClientCertificateBox.IsChecked == true,
                     Certificate: SelectedCertificate?.Thumbprint,
-                    WindowsAuth: WindowsAuthBox.IsChecked == true));
+                    WindowsAuth: WindowsAuthBox.IsChecked == true),
+                _mode,
+                RawTargetBox.Text,
+                RawHeadBox.Text);
 
         // Copy as cURL: one click copies to the clipboard a command for PowerShell 7 that sends the request as the editors
         // hold it, with the inbox curl.exe (RequestCurlExporter, CurlScriptForm.Pasteable); the warning beside the button
@@ -3036,8 +4224,9 @@ namespace XMAT.WebServiceCapture
         private static string ShownOrigin(string url) => UntrustedText.Show(Origin(url), MaxShownOriginChars);
 
         // Why RequestCurlExporter.Prepare, or the check of a form's Content-Type before it (RefuseDroppedFormContentType),
-        // refused the request, in the words that the buttons use when they are unavailable for the same reason; null for an
-        // exception that is no refusal. pending is what the request still leaves out.
+        // refused the request, in the words that the buttons use when they are unavailable for the same reason, and a
+        // destination with an IPv6 zone in the words of the shared diagnostic; null for an exception that is no refusal.
+        // pending is what the request still leaves out.
         private static string CurlRefusalText(Exception exception, RequestOmissions pending) => exception switch
         {
             RequestIncompleteException =>
@@ -3052,6 +4241,9 @@ namespace XMAT.WebServiceCapture
                 Localization.GetLocalizedString("COMPOSER_CURL_TOO_LONG"),
             CurlExportException { Code: ReplayOperation.ControlHeaderCode } =>
                 Localization.GetLocalizedString("COMPOSER_CURL_CONTROL_HEADER"),
+            CurlExportException { Code: ReplayDestination.ScopedIpv6Code } =>
+                Localization.GetLocalizedString(
+                    "COMPOSER_CURL_INVALID", Localization.GetLocalizedString("REPLAY_DESTINATION_SCOPED_IPV6")),
             CurlExportException or FormatException or ArgumentException =>
                 Localization.GetLocalizedString("COMPOSER_CURL_INVALID", exception.Message),
             _ => null,
@@ -3120,9 +4312,10 @@ namespace XMAT.WebServiceCapture
 
         // Until the composer asks for a decision bound to a capture's own file, a request whose stored text
         // comes from an XMAT capture without the text-format marker is refused: a drop of one, before anything is loaded or
-        // asked (replay.capture-text.ambiguous), and Save request as and both cURL exports of one in the editors, before
-        // anything is asked, prepared, copied or written (capture.text.ambiguous-export). A source that is unknown counts
-        // as unmarked. True, with the reason in the status, when refused; nothing else changes.
+        // asked, and a raw send of one, before anything is checked, asked or sent (replay.capture-text.ambiguous); and Save
+        // request as and both cURL exports of one in the editors, before anything is asked, prepared, copied or written
+        // (capture.text.ambiguous-export). A source that is unknown counts as unmarked. True, with the reason in the status,
+        // when refused; nothing else changes.
         private bool RefusesStoredText(CaptureTextSource source, string code)
         {
             if (source?.Semantics == CaptureTextSemantics.Literal)
@@ -3152,18 +4345,21 @@ namespace XMAT.WebServiceCapture
         // drop, which keeps them but for Upstream proxy, Client certificate and Automatically authenticate with Windows.
         // Supplying a part is an edit, even as the empty part that the editor already showed. A body that the window holds as
         // bytes, an uploaded file's, a form's, or a large one from a request file or the Replays tab, is compared by
-        // reference: it is the same bytes until another upload, form or Clear body.
+        // reference: it is the same bytes until another upload, form or Clear body. The mode, and Raw mode's target and head,
+        // which are empty in Parsed mode, are compared too: every load is in Parsed mode, so Raw mode is always an edit, even
+        // with both of its boxes empty, and a round trip through it that changes nothing in the Parsed editors leaves them as
+        // loaded.
         private sealed record EditorState(
             string Method, string Url, string Headers, string Body, bool Base64, byte[] FileBody,
-            RequestOmissions Omissions, TransportState Transport);
+            RequestOmissions Omissions, TransportState Transport, ComposerMode Mode, string RawTarget, string RawHead);
 
         // The transport options as the user left them, which Open request and Load reset (ResetTransport) and a drop keeps:
-        // the HTTP version, which a request file keeps too, and Connect to another endpoint and Follow same-origin
-        // redirects, each with what it holds also while it is off: the endpoint as typed and the most redirects. And
-        // Upstream proxy, with the proxy as typed, Client certificate, with the thumbprint of the certificate chosen, each
-        // also while it is off, and Automatically authenticate with Windows, which all three reset (ResetProxy,
-        // ResetClientCertificate, ResetWindowsAuth) and nothing keeps: they are here only to tell whether replacing the
-        // request loses them, never to be saved or restored.
+        // the HTTP version, which a request file keeps too, as chosen for Parsed mode, also while Raw mode shows HTTP/1.1
+        // only, and Connect to another endpoint and Follow same-origin redirects, each with what it holds also while it is
+        // off: the endpoint as typed and the most redirects. And Upstream proxy, with the proxy as typed, Client
+        // certificate, with the thumbprint of the certificate chosen, each also while it is off, and Automatically
+        // authenticate with Windows, which all three reset (ResetProxy, ResetClientCertificate, ResetWindowsAuth) and nothing
+        // keeps: they are here only to tell whether replacing the request loses them, never to be saved or restored.
         private sealed record TransportState(
             ReplayHttpVersion HttpVersion,
             bool ConnectTo,

@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Xml.Linq;
 using XMAT.Cli;
+using XMAT.Operations.Replay;
 using XMAT.Tests.Proxy;
 using XMAT.Tests.Replay;
 
@@ -143,21 +144,52 @@ namespace XMAT.Tests.Cli
             CliAssert.NoStagingFolders(directory.Root);
         }
 
-        // A run that publishes nothing never completes its archive, and its own failure stands.
+        // Parsed policy refusals now win before output reservation, so they never create an archive or staging folder.
         [Fact]
-        public async Task ARefusedRun_NeverCompletesItsArchive_AndKeepsItsFailure()
+        public async Task UnsafeMethodRefusal_PrecedesArchiveReservation()
         {
             using var directory = new CliTestDirectory();
             await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok("ok"));
             var seam = new SeamStream.Options();
 
-            CliReport report = await RunInProcess(seam, CancellationToken.None, "compose", "--url", server.Origin + "/", "--method", "POST", "--save-saz", "--out", Path.Join(directory.Root, "results"));
+            CliReport report = await RunInProcess(
+                seam, CancellationToken.None,
+                "compose", "--url", server.Origin + "/", "--method", "POST",
+                "--save-saz", "--out", Path.Join(directory.Root, "results"));
 
             Assert.Equal(CliExitCodes.InvalidInput, report.ExitCode);
             Assert.Equal(new[] { "replay.policy.unsafe-method" }, report.Errors.Select(error => error.Code));
+            Assert.False(seam.Created);
+            Assert.False(seam.SawEnd);
+            Assert.Equal(CliCleanupStates.NotNeeded, report.CleanupState);
+            Assert.False(Directory.Exists(Path.Join(directory.Root, "results")));
+            Assert.Empty(server.Requests);
+            CliAssert.NoStagingFolders(directory.Root);
+        }
+
+        // Credential resolution remains after reservation. Its refusal keeps the failure, leaves the archive incomplete,
+        // removes staging and sends nothing.
+        [Fact]
+        public async Task CredentialRefusalAfterReservation_NeverCompletesItsArchive()
+        {
+            using var directory = new CliTestDirectory();
+            await using var server = new LoopbackHttpServer(_ => LoopbackResponse.Ok("unexpected"));
+            var seam = new SeamStream.Options();
+            string origin = $"https://localhost:{server.Port}";
+
+            CliReport report = await RunInProcess(
+                seam, CancellationToken.None,
+                "compose", "--url", origin + "/",
+                "--client-cert", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "--allow-client-cert", origin,
+                "--save-saz", "--out", Path.Join(directory.Root, "results"));
+
+            Assert.Equal(CliExitCodes.InvalidInput, report.ExitCode);
+            Assert.Equal(new[] { ReplayCertificateResolver.NotFoundCode }, report.Errors.Select(error => error.Code));
             Assert.True(seam.Created);
             Assert.False(seam.SawEnd);
             Assert.Equal(CliCleanupStates.Completed, report.CleanupState);
+            Assert.False(Directory.Exists(Path.Join(directory.Root, "results")));
             Assert.Empty(server.Requests);
             CliAssert.NoStagingFolders(directory.Root);
         }

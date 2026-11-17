@@ -272,6 +272,10 @@ XMAT's reach.
 2. Edit the method, URL, headers, or body in the composer window.
 3. Click **Send** and inspect the new response. The original capture is not modified.
 
+The composer shows the request as fields, in Parsed mode, from which XMAT builds the
+request that it sends, as described below. To send exactly the bytes that you prepare
+instead, see [Raw mode (prepared bytes)](#raw-mode-prepared-bytes).
+
 Loaded and imported captures can be resent too. Binary, compressed, and non-UTF-8
 request bodies are preserved as editable Base64; text bodies use UTF-8.
 
@@ -293,6 +297,22 @@ names the method, the URL, and any origin that it is about, each shortened when 
 and with any character that could hide or reorder text, such as a bidirectional
 control, shown as `\uXXXX`; the request is sent with the whole method and URL as you
 entered them. CONNECT and WebSocket handshakes cannot be resent.
+
+XMAT sends no request to an IPv6 address with a zone identifier, such as `fe80::1%12` or
+`fe80::1%Ethernet`, and exports no cURL command for one. A request keeps such a
+destination as data: **Edit and resend**, dragging a request into a composer, **Open
+request**, and **Save request as** keep its URL, zone included. **Send**, **Copy as
+cURL**, and **Save as cURL script** refuse it before anything is asked, sent, copied, or
+saved; the status line says why, and the request in the composer stays as it was. To
+send the request, replace its URL with another destination: that changes the captured
+origin, which XMAT asks about as always, and the request keeps its captured origin.
+
+A request of the **XMAT Replays** tab keeps, as its captured origin, the origin that its
+request was captured or saved for, or first sent to, in Parsed and Raw mode alike; a
+request file's is the origin that it was saved for. **Edit and resend**, dragging the
+request into a composer, and **Load** keep it, and **Reissue** asks before sending such
+a request to another origin. It is kept in memory only: in a saved capture that you open
+again, a request's origin is that of its own URL.
 
 HTTPS certificates are checked as Windows checks them, with two limits that every
 resent or composed request shares. Revocation is not checked, so a revoked certificate
@@ -329,9 +349,10 @@ send and says so; send again when it has finished.
   request was sent to, and never from HTTPS to HTTP, so captured headers and the body
   never go to another origin. Each redirect followed is another request: after a 303
   it is a GET without the body, but a HEAD stays a HEAD, and after a 301 or 302 that
-  answers a POST it is a GET without the body, as browsers send it. When XMAT does not
-  follow a redirect, the redirect response is the result and the status line says why.
-  Without the option, a redirect response is shown as it is.
+  answers a POST it is a GET without the body, as browsers send it. XMAT never follows
+  a redirect to an IPv6 address with a zone. When XMAT does not follow a redirect, the
+  redirect response is the result and the status line says why. Without the option, a
+  redirect response is shown as it is.
 - **Inspect session** is off by default. When it is selected, XMAT selects the last
   request that the send recorded in the **XMAT Replays** tab once the send has ended,
   also when that request failed or timed out, and also when you cancelled the send
@@ -359,6 +380,12 @@ send and says so; send again when it has finished.
 - **Automatically authenticate with Windows** is off by default. It answers the
   Negotiate and NTLM challenges of the request's origin with the Windows credentials
   that XMAT runs with; see [Authenticate with Windows](#authenticate-with-windows).
+- **Edit as raw text...** switches the composer to Raw mode, which sends one HTTP/1.1
+  request as the exact bytes that you prepare, and **Edit as parsed (normalized)...**
+  switches it back; see [Raw mode (prepared bytes)](#raw-mode-prepared-bytes). In Raw
+  mode, **HTTP version** shows **HTTP/1.1 only**, and **Follow same-origin redirects**,
+  **Upstream proxy**, **Client certificate**, and **Automatically authenticate with
+  Windows** stay off and cannot be selected.
 
 The options are fixed when you confirm or start a send: changing them while it runs, or
 while XMAT asks you about it, changes nothing for that send. In the **XMAT Replays**
@@ -524,6 +551,120 @@ steer the Kerberos service name through CNAMEs, while HTTPS still proves the hos
 - **Testing.** XMAT's tests exercise Windows authentication with NTLM only, against a
   server on the loopback address; Kerberos is not exercised.
 
+### Raw mode (prepared bytes)
+
+Raw mode sends one HTTP/1.1 request as the bytes that you prepare in the composer: a
+target origin, a head, and a body. It is a constrained mode, not Fiddler's raw wire
+format: XMAT checks the request against Raw mode's rules before anything is asked or
+sent, sends nothing that breaks one, and adds no field and changes none.
+
+- **Switching.** **Edit as raw text...** turns the request in the editors into Raw
+  mode's target origin, head, and body, and **Edit as parsed (normalized)...** turns it
+  back into fields. Neither sends anything. The request is prepared in the background:
+  **Cancel request**, or closing the composer, stops it and changes nothing. When the
+  change loses anything, XMAT lists what and asks first, No by default, and declining
+  keeps the request exactly as it was. Going to Raw mode, `Host` is written from the
+  URL, `Content-Length` as the body's length, each header line as `Name: value`, and
+  the URL's path and query as Parsed mode sends them; header lines that Parsed mode
+  leaves out, such as connection-only ones, are left out, and a built form keeps its
+  bytes but not its parts. Going back, a chunked body is decoded and sent with
+  `Content-Length`, an absolute URL in the request line is not kept, header lines that
+  Parsed mode does not send stay in the headers without being sent, and **HTTP
+  version** returns to the choice for Parsed mode.
+- **When switching is refused.** A request stays in Parsed mode while a part that a
+  request file left out is not supplied, with a numbered URL, and with **HTTP/2 only**,
+  **Follow same-origin redirects**, **Upstream proxy**, **Client certificate**, or
+  **Automatically authenticate with Windows**. Its URL must be an absolute HTTP or
+  HTTPS URL of at most 65,536 characters, without a user name or fragment, whose host
+  is a DNS name or a whole IP address and whose port is decimal; its method a single
+  token; each header line one valid `Name: value`; its body valid as its editor reads
+  it; and the request within Raw mode's limits (see below). Preparation also allows at
+  most 1,024 distinct candidate field names totaling 256 KiB, before Connection
+  nominations are applied. A raw request that is not valid stays in Raw mode, as it is,
+  when you edit it as parsed. Each time, the status line says why.
+- **Target origin.** Where Raw mode connects, and the name that the server's
+  certificate must have: `http://` or `https://`, a host, and a port when needed, such
+  as `https://api.example.com:8443`, with no user name, path, query, or fragment. XMAT
+  fills it in from the URL, with an international host name in its ASCII (punycode)
+  form, and the confirmation shows it in ASCII first, with its Unicode spelling after
+  it. `Host` must name this origin, and so must an absolute URL in the request line.
+- **Head.** The request line, such as `GET /items HTTP/1.1`, then one `Name: value` line
+  per field, in ASCII. Every line break is sent as CRLF, also one typed as LF, and the
+  head ends with exactly one empty line. As you type, the composer counts the head's
+  bytes and field lines against Raw mode's limits, and the line breaks typed as LF.
+- **Body.** The body editor holds the body, which is sent unchanged, line breaks
+  included: its text as UTF-8, or its bytes when it is Base64 or uploaded. Its framing
+  is the head's own: one `Content-Length` equal to the body's length, or
+  `Transfer-Encoding: chunked` with complete chunks, never both. **Fix
+  Content-Length** sets the one `Content-Length` field to the body's length in bytes
+  and changes nothing else in the head; it needs exactly one `Content-Length` field and
+  no `Transfer-Encoding`. **Build form** is not available: write the body and its
+  framing yourself, or upload its bytes.
+- **Rules.** A head of at most 64 KiB, with a request line of at most 16 KiB and at most
+  256 field lines; a method of at most 64 characters; a body of at most 64 MiB; and
+  chunk framing of at most 1 MiB in all, with chunk lines of at most 8 KiB. No
+  trailers, chunk extensions, or `Trailer` field, and no field more than once. HEAD and
+  TRACE requests have no body, and a GET or OPTIONS request with a body counts as
+  unsafe, with its own warning. `Host`, and an absolute URL in the request line, must
+  name the target origin, which must not be, or resolve only to, an unspecified,
+  multicast, or broadcast address. `Connection: close` is the only Connection field
+  allowed, with no `Keep-Alive`, `Proxy-Connection`, or `TE` field, and there is no
+  `Expect` field, protocol upgrade, or WebSocket handshake. CONNECT, and a standard
+  method written in another case, are not sent.
+- **The question.** XMAT asks before every raw send, No by default. The question says
+  how many prepared bytes XMAT sends and to which target origin, and shows the request
+  line, the head's size and field lines, and the body's size and framing, never the
+  rest of the head. It adds the risk of a method that can change server data or of
+  another origin than the request's captured origin, the warning about a GET or OPTIONS
+  request with a body, and **Connect to another endpoint** when it is selected. **HTTP
+  version** shows **HTTP/1.1 only**, the only version that Raw mode sends, and the
+  version that you chose for Parsed mode comes back when you edit as parsed.
+- **What Raw mode never does.** It sends on a new connection of its own, directly or to
+  **Connect to another endpoint**, which needs an HTTPS target origin, never through a
+  proxy. It offers no client certificate, uses no Windows authentication, follows no
+  redirect, retries nothing, and adds no cookies or credentials: fields that you write,
+  such as `Authorization` or `Cookie`, are part of the prepared bytes. It sends one
+  request, without verification or numbered URLs, with the same 30-second timeout and
+  16 MiB response limit.
+- **What is recorded.** Each raw send that begins gets a row in the **XMAT Replays**
+  tab, which shows a normalized view of the request, not its prepared bytes. The row's
+  note begins "Attempted request" unless XMAT handed every byte of the request to the
+  connection, and says what XMAT wrote, as the status line does: XMAT wrote nothing of
+  the request; XMAT stopped after handing part of the request to the connection; XMAT
+  could not confirm that every prepared byte was handed to the connection; or XMAT
+  handed every byte to the connection. None of these says that the server received
+  anything. The note also says when a response ended because the server closed the
+  connection, so that it may be incomplete, and when the response's trailer fields
+  were read but not kept. **Cancel request** before the send begins sends and records
+  nothing.
+- **The recording guarantee.** A raw send that began always gets its row, with what
+  XMAT wrote, whether it completes, fails, or is cancelled, also by closing the
+  composer, and exiting XMAT waits for it. There are two exceptions. When XMAT exits
+  without closing its window, as when Windows ends the session, no row is added; the
+  **XMAT Replays** tab, kept in memory only, ends with XMAT anyway. And when the tab
+  cannot take a send, the run stops: while the composer is open, its status line shows
+  that send's result and what XMAT wrote; once it is closed, only the application log
+  notes the failure, naming only the error's type, never the request's data.
+- **Certificates.** A raw send checks HTTPS certificates as every resent or composed
+  request does, with the same two limits; see
+  [Edit and resend a request](#edit-and-resend-a-request).
+- **When a send fails.** "Could not be completed" means that XMAT could not resolve the
+  target's name, connect to it, or set up TLS with it; or that a write of the request
+  failed and no complete response followed; or that the connection ended before a
+  complete final status line came, even after interim responses or part of a response.
+  When the connection ends while XMAT reads a response's body, the response may be
+  incomplete, and the status line says so.
+- **Not available in Raw mode.** **Copy as cURL** and **Save as cURL script**, since
+  curl would build a request of its own, and **Save request as**, since a request file
+  holds a parsed request: edit as parsed first. Dragging a request in, **Open
+  request**, and **Load** load it in Parsed mode; in Raw mode, the request in the
+  editors always counts as edited, so they ask first, and declining keeps the raw text
+  exactly.
+- **No guarantee.** Raw mode's checks make a request well formed by its rules, not
+  safe. A front end and the server behind it can read the same bytes differently, and
+  a raw request can affect other requests on a connection that they share. Send raw
+  requests only to servers that you own or may test.
+
 ### Copy as cURL and Save as cURL script
 
 **Copy as cURL (PowerShell 7)** copies a command, and **Save as cURL script...** saves a
@@ -554,13 +695,14 @@ script can use them.
   header value with non-ASCII characters, which XMAT does not send, is sent as its UTF-8
   bytes, and an empty value as `Name:` rather than `Name: `. **HTTP/1.1 only** is sent
   exactly; with **Automatic**, curl chooses the version itself.
-- **When they are not available.** While a part that a request file left out is not
-  supplied, for a numbered URL (see below), and with **Follow same-origin redirects**,
-  **HTTP/2 only**, **Connect to another endpoint**, **Upstream proxy**, **Client
-  certificate**, or **Automatically authenticate with Windows**: each button says why. A
-  request with a Fiddler control header, a HEAD request with a body, or a URL and
-  headers too long for one command line are refused when you select either button, and
-  the status line says why.
+- **When they are not available.** In Raw mode, while a part that a request file left
+  out is not supplied, for a numbered URL (see below), and with **Follow same-origin
+  redirects**, **HTTP/2 only**, **Connect to another endpoint**, **Upstream proxy**,
+  **Client certificate**, or **Automatically authenticate with Windows**: each button
+  says why. A request with a Fiddler control header, a HEAD request with a body, a URL
+  to an IPv6 address with a zone, or a URL and headers too long for one command line
+  are refused when you select either button, before anything is asked, copied, or
+  saved, and the status line says why.
 - **Another origin.** When the URL goes to another origin than the request was captured
   or loaded for, XMAT asks whether to export the request for that origin, which it
   names: every time, before asking about the content, and No by default. Declining
@@ -589,11 +731,13 @@ the body is sent as it is. Write `%23` for a literal `#` in the URL. A `#` in th
 scheme, host, or port is refused, so numbers never lead to other hosts.
 
 The requests are checked before anything is sent: the request first, then the run with
-the numbers that you chose, each in the background, which **Cancel request** stops. They
-go out one at a time, at most 10,000 of them. When they need confirmation, one question
-covers them all and says how many there are. **Cancel request** stops before the next
-request: the requests already sent stay in the **XMAT Replays** tab. The composer shows
-the last response only.
+the numbers that you chose, each in the background, which **Cancel request** stops. A
+request whose text comes from an XMAT capture without the text-format marker, or whose
+destination is an IPv6 address with a zone, is refused before XMAT asks for the numbers.
+The requests go out one at a time, at most 10,000 of them. When they need confirmation,
+one question covers them all and says how many there are. **Cancel request** stops before
+the next request: the requests already sent stay in the **XMAT Replays** tab. The
+composer shows the last response only.
 
 ### Upload a body from a file
 
@@ -668,15 +812,16 @@ Drag a request from a connections list onto an open composer to edit and send it
 One request is dragged at a time; CONNECT tunnels, protocol upgrades, and requests
 recorded without their body cannot be dragged. The composer loads a copy of the request
 as it was when the drag began, clears the previous response, and sends nothing. If you
-have edited the request in the composer, it asks before replacing it. A drop keeps the
-**HTTP version**, **Connect to another endpoint**, and **Follow same-origin redirects**
-as they are, so changing only those asks nothing here; opening a request file or loading
-a request from history still asks about them, since both reset them. A drop turns
-**Upstream proxy**, **Client certificate**, and **Automatically authenticate with
-Windows** off, clearing the proxy and the certificate chosen, as both of those do, so it
-asks first when you have changed any of these options. Only requests dragged from XMAT
-can be dropped; text, links, and files are refused, and nothing can be dropped while the
-composer sends or reads a file.
+have edited the request in the composer, it asks before replacing it; in Raw mode, the
+request always counts as edited, and the dropped request loads in Parsed mode. A drop
+keeps the **HTTP version**, **Connect to another endpoint**, and **Follow same-origin
+redirects** as they are, so changing only those asks nothing here; opening a request
+file or loading a request from history still asks about them, since both reset them. A
+drop turns **Upstream proxy**, **Client certificate**, and **Automatically authenticate
+with Windows** off, clearing the proxy and the certificate chosen, as both of those do,
+so it asks first when you have changed any of these options. Only requests dragged from
+XMAT can be dropped; text, links, and files are refused, and nothing can be dropped
+while the composer sends or reads a file.
 
 ### Load a request from history
 
@@ -686,7 +831,12 @@ including those that failed or were recorded without their body. It keeps the la
 200 and is never saved: it is empty when XMAT starts, and opening a saved capture adds
 nothing to it. The list is the same in every composer. Each entry shows its tab and
 request number, its time, method, URL, and status, shortened when they are long, with
-any character that could hide or reorder text shown as `\uXXXX`.
+any character that could hide or reorder text shown as `\uXXXX`. The entry of a
+request that Raw mode sent then says "Raw mode", or "Raw mode, attempted request"
+unless XMAT handed every byte of it to the connection, followed by what XMAT wrote of
+it, in its row's words but without a count of bytes. **Load** loads such a request as
+the normalized view that its row shows, in Parsed mode, and the status line says so:
+that view can differ from the bytes that XMAT prepared.
 
 - **Load** loads the request in place of the request in the editors, as **Edit and
   resend** would, clears the previous response, and sends nothing. It resets the
@@ -700,7 +850,10 @@ any character that could hide or reorder text shown as `\uXXXX`.
   the composer, stops it and loads nothing. A body larger than 64 KiB is kept as its
   exact bytes and shown only by its size: **Copy as cURL** does not copy it, and **Save
   as cURL script** saves it whole. **Load** is not available for CONNECT tunnels,
-  protocol upgrades, and requests recorded without their body.
+  protocol upgrades, requests recorded without their body, scoped IPv6 destinations,
+  destinations that are malformed or exceed the size limit (see
+  [Replay requests](#replay-requests)), or requests whose international host name XMAT
+  cannot convert to ASCII (punycode), which it never sends; its tooltip says which.
 - **Show in Replays** selects the request in its tab, also when it cannot be loaded.
 - **Clear history** empties the history in every composer. The requests stay in the
   **XMAT Replays** tab, and a request that you loaded stays in its composer.
@@ -719,7 +872,8 @@ request file is JSON in XMAT's `xmat-request/1` format; XMAT suggests the extens
 `.xmat-request.json`. It holds one request and its **HTTP version**, and never **Connect
 to another endpoint**, **Upstream proxy**, **Client certificate**, **Automatically
 authenticate with Windows**, **Follow same-origin redirects**, a range for a numbered
-URL, or any permission.
+URL, or any permission. It never holds raw text either: **Save request as** is not
+available in Raw mode, so edit the request as parsed to save it.
 
 - **A template by default.** Unless you include the captured content, the file is a
   template: it keeps only safe protocol structure, which is the method when it is a
@@ -762,8 +916,9 @@ URL, or any permission.
   current request: edits to the request since it was loaded, even only supplying a part
   that its file left out, and changes to these transport options from what the composer
   started with, the last opened file, or the last request loaded from history set,
-  including changes made before you dragged in a request. Declining keeps everything as
-  it was, and no answer is a permission to send. Text in the file, such as Fiddler's
+  including changes made before you dragged in a request. In Raw mode, the request
+  always counts as edited, and the file opens in Parsed mode. Declining keeps everything
+  as it was, and no answer is a permission to send. Text in the file, such as Fiddler's
   `<@INCLUDE@>`, is used as it is, and no other file is read. The composer shows only
   the file's name, never its folder, with any character that could hide or reorder text
   shown as `\uXXXX`, and the **XMAT Replays** tab records each send as coming from that
@@ -808,9 +963,26 @@ Right-click a request, or one of several selected requests, and open **Replay**:
 
 Replays are sent the way the composer sends requests. Methods other than exactly GET,
 HEAD, and OPTIONS, in capitals, need confirmation, which states how many requests the
-replay sends, repeats included, and how many of them can change server data. The
-requests are copied when you choose the menu item, so the confirmed requests are exactly
-the ones sent, even if a running capture updates their rows meanwhile.
+replay sends, repeats included, and how many of them can change server data. So does a
+request of the **XMAT Replays** tab that goes to another origin than the one that its
+request was captured or saved for, or first sent to (see
+[Edit and resend a request](#edit-and-resend-a-request)), and the question says how many
+such requests the replay sends. The requests are copied when you choose the menu item,
+so the confirmed requests are exactly the ones sent, even if a running capture updates
+their rows meanwhile.
+
+A replay in which any request's destination is malformed or exceeds the size limit is
+refused whole, before anything is asked or sent, and XMAT says why; so is a replay in
+which any request would go to an IPv6 address with a zone. Requests that a replay
+skips, such as CONNECT tunnels, do not count. The size limit applies to the destination
+only, never to the rest of the URL: at most 8,192 characters (UTF-16 code units) of a
+request's target, from its first character, leading whitespace included, through the
+one that ends its host and port, when the target is an absolute URL, and otherwise at
+most 8,192 each for the captured scheme, host, and port. A request whose destination is
+malformed or exceeds the limit cannot be edited and resent, or dragged into a composer,
+either. A selection that also has a request of an XMAT capture without the text-format
+marker is refused for that first (see
+[Edit and resend a request](#edit-and-resend-a-request)).
 
 Each request that was sent appears in the read-only **XMAT Replays** tab, with its
 response, or without one when the request failed or timed out. **Replay of** in the

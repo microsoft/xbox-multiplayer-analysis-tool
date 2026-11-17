@@ -9,8 +9,10 @@ using CaptureAnalysisEngine;
 using XMAT.DataAbstractionLayer;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Replay;
 using XMAT.SharedInterfaces;
 using XMAT.Tests.Fixtures;
+using XMAT.Tests.Replay;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using XMAT.XboxLiveCaptureAnalysis;
@@ -20,6 +22,233 @@ namespace XMAT.Tests.Operations.Analysis
     public class SazAnalysisParityTests
     {
         private const string DeviceName = "Synthetic SAZ device";
+
+        [Fact]
+        public void AnalysisUrlKeepsTheZoneWithoutAddingItToTheLogicalHost()
+        {
+            var record = new ProxyConnectionModel(
+                1, "200", DateTime.UnixEpoch, TimeSpan.FromMilliseconds(1),
+                "https", "example.test:443", "POST", "/users?q=%25",
+                "POST /users?q=%25 HTTP/1.1\r\n" +
+                    "Host: userpresence.xboxlive.com\r\n" +
+                    "User-Agent: XboxServicesAPI\r\n\r\n",
+                Array.Empty<byte>(), "HTTP/1.1 200 OK\r\n\r\n", Array.Empty<byte>(), "127.0.0.1");
+            typeof(ProxyConnectionModel)
+                .GetProperty(nameof(ProxyConnectionModel.Host))
+                .SetValue(record, "fe80::1%Ethernet");
+
+            ServiceCallItem call = WebServiceCaptureRecordConverter.Convert(
+                AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(1, record));
+
+            Assert.NotNull(call);
+            Assert.Equal("userpresence.xboxlive.com", call.Host);
+            Assert.Equal("https://[fe80::1%Ethernet]/users?q=%25", call.Uri);
+        }
+
+        [Fact]
+        public async Task AnalysisWithEscapedUserInformationAndAScopedHost_DoesNotFailTheRun()
+        {
+            using var directory = new TestDirectory();
+            var record = new ProxyConnectionModel(
+                1, "200", DateTime.UnixEpoch, TimeSpan.FromMilliseconds(1),
+                "http", "example.test:80", "GET", "http://a{b@[fe80::1%12]/a%20b",
+                "GET http://a{b@[fe80::1%12]/a%20b HTTP/1.1\r\n" +
+                    "Host: userpresence.xboxlive.com\r\n" +
+                    "User-Agent: XboxServicesAPI\r\n\r\n",
+                Array.Empty<byte>(), "HTTP/1.1 200 OK\r\n\r\n", Array.Empty<byte>(), "127.0.0.1");
+            ServiceCallItem call = WebServiceCaptureRecordConverter.Convert(
+                AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(1, record));
+            string unscoped = new Uri("http://a{b@[fe80::1]/a%20b").ToString();
+
+            Assert.NotNull(call);
+            Assert.Equal("userpresence.xboxlive.com", call.Host);
+            Assert.Equal(unscoped.Replace("[fe80::1]", "[fe80::1%12]", StringComparison.Ordinal), call.Uri);
+
+            OperationResult<AnalysisResult> result = await AnalyzeRecords(
+                new[] { AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(1, record) },
+                System.IO.Path.Join(directory.Path, "analysis"));
+
+            Assert.Equal(OperationOutcome.Succeeded, result.Outcome);
+        }
+
+        [Theory]
+        [InlineData("%0")]
+        [InlineData("%Ethernet")]
+        [InlineData("%25NoSuchIf")]
+        public async Task ScopedAbsoluteTargets_KeepTheirLexicalZoneThroughBothReadersAndDataUses(string zone)
+        {
+            using var directory = new TestDirectory();
+            string host = "fe80::1" + zone;
+            string url = $"http://[{host}]:8080/x?keep=%25";
+            string path = ReplayCaptures.WriteSaz(
+                directory.Path,
+                "scoped.saz",
+                new CapturedExchange(
+                    "GET",
+                    url,
+                    "Host: userpresence.xboxlive.com\r\nUser-Agent: XboxServicesAPI\r\n"));
+            FiddlerSazImportResult imported =
+                FiddlerSazHandler.ImportSazFileWithDiagnostics(path, CancellationToken.None);
+            BoundedSazReadResult bounded = ReadBounded(path);
+            ProxyConnectionModel[] records =
+            {
+                Assert.Single(imported.Records),
+                Assert.Single(bounded.Records),
+            };
+
+            var constructed = new ProxyConnectionModel(
+                7,
+                "200",
+                DateTime.UnixEpoch,
+                TimeSpan.Zero,
+                "http",
+                $"[{host}]:8080",
+                "GET",
+                "/x?keep=%25",
+                $"GET /x?keep=%25 HTTP/1.1\r\nHost: [{host}]:8080\r\n\r\n",
+                Array.Empty<byte>(),
+                "HTTP/1.1 200 OK\r\n\r\n",
+                Array.Empty<byte>(),
+                "127.0.0.1");
+            Assert.Equal((host, "8080"), (constructed.Host, constructed.Port));
+
+            foreach (ProxyConnectionModel record in records)
+            {
+                Assert.Equal(("http", host, "8080", "/x?keep=%25"), (record.Scheme, record.Host, record.Port, record.Path));
+                Assert.StartsWith($"GET {url} HTTP/1.1\r\n", record.RequestLineAndHeaders, StringComparison.Ordinal);
+                Assert.Contains("\r\nHost: userpresence.xboxlive.com\r\n", record.RequestLineAndHeaders, StringComparison.Ordinal);
+                RequestReplayDraft draft = RequestReplayDraft.FromCapture(record);
+                Assert.Equal(url, draft.Url);
+                Assert.Equal(ReplayCaptureDestinationStatus.ScopedIpv6, ReplayDestination.ClassifyCaptureDestination(record));
+
+                using var requestFile = new MemoryStream();
+                RequestFileWriter.Write(
+                    draft,
+                    ReplayHttpVersion.Auto,
+                    RequestFileProfile.Content,
+                    requestFile,
+                    CancellationToken.None);
+                RequestFileReadResult read = RequestFileReader.Read(requestFile.ToArray());
+                Assert.Null(read.Code);
+                Assert.Equal(url, read.Content.Url);
+                Assert.Equal(url, RequestReplayDraft.FromRequestFile(read.Content).Url);
+
+                ServiceCallItem call = WebServiceCaptureRecordConverter.Convert(
+                    AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(1, record));
+                Assert.NotNull(call);
+                Assert.Equal("userpresence.xboxlive.com", call.Host);
+                Assert.Equal(url, call.Uri);
+            }
+
+            var ordinary = new ProxyConnectionModel(
+                8,
+                "200",
+                DateTime.UnixEpoch,
+                TimeSpan.Zero,
+                "http",
+                "127.0.0.1:9",
+                "GET",
+                "/ordinary",
+                "GET /ordinary HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n",
+                Array.Empty<byte>(),
+                "HTTP/1.1 200 OK\r\n\r\n",
+                Array.Empty<byte>(),
+                "127.0.0.1");
+            int senders = 0;
+            var operation = new ReplayOperation
+            {
+                SenderFactory = () =>
+                {
+                    senders++;
+                    throw new InvalidOperationException("A scoped plan must not create a sender.");
+                },
+            };
+            OperationResult<ReplayResult> send = await operation.ExecuteAsync(
+                new ReplayRequest(ReplaySource.FromCaptures(new[] { ordinary, records[0] })),
+                OperationContext.None,
+                CancellationToken.None);
+            Assert.Equal(ReplayDestination.ScopedIpv6Code, Assert.Single(send.Diagnostics).Code);
+            Assert.Equal(0, senders);
+
+            OperationResult<ReplayExport> exported = operation.PrepareForExport(
+                new ReplayRequest(ReplaySource.FromCaptures(new[] { ordinary, records[0] })),
+                CancellationToken.None);
+            Assert.True(exported.Succeeded);
+            int scripts = 0;
+            CurlExportException curl = Assert.Throws<CurlExportException>(() =>
+            {
+                foreach (ReplayExportItem item in exported.Value.Items)
+                {
+                    RequestCurlExporter.CheckDestination(item.Draft);
+                }
+
+                scripts++;
+            });
+            Assert.Equal(ReplayDestination.ScopedIpv6Code, curl.Code);
+            Assert.Equal(0, scripts);
+        }
+
+        [Theory]
+        [InlineData("http://[fe80::1%a?x]:8080/path")]
+        [InlineData("http://[fe80::1%a@[2001:db8::1]:8080/path")]
+        [InlineData("http://[fe80::1%a]@[2001:db8::1]:8080/path")]
+        [InlineData("http://x@[fe80::1%a@[2001:db8::1]:8080/path")]
+        public void AbsoluteTargetWithRejectedZoneText_FallsBackToANonUrlRow(string target)
+        {
+            using var directory = new TestDirectory();
+            Assert.True(Uri.TryCreate(target, UriKind.Absolute, out _));
+            string path = WriteSazRequest(
+                directory.Path,
+                "rejected-zone.saz",
+                $"GET {target} HTTP/1.1\r\nHost: conflicting.example\r\n\r\n");
+            FiddlerSazImportResult imported =
+                FiddlerSazHandler.ImportSazFileWithDiagnostics(path, CancellationToken.None);
+            BoundedSazReadResult bounded = ReadBounded(path);
+
+            foreach (ProxyConnectionModel record in new[] { Assert.Single(imported.Records), Assert.Single(bounded.Records) })
+            {
+                Assert.Equal((string.Empty, "conflicting.example", target), (record.Scheme, record.Host, record.Path));
+            }
+        }
+
+        [Theory]
+        [InlineData("http://b.test:/x", "b.test")]
+        [InlineData("http://[2001:db8::1]:/x", "2001:db8::1")]
+        public void AbsoluteTargetWithAnEmptyPort_RemainsAUrlRow(string target, string expectedHost)
+        {
+            using var directory = new TestDirectory();
+            string path = WriteSazRequest(
+                directory.Path,
+                "empty-port.saz",
+                $"GET {target} HTTP/1.1\r\nHost: conflicting.example\r\n\r\n");
+            FiddlerSazImportResult imported =
+                FiddlerSazHandler.ImportSazFileWithDiagnostics(path, CancellationToken.None);
+            BoundedSazReadResult bounded = ReadBounded(path);
+
+            foreach (ProxyConnectionModel record in new[] { Assert.Single(imported.Records), Assert.Single(bounded.Records) })
+            {
+                Assert.Equal(("http", expectedHost, string.Empty, "/x"), (record.Scheme, record.Host, record.Port, record.Path));
+            }
+        }
+
+        [Theory]
+        [InlineData("http://[fe80::1%playfab.com]/x", false)]
+        [InlineData("http://api.playfab.com/x", true)]
+        public void PlayFabAllowList_UsesTheHostIdentityWithoutItsZone(string url, bool analyzed)
+        {
+            using var directory = new TestDirectory();
+            string path = ReplayCaptures.WriteSaz(
+                directory.Path,
+                "playfab.saz",
+                new CapturedExchange("GET", url));
+            ProxyConnectionModel record = Assert.Single(
+                FiddlerSazHandler.ImportSazFileWithDiagnostics(path, CancellationToken.None).Records);
+
+            ServiceCallItem call = WebServiceCaptureRecordConverter.Convert(
+                AnalyzeCaptureOperation.AnalysisDataRecord.FromProxyModel(1, record));
+
+            Assert.Equal(analyzed, call != null);
+        }
 
         [Fact]
         public async Task LegacySazImportAndSharedFileAnalysis_ProduceEquivalentFirstConsoleResults()
@@ -595,6 +824,31 @@ namespace XMAT.Tests.Operations.Analysis
                 {
                     ("raw/0001_c.txt", Encoding.Latin1.GetBytes(
                         "GET http://example.test/users/me HTTP/1.1\r\nHost: example.test\r\nUser-Agent: XboxServicesAPI\r\n\r\n")),
+                    ("raw/0001_s.txt", Encoding.Latin1.GetBytes("HTTP/1.1 200 OK\r\n\r\n")),
+                    ("raw/0001_m.xml", Encoding.UTF8.GetBytes(metadata)),
+                })
+                {
+                    using Stream entry = archive.CreateEntry(name).Open();
+                    entry.Write(bytes);
+                }
+            }
+
+            return path;
+        }
+
+        private static string WriteSazRequest(string directory, string fileName, string request)
+        {
+            string metadata =
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?><Session SID=\"1\" BitFlags=\"0\">" +
+                "<SessionTimers ClientBeginRequest=\"2026-01-01T00:00:00.0000000Z\" " +
+                "ClientDoneResponse=\"2026-01-01T00:00:01.0000000Z\" />" +
+                "<SessionFlags><SessionFlag N=\"x-clientip\" V=\"10.0.0.1\" /></SessionFlags></Session>";
+            string path = System.IO.Path.Join(directory, fileName);
+            using (var archive = new ZipArchive(File.Create(path), ZipArchiveMode.Create))
+            {
+                foreach ((string name, byte[] bytes) in new[]
+                {
+                    ("raw/0001_c.txt", Encoding.Latin1.GetBytes(request)),
                     ("raw/0001_s.txt", Encoding.Latin1.GetBytes("HTTP/1.1 200 OK\r\n\r\n")),
                     ("raw/0001_m.xml", Encoding.UTF8.GetBytes(metadata)),
                 })

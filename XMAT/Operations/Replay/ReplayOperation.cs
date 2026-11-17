@@ -31,6 +31,8 @@ namespace XMAT.Operations.Replay
     {
         internal const string SkippedCode = "replay.request.skipped";
         internal const string RequestInvalidCode = "replay.request.invalid";
+        internal const string RequestMalformedCode = "replay.request.malformed";
+        internal const string RequestMalformedMessage = "A selected request in the capture is malformed.";
         internal const string VerifySkippedCode = "replay.verify.skipped";
         internal const string SequenceInvalidCode = "replay.sequence.invalid";
         internal const string ControlHeaderCode = ReplayControlHeaders.Code;
@@ -121,9 +123,16 @@ namespace XMAT.Operations.Replay
             OperationContext context,
             CancellationToken cancellationToken)
         {
-            context ??= OperationContext.None;
+            PreparedRun prepared = await PrepareRunAsync(request, cancellationToken).ConfigureAwait(false);
+            return prepared.Failure ??
+                await ExecuteAsync(prepared, request.Sink, context, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Freezes and checks one run without resolving a credential or making a sender. The command line can do this before
+        // it reserves output, then execute this same prepared run after it has configured isolated storage.
+        internal async Task<PreparedRun> PrepareRunAsync(ReplayRequest request, CancellationToken cancellationToken)
+        {
             var diagnostics = new List<OperationDiagnostic>();
-            ReplayClientCredential credential = null;
             try
             {
                 if (request?.Source == null)
@@ -142,9 +151,83 @@ namespace XMAT.Operations.Replay
                     CancellationToken.None).ConfigureAwait(false);
                 if (prepared.Failure != null)
                 {
-                    return prepared.Failure;
+                    return PreparedRun.Failed(prepared.Failure);
                 }
 
+                return PreparedRun.Succeeded(prepared, options, diagnostics.ToArray());
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return PreparedRun.Failed(Failure(
+                    OperationOutcome.Cancelled, "replay.cancelled", OperationDiagnosticSeverity.Info,
+                    "Replay was cancelled."));
+            }
+            catch (ReplayInputException ex)
+            {
+                return PreparedRun.Failed(Failure(
+                    OperationOutcome.InvalidInput, ex.Code, OperationDiagnosticSeverity.Error, ex.DiagnosticMessage));
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                return PreparedRun.Failed(Failure(
+                    OperationOutcome.InternalError, "replay.internal", OperationDiagnosticSeverity.Error,
+                    "Replay could not be completed because of an internal failure."));
+            }
+        }
+
+        // Reissue's pre-confirmation admission, by each row's destination decision (ReplayDestination.ReadCaptureDestination),
+        // which the run makes its URL from. Rows that CanReplay rejects are ignored because the run skips them. A malformed
+        // destination among the rest, the decision's limit included, refuses the whole plan as the run's gathering would
+        // (replay.request.malformed), before a scoped one, which the run's checks find only later; otherwise a scoped
+        // destination refuses it (replay.destination.scoped-ipv6). Null when neither does. Only each row's destination
+        // head and stored fields are read: no body, no URL and no sender is made.
+        internal static OperationDiagnostic CheckCaptureDestinations(IEnumerable<ProxyConnectionModel> captures)
+        {
+            ArgumentNullException.ThrowIfNull(captures);
+            bool scoped = false;
+            foreach (ProxyConnectionModel capture in captures)
+            {
+                ArgumentNullException.ThrowIfNull(capture);
+                if (!RequestReplayDraft.CanReplay(capture))
+                {
+                    continue;
+                }
+
+                CaptureDestination destination = ReplayDestination.ReadCaptureDestination(capture);
+                if (destination.IsMalformed)
+                {
+                    return new OperationDiagnostic(
+                        RequestMalformedCode, OperationDiagnosticSeverity.Error, RequestMalformedMessage);
+                }
+
+                scoped |= ReplayDestination.IsScopedIpv6(destination.Authority);
+            }
+
+            return scoped
+                ? new OperationDiagnostic(
+                    ReplayDestination.ScopedIpv6Code, OperationDiagnosticSeverity.Error, ReplayDestination.ScopedIpv6Message)
+                : null;
+        }
+
+        // Executes one successful prepared run without gathering or reading its source again.
+        internal async Task<OperationResult<ReplayResult>> ExecuteAsync(
+            PreparedRun prepared,
+            IReplayExchangeSink sink,
+            OperationContext context,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(prepared);
+            if (prepared.Failure != null)
+            {
+                return prepared.Failure;
+            }
+
+            context ??= OperationContext.None;
+            ReplayClientCredential credential = null;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ReplayOptions options = prepared.Options;
                 // Only after every check and consent: the client certificate, looked up and its key checked, before any
                 // sender exists. The run owns it until it ends, after its sender was disposed.
                 ReplayClientCertificate certificate = options.EffectiveTransport.ClientCertificate;
@@ -155,11 +238,12 @@ namespace XMAT.Operations.Replay
                         CancellationToken.None).ConfigureAwait(false);
                 }
 
+                Prepared plan = prepared.Plan;
                 IReadOnlyList<ReplayItemResult> items = await RunAsync(
-                    prepared.Items, options, credential, request.Sink, context, cancellationToken).ConfigureAwait(false);
+                    plan.Items, options, credential, sink, context, cancellationToken).ConfigureAwait(false);
                 return OperationResult<ReplayResult>.Success(
-                    new ReplayResult(prepared.InputKind, prepared.InputSha256, items, prepared.StoredText),
-                    diagnostics);
+                    new ReplayResult(plan.InputKind, plan.InputSha256, items, plan.StoredText),
+                    prepared.Diagnostics);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -234,6 +318,7 @@ namespace XMAT.Operations.Replay
 
                 if (source.Raw != null)
                 {
+                    CheckRawStoredText(source);
                     CheckRawValues(source.Raw, null, options, cancellationToken);
                     return OperationResult<ReplayPlanPreview>.Success(new ReplayPlanPreview(
                         null,
@@ -243,7 +328,8 @@ namespace XMAT.Operations.Replay
                         RawChangesOrigin(source),
                         options.EffectiveTransport,
                         Raw: source.Raw,
-                        ProvenanceOrigin: source.ProvenanceOrigin));
+                        ProvenanceOrigin: source.ProvenanceOrigin,
+                        RawTextSource: source.RawTextSource));
                 }
 
                 RequestReplayDraft template = source.Draft.WithUrl(source.Draft.Url);
@@ -435,7 +521,12 @@ namespace XMAT.Operations.Replay
             else
             {
                 CheckStoredText(source.Draft, storedTextCode);
-                items = new List<ReplayItem> { new(null, null, null, source.Draft) };
+
+                // Preparation owns this copy, so later editor or adapter changes cannot alter a checked run.
+                items = new List<ReplayItem>
+                {
+                    new(null, null, null, source.Draft.WithUrl(source.Draft.Url)),
+                };
             }
 
             if (items.Count == 0)
@@ -465,6 +556,17 @@ namespace XMAT.Operations.Replay
             }
         }
 
+        // A raw request keeps the source of the text that it was made from (ReplaySource.RawTextSource): one that is not
+        // Literal is refused before any raw check, consent or sender. The run's acceptance of a capture file
+        // (ReplayOptions.AcceptStoredText) never covers it, as it never covers a held draft.
+        private static void CheckRawStoredText(ReplaySource source)
+        {
+            if (!IsLiteral(source.RawTextSource))
+            {
+                throw StoredTextAmbiguous(StoredTextAmbiguousCode);
+            }
+        }
+
         private static ReplayInputException StoredTextAmbiguous(string code) =>
             new(code, code == StoredTextAmbiguousExportCode ? StoredTextAmbiguousExportMessage : StoredTextAmbiguousMessage);
 
@@ -480,6 +582,7 @@ namespace XMAT.Operations.Replay
             ReplaySource source = request.Source;
             if (source.Raw != null)
             {
+                CheckRawStoredText(source);
                 CheckRawValues(source.Raw, request.Edits, options, cancellationToken);
                 CheckRawConsents(source, options);
                 return new Prepared(
@@ -612,8 +715,10 @@ namespace XMAT.Operations.Replay
         }
 
         // One request per number of the sequence, in ascending order: the template with every '#' in its URL replaced. The
-        // numbers may change only the path and query, so the template has its '#' there, and every expanded URL must keep
-        // the scheme, host and port of the first. The header text and body are shared, not copied; the expanded URLs,
+        // numbers may change only the path and query, so the template has its '#' there, and every expanded URL must keep the
+        // origin of the first (ReplayAuthority.TryOriginKey). A URL without one, such as one whose international host name Uri
+        // does not convert, is refused as invalid, as Validate refuses it, never as an internal failure; a scoped IPv6 URL has
+        // an origin, and Check refuses it as Validate does. The header text and body are shared, not copied; the expanded URLs,
         // which are kept until the run ends, are checked to fit maxUrlCharacters together before any is made.
         private static List<ReplayItem> ExpandSequence(
             RequestReplayDraft template,
@@ -628,12 +733,12 @@ namespace XMAT.Operations.Replay
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string url = sequence.Expand(template.Url, value);
-                if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+                if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri) ||
+                    !ReplayAuthority.TryOriginKey(uri, out string current))
                 {
                     throw Invalid(null);
                 }
 
-                string current = uri.Scheme + "://" + uri.IdnHost + ":" + uri.Port.ToString(CultureInfo.InvariantCulture);
                 origin ??= current;
                 if (!string.Equals(current, origin, StringComparison.Ordinal))
                 {
@@ -710,8 +815,7 @@ namespace XMAT.Operations.Replay
             }
             catch (Exception ex) when (ex is FormatException or OverflowException or ArgumentException)
             {
-                throw new ReplayInputException(
-                    "replay.request.malformed", "A selected request in the capture is malformed.", ex);
+                throw new ReplayInputException(RequestMalformedCode, RequestMalformedMessage, ex);
             }
         }
 
@@ -723,8 +827,7 @@ namespace XMAT.Operations.Replay
             }
             catch (Exception ex) when (ex is FormatException or OverflowException or ArgumentException)
             {
-                throw new ReplayInputException(
-                    "replay.request.malformed", "A selected request in the capture is malformed.", ex);
+                throw new ReplayInputException(RequestMalformedCode, RequestMalformedMessage, ex);
             }
         }
 
@@ -828,18 +931,21 @@ namespace XMAT.Operations.Replay
 
         private static bool IsContentType(string name) => string.Equals(name, "Content-Type", StringComparison.OrdinalIgnoreCase);
 
-        // An origin is an absolute HTTP or HTTPS URL with nothing after its authority but an optional "/".
+        // An origin is an absolute HTTP or HTTPS URL with nothing after its authority but an optional "/", whose host Uri gives
+        // in ASCII (ReplayAuthority.HasIdnHost). Its canonical authority keeps an IPv6 zone, so data export can retain it and
+        // send admission can refuse it later.
         internal static bool TryParseOrigin(string text, out string origin)
         {
             origin = null;
             if (!Uri.TryCreate(text, UriKind.Absolute, out Uri uri) ||
                 (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
-                !string.IsNullOrEmpty(uri.UserInfo) || uri.PathAndQuery != "/" || !string.IsNullOrEmpty(uri.Fragment))
+                !string.IsNullOrEmpty(uri.UserInfo) || uri.PathAndQuery != "/" || !string.IsNullOrEmpty(uri.Fragment) ||
+                !ReplayAuthority.HasIdnHost(uri))
             {
                 return false;
             }
 
-            origin = uri.GetLeftPart(UriPartial.Authority);
+            origin = ReplayDestination.AuthorityKeepingZone(uri);
             return true;
         }
 
@@ -1168,6 +1274,11 @@ namespace XMAT.Operations.Replay
                         "or body); supply them before sending. Nothing was sent.");
             }
 
+            if (ReplayDestination.IsScopedIpv6(draft.Url))
+            {
+                throw ScopedIpv6();
+            }
+
             try
             {
                 using (draft.CreateRequestToSend())
@@ -1189,6 +1300,9 @@ namespace XMAT.Operations.Replay
                         "the request. Nothing was sent.");
             }
         }
+
+        private static ReplayInputException ScopedIpv6() =>
+            new(ReplayDestination.ScopedIpv6Code, ReplayDestination.ScopedIpv6Message);
 
         private static ReplayInputException Invalid(Exception inner) =>
             new(
@@ -1377,7 +1491,7 @@ namespace XMAT.Operations.Replay
 
         // Raw is a raw request's admitted image and Provenance the origin that it inherits; a raw item has no
         // Draft, and is the run's only request.
-        private sealed record ReplayItem(
+        internal sealed record ReplayItem(
             string DeviceId,
             long? RequestNumber,
             ProxyConnectionModel Original,
@@ -1399,12 +1513,44 @@ namespace XMAT.Operations.Replay
         }
 
         // StoredText is how a capture file's stored text was used (ReplayResult.StoredText); null for other sources.
-        private sealed record Prepared(
+        internal sealed record Prepared(
             IReadOnlyList<ReplayItem> Items,
             string InputKind,
             string InputSha256,
             OperationResult<ReplayResult> Failure,
             StoredTextSummary StoredText = null);
+
+        internal sealed class PreparedRun
+        {
+            private PreparedRun(
+                Prepared plan,
+                ReplayOptions options,
+                IReadOnlyList<OperationDiagnostic> diagnostics,
+                OperationResult<ReplayResult> failure)
+            {
+                Plan = plan;
+                Options = options;
+                Diagnostics = diagnostics;
+                Failure = failure;
+            }
+
+            internal Prepared Plan { get; }
+
+            internal ReplayOptions Options { get; }
+
+            internal IReadOnlyList<OperationDiagnostic> Diagnostics { get; }
+
+            internal OperationResult<ReplayResult> Failure { get; }
+
+            internal static PreparedRun Succeeded(
+                Prepared plan,
+                ReplayOptions options,
+                IReadOnlyList<OperationDiagnostic> diagnostics) =>
+                new(plan, options, diagnostics, null);
+
+            internal static PreparedRun Failed(OperationResult<ReplayResult> failure) =>
+                new(null, null, Array.Empty<OperationDiagnostic>(), failure);
+        }
 
         private sealed class ReplayInputException : Exception
         {

@@ -57,11 +57,13 @@ namespace XMAT.Tests.Replay
         // Load, from the menu, gives the editors what Edit and resend gives them for the entry's row, and a send then
         // comes from that row, as edited from the Replays tab. The transport options go back to their defaults before the
         // request becomes the baseline, so loading again asks nothing. Inspect session stays, the previous response is
-        // cleared, and nothing is sent or read.
+        // cleared, and nothing is sent or read. The endpoint that Connect to names before the reset is a loopback server
+        // that the test owns (a decoy), which nothing reaches: a reset that kept it fails here, locally and at once.
         [Fact]
         public Task Load_GivesEditAndResendsRequest_ResetsTheTransportIntoTheBaseline_AndSendsNothing() => _application.RunAsync(async () =>
         {
             await using var server = new LoopbackHttpServer(request => LoopbackResponse.Ok("reply " + request.Target));
+            await using var decoy = new LoopbackHttpServer(_ => new LoopbackResponse(503, "Connect to was not reset"));
             using var client = new RequestReplayClient();
             var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
             ReplayRecordingTarget target = Recording(model);
@@ -82,7 +84,7 @@ namespace XMAT.Tests.Replay
                 Find<CheckBox>(window, "InspectSessionBox").IsChecked = true;
                 ChooseVersion(window, ReplayHttpVersion.Http11);
                 Find<CheckBox>(window, "ConnectToBox").IsChecked = true;
-                Find<TextBox>(window, "ConnectToText").Text = "192.0.2.10:443";
+                Find<TextBox>(window, "ConnectToText").Text = "127.0.0.1:" + decoy.Port;
                 Find<CheckBox>(window, "FollowRedirectsBox").IsChecked = true;
                 Find<ComboBox>(window, "RedirectLimitBox").SelectedItem = 3;
                 ProxyConnectionModel[] recorded = Replays(model).ProxyConnections.ToArray();
@@ -120,8 +122,13 @@ namespace XMAT.Tests.Replay
                     ("POST", "/items/7?page=2", "canary", "name=value"),
                     (sent.Method, sent.Target, sent.Header("X-Token"), Encoding.UTF8.GetString(sent.Body)));
                 Assert.Equal(
-                    ReplayProvenance.Of(ReplaySourceKind.Edited, CaptureAppModel.ReplayContextName, row),
+                    ReplayProvenance.Of(ReplaySourceKind.Edited, CaptureAppModel.ReplayContextName, row) with
+                    {
+                        Origin = new Uri(server.Origin + "/items/7?page=2"),
+                    },
                     Replays(model).ProxyConnections[^1].Replay);
+                Assert.Equal(0, decoy.Connections);
+                Assert.Empty(decoy.Requests);
             }
             finally
             {
@@ -555,6 +562,48 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // Nor can a request whose destination is an IPv6 address with a zone, which XMAT sends nothing to, or whose
+        // destination cannot be read: Load says why, in its own words for each (ReplayHistoryPreview.LoadReason), also to
+        // automation, and Load refuses it in those words without preparing anything. Show in Replays is still offered.
+        [Theory]
+        [InlineData("fe80::1%Ethernet", "8080", "COMPOSER_HISTORY_CANNOT_LOAD_SCOPED_IPV6", "COMPOSER_HISTORY_UNSUPPORTED_SCOPED_IPV6")]
+        [InlineData("example.test", "x", "COMPOSER_HISTORY_CANNOT_LOAD_DESTINATION", "COMPOSER_HISTORY_UNSUPPORTED_DESTINATION")]
+        public Task ARequestWhoseDestinationIsScopedOrUnreadable_CannotBeLoaded_AndSaysWhy(
+            string host, string port, string hint, string refusal) => _application.RunAsync(async () =>
+        {
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            ProxyConnectionModel row = Assert.Single(Record(Recording(model), Exchange(9, "/item")));
+            typeof(ProxyConnectionModel).GetProperty(nameof(ProxyConnectionModel.Host)).SetValue(row, host);
+            typeof(ProxyConnectionModel).GetProperty(nameof(ProxyConnectionModel.Port)).SetValue(row, port);
+            Assert.True(RequestReplayDraft.CanReplay(row));
+            var window = RequestComposerWindow.ForNewRequest(confirm: NoQuestion, recording: Recording(model));
+            window.PrepareHistoryDraft = (_, _, _) =>
+                throw new Xunit.Sdk.XunitException("A request that cannot be loaded is not prepared.");
+            try
+            {
+                window.OpenHistoryView();
+                MenuItem entry = Assert.Single(Entries(window));
+                MenuItem load = Child(entry, "HistoryLoad");
+                string reason = Localization.GetLocalizedString(hint);
+
+                Assert.False(load.IsEnabled);
+                Assert.Equal(reason, load.ToolTip);
+                Assert.Equal(reason, AutomationProperties.GetHelpText(load));
+                Assert.True(Child(entry, "HistoryShow").IsEnabled);
+                string before = Editors(window);
+
+                await window.LoadFromHistoryAsync((ReplayHistoryEntry)entry.Tag);
+
+                Assert.Equal(Localization.GetLocalizedString(refusal), Status(window));
+                Assert.Equal(before, Editors(window));
+            }
+            finally
+            {
+                window.Close();
+                await RemoveAllAsync(model);
+            }
+        });
+
         // Clear history in one composer empties the history of every composer: another composer's open menu then says
         // that the history is empty, with no entry and no Clear history, and the entries that it listed no longer load or
         // show anything. The Replays tab keeps its requests.
@@ -654,7 +703,10 @@ namespace XMAT.Tests.Replay
                 Assert.Equal(body, sent.Body);
                 Assert.Equal("kept", sent.Header("X-Edited"));
                 Assert.Equal(
-                    ReplayProvenance.Of(ReplaySourceKind.Edited, CaptureAppModel.ReplayContextName, row),
+                    ReplayProvenance.Of(ReplaySourceKind.Edited, CaptureAppModel.ReplayContextName, row) with
+                    {
+                        Origin = new Uri(server.Origin + "/upload"),
+                    },
                     Replays(model).ProxyConnections[^1].Replay);
             }
             finally
@@ -891,6 +943,77 @@ namespace XMAT.Tests.Replay
             }
         });
 
+        // A raw send's entry: after its status, "Raw mode" with the complete state's sentence, or "Raw mode,
+        // attempted request" with its state's sentence, word for word, in the menu, its tooltip and its automation name.
+        // Load, from Raw mode and after the usual question, loads the row's normalized view in Parsed mode, as Edit and
+        // resend shows it, and its status says so with the same sentence, and that the view can differ from the bytes that
+        // XMAT prepared; it sends nothing. The entries and loads of rows that Raw mode did not send keep their own words
+        // (History_IsReachedByKeyboard_AndNamedForAutomation, Load_GivesEditAndResendsRequest_...).
+        [Theory]
+        [InlineData(RawWriteState.Complete, "XMAT handed every byte to the connection.")]
+        [InlineData(RawWriteState.Partial, "XMAT stopped after handing part of the request to the connection.")]
+        [InlineData(RawWriteState.Uncertain, "XMAT could not confirm that every prepared byte was handed to the connection.")]
+        [InlineData(RawWriteState.None, "XMAT wrote nothing of the request.")]
+        public Task ARawSendsEntry_SaysWhatXmatWrote_AndLoadSaysThatItLoadedTheNormalizedView(string write, string sentence) =>
+            _application.RunAsync(async () =>
+        {
+            const string Reset =
+                "The transport options were reset: HTTP version Automatic, and Connect to another endpoint, Upstream proxy, " +
+                "Client certificate, Automatically authenticate with Windows and Follow same-origin redirects off. Loading " +
+                "sends nothing.";
+            var model = new CaptureAppModel(Dispatcher.CurrentDispatcher);
+            ReplayRecordingTarget target = Recording(model);
+            ProxyConnectionModel row = RecordRaw(target, write);
+            var questions = new List<string>();
+            var window = RequestComposerWindow.ForNewRequest(confirm: Answer(questions, true), recording: target);
+            var editAndResend = new RequestComposerWindow(row, confirm: NoQuestion);
+            try
+            {
+                bool complete = write == RawWriteState.Complete;
+                string shown =
+                    $"XMAT Replays #1, {SentAt.ToLocalTime():HH:mm:ss}: POST http://127.0.0.1:9/items, " +
+                    (write == RawWriteState.None ? "no response" : "HTTP 200") + ", " +
+                    (complete ? "Raw mode. " : "Raw mode, attempted request. ") + sentence;
+
+                window.OpenHistoryView();
+
+                MenuItem entry = Assert.Single(Entries(window));
+                Assert.Equal(shown, Assert.IsType<TextBlock>(entry.Header).Text);
+                Assert.Equal(shown, entry.ToolTip);
+                Assert.Equal(shown, AutomationProperties.GetName(entry));
+                Assert.True(Child(entry, "HistoryLoad").IsEnabled);
+
+                Find<TextBox>(window, "UrlBox").Text = "http://127.0.0.1:9/raw";
+                await window.SwitchModeAsync();
+                Assert.Equal(RequestComposerWindow.ComposerMode.Raw, window.Mode);
+
+                await window.LoadFromHistoryAsync(Snapshot(model)[0].Entry);
+
+                string loaded = complete
+                    ? "Loaded request #1 of the XMAT Replays tab in Parsed mode. In Raw mode, " + sentence +
+                        " The tab keeps a normalized view of it"
+                    : "Loaded attempted request #1 of the XMAT Replays tab in Parsed mode. XMAT prepared it in Raw " +
+                        "mode. " + sentence + " The tab keeps a normalized view of the whole request";
+                Assert.Equal(loaded + ", which can differ from the bytes that XMAT prepared. " + Reset, Status(window));
+                Assert.Equal(
+                    new[]
+                    {
+                        Localization.GetLocalizedString(
+                            "COMPOSER_REPLACE_EDITED_HISTORY", CaptureAppModel.ReplayContextName, row.RequestNumber),
+                    },
+                    questions);
+                Assert.Equal(RequestComposerWindow.ComposerMode.Parsed, window.Mode);
+                Assert.Equal(Request(editAndResend), Request(window));
+                Assert.Same(row, Assert.Single(Replays(model).ProxyConnections));
+            }
+            finally
+            {
+                editAndResend.Close();
+                window.Close();
+                await RemoveAllAsync(model);
+            }
+        });
+
         // A change to the history while the menu is open queues one rebuild, never one within the change. Closing the
         // menu drops that rebuild: the closed menu stays empty, and a menu opened again before the old rebuild would have run
         // shows the current history, which the old rebuild never changes. A rebuild shows the history as it is when it runs,
@@ -1042,6 +1165,54 @@ namespace XMAT.Tests.Replay
             }
 
             return rows;
+        }
+
+        // Records a raw send in the model's Replays tab, as Raw mode's sends are recorded (ReplayRecorder.ToRow): the
+        // normalized view of a request with a 4-byte body to the loopback port, what XMAT wrote of it, and a response unless
+        // XMAT wrote nothing; its row.
+        private static ProxyConnectionModel RecordRaw(ReplayRecordingTarget target, string write)
+        {
+            bool answered = write != RawWriteState.None;
+            ReplayOutcome outcome = answered ? ReplayOutcome.Completed : ReplayOutcome.Failed;
+            string code = answered ? null : ReplaySender.SendFailedCode;
+            long written = answered ? 16 : 0;
+            string framing = answered ? RawResponseReader.ContentLengthFraming : null;
+            var exchange = new ReplayExchange
+            {
+                Outcome = outcome,
+                Code = code,
+                Raw = true,
+                RequestBytesWritten = written,
+                RequestWrite = write,
+                ResponseFraming = framing,
+                Request = new ReplayMessage(
+                    "POST /items HTTP/1.1",
+                    new[]
+                    {
+                        new KeyValuePair<string, string>("Host", "127.0.0.1:9"),
+                        new KeyValuePair<string, string>("Content-Length", "4"),
+                    },
+                    null,
+                    "body"u8.ToArray()),
+                Response = answered ? new ReplayMessage("HTTP/1.1 200 OK", null, null, "reply"u8.ToArray()) : null,
+                RequestUri = new Uri("http://127.0.0.1:9/items"),
+                StatusCode = answered ? 200 : 0,
+                Started = SentAt,
+                ProvenanceOrigin = new Uri("http://127.0.0.1:9/"),
+            };
+            var sent = new ReplayItemResult(
+                1, null, null, 1, outcome, exchange.StatusCode, TimeSpan.Zero, 5, 0, code, null,
+                HttpVersion: "1.1",
+                ResponseVersion: answered ? "1.1" : null,
+                Raw: true,
+                RequestBytesWritten: written,
+                RequestWrite: write,
+                ResponseFraming: framing);
+            using var cancellation = new CancellationTokenSource();
+            using ReplayRecording recording = target.TryBegin(cancellation, _ => ReplayProvenance.Composed);
+            Assert.NotNull(recording);
+            recording.Recorder.Add(sent, exchange);
+            return recording.Recorder.LastRecorded;
         }
 
         // A send as the Replays tab records it: the request that XMAT sent to the loopback port, with a credential, and its

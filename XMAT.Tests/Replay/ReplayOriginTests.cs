@@ -8,6 +8,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using XMAT.Operations;
 using XMAT.Operations.Replay;
+using XMAT.Tests.Fixtures;
 using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
@@ -86,16 +87,19 @@ namespace XMAT.Tests.Replay
             }
         }
 
-        // A redirect to a host without a canonical form is to no origin: it is not followed either.
-        [Fact]
-        public async Task ARedirectToAHostWithoutACanonicalForm_IsNotFollowed()
+        // A redirect to a host without a canonical form is to no origin: it is not followed either, whether IDNA refuses the
+        // name's characters or its length (the host of SyntheticCaptures.IdnTooLongHost, which no request may name).
+        [Theory]
+        [InlineData(Palochka, CapitalPalochka, 307)]
+        [InlineData(Palochka, SyntheticCaptures.IdnTooLongHost, 302)]
+        public async Task ARedirectToAHostWithoutACanonicalForm_IsNotFollowed(string from, string to, int status)
         {
-            (LoopbackHttpServer server, ReplayExchange exchange) = await RedirectAsync(Palochka, CapitalPalochka, 307);
+            (LoopbackHttpServer server, ReplayExchange exchange) = await RedirectAsync(from, to, status);
             await using (server)
             {
                 Assert.Equal(
-                    (ReplayOutcome.Completed, 307, ReplaySender.RedirectOriginChangeCode),
-                    (exchange.Outcome, exchange.StatusCode, exchange.Code));
+                    (ReplayOutcome.Completed, status, ReplaySender.RedirectOriginChangeCode, 0),
+                    (exchange.Outcome, exchange.StatusCode, exchange.Code, exchange.Redirects));
                 Assert.Equal("/a", Assert.Single(server.Requests).Target);
             }
         }
@@ -183,12 +187,11 @@ namespace XMAT.Tests.Replay
             Assert.Equal((changes, changes, changes), (file.ChangesOrigin, completed.ChangesOrigin, copy.ChangesOrigin));
         }
 
-        // A request file's URL with an IPv6 zone is sent as it came without consent for another origin, and needs that
-        // consent once its zone changed.
+        // A request file keeps its IPv6 zone as origin data, but neither that destination nor another scoped edit is sent.
         [Theory]
-        [InlineData("http://[fe80::1%25A]/item", null)]
-        [InlineData("http://[fe80::1%25B]/item", "replay.policy.origin-change")]
-        public async Task ARequestFilesZone_NeedsConsentOnlyOnceItChanged(string edited, string code)
+        [InlineData("http://[fe80::1%25A]/item")]
+        [InlineData("http://[fe80::1%25B]/item")]
+        public async Task ARequestFilesZone_IsAlwaysRefusedForSending(string edited)
         {
             int sends = 0;
             var operation = new ReplayOperation
@@ -201,17 +204,17 @@ namespace XMAT.Tests.Replay
             OperationResult<ReplayResult> result = await operation.ExecuteAsync(
                 new ReplayRequest(ReplaySource.FromDraft(draft)), OperationContext.None, CancellationToken.None);
 
-            Assert.Equal(code, result.Diagnostics.SingleOrDefault()?.Code);
-            Assert.Equal(code == null ? 1 : 0, sends);
+            Assert.Equal(ReplayDestination.ScopedIpv6Code, Assert.Single(result.Diagnostics).Code);
+            Assert.Equal(0, sends);
         }
 
-        // A connect-to run serves one origin: the two sigmas are two, and a host without a canonical form is none, so a run
-        // with it is refused rather than counted with another.
+        // A connect-to run serves one origin: the two sigmas are two. A host without an IDN form (capital palochka, U+04C0)
+        // is no valid URL, so a run with it is refused as invalid before its origins are counted.
         [Theory]
         [InlineData("https://ασ.example/a", "https://ας.example/b", ReplayOperation.ConnectToOriginCountCode)]
         [InlineData("https://ας.example/a", "https://ΑΣ.example/b", ReplayOperation.ConnectToOriginCountCode)]
-        [InlineData("https://а\u04CF.example/a", "https://а\u04C0.example/b", ReplayOperation.ConnectToOriginCountCode)]
-        [InlineData("https://а\u04C0.example/a", null, ReplayOperation.ConnectToOriginCountCode)]
+        [InlineData("https://а\u04CF.example/a", "https://а\u04C0.example/b", RequestFileCodes.RequestInvalid)]
+        [InlineData("https://а\u04C0.example/a", null, RequestFileCodes.RequestInvalid)]
         [InlineData("https://ασ.example/a", "https://ΑΣ.example/b", null)]
         public async Task AConnectToRun_HoldsOneOrigin_TheSigmasCountedApart(string first, string second, string code)
         {
@@ -235,12 +238,13 @@ namespace XMAT.Tests.Replay
         }
 
         // A POST with credentials, a cookie and a body, all carrying the canary, from https://FROM:PORT/a, which redirects
-        // with status to https://TO:PORT/b, written as UTF-8 bytes; both names reach the one loopback server, whose
-        // certificate is valid for both, through a connect-to sender that trusts it.
+        // with status to https://TO:PORT/b, written as UTF-8 bytes. Each name that is requested reaches the one loopback
+        // server through a connect-to sender that trusts its certificate, which is valid for FROM and for TO when TO has an
+        // IDN form; a TO without one is never requested, so only FROM must match.
         private async Task<(LoopbackHttpServer Server, ReplayExchange Exchange)> RedirectAsync(string from, string to, int status)
         {
             using X509Certificate2 certificate = _authority.IssueServer(
-                "both names", new[] { new Uri("https://" + from + "/").IdnHost, IdnHostOrSelf(to) });
+                "both names", new[] { new Uri("https://" + from + "/").IdnHost, IdnHostOrUnused(to) });
             int port = 0;
             var server = new LoopbackHttpServer(
                 request => request.Target == "/a"
@@ -266,9 +270,9 @@ namespace XMAT.Tests.Replay
             return (server, exchange);
         }
 
-        // A name that IDNA refuses cannot be a certificate's name; the certificate then names the refused host as written,
-        // which no handshake ever asks for.
-        private static string IdnHostOrSelf(string host)
+        // A host's IDN form, the name a certificate holds. A name that IDNA refuses has none and is never requested, so no
+        // second handshake can ask for it: the certificate names a valid, unused name in its place.
+        private static string IdnHostOrUnused(string host)
         {
             try
             {

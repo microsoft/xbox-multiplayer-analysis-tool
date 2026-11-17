@@ -167,7 +167,7 @@ namespace XMAT.Tests.Replay
         [InlineData(true, false, "Auto", "http://a.test/", null, ReplayOperation.ConnectToHttpsCode)]
         [InlineData(false, false, "Auto", "http://a.test/", null, ReplayOperation.ClientCertificateHttpsCode)]
         [InlineData(false, false, "Auto", "https://a.test/", "http://b.test/", ReplayOperation.ClientCertificateHttpsCode)]
-        [InlineData(false, false, "Auto", "https://[fe80::1%253]/", null, ReplayOperation.ClientCertificateOriginInvalidCode)]
+        [InlineData(false, false, "Auto", "https://[fe80::1%253]/", null, ReplayDestination.ScopedIpv6Code)]
         [InlineData(false, false, "Auto", "https://127\u30021/", null, ReplayOperation.ClientCertificateOriginInvalidCode)]
         [InlineData(false, false, "Auto", "https://a.test/", "https://b.test/", ReplayOperation.ClientCertificateOriginCountCode)]
         [InlineData(false, false, "Auto", "https://a.test/", "https://a.test:8443/", ReplayOperation.ClientCertificateOriginCountCode)]

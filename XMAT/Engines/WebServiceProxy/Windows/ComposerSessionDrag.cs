@@ -12,9 +12,11 @@ namespace XMAT.WebServiceCapture
 {
     // A captured request that a connections list lends a composer for one drag, as Fiddler drags a session into its
     // composer: a copy of the row made when the drag began, so a live capture that updates the row afterwards changes
-    // nothing, and where it comes from. The copy shares the row's bodies and header dictionaries, which are never changed
-    // in place (ProxyConnectionModel.RequestBody).
-    internal sealed record ComposerSession(ProxyConnectionModel Capture, ReplayProvenance Provenance);
+    // nothing, where it comes from, and the origin that a row of the Replays tab keeps (ReplayProvenance.Origin), read when
+    // the drag began, which the composer restores. The copy shares the row's bodies and header dictionaries, which are never
+    // changed in place (ProxyConnectionModel.RequestBody).
+    internal sealed record ComposerSession(
+        ProxyConnectionModel Capture, ReplayProvenance Provenance, Uri RecordedOrigin = null);
 
     // The drag's data holds an opaque id only, in a format of XMAT's own: the request, with its headers and body, stays in
     // this process and never enters data that another program could read. A composer takes the request at most once, and
@@ -37,7 +39,9 @@ namespace XMAT.WebServiceCapture
             }
 
             var session = new ComposerSession(
-                new ProxyConnectionModel(row), ReplayProvenance.Of(ReplaySourceKind.Edited, sourceName, row));
+                new ProxyConnectionModel(row),
+                ReplayProvenance.Of(ReplaySourceKind.Edited, sourceName, row),
+                row.Replay?.Origin);
             string id = Guid.NewGuid().ToString("N");
             lock (Gate)
             {

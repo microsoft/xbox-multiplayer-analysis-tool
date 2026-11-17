@@ -5,6 +5,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using XMAT.Cli;
 using XMAT.Operations.Replay;
 using XMAT.Tests.Proxy;
 using XMAT.Tests.Replay;
@@ -53,6 +54,115 @@ namespace XMAT.Tests.Cli
             Assert.Equal(new[] { "body.bin", "capture.saz", "request.json" }, directory.Entries());
         }
 
+        [Theory]
+        [InlineData("url")]
+        [InlineData("request-file")]
+        [InlineData("origin-change")]
+        [InlineData("capture")]
+        public async Task Curl_RefusesScopedDestinationBeforeOutputReservation(string source)
+        {
+            using var directory = new CliTestDirectory();
+            string output = Path.Join(directory.Root, "out");
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Join(output, "keep.txt"), "keep");
+            string[] arguments;
+            if (source is "request-file" or "origin-change")
+            {
+                string file = Path.Join(directory.Root, "request.json");
+                string url = source == "origin-change"
+                    ? "http://example.test/item"
+                    : "http://[fe80::1%Ethernet]/item";
+                File.WriteAllText(
+                    file,
+                    "{\"schema\":\"xmat-request/1\",\"profile\":\"content\",\"method\":\"GET\"," +
+                        $"\"url\":\"{url}\",\"httpVersion\":\"auto\"," +
+                        "\"headers\":[],\"body\":\"\",\"omitted\":[]}");
+                var options = new List<string> { "curl", "--request-file", file };
+                if (source == "origin-change")
+                {
+                    options.Add("--url");
+                    options.Add("http://[fe80::1%12]/item");
+                }
+                options.Add("--include-sensitive");
+                options.Add("--out");
+                options.Add(output);
+                arguments = options.ToArray();
+            }
+            else if (source == "capture")
+            {
+                string capture = ReplayCaptures.WriteSaz(
+                    directory.Root, "capture.saz", new CapturedExchange("GET", "http://[fe80::1%12]/item"));
+                arguments = new[] { "curl", capture, "--request", "1", "--include-sensitive", "--out", output };
+            }
+            else
+            {
+                arguments = new[]
+                {
+                    "curl", "--url", "http://[fe80::1%2518]/item", "--include-sensitive", "--out", output,
+                };
+            }
+
+            XmatRun run = await XmatProcess.RunAsync(directory.Root, arguments);
+
+            CliAssert.ExitCode(CliExitCodes.InvalidInput, run);
+            Assert.Equal(new[] { ReplayDestination.ScopedIpv6Code }, run.ErrorCodes());
+            string message =
+                Assert.Single(run.Json().GetProperty("errors").EnumerateArray()).GetProperty("message").GetString();
+            Assert.Equal(ReplayDestination.ScopedIpv6Message, message);
+            Assert.Empty(run.Json().GetProperty("artifacts").EnumerateArray());
+            Assert.Equal(
+                CliCleanupStates.NotNeeded,
+                run.Json().GetProperty("cleanup").GetProperty("state").GetString());
+            Assert.Equal("keep", File.ReadAllText(Path.Join(output, "keep.txt")));
+            CliAssert.NoStagingFolders(directory.Root);
+        }
+
+        [Fact]
+        public async Task Curl_OmittedRequestPartPrecedesScopedDestination()
+        {
+            using var directory = new CliTestDirectory();
+            string file = Path.Join(directory.Root, "request.json");
+            File.WriteAllText(
+                file,
+                "{\"schema\":\"xmat-request/1\",\"profile\":\"template\",\"method\":\"GET\"," +
+                    "\"url\":null,\"httpVersion\":\"auto\",\"headers\":null,\"body\":\"\"," +
+                    "\"omitted\":[\"url\",\"headers\"]}");
+
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root, "curl", "--request-file", file, "--url", "http://[fe80::1%12]/item",
+                "--include-sensitive", "--out", "out");
+
+            CliAssert.ExitCode(CliExitCodes.InvalidInput, run);
+            Assert.Equal(new[] { RequestFileCodes.RequestIncomplete }, run.ErrorCodes());
+            Assert.Empty(run.Json().GetProperty("artifacts").EnumerateArray());
+            Assert.Equal(
+                CliCleanupStates.NotNeeded,
+                run.Json().GetProperty("cleanup").GetProperty("state").GetString());
+            Assert.False(Directory.Exists(Path.Join(directory.Root, "out")));
+            CliAssert.NoStagingFolders(directory.Root);
+        }
+
+        [Theory]
+        [InlineData("invalid", CliExitCodes.Usage, "cli.usage.invalid-value")]
+        [InlineData("unprotected", CliExitCodes.Failed, "cli.output.unprotected")]
+        public async Task Curl_OutputTargetRefusalPrecedesInvalidInput(string targetKind, int exitCode, string code)
+        {
+            using var directory = new CliTestDirectory();
+            string output = targetKind == "invalid" ? @"C:\bad|x" : @"\\server\share\out";
+
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root, "curl", "missing.saz", "--request", "1", "--include-sensitive", "--out", output);
+
+            CliAssert.ExitCode(exitCode, run);
+            Assert.Equal(new[] { code }, run.ErrorCodes());
+            Assert.Empty(run.Json().GetProperty("artifacts").EnumerateArray());
+            Assert.Equal(
+                CliCleanupStates.NotNeeded,
+                run.Json().GetProperty("cleanup").GetProperty("state").GetString());
+            Assert.Equal(Array.Empty<string>(), directory.Entries());
+            CliAssert.NoStagingFolders(directory.Root);
+        }
+
         // One script per request and a body file per body that is not empty, written from the bytes whose length and hash
         // the script checks. Only the scripts and body files hold captured content; nothing is sent.
         [Fact]
@@ -71,6 +181,7 @@ namespace XMAT.Tests.Cli
                     body),
                 new CapturedExchange("GET", server.Origin + "/read", "Accept: application/json\r\n"));
             string inputHash = CliAssert.Sha256(input);
+            GuiStorageProbe gui = GuiStorageProbe.Capture();
 
             XmatRun run = await XmatProcess.RunAsync(
                 directory.Root, "curl", input, "--request", "all", "--include-sensitive", "--out", "out");
@@ -126,6 +237,7 @@ namespace XMAT.Tests.Cli
             CliAssert.OnlyCurrentUserCanOpen(output);
             CliAssert.NoStagingFolders(directory.Root);
             Assert.Equal(inputHash, CliAssert.Sha256(input));
+            gui.AssertUnchanged();
         }
 
         // Each refusal is exit code 3 with its code and publishes nothing; the same requests export once the reason is gone.

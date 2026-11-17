@@ -1730,10 +1730,12 @@ namespace XMAT.Cli
             return null;
         }
 
+        // An absolute http or https URL without user information or a fragment, whose host Uri gives in ASCII
+        // (ReplayAuthority.HasIdnHost), as RequestReplayDraft.IsValidRequestFileUrl requires.
         private static bool IsHttpUrl(string text) =>
             Uri.TryCreate(text, UriKind.Absolute, out Uri uri) &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
-            string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment);
+            string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment) && ReplayAuthority.HasIdnHost(uri);
 
         // NAME: VALUE. Host and Content-Length follow from the URL and the body, and connection headers belong to the
         // transport, so none of them can be set.

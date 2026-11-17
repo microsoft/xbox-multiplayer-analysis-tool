@@ -8,11 +8,20 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Threading;
 using XMAT.Models;
+using XMAT.Operations.Replay;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture
 {
+    internal enum ReplayHistoryLoadReason
+    {
+        None,
+        NotReplayable,
+        ScopedIpv6,
+        UnreadableDestination,
+    }
+
     // The composer's history: the rows that this session's Replays tab recorded, newest first, as the recorder committed
     // them (ReplayRecorder), at most MaxEntries. It is a way back to those rows, not another store of what they hold: an
     // entry names its row and tab by weak reference only, so the history keeps neither alive, copies none of their content
@@ -31,7 +40,9 @@ namespace XMAT.WebServiceCapture
         internal const int MaxStatusPreviewChars = 16;
 
         // The longest host and port that a preview gives Uri to build an authority (RequestReplayDraft.CaptureAuthority); a
-        // longer one, which no URL that was sent has, is shown as stored, cut to the preview's bound.
+        // longer one is shown as stored, cut to the preview's bound. They limit how the preview is made, not which
+        // destinations are valid: whether a row can be loaded is its destination decision's
+        // (ReplayDestination.ClassifyCaptureDestination), which reads longer hosts and ports.
         private const int MaxAuthorityHostChars = 255;
         private const int MaxAuthorityPortChars = 5;
 
@@ -207,8 +218,23 @@ namespace XMAT.WebServiceCapture
             return controllers;
         }
 
-        private static ReplayHistoryPreview Preview(ReplayHistoryEntry entry, ICaptureDeviceContext tab, ProxyConnectionModel row) =>
-            new(
+        private static ReplayHistoryPreview Preview(ReplayHistoryEntry entry, ICaptureDeviceContext tab, ProxyConnectionModel row)
+        {
+            ReplayHistoryLoadReason loadReason;
+            if (!RequestReplayDraft.CanReplay(row))
+            {
+                loadReason = ReplayHistoryLoadReason.NotReplayable;
+            }
+            else
+            {
+                loadReason = ReplayDestination.ClassifyCaptureDestination(row) switch
+                {
+                    ReplayCaptureDestinationStatus.Loadable => ReplayHistoryLoadReason.None,
+                    ReplayCaptureDestinationStatus.ScopedIpv6 => ReplayHistoryLoadReason.ScopedIpv6,
+                    _ => ReplayHistoryLoadReason.UnreadableDestination,
+                };
+            }
+            return new(
                 entry,
                 UntrustedText.ShowParts(MaxTabNamePreviewChars, tab.DeviceName),
                 row.RequestNumber,
@@ -216,17 +242,20 @@ namespace XMAT.WebServiceCapture
                 UntrustedText.ShowParts(MaxMethodPreviewChars, row.Method),
                 UrlPreview(row),
                 UntrustedText.ShowParts(MaxStatusPreviewChars, row.Status),
-                RequestReplayDraft.CanReplay(row));
+                loadReason,
+                RawSendWording.HistoryMarker(row.SentRaw, row.RawRequestWrite));
+        }
 
-        // Where Load sends the row's request (RequestReplayDraft.FromCapture): its authority as Uri gives it, then its path,
-        // read only as far as the bound needs. A row whose path is an absolute URL, which the recorder never writes, is shown
-        // as stored. A host or port too long for any URL that was sent, or that Uri refuses, is shown as stored, the host
+        // The row's retained effective destination (RequestReplayDraft.FromCapture), including an IPv6 zone even though
+        // Load is disabled for it: its authority as Uri gives it, then its path, read only as far as the bound needs. A row
+        // whose path is an absolute URL, which the recorder never writes, is shown as stored. A host or port longer than the
+        // preview's bound (MaxAuthorityHostChars, MaxAuthorityPortChars), or that Uri refuses, is shown as stored, the host
         // of an IPv6 address in brackets, and so is a row whose scheme is unknown, without a scheme.
         private static string UrlPreview(ProxyConnectionModel row)
         {
             string path = row.Path ?? string.Empty;
-            if (path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                path.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            AbsoluteHttpTargetRecognition recognition = ReplayDestination.RecognizeAbsoluteHttpTarget(path);
+            if (recognition != AbsoluteHttpTargetRecognition.NotAbsolute)
             {
                 return UntrustedText.ShowParts(MaxUrlPreviewChars, path);
             }
@@ -448,7 +477,9 @@ namespace XMAT.WebServiceCapture
 
     // What a history view shows of one live entry, made from its row when the view is built (ReplayHistory.Snapshot). Each
     // text is escaped and bounded for display only: Load and Show in Replays act on the row that TryResolve gives, never on
-    // these. CanLoad says whether the row can be sent again (RequestReplayDraft.CanReplay), which only Load needs.
+    // these. LoadReason says why Load is unavailable; CanLoad is true only for None. RawMarker says, for a row that a raw
+    // send recorded, Raw mode and what XMAT wrote of its request, from the row's SentRaw and RawRequestWrite
+    // (RawSendWording.HistoryMarker); null for any other row.
     internal sealed record ReplayHistoryPreview(
         ReplayHistoryEntry Entry,
         string TabNamePreview,
@@ -457,5 +488,9 @@ namespace XMAT.WebServiceCapture
         string MethodPreview,
         string UrlPreview,
         string StatusPreview,
-        bool CanLoad);
+        ReplayHistoryLoadReason LoadReason,
+        string RawMarker)
+    {
+        internal bool CanLoad => LoadReason == ReplayHistoryLoadReason.None;
+    }
 }

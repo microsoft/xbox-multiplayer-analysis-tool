@@ -29,7 +29,6 @@ namespace XMAT.Tests.Replay
             yield return new object[] { "http://example.test/path?q=1", "http://example.test/path?q=1", "example.test" };
             yield return new object[] { "https://example.test:8443/a%20b?x=%C3%A9", "https://example.test:8443/a%20b?x=%C3%A9", "example.test:8443" };
             yield return new object[] { "http://[::1]:8080/v6", "http://[::1]:8080/v6", "[::1]:8080" };
-            yield return new object[] { "http://[fe80::1%251]:8081/zone", "http://[fe80::1]:8081/zone", "[fe80::1]:8081" };
             yield return new object[]
             {
                 "http://b\u00fccher.example:18081/\u00e4 b?\u00f6=1", "http://xn--bcher-kva.example:18081/%C3%A4%20b?%C3%B6=1",

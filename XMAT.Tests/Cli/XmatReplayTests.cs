@@ -10,6 +10,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using XMAT.Cli;
 using XMAT.Operations.Replay;
 using XMAT.Tests.Proxy;
 using XMAT.Tests.Replay;
@@ -88,6 +89,108 @@ namespace XMAT.Tests.Cli
             Assert.Equal(inputHash, CliAssert.Sha256(input));
             Assert.False(run.WindowSeen);
             gui.AssertUnchanged();
+        }
+
+        [Theory]
+        [InlineData("url")]
+        [InlineData("request-file")]
+        [InlineData("capture")]
+        [InlineData("sequence")]
+        public async Task ScopedDestination_IsRefusedBeforeOutputReservation(string source)
+        {
+            using var directory = new CliTestDirectory();
+            string output = Path.Join(directory.Root, "results");
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Join(output, "keep.txt"), "keep");
+            string[] arguments;
+            if (source == "request-file")
+            {
+                string file = Path.Join(directory.Root, "request.json");
+                File.WriteAllText(
+                    file,
+                    "{\"schema\":\"xmat-request/1\",\"profile\":\"content\",\"method\":\"GET\"," +
+                        "\"url\":\"http://[fe80::1%Ethernet]/item\",\"httpVersion\":\"auto\"," +
+                        "\"headers\":[],\"body\":\"\",\"omitted\":[]}");
+                arguments = new[] { "compose", "--request-file", file, "--out", output };
+            }
+            else if (source == "capture")
+            {
+                string capture = ReplayCaptures.WriteSaz(
+                    directory.Root, "capture.saz", new CapturedExchange("GET", "http://[fe80::1%12]/item"));
+                arguments = new[] { "replay", capture, "--request", "1", "--out", output };
+            }
+            else
+            {
+                arguments = source == "sequence"
+                    ? new[]
+                    {
+                        "compose", "--url", "http://[fe80::1%2518]/item/#",
+                        "--sequence", "1-2", "--out", output,
+                    }
+                    : new[] { "compose", "--url", "http://[fe80::1%0]/item", "--out", output };
+            }
+
+            XmatRun run = await XmatProcess.RunAsync(directory.Root, arguments);
+
+            CliAssert.ExitCode(CliExitCodes.InvalidInput, run);
+            Assert.Equal(new[] { ReplayDestination.ScopedIpv6Code }, run.ErrorCodes());
+            string message =
+                Assert.Single(run.Json().GetProperty("errors").EnumerateArray()).GetProperty("message").GetString();
+            Assert.Equal(ReplayDestination.ScopedIpv6Message, message);
+            Assert.Equal(CliCleanupStates.NotNeeded, run.Json().GetProperty("cleanup").GetProperty("state").GetString());
+            Assert.Equal("keep", File.ReadAllText(Path.Join(output, "keep.txt")));
+            Assert.Equal(
+                new[] { "keep.txt" },
+                Directory.GetFileSystemEntries(output).Select(Path.GetFileName));
+            CliAssert.NoStagingFolders(directory.Root);
+        }
+
+        [Fact]
+        public async Task Replay_InputFailureWinsBeforeExistingOutput()
+        {
+            using var directory = new CliTestDirectory();
+            string output = Path.Join(directory.Root, "results");
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Join(output, "keep.txt"), "keep");
+
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root, "replay", Path.Join(directory.Root, "missing.saz"),
+                "--request", "1", "--out", output);
+
+            CliAssert.ExitCode(CliExitCodes.InvalidInput, run);
+            Assert.Equal(new[] { "analysis.input.not-found" }, run.ErrorCodes());
+            Assert.Equal(CliCleanupStates.NotNeeded, run.Json().GetProperty("cleanup").GetProperty("state").GetString());
+            Assert.Equal("keep", File.ReadAllText(Path.Join(output, "keep.txt")));
+            CliAssert.NoStagingFolders(directory.Root);
+        }
+
+        [Theory]
+        [InlineData("replay", "invalid", CliExitCodes.Usage, "cli.usage.invalid-value")]
+        [InlineData("replay", "unprotected", CliExitCodes.Failed, "cli.output.unprotected")]
+        [InlineData("compose", "invalid", CliExitCodes.Usage, "cli.usage.invalid-value")]
+        [InlineData("compose", "unprotected", CliExitCodes.Failed, "cli.output.unprotected")]
+        public async Task OutputTargetRefusal_PrecedesInvalidReplayOrComposeInput(
+            string command,
+            string targetKind,
+            int exitCode,
+            string code)
+        {
+            using var directory = new CliTestDirectory();
+            string output = targetKind == "invalid" ? @"C:\bad|x" : @"\\server\share\out";
+            string[] arguments = command == "replay"
+                ? new[] { "replay", "missing.saz", "--request", "1", "--out", output }
+                : new[] { "compose", "--request-file", "missing.json", "--out", output };
+
+            XmatRun run = await XmatProcess.RunAsync(directory.Root, arguments);
+
+            CliAssert.ExitCode(exitCode, run);
+            Assert.Equal(new[] { code }, run.ErrorCodes());
+            Assert.Empty(run.Json().GetProperty("artifacts").EnumerateArray());
+            Assert.Equal(
+                CliCleanupStates.NotNeeded,
+                run.Json().GetProperty("cleanup").GetProperty("state").GetString());
+            Assert.Equal(Array.Empty<string>(), directory.Entries());
+            CliAssert.NoStagingFolders(directory.Root);
         }
 
         [Fact]

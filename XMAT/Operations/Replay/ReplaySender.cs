@@ -551,6 +551,11 @@ namespace XMAT.Operations.Replay
                 return RedirectUnsupportedCode;
             }
 
+            if (ReplayDestination.IsScopedIpv6(to))
+            {
+                return ReplayDestination.ScopedIpv6Code;
+            }
+
             if (from.Scheme == Uri.UriSchemeHttps && to.Scheme == Uri.UriSchemeHttp)
             {
                 return RedirectInsecureCode;
