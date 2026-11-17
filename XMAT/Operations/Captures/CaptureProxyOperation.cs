@@ -132,7 +132,10 @@ namespace XMAT.Operations.Captures
                     request.OutputPath, false, false, _ => { },
                     async (staged, token) =>
                     {
-                        var proxy = new WebServiceProxy(certificates, applicationDiagnostics: false);
+                        var proxy = new WebServiceProxy(certificates, applicationDiagnostics: false)
+                        {
+                            ResponseStreaming = new ResponseStreamingOptions(),
+                        };
                         if (request.RootPfx == null)
                         {
                             diagnostics.Add(new OperationDiagnostic(

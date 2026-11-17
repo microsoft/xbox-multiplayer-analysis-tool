@@ -69,6 +69,7 @@ namespace XMAT.Operations.Captures
             // As in the GUI, web requests are attributed to the capture device so analysis counts them as one console.
             proxy.ReceivedWebRequest += (_, args) =>
                 args.AcceptRequest &= RecordRequest(args.Request, args.Timestamp, args.ConnectionID, DeviceName);
+            // Terminal events also complete streams during shutdown; progress snapshots would double-charge prefixes.
             proxy.ReceivedWebResponse += (_, args) => args.SendResponse &= RecordResponse(args.Request, args.Response, args.Timestamp);
             proxy.CompletedSslConnectionRequest += (_, args) => Guard(() =>
             {
@@ -86,19 +87,23 @@ namespace XMAT.Operations.Captures
         {
             byte[] bodyBytes = response.BodyBytes ?? Array.Empty<byte>();
             string headers = response.FirstLineAndHeaders;
-            // Reserve the projected size first: a response body has no proxy cap, so encoding it before the
-            // limit check could exhaust memory instead of stopping the capture.
-            CheckBudget(Encoding.UTF8.GetByteCount(headers) + Base64Length(bodyBytes));
+            string trailers = response.Trailers.ToString();
+            // Reserve stored size before encoding: observers can supply bodies larger than the streaming limit.
+            CheckBudget((long)Encoding.UTF8.GetByteCount(headers) + Encoding.UTF8.GetByteCount(trailers) + Base64Length(bodyBytes));
             string body = Convert.ToBase64String(bodyBytes);
             using var command = _connection.CreateCommand();
             command.CommandText = $"UPDATE {WebServiceCaptureMethod.TableName} SET " +
                 $"\"{WebServiceCaptureMethod.FieldKey_ResponseTimestamp}\"=$time, " +
                 $"\"{WebServiceCaptureMethod.FieldKey_RequestStatus}\"=$status, " +
                 $"\"{WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders}\"=$headers, " +
+                $"\"{WebProxyCaptureSchema.ResponseTrailers}\"=$trailers, " +
+                $"\"{WebProxyCaptureSchema.ResponseBodyTruncatedAt}\"=$truncated, " +
                 $"\"{WebServiceCaptureMethod.FieldKey_ResponseBody}\"=$body WHERE id=$id";
             command.Parameters.AddWithValue("$time", Time(timestamp));
             command.Parameters.AddWithValue("$status", response.Status);
             command.Parameters.AddWithValue("$headers", headers);
+            command.Parameters.AddWithValue("$trailers", trailers);
+            command.Parameters.AddWithValue("$truncated", response.CaptureTruncatedAt);
             command.Parameters.AddWithValue("$body", body);
             command.Parameters.AddWithValue("$id", request.RequestNumber);
             command.ExecuteNonQuery();
@@ -126,6 +131,7 @@ namespace XMAT.Operations.Captures
                 [WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders] = request.FirstLineAndHeaders,
                 [WebServiceCaptureMethod.FieldKey_RequestBody] = Convert.ToBase64String(bodyBytes),
                 [WebServiceCaptureMethod.FieldKey_ClientIP] = clientIp,
+                [WebProxyCaptureSchema.HeadersUninspectable] = (long)HeaderProvenance.NoKnownLoss,
             };
             object[] fields = WebProxyCaptureSchema.Project(values, ClientProcessInfo.NotRecorded);
             CheckBudget(fields.OfType<string>().Sum(value => (long)Encoding.UTF8.GetByteCount(value)));

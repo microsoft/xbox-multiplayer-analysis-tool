@@ -55,6 +55,12 @@ non-UI proxy core so the GUI and CLI use the same behavior.
 - The foreground CLI uses explicit client routing, a bounded capture lifetime,
   and private atomic output. It does not configure system/console proxies,
   firewall, certificate trust, or GUI preferences.
+- Pin the foreground proxy's response-streaming defaults per instance, rather
+  than inheriting GUI-global preferences. Keep its recorder alive through awaited
+  proxy shutdown so terminal stream events are saved before publication. Record
+  terminal responses once, not repeated progress prefixes; retain trailers,
+  truncation markers and live-header provenance, and charge trailer UTF-8 bytes
+  against the same recorder budgets as headers and bodies.
 - New native captures store text through parameters and carry
   `CaptureTextFormat.LiteralUserVersion`, so replay and sanitized export can
   distinguish them from ambiguous legacy captures. Preserve both text provenance

@@ -280,6 +280,8 @@ namespace XMAT.Tests.Cli
                 directory.Root, "export", "capture.xmatcap", "--format", "sanitized-saz", "--out", "sanitized.saz");
             CliAssert.ExitCode(0, export);
             Assert.True(File.Exists(Path.Join(directory.Root, "sanitized.saz")));
+            Assert.DoesNotContain(export.Json().GetProperty("warnings").EnumerateArray(),
+                warning => warning.GetProperty("code").GetString() == "export.sanitization.header-provenance-unknown");
         }
 
         [Fact]

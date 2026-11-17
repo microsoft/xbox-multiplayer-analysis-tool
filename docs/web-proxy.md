@@ -138,6 +138,10 @@ connections borrow extra chunks, without waiting, from a 4 MiB pool shared per l
 Pipe buffers are separate. Backpressure applies when queues fill.
 Disabling shaping wakes waiting transfers and removes pacing/latency from subsequent slices.
 
+[Streamed responses](#streaming-and-large-responses) are shaped as they arrive, without waiting for the
+response to finish. The capture prefix limit bounds only the recorded copy; all forwarded bytes use the
+shared bandwidth budget, including bytes beyond that prefix.
+
 **Broken** rejects new proxy connections; existing connections continue without shaping. **Disconnect** also
 aborts existing proxy connections and rejects new ones until another mode is selected. Neither mode disconnects
 the console's network link. UDP, game/peer traffic, traffic outside the explicit proxy, and true packet loss,

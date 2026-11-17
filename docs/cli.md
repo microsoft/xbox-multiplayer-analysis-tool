@@ -77,6 +77,12 @@ New captures use the literal-text format, so replay and sanitized export do not 
 The recorder stops with a failure rather than publishing an incomplete result if it exceeds 100000 sessions,
 64 MiB in one projected update, or 512 MiB of cumulative projected data. These are capture limits, not analysis limits.
 
+Responses use the proxy's default streaming policy, independent of GUI preferences: media and event streams flow
+immediately, other responses stream when they exceed the **32 MiB** capture prefix limit. Forwarding is not limited
+to that prefix. Saved captures retain truncation markers, response trailers and known live-header provenance;
+Unsanitized SAZ exports preserve them alongside shaping history. Normal duration expiry records the received prefix and end
+timestamp of an open stream before publishing. Streaming preference controls are not CLI options yet.
+
 Without `--root-pfx`, HTTPS/WSS CONNECT tunnels are forwarded and shaped but not decrypted; only their CONNECT
 records are saved. Inspection requires an explicit **passwordless RSA or ECDSA CA PFX containing its private key**, whose public
 root the client already trusts. Protect this input file with private Windows permissions. The certificate is loaded

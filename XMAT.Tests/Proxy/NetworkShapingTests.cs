@@ -8,6 +8,11 @@ using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using Microsoft.AspNetCore.Http;
+using XMAT.DataAbstractionLayer;
+using XMAT.Operations;
+using XMAT.Operations.Captures;
+using XMAT.Tests.Cli;
+using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
 using Xunit.Abstractions;
@@ -69,6 +74,115 @@ namespace XMAT.Tests.Proxy
             }
             output.WriteLine($"{route} {(upload ? "up" : "down")}: {elapsed:F0} ms, {body.Length * 8d / elapsed:F0} kbps");
             Assert.InRange(elapsed, 850, 3500);
+        }
+
+        [Fact]
+        public async Task StreamingCaptureIgnoresGuiDefaultsAndCompletesOnExpiry()
+        {
+            using var directory = new CliTestDirectory();
+            const string first = "data: first\n\n";
+            await using var origin = await LoopbackOrigin.StartAsync(async context =>
+            {
+                context.Response.ContentType = "text/event-stream";
+                await context.Response.WriteAsync(first);
+                await context.Response.Body.FlushAsync();
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, context.RequestAborted);
+                }
+                catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+                {
+                    // Normal capture expiry aborts the event stream.
+                }
+            });
+            using var portReservation = new TcpListener(IPAddress.Loopback, 0);
+            portReservation.Start();
+            int port = ((IPEndPoint)portReservation.LocalEndpoint).Port;
+            portReservation.Stop();
+            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            ResponseStreamingOptions previous = ResponseStreamingOptions.Current;
+            Task<OperationResult<CaptureProxyResult>> capture = null;
+            try
+            {
+                ResponseStreamingOptions.Current = new ResponseStreamingOptions { AutoStreamMediaAndEvents = false };
+                string path = Path.Join(directory.Root, "stream.xmatcap");
+                capture = new CaptureProxyOperation().ExecuteAsync(
+                    new(port, 4, path, new(1, NetworkShapingProfile.Preset("min"))),
+                    new OperationContext(progress: new Progress<OperationProgress>(progress =>
+                    {
+                        if (progress.Phase == "capture.listening")
+                            ready.TrySetResult();
+                    })),
+                    cancellation.Token);
+                await ready.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                using var client = new HttpClient(new HttpClientHandler
+                {
+                    Proxy = new WebProxy($"http://127.0.0.1:{port}"),
+                });
+                using var request = new HttpRequestMessage(HttpMethod.Get, origin.Url("/stream"));
+                using HttpResponseMessage response = await client.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead).WaitAsync(TimeSpan.FromSeconds(2));
+                Stream body = await response.Content.ReadAsStreamAsync();
+                byte[] received = new byte[Encoding.UTF8.GetByteCount(first)];
+                await body.ReadExactlyAsync(received, cancellation.Token);
+                Assert.Equal(first, Encoding.UTF8.GetString(received));
+                Assert.True((await capture).Succeeded);
+
+                using var saved = new SqLtReadonlyDatabase(path);
+                var row = Assert.Single(saved.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
+                Assert.Equal(received, Convert.FromBase64String(row.Str(WebServiceCaptureMethod.FieldKey_ResponseBody)));
+                Assert.False(string.IsNullOrEmpty(row.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp)));
+            }
+            finally
+            {
+                try
+                {
+                    await cancellation.CancelAsync();
+                    if (capture != null)
+                        await capture;
+                }
+                finally
+                {
+                    ResponseStreamingOptions.Current = previous;
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("http11")]
+        [InlineData("https11")]
+        [InlineData("https2")]
+        public async Task ShapedEventStreamsArriveBeforeTheOriginCompletes(string route)
+        {
+            (Version version, bool tls) = ResponseStreamingTests.Route(route);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            const string first = "data: first\n\n";
+            string last = new('x', 64 * 1024);
+            await using var origin = await LoopbackOrigin.StartAsync(
+                ResponseStreamingTests.HoldingOrigin("text/event-stream", first, last, release.Task), useTls: tls);
+            var shaping = new NetworkShapingController();
+            shaping.Apply(new(NetworkShapingMode.Shape, DownKbps: 500));
+            await using var proxy = await StartAsync(shaping);
+            using HttpClient client = proxy.CreateClient();
+            try
+            {
+                using var request = ResponseStreamingTests.NewRequest(HttpMethod.Get, origin.Url("/events"), version);
+                (HttpResponseMessage response, string prefix) = await ResponseStreamingTests.ReadFirstBytesAsync(
+                    client, request, "data: first");
+                using (response)
+                {
+                    Assert.Contains("data: first", prefix, StringComparison.Ordinal);
+                    var clock = Stopwatch.StartNew();
+                    release.TrySetResult();
+                    Assert.Equal(first + last, prefix + await ResponseStreamingTests.ReadToEndAsync(response));
+                    Assert.InRange(clock.Elapsed.TotalMilliseconds, 800, 4000);
+                }
+            }
+            finally
+            {
+                release.TrySetResult();
+            }
         }
 
         [Fact]
