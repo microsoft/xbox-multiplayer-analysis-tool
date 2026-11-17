@@ -230,8 +230,17 @@ namespace XMAT.Cli
             CliFailure failure = CheckOutput(capture.OutputPath);
             if (failure == null && request.ShapingProfilePath != null)
             {
-                (failure, NetworkShapingPlan plan) = await ReadProfileAsync(
-                    request.ShapingProfilePath, cancellationToken).ConfigureAwait(false);
+                NetworkShapingPlan plan;
+                try
+                {
+                    (failure, plan) = await ReadProfileAsync(
+                        request.ShapingProfilePath, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    report.Cancel();
+                    return report;
+                }
                 capture = capture with { Shaping = plan };
             }
             if (failure == null && capture.Shaping.Schedule?.Any(change => change.AfterSeconds >= capture.DurationSeconds) == true)

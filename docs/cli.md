@@ -77,7 +77,7 @@ The recorder stops with a failure rather than publishing an incomplete result if
 64 MiB in one projected update, or 512 MiB of cumulative projected data. These are capture limits, not analysis limits.
 
 Without `--root-pfx`, HTTPS/WSS CONNECT tunnels are forwarded and shaped but not decrypted; only their CONNECT
-records are saved. Inspection requires an explicit **passwordless CA PFX containing its private key**, whose public
+records are saved. Inspection requires an explicit **passwordless RSA or ECDSA CA PFX containing its private key**, whose public
 root the client already trusts. Protect this input file with private Windows permissions. The certificate is loaded
 ephemerally; xmat never imports it into a store. Windows TLS requires temporary private-key containers for generated
 host certificates: these are deleted on normal certificate disposal, but forced termination may leave orphaned
@@ -117,7 +117,7 @@ Capture failures use stable codes and never echo paths or values:
 | `capture.output.locked` | 5 | Another program locked `--out` while publishing |
 | `cli.output.parent-missing`, `capture.output.parent-missing` | 2 / 3 | The folder that should contain `--out` does not exist |
 | `capture.listen.unavailable` | 5 | `--listen`/`--port` is in use, reserved or not assigned to this PC |
-| `capture.ca.invalid` | 3 | `--root-pfx` is unreadable, expired, password-protected or not a CA with its private key |
+| `capture.ca.invalid` | 3 | `--root-pfx` is unreadable, expired, password-protected, or not an RSA or ECDSA CA that may sign certificates, with its private key |
 | `capture.profile.unreadable` | 3 | The `--shape-profile` file could not be read |
 | `capture.profile.invalid` | 3 | Profile JSON, values or schedule are invalid, or a change is at or after the duration |
 | `capture.output.unprotected` | 6 | `--out` is on storage without Windows permissions |

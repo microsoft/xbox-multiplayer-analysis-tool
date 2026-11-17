@@ -159,6 +159,8 @@ namespace XMAT.WebServiceCapture
         public NetworkShapingController Shaping { get; } = new();
         public int BodyTimeoutSeconds { get; private set; } = 120;
         private NetworkShapingMetadata _importedShaping;
+        // Completed live traces, each kept with the body deadline that was in force while it was captured.
+        private NetworkShapingMetadata _retainedShaping;
         internal event EventHandler ShapingMetadataChanged;
         internal NetworkShapingMetadata ImportedShaping
         {
@@ -184,6 +186,7 @@ namespace XMAT.WebServiceCapture
             NetworkShapingMetadata.Combine(new[]
             {
                 ImportedShaping,
+                _retainedShaping,
                 _readOnly ? null : NetworkShapingMetadata.From(Shaping, BodyTimeoutSeconds),
             });
         public string ShapingStatusText => _readOnly ||
@@ -209,6 +212,33 @@ namespace XMAT.WebServiceCapture
                         "A running capture cannot change its body deadline; stop the capture first."));
             }
             int previous = BodyTimeoutSeconds;
+            // Invalid settings fall through to the operation, which rejects them without touching history.
+            if (IsValidShaping(profile, bodyTimeoutSeconds))
+            {
+                bool newTrace = bodyTimeoutSeconds != previous;
+                NetworkShapingMetadata retained = newTrace
+                    ? NetworkShapingMetadata.Combine(new[]
+                    {
+                        _retainedShaping,
+                        NetworkShapingMetadata.From(Shaping, previous),
+                    })
+                    : _retainedShaping;
+                if (!CanRecordShaping(profile, retained, newTrace))
+                {
+                    return Operations.OperationResult<NetworkShapingProfile>.Failure(
+                        Operations.OperationOutcome.Conflict,
+                        new Operations.OperationDiagnostic(
+                            SetNetworkShapingOperation.HistoryFullCode,
+                            Operations.OperationDiagnosticSeverity.Error,
+                            SetNetworkShapingOperation.HistoryFullMessage));
+                }
+                if (newTrace)
+                {
+                    // Completed traffic keeps the deadline it was captured under.
+                    _retainedShaping = retained;
+                    ResetShapingHistory();
+                }
+            }
             BodyTimeoutSeconds = bodyTimeoutSeconds;
             var result = await new SetNetworkShapingOperation().ExecuteAsync(
                 new SetNetworkShapingRequest(Shaping, profile, bodyTimeoutSeconds),
@@ -221,6 +251,62 @@ namespace XMAT.WebServiceCapture
             RaisePropertyChange(nameof(ShapingStatusText));
             return result;
         }
+
+        private static bool IsValidShaping(NetworkShapingProfile profile, int bodyTimeoutSeconds)
+        {
+            try
+            {
+                new NetworkShapingPlan(1, profile, BodyTimeoutSeconds: bodyTimeoutSeconds).Validate();
+                return true;
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        }
+
+        // Keeps the saved metadata within its trace and change limits. Like the live controller, entries
+        // are reserved so that Disconnect and then Off can always be recorded.
+        private bool CanRecordShaping(NetworkShapingProfile profile, NetworkShapingMetadata retained, bool newTrace)
+        {
+            NetworkShapingTrace[] kept = new[] { ImportedShaping, retained }
+                .Where(metadata => metadata != null)
+                .SelectMany(metadata => metadata.Traces)
+                .ToArray();
+            int reserve = profile.Mode switch
+            {
+                NetworkShapingMode.Off => 0,
+                NetworkShapingMode.Disconnect => 1,
+                _ => 2,
+            };
+            int liveChanges = newTrace ? 2 : Shaping.History.Count + 1;
+            return kept.Length < NetworkShapingMetadata.MaximumTraces &&
+                kept.Sum(trace => trace.Changes.Count) + liveChanges + reserve <=
+                    NetworkShapingMetadata.MaximumChanges;
+        }
+
+        // Replacing the captured rows replaces their shaping history too. The current condition stays active.
+        internal void ReplaceShapingHistory(NetworkShapingMetadata imported)
+        {
+            _retainedShaping = null;
+            if (_readOnly)
+            {
+                // A read-only tab records no live history; only its imported history changes.
+                ImportedShaping = imported;
+                return;
+            }
+            _importedShaping = imported;
+            ResetShapingHistory();
+        }
+
+        private void ResetShapingHistory()
+        {
+            if (!Shaping.ResetHistory())
+            {
+                PublicUtilities.AppLog(LogLevel.ERROR, "Reset the capture's shaping history, but its notification failed.");
+            }
+        }
+
         internal bool CanDeleteSessions =>
             !_readOnly &&
             _captureDataSource == CaptureDataSource.ActiveTable &&
@@ -2858,11 +2944,7 @@ namespace XMAT.WebServiceCapture
                         new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, DeviceName));
                 }
                 _loadedCaptureDataset = null;
-                _importedShaping = null;
-                if (!Shaping.ResetHistory())
-                {
-                    PublicUtilities.AppLog(LogLevel.ERROR, "Cleared capture data, but its shaping-history notification failed.");
-                }
+                ReplaceShapingHistory(null);
             }
         }
 
@@ -2896,7 +2978,7 @@ namespace XMAT.WebServiceCapture
                     // proxy connection models...
                     FiddlerSazImportResult imported = FiddlerSazHandler.ImportSazFileWithDiagnostics(fromFilePath, cancelToken);
                     ProxyConnections = imported.Records;
-                    ImportedShaping = imported.Shaping;
+                    ReplaceShapingHistory(imported.Shaping);
 
                     // ...and then do the actual adding to the table
                     ImportCapturesToTable(

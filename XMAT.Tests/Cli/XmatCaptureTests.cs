@@ -131,6 +131,28 @@ namespace XMAT.Tests.Cli
             AssertListenerReleased(port);
         }
 
+        [Fact]
+        public async Task CancellationWhileReadingTheShapingProfileIsCancelledNotInternal()
+        {
+            using var directory = new CliTestDirectory();
+            string profile = Path.Join(directory.Root, "profile.json");
+            File.WriteAllText(profile, "{\"version\":1,\"initial\":{\"mode\":\"off\"}}");
+            CliParseResult parsed = CliCommandLine.Parse(new[]
+            {
+                "capture", "--port", AvailablePort().ToString(), "--duration-seconds", "1",
+                "--out", Path.Join(directory.Root, "capture.xmatcap"), "--shape-profile", profile,
+            });
+            using var stdout = new MemoryStream();
+            using var stderr = new StringWriter();
+
+            CliReport report = await CliCaptureCommand.RunAsync(
+                parsed.Request, "cancelled", new CliConsole(stdout, stderr), new CancellationToken(true));
+
+            Assert.Equal(CliExitCodes.Cancelled, report.ExitCode);
+            Assert.Equal(new[] { "cli.cancelled" }, report.Errors.Select(error => error.Code));
+            Assert.Equal(new[] { "profile.json" }, directory.Entries());
+        }
+
         [Theory]
         [InlineData(false)]
         [InlineData(true)]

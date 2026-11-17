@@ -18,6 +18,9 @@ namespace XMAT.Operations.Captures
 {
     internal sealed class ProxyCaptureRecorder : IDisposable
     {
+        internal const long MaximumUpdateBytes = 64L * 1024 * 1024;
+        internal const long MaximumCaptureBytes = 512L * 1024 * 1024;
+
         private readonly object _gate = new();
         private readonly SqliteConnection _connection;
         private long _bytes;
@@ -63,24 +66,7 @@ namespace XMAT.Operations.Captures
                 args.AcceptConnection &= RecordRequest(args.Request, args.Timestamp, args.ConnectionID, args.ClientIP);
             proxy.ReceivedWebRequest += (_, args) =>
                 args.AcceptRequest &= RecordRequest(args.Request, args.Timestamp, args.ConnectionID, string.Empty);
-            proxy.ReceivedWebResponse += (_, args) => args.SendResponse &= Guard(() =>
-            {
-                ServerResponse response = args.Response;
-                string body = Convert.ToBase64String(response.BodyBytes ?? Array.Empty<byte>());
-                CheckBudget(response.FirstLineAndHeaders.Length + body.Length);
-                using var command = _connection.CreateCommand();
-                command.CommandText = $"UPDATE {WebServiceCaptureMethod.TableName} SET " +
-                    $"\"{WebServiceCaptureMethod.FieldKey_ResponseTimestamp}\"=$time, " +
-                    $"\"{WebServiceCaptureMethod.FieldKey_RequestStatus}\"=$status, " +
-                    $"\"{WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders}\"=$headers, " +
-                    $"\"{WebServiceCaptureMethod.FieldKey_ResponseBody}\"=$body WHERE id=$id";
-                command.Parameters.AddWithValue("$time", Time(args.Timestamp));
-                command.Parameters.AddWithValue("$status", response.Status);
-                command.Parameters.AddWithValue("$headers", response.FirstLineAndHeaders);
-                command.Parameters.AddWithValue("$body", body);
-                command.Parameters.AddWithValue("$id", args.Request.RequestNumber);
-                command.ExecuteNonQuery();
-            });
+            proxy.ReceivedWebResponse += (_, args) => args.SendResponse &= RecordResponse(args.Request, args.Response, args.Timestamp);
             proxy.CompletedSslConnectionRequest += (_, args) => Guard(() =>
             {
                 using var command = _connection.CreateCommand();
@@ -93,12 +79,35 @@ namespace XMAT.Operations.Captures
             });
         }
 
+        internal bool RecordResponse(ClientRequest request, ServerResponse response, DateTime timestamp) => Guard(() =>
+        {
+            byte[] bodyBytes = response.BodyBytes ?? Array.Empty<byte>();
+            // Reserve the projected size first: a response body has no proxy cap, so encoding it before the
+            // limit check could exhaust memory instead of stopping the capture.
+            CheckBudget(response.FirstLineAndHeaders.Length + Base64Length(bodyBytes));
+            string body = Convert.ToBase64String(bodyBytes);
+            using var command = _connection.CreateCommand();
+            command.CommandText = $"UPDATE {WebServiceCaptureMethod.TableName} SET " +
+                $"\"{WebServiceCaptureMethod.FieldKey_ResponseTimestamp}\"=$time, " +
+                $"\"{WebServiceCaptureMethod.FieldKey_RequestStatus}\"=$status, " +
+                $"\"{WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders}\"=$headers, " +
+                $"\"{WebServiceCaptureMethod.FieldKey_ResponseBody}\"=$body WHERE id=$id";
+            command.Parameters.AddWithValue("$time", Time(timestamp));
+            command.Parameters.AddWithValue("$status", response.Status);
+            command.Parameters.AddWithValue("$headers", response.FirstLineAndHeaders);
+            command.Parameters.AddWithValue("$body", body);
+            command.Parameters.AddWithValue("$id", request.RequestNumber);
+            command.ExecuteNonQuery();
+        });
+
         private bool RecordRequest(ClientRequest request, DateTime timestamp, int connection, string clientIp) => Guard(() =>
         {
             if (Records >= 100_000)
             {
                 throw new InvalidOperationException("Capture record limit reached.");
             }
+            byte[] bodyBytes = request.BodyBytes ?? Array.Empty<byte>();
+            EnsureBudget(Base64Length(bodyBytes));
             var values = new Dictionary<string, object>
             {
                 [WebServiceCaptureMethod.FieldKey_DeviceName] = "Proxy capture",
@@ -111,8 +120,7 @@ namespace XMAT.Operations.Captures
                 [WebServiceCaptureMethod.FieldKey_RequestMethod] = request.Method,
                 [WebServiceCaptureMethod.FieldKey_RequestPath] = request.Path,
                 [WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders] = request.FirstLineAndHeaders,
-                [WebServiceCaptureMethod.FieldKey_RequestBody] =
-                    Convert.ToBase64String(request.BodyBytes ?? Array.Empty<byte>()),
+                [WebServiceCaptureMethod.FieldKey_RequestBody] = Convert.ToBase64String(bodyBytes),
                 [WebServiceCaptureMethod.FieldKey_ClientIP] = clientIp,
             };
             object[] fields = WebProxyCaptureSchema.Project(values, ClientProcessInfo.NotRecorded);
@@ -163,11 +171,20 @@ namespace XMAT.Operations.Captures
 
         private void CheckBudget(long bytes)
         {
-            if (bytes > 64L * 1024 * 1024 || (_bytes += bytes) > 512L * 1024 * 1024)
+            EnsureBudget(bytes);
+            _bytes += bytes;
+        }
+
+        // Checks a projected size without reserving it.
+        private void EnsureBudget(long bytes)
+        {
+            if (bytes > MaximumUpdateBytes || _bytes + bytes > MaximumCaptureBytes)
             {
                 throw new InvalidOperationException("Capture data limit reached.");
             }
         }
+
+        private static long Base64Length(byte[] bytes) => (bytes.LongLength + 2) / 3 * 4;
 
         private void Execute(string sql)
         {

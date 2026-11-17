@@ -29,6 +29,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private const int RootCertValidityYears = 4;
         private const int HostCertValidityYears = 3;
+        private const string RsaKeyAlgorithm = "1.2.840.113549.1.1.1";
+        private const string EcdsaKeyAlgorithm = "1.2.840.10045.2.1";
 
         private readonly X509Store _rootStore;
         private readonly X509Store _myStore;
@@ -61,9 +63,13 @@ namespace XMAT.WebServiceCapture.Proxy
                 rootCertificate.NotAfter.ToUniversalTime() <= DateTime.UtcNow ||
                 rootCertificate.NotBefore.ToUniversalTime() > DateTime.UtcNow ||
                 rootCertificate.Extensions.OfType<X509BasicConstraintsExtension>()
-                    .All(extension => !extension.CertificateAuthority))
+                    .All(extension => !extension.CertificateAuthority) ||
+                rootCertificate.Extensions.OfType<X509KeyUsageExtension>()
+                    .Any(extension => !extension.KeyUsages.HasFlag(X509KeyUsageFlags.KeyCertSign)) ||
+                rootCertificate.GetKeyAlgorithm() is not (RsaKeyAlgorithm or EcdsaKeyAlgorithm))
             {
-                throw new ArgumentException("A currently valid CA certificate with its private key is required.");
+                throw new ArgumentException(
+                    "A currently valid RSA or ECDSA CA certificate that may sign certificates, with its private key, is required.");
             }
             _rootCert = rootCertificate; // The caller retains ownership of the supplied CA.
         }
@@ -291,8 +297,17 @@ namespace XMAT.WebServiceCapture.Proxy
                 notBefore = issuerNotBefore;
             }
 
+            // An explicit signer lets an ECDSA authority issue the RSA host certificate.
+            using RSA issuerRsa = issuer.GetRSAPrivateKey();
+            using ECDsa issuerEcdsa = issuerRsa == null ? issuer.GetECDsaPrivateKey() : null;
+            X509SignatureGenerator signer = issuerRsa != null
+                ? X509SignatureGenerator.CreateForRSA(issuerRsa, RSASignaturePadding.Pkcs1)
+                : issuerEcdsa != null
+                    ? X509SignatureGenerator.CreateForECDsa(issuerEcdsa)
+                    : throw new InvalidOperationException("The root certificate has no RSA or ECDSA private key.");
             using X509Certificate2 cert = req.Create(
-                issuer,
+                issuer.SubjectName,
+                signer,
                 notBefore,
                 notAfter,
                 serial);

@@ -4,6 +4,7 @@
 
 using System.IO.Compression;
 using System.Text;
+using Microsoft.Data.Sqlite;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
 using XMAT.Operations.Captures;
@@ -108,6 +109,38 @@ namespace XMAT.Tests.Operations.Export
                 Assert.DoesNotContain("Export PC", json);
                 Assert.DoesNotContain("127.0.0.1", json);
             }
+        }
+
+        [Fact]
+        public void HeadlessReaderTakesShapingFromTheWebProxyDescriptor()
+        {
+            using var directory = new ExportTestDirectory();
+            string path = directory.PathOf("capture.xmatcap");
+            var controller = new NetworkShapingController();
+            controller.Apply(NetworkShapingProfile.Preset("min"));
+            NetworkShapingMetadata metadata = NetworkShapingMetadata.From(controller, 120);
+            using (var recorder = new ProxyCaptureRecorder(path))
+            {
+                recorder.RecordShaping(metadata);
+            }
+            using (var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
+            {
+                connection.Open();
+                using SqliteCommand command = connection.CreateCommand();
+                // The same PC's network trace descriptor is listed before its web proxy descriptor.
+                command.CommandText =
+                    "UPDATE CaptureDevices SET id=2; INSERT INTO CaptureDevices VALUES (1, 0, 'Proxy capture', 1, NULL)";
+                command.ExecuteNonQuery();
+            }
+
+            using LoadedInput loaded = new CaptureInputReader().Read(
+                AnalysisInput.FromFile(path), AnalysisLimits.Default,
+                new List<OperationDiagnostic>(), CancellationToken.None);
+
+            Assert.Equal(
+                NetworkShapingMetadata.Serialize(metadata),
+                NetworkShapingMetadata.Serialize(Assert.Single(loaded.Devices).Shaping));
         }
 
         [Theory]

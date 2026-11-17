@@ -110,8 +110,10 @@ namespace XMAT.WebServiceCapture.Proxy
                         int offset = 0;
                         while (offset < chunk.Length)
                         {
-                            int count = await pacer.PaceAsync(chunk.Length - offset, stopping.Token).ConfigureAwait(false);
+                            // Wait out latency before drawing from the shared pacer, so allowances granted to many
+                            // delayed connections are not released together as one burst.
                             await DelayAsync(chunk, controller, stopping.Token).ConfigureAwait(false);
+                            int count = await pacer.PaceAsync(chunk.Length - offset, stopping.Token).ConfigureAwait(false);
                             FlushResult flush = await destination.WriteAsync(
                                 chunk.Buffer.AsMemory(offset, count), stopping.Token).ConfigureAwait(false);
                             if (flush.IsCanceled || flush.IsCompleted)

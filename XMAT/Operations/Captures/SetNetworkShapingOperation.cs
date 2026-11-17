@@ -50,15 +50,27 @@ namespace XMAT.Operations.Captures
                 }
                 return Task.FromResult(OperationResult<NetworkShapingProfile>.Success(request.Profile, diagnostics));
             }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            catch (ArgumentException)
             {
                 return Task.FromResult(OperationResult<NetworkShapingProfile>.Failure(
                     OperationOutcome.InvalidInput,
                     new OperationDiagnostic(
                         "capture.shaping.invalid",
                         OperationDiagnosticSeverity.Error,
-                        "The shaping settings are invalid or the capture's shaping history is full.")));
+                        "The shaping settings are invalid.")));
+            }
+            catch (InvalidOperationException)
+            {
+                return Task.FromResult(OperationResult<NetworkShapingProfile>.Failure(
+                    OperationOutcome.Conflict,
+                    new OperationDiagnostic(
+                        HistoryFullCode,
+                        OperationDiagnosticSeverity.Error,
+                        HistoryFullMessage)));
             }
         }
+
+        internal const string HistoryFullCode = "capture.shaping.history-full";
+        internal const string HistoryFullMessage = "The capture's shaping history is full; clear the capture first.";
     }
 }

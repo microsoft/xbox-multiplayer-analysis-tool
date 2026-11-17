@@ -103,7 +103,7 @@ namespace XMAT.Cli
                 yield return "Runs a foreground explicit proxy and publishes a new private .xmatcap file when its duration ends.";
                 yield return "The port is required; --listen defaults to 127.0.0.1. Configure the client proxy separately.";
                 yield return "No system proxy, trust-store, firewall or console settings are changed. TLS is opaque unless";
-                yield return "--root-pfx supplies a private, passwordless CA PFX trusted by the client. Protect that private key.";
+                yield return "--root-pfx supplies a private, passwordless RSA or ECDSA CA PFX trusted by the client. Protect that private key.";
                 yield return "Rates are shared across this listener's connections; latency/jitter are added RTT in milliseconds.";
                 yield return "Ranges: rates 0-1000000 kbps (0 = unlimited), latency 0-10000 ms, jitter 0 to the latency.";
                 yield return "A version-1 JSON --shape-profile can schedule live changes. Do not mix it with shaping flags.";

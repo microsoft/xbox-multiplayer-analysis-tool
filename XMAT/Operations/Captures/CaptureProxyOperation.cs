@@ -294,7 +294,7 @@ namespace XMAT.Operations.Captures
         private static OperationResult<CaptureProxyResult> InvalidAuthority() =>
             Failure(
                 OperationOutcome.InvalidInput, "capture.ca.invalid",
-                "The CA certificate could not be read or is not a currently valid, passwordless CA PFX with its private key.");
+                "The CA certificate could not be read or is not a currently valid, passwordless RSA or ECDSA CA PFX with its private key.");
 
         private static async Task ScheduleAsync(
             NetworkShapingController controller, NetworkShapingPlan plan,

@@ -1221,7 +1221,9 @@ namespace XMAT.WebServiceCapture
                         ? string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic =>
                             Localization.GetLocalizedString(diagnostic.Code == "capture.shaping.notification-failed"
                                 ? "SHAPING_NOTIFICATION_WARNING" : "SHAPING_TIMEOUT_WARNING")))
-                        : Localization.GetLocalizedString("SHAPING_INVALID"),
+                        : Localization.GetLocalizedString(result.Diagnostics.Any(diagnostic =>
+                            diagnostic.Code == SetNetworkShapingOperation.HistoryFullCode)
+                                ? "SHAPING_HISTORY_FULL" : "SHAPING_INVALID"),
                     Localization.GetLocalizedString("SHAPING_TITLE"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);

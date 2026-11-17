@@ -125,7 +125,7 @@
                 <CheckBox x:Name="AutoScrollButton" Content="Auto Scroll" IsChecked="{Binding AutoScroll, ElementName=CaptureConnectionControl}"/>
             </Grid>
         </ToolBar>
-        <TextBlock Grid.Row="0" Grid.Column="2" Margin="8,0" VerticalAlignment="Center"
+        <TextBlock x:Name="ShapingStatus" Grid.Row="0" Grid.Column="2" Margin="8,0" VerticalAlignment="Center"
                    FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
                    Text="{Binding CaptureController.ShapingStatusText}"
                    ToolTip="{Binding CaptureController.ShapingStatusText}"/>
@@ -239,7 +239,7 @@
 
         <GridSplitter Grid.Column="1" Grid.RowSpan="63" Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeDirection="Columns"/>
 
-        <TabControl Grid.Row="0" Grid.Column="2" Grid.RowSpan="5">
+        <TabControl Grid.Row="1" Grid.Column="2" Grid.RowSpan="4">
             <TabItem x:Name="ReqestResponseTab" Header="Request/Response">
                 <Grid>
                     <Grid.RowDefinitions>

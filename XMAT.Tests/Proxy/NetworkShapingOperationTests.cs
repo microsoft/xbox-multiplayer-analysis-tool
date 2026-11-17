@@ -37,5 +37,20 @@ namespace XMAT.Tests.Proxy
             Assert.True(notified);
             Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "capture.shaping.notification-failed");
         }
+
+        [Fact]
+        public async Task FullHistoryIsReportedSeparatelyFromInvalidSettings()
+        {
+            var controller = new NetworkShapingController();
+            var shape = new NetworkShapingProfile(NetworkShapingMode.Shape, DownKbps: 192);
+            for (int count = 1; count < NetworkShapingController.MaximumHistory; count++)
+            {
+                controller.Apply(shape);
+            }
+            var result = await new SetNetworkShapingOperation().ExecuteAsync(
+                new(controller, shape), OperationContext.None, CancellationToken.None);
+            Assert.Equal(OperationOutcome.Conflict, result.Outcome);
+            Assert.Equal(SetNetworkShapingOperation.HistoryFullCode, Assert.Single(result.Diagnostics).Code);
+        }
     }
 }

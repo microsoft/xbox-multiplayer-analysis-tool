@@ -22,6 +22,8 @@ namespace XMAT.Operations.Captures
         internal const string DeviceField = "NetworkShaping";
         internal const string ArchiveEntry = "xmat/network-shaping.json";
         internal const int MaximumBytes = 4 * 1024 * 1024;
+        internal const int MaximumTraces = 64;
+        internal const int MaximumChanges = 16384;
 
         internal static NetworkShapingMetadata From(NetworkShapingController controller, int bodyTimeoutSeconds)
         {
@@ -104,7 +106,7 @@ namespace XMAT.Operations.Captures
 
         private static void Validate(NetworkShapingMetadata metadata)
         {
-            if (metadata?.Version != 1 || metadata.Traces == null || metadata.Traces.Count > 64)
+            if (metadata?.Version != 1 || metadata.Traces == null || metadata.Traces.Count > MaximumTraces)
             {
                 throw new ArgumentException("Unsupported shaping metadata.");
             }
@@ -112,7 +114,7 @@ namespace XMAT.Operations.Captures
             foreach (NetworkShapingTrace trace in metadata.Traces)
             {
                 if (trace?.Changes == null || trace.BodyTimeoutSeconds is < 1 or > 1800 ||
-                    trace.Changes.Count == 0 || (total += trace.Changes.Count) > 16384)
+                    trace.Changes.Count == 0 || (total += trace.Changes.Count) > MaximumChanges)
                 {
                     throw new ArgumentException("Invalid shaping history.");
                 }

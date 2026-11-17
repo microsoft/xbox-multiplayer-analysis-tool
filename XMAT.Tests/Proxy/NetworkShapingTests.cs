@@ -92,6 +92,29 @@ namespace XMAT.Tests.Proxy
             Assert.InRange(elapsed, 1750, 5000);
         }
 
+        [Fact]
+        public async Task DelayedConnectionsDoNotPrepayTheSharedRate()
+        {
+            // Each response fits one pacer slice, so drawing it before the latency wait would release them together.
+            byte[] body = Payload(1800);
+            await using var origin = await LoopbackOrigin.StartAsync(
+                context => context.Response.Body.WriteAsync(body).AsTask());
+            var shaping = new NetworkShapingController();
+            shaping.Apply(new(NetworkShapingMode.Shape, DownKbps: 1000, LatencyMs: 2000));
+            await using var proxy = await StartAsync(shaping);
+            using HttpClient client = proxy.CreateClient();
+            var clock = Stopwatch.StartNew();
+            double[] completed = await Task.WhenAll(Enumerable.Range(0, 32).Select(async index =>
+            {
+                Assert.Equal(body, await client.GetByteArrayAsync(origin.Url($"/burst/{index}")));
+                return clock.Elapsed.TotalMilliseconds;
+            }));
+            double spread = completed.Max() - completed.Min();
+            output.WriteLine($"32 x 1800 B at 1 Mbps + 2000 ms RTT: first {completed.Min():F0} ms, spread {spread:F0} ms");
+            // About 64 KB at 1 Mbps needs ~500 ms of the shared rate once the latency has elapsed.
+            Assert.True(spread >= 300, $"Responses were released within {spread:F0} ms of each other.");
+        }
+
         [Theory]
         [InlineData("http11")]
         [InlineData("https2")]
@@ -366,44 +389,33 @@ namespace XMAT.Tests.Proxy
                 controller.Apply(new(NetworkShapingMode.Shape, DownKbps: 1_000_000));
             }
             await using var proxy = await StartAsync(controller);
-            var stalled = new List<TcpClient>();
-            try
+            using var stalled = new StalledClients();
+            for (int i = 0; i < 8; i++)
             {
-                for (int i = 0; i < 8; i++)
-                {
-                    // The client never reads, so its download queue fills and stays full.
-                    var client = new TcpClient { ReceiveBufferSize = 4096 };
-                    stalled.Add(client);
-                    await client.ConnectAsync(IPAddress.Loopback, proxy.Port);
-                    await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(
-                        $"GET {origin.Url("/large")} HTTP/1.1\r\nHost: 127.0.0.1:{origin.Port}\r\n\r\n"));
-                }
-                var elapsed = Stopwatch.StartNew();
-                while (origin.Requests.Count < stalled.Count && elapsed.Elapsed < TimeSpan.FromSeconds(10))
-                {
-                    await Task.Delay(20);
-                }
-                Assert.Equal(stalled.Count, origin.Requests.Count);
-                // Shaped queues borrow the shared pool until it is empty; unshaped queues use only their reserve.
-                var filling = Stopwatch.StartNew();
-                while (controller.BufferSlots.CurrentCount > 0 &&
-                    filling.Elapsed < (shaped ? TimeSpan.FromSeconds(10) : TimeSpan.FromSeconds(1.5)))
-                {
-                    await Task.Delay(20);
-                }
-                Assert.Equal(shaped ? 0 : 256, controller.BufferSlots.CurrentCount);
+                // The client never reads, so its download queue fills and stays full.
+                TcpClient client = stalled.Add();
+                await client.ConnectAsync(IPAddress.Loopback, proxy.Port);
+                await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(
+                    $"GET {origin.Url("/large")} HTTP/1.1\r\nHost: 127.0.0.1:{origin.Port}\r\n\r\n"));
+            }
+            var elapsed = Stopwatch.StartNew();
+            while (origin.Requests.Count < stalled.Count && elapsed.Elapsed < TimeSpan.FromSeconds(10))
+            {
+                await Task.Delay(20);
+            }
+            Assert.Equal(stalled.Count, origin.Requests.Count);
+            // Shaped queues borrow the shared pool until it is empty; unshaped queues use only their reserve.
+            var filling = Stopwatch.StartNew();
+            while (controller.BufferSlots.CurrentCount > 0 &&
+                filling.Elapsed < (shaped ? TimeSpan.FromSeconds(10) : TimeSpan.FromSeconds(1.5)))
+            {
+                await Task.Delay(20);
+            }
+            Assert.Equal(shaped ? 0 : 256, controller.BufferSlots.CurrentCount);
 
-                using HttpClient other = proxy.CreateClient();
-                other.Timeout = TimeSpan.FromSeconds(5);
-                Assert.Equal(new byte[16], await other.GetByteArrayAsync(origin.Url("/small")));
-            }
-            finally
-            {
-                foreach (TcpClient client in stalled)
-                {
-                    client.Dispose();
-                }
-            }
+            using HttpClient other = proxy.CreateClient();
+            other.Timeout = TimeSpan.FromSeconds(5);
+            Assert.Equal(new byte[16], await other.GetByteArrayAsync(origin.Url("/small")));
         }
 
         private static Task<ProxyTestHarness> StartAsync(NetworkShapingController controller) =>
@@ -414,6 +426,22 @@ namespace XMAT.Tests.Proxy
             var bytes = new byte[size];
             new Random(17).NextBytes(bytes);
             return bytes;
+        }
+
+        private sealed class StalledClients : IDisposable
+        {
+            private readonly List<TcpClient> _clients = new();
+
+            internal int Count => _clients.Count;
+
+            internal TcpClient Add()
+            {
+                var client = new TcpClient { ReceiveBufferSize = 4096 };
+                _clients.Add(client);
+                return client;
+            }
+
+            public void Dispose() => _clients.ForEach(client => client.Dispose());
         }
     }
 }

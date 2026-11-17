@@ -160,6 +160,9 @@ other SAZ tools may ignore or discard this extension. History is capped at 4096 
 the cap, new shaping or Broken changes are refused, but Disconnect and then Off are still accepted and recorded.
 Clearing captured data also clears imported/past history, but keeps the currently selected shaping condition
 as the start of the new history. An explicit nondefault upload deadline is recorded even when shaping is off.
+Changing the upload deadline starts a new history entry, so traffic captured earlier keeps its original deadline.
+A capture keeps at most 64 such entries and 16384 changes in total; a change that would exceed either limit is
+refused with a message to clear the capture first, and the current condition stays in effect.
 
 Development kits and PC applications must already route their traffic to the explicit proxy. This does not add
 a proxy-routing facility to consumer retail consoles or shape an entire RETAIL network connection. Exact

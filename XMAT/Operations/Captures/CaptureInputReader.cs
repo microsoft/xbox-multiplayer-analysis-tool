@@ -303,6 +303,8 @@ namespace XMAT.Operations.Captures
                     ref retainedBytes,
                     cancellationToken);
                 var webDeviceNames = new SortedSet<string>(StringComparer.Ordinal);
+                // A device can also have a NetworkTrace row with the same name; shaping belongs to its WebProxy row.
+                var webDeviceRows = new Dictionary<string, IDataRecord>(StringComparer.Ordinal);
                 var skippedUnsupportedDevice = false;
                 foreach (IDataRecord deviceRow in deviceRows)
                 {
@@ -321,6 +323,7 @@ namespace XMAT.Operations.Captures
                             "The capture database schema is invalid.");
                     }
                     webDeviceNames.Add(deviceName);
+                    webDeviceRows.TryAdd(deviceName, deviceRow);
                 }
 
                 if (skippedUnsupportedDevice)
@@ -366,8 +369,7 @@ namespace XMAT.Operations.Captures
                             ? deviceRecords
                             : new List<IDataRecord>(),
                         ownsRecords: true,
-                        NetworkShapingMetadata.Parse(deviceRows.FirstOrDefault(row =>
-                            row.Str("DeviceName") == deviceName)?.Str(NetworkShapingMetadata.DeviceField))));
+                        NetworkShapingMetadata.Parse(webDeviceRows[deviceName].Str(NetworkShapingMetadata.DeviceField))));
                 }
 
                 return new LoadedInput(

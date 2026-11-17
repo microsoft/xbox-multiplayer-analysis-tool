@@ -9,6 +9,7 @@
 	"SHAPING_TIMEOUT": "Total upload deadline (seconds, 1-1800; change while stopped)",
 	"SHAPING_APPLY": "Apply",
 	"SHAPING_INVALID": "Settings were not applied. Rates must be 0-1000000 kbps, latency 0-10000 ms, jitter 0-latency, and deadline 1-1800 seconds. A running capture cannot change its deadline.",
+	"SHAPING_HISTORY_FULL": "Settings were not applied because this capture's shaping history is full. Save the capture if needed, then clear it to record new changes.",
 	"SHAPING_TIMEOUT_WARNING": "Large uploads at this rate can exceed the total upload deadline. Stop the capture to adjust that deadline if needed. The 30-second inactivity guard and title/server timeouts still apply; parallel connections share the bandwidth.",
 	"SHAPING_NOTIFICATION_WARNING": "The profile is active, but a connection abort or capture-history update failed. Some active connections may remain, or the saved history may be incomplete.",
 	"SHAPING_ACTIVE": "Shaping: down {0} / up {1} kbps (0 unlimited), RTT {2} +/- {3} ms",

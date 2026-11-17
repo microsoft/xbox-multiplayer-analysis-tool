@@ -179,7 +179,7 @@ namespace XMAT.WebServiceCapture
                 captureController,
                 imported.Source);
             TryNotifyCaptureReplacement(
-                () => captureController.ImportedShaping = imported.Shaping,
+                () => captureController.ReplaceShapingHistory(imported.Shaping),
                 logError);
             TryNotifyCaptureReplacement(
                 () => captureController.SetImportNotice(

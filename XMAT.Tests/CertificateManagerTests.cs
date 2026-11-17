@@ -59,6 +59,50 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task SuppliedEcdsaAuthorityIssuesUsableTlsCertificate()
+        {
+            using ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var request = new CertificateRequest("CN=XMAT synthetic EC CA", key, HashAlgorithmName.SHA256);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+            using X509Certificate2 root = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+            using var manager = new CertificateManager(root);
+            X509Certificate2 leaf = manager.GetCertificateForHost("localhost");
+            using var chain = new X509Chain();
+            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+            chain.ChainPolicy.CustomTrustStore.Add(root);
+            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            Assert.True(chain.Build(leaf));
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            Task server = ServeAsync();
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port, cancellation.Token);
+            using var tls = new SslStream(client.GetStream(), false, (_, _, _, _) => true);
+            await Task.WhenAll(server, tls.AuthenticateAsClientAsync(
+                new SslClientAuthenticationOptions { TargetHost = "localhost" }, cancellation.Token));
+
+            async Task ServeAsync()
+            {
+                using TcpClient accepted = await listener.AcceptTcpClientAsync(cancellation.Token);
+                using var serverTls = new SslStream(accepted.GetStream());
+                await serverTls.AuthenticateAsServerAsync(
+                    new SslServerAuthenticationOptions { ServerCertificate = leaf }, cancellation.Token);
+            }
+        }
+
+        [Fact]
+        public void SuppliedAuthorityThatMayNotSignCertificatesIsRejected()
+        {
+            using RSA rsa = RSA.Create(2048);
+            var request = new CertificateRequest("CN=XMAT synthetic CA", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+            using X509Certificate2 root = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+            Assert.Throws<ArgumentException>(() => new CertificateManager(root));
+        }
+
+        [Fact]
         public async Task ConcurrentRequestsForOneHostShareOneCertificate()
         {
             using RSA rsa = RSA.Create(2048);

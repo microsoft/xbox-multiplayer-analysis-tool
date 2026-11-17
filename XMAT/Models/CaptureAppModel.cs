@@ -1193,19 +1193,15 @@ namespace XMAT.Models
 
                 if (!readOnly)
                 {
-                    long deviceRow = AppModel.CaptureDevicesTable.AddRow(
+                    IDataTable devices = AppModel.CaptureDevicesTable;
+                    long deviceRow = devices.AddRow(
                         (Int64)deviceType,
                         deviceName,
                         (Int64)captureType,
                         string.Empty);
                     if (newCaptureDeviceModel.CaptureController is WebServiceDeviceCaptureController shapingController)
                     {
-                        shapingController.ShapingMetadataChanged += (_, _) =>
-                            CaptureDevicesTable.UpdateRow(
-                                deviceRow,
-                                new FieldValue<string>(
-                                    Operations.Captures.NetworkShapingMetadata.DeviceField,
-                                    Operations.Captures.NetworkShapingMetadata.Serialize(shapingController.RecordedShaping)));
+                        RecordShapingIn(devices, deviceRow, shapingController);
                     }
                 }
 
@@ -1265,6 +1261,17 @@ namespace XMAT.Models
                 new FieldValue<Int64>(@"DeviceType", (Int64)context.DeviceType),
                 new FieldValue<string>(@"DeviceName", context.DeviceName),
                 new FieldValue<Int64>(@"CaptureType", (Int64)context.CaptureType));
+
+        internal static void RecordShapingIn(
+            IDataTable devices,
+            long deviceRow,
+            WebServiceDeviceCaptureController controller) =>
+            controller.ShapingMetadataChanged += (_, _) =>
+                devices.UpdateRow(
+                    deviceRow,
+                    new FieldValue<string>(
+                        Operations.Captures.NetworkShapingMetadata.DeviceField,
+                        Operations.Captures.NetworkShapingMetadata.Serialize(controller.RecordedShaping)));
 
         internal ICaptureDeviceContext GetDeviceContext(DeviceType deviceType, string deviceName, CaptureType captureType, bool readOnly)
         {

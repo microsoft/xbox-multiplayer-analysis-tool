@@ -52,8 +52,9 @@ See [Network shaping](web-proxy.md#network-shaping) for the aggregate bandwidth 
 
 CLI HTTPS bodies are intentionally absent without an explicit `--root-pfx`: that
 mode forwards opaque TLS and records only CONNECT. It is not a lost-body defect.
-The supplied CA must contain its private key, and the client must already trust
-the corresponding public root. The CLI does not change certificate stores.
+The supplied CA must be an RSA or ECDSA CA allowed to sign certificates, must
+contain its private key, and the client must already trust the corresponding
+public root. The CLI does not change certificate stores.
 
 ## If XMAT closes unexpectedly
 
