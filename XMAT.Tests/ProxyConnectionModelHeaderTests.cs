@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Text;
+using XMAT.WebServiceCapture;
 using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.Tests
@@ -18,24 +19,8 @@ namespace XMAT.Tests
         public void ResponseCaptureNotice_StatesWhereTheCaptureWasTruncated(long truncatedAt, string notice)
         {
             Localization.LoadLanguage("en-us");
-            var model = new ProxyConnectionModel(
-                1,
-                "200",
-                DateTime.UnixEpoch,
-                TimeSpan.Zero,
-                "https",
-                "example.test",
-                "GET",
-                "/",
-                "GET / HTTP/1.1\r\n",
-                Array.Empty<byte>(),
-                "HTTP/1.1 200 OK\r\n",
-                Array.Empty<byte>(),
-                "10.0.0.1");
 
-            model.SetResponseCaptureDetails(string.Empty, truncatedAt);
-
-            Assert.Equal(notice, model.ResponseCaptureNotice);
+            Assert.Equal(notice, ResponseCaptureNoticeConverter.Format(false, truncatedAt));
         }
 
         [Fact]

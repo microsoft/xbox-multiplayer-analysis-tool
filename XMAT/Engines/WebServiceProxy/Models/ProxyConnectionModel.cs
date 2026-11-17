@@ -85,21 +85,6 @@ namespace XMAT.WebServiceCapture.Models
         // or couldn't trust their encoding, so a sanitized export leaves the pair out (see SazSanitizer).
         internal HeaderProvenance HeaderProvenance { get; private set; }
 
-        // Notes about the captured response: still streaming, and where the capture truncated its body.
-        public string ResponseCaptureNotice
-        {
-            get
-            {
-                string streaming = IsResponseStreaming
-                    ? Localization.GetLocalizedString("WEBCAP_RESPONSE_STREAMING")
-                    : null;
-                string truncated = ResponseBodyTruncatedAt > 0
-                    ? Localization.GetLocalizedString("WEBCAP_RESPONSE_TRUNCATED", FormatSize(ResponseBodyTruncatedAt))
-                    : null;
-                return string.Join(" ", new[] { streaming, truncated }.Where(notice => notice != null));
-            }
-        }
-
         // The response's status and headers were recorded, but it has not ended yet: a streamed response still arriving.
         public bool IsResponseStreaming => !string.IsNullOrEmpty(ResponseLineAndHeaders) && !HasRecordedResponseTimestamp;
 
@@ -406,18 +391,6 @@ namespace XMAT.WebServiceCapture.Models
         internal void SetHeaderProvenance(HeaderProvenance provenance)
         {
             HeaderProvenance = provenance;
-        }
-
-        // Megabytes of 1,048,576 bytes, as the capture limit counts them.
-        private static string FormatSize(long bytes)
-        {
-            const long Kilobyte = 1024;
-            const long Megabyte = 1024 * Kilobyte;
-            return bytes >= Megabyte
-                ? Localization.GetLocalizedString("WEBCAP_SIZE_MB", Math.Round(bytes / (double)Megabyte, 1))
-                : bytes >= Kilobyte
-                    ? Localization.GetLocalizedString("WEBCAP_SIZE_KB", Math.Round(bytes / (double)Kilobyte, 1))
-                    : Localization.GetLocalizedString("WEBCAP_SIZE_BYTES", bytes);
         }
 
         internal void SetClientProcess(ClientProcessInfo info, bool resolving = false)

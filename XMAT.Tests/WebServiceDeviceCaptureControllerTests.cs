@@ -1551,7 +1551,7 @@ namespace XMAT.Tests
             Assert.Equal(0L, headers.ResponseBodyTruncatedAt);
             Assert.False(headers.HasRecordedResponseTimestamp);
             Assert.True(headers.IsResponseStreaming);
-            Assert.Equal(streaming, headers.ResponseCaptureNotice);
+            Assert.Equal(streaming, ResponseCaptureNoticeConverter.Format(headers.IsResponseStreaming, headers.ResponseBodyTruncatedAt));
 
             response.BodyBytes = "data: a first ev"u8.ToArray();
             response.CaptureTruncatedAt = 16;
@@ -1563,7 +1563,10 @@ namespace XMAT.Tests
             Assert.Equal("200", atLimit.Status);
             Assert.False(atLimit.HasRecordedResponseTimestamp);
             Assert.True(atLimit.IsResponseStreaming);
-            Assert.Contains(streaming, atLimit.ResponseCaptureNotice, StringComparison.Ordinal);
+            Assert.Contains(
+                streaming,
+                ResponseCaptureNoticeConverter.Format(atLimit.IsResponseStreaming, atLimit.ResponseBodyTruncatedAt),
+                StringComparison.Ordinal);
             Assert.Equal("200", response.Status);
 
             Assert.True(await capture.Proxy.RaiseReceivedWebResponseAsync(
@@ -1572,8 +1575,9 @@ namespace XMAT.Tests
             var ended = new ProxyConnectionModel(capture.Row);
             Assert.True(ended.HasRecordedResponseTimestamp);
             Assert.False(ended.IsResponseStreaming);
-            Assert.NotEmpty(ended.ResponseCaptureNotice);
-            Assert.DoesNotContain(streaming, ended.ResponseCaptureNotice, StringComparison.Ordinal);
+            string endedNotice = ResponseCaptureNoticeConverter.Format(ended.IsResponseStreaming, ended.ResponseBodyTruncatedAt);
+            Assert.NotEmpty(endedNotice);
+            Assert.DoesNotContain(streaming, endedNotice, StringComparison.Ordinal);
         }
 
         // The proxy publishes a streamed body's captured prefix as an array that never changes, and reports that same array

@@ -17,6 +17,7 @@
         <BooleanToVisibilityConverter x:Key="booleanToVisibilityConverter" />
         <local:ProxyStatusIsErrorConverter x:Key="proxyStatusIsErrorConverter" />
         <local:ProcessDisplayConverter x:Key="processDisplayConverter" />
+        <local:ResponseCaptureNoticeConverter x:Key="responseCaptureNoticeConverter" />
         <Style x:Key="CenterGridHeaderStyle" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
         </Style>
@@ -285,9 +286,14 @@
                                                HeaderDictionary="{Binding SelectedItem.ResponseHeaders, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyBytes="{Binding SelectedItem.ResponseBody, ElementName=ConnectionList, Mode=OneWay}"
                                                BodyIsDecoded="{Binding SelectedItem.IsReplay, ElementName=ConnectionList, Mode=OneWay}"
-                                               Notice="{Binding SelectedItem.ResponseCaptureNotice, ElementName=ConnectionList, Mode=OneWay}"
-                                               Trailers="{Binding SelectedItem.ResponseTrailers, ElementName=ConnectionList, Mode=OneWay}"
-                                               />
+                                               Trailers="{Binding SelectedItem.ResponseTrailers, ElementName=ConnectionList, Mode=OneWay}">
+                        <local:RequestResponseView.Notice>
+                            <MultiBinding Converter="{StaticResource responseCaptureNoticeConverter}" Mode="OneWay">
+                                <Binding Path="SelectedItem.IsResponseStreaming" ElementName="ConnectionList" Mode="OneWay"/>
+                                <Binding Path="SelectedItem.ResponseBodyTruncatedAt" ElementName="ConnectionList" Mode="OneWay"/>
+                            </MultiBinding>
+                        </local:RequestResponseView.Notice>
+                    </local:RequestResponseView>
 
                     <Grid Grid.Row="1" Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Stretch">
                         <Grid.ColumnDefinitions>
