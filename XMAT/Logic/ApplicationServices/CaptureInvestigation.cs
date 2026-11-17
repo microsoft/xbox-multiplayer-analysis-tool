@@ -14,10 +14,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using CaptureAnalysisEngine;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.NetworkTrace;
 using XMAT.NetworkTrace.Models;
 using XMAT.NetworkTraceCaptureAnalysis;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.XboxLiveCaptureAnalysis;
@@ -53,6 +55,11 @@ namespace XMAT.ApplicationServices
             Web.FieldKey_ResponseBody, Web.FieldKey_ClientIP
         ];
         private static readonly string[] WebDetailFields = [.. WebAnalysisFields, Web.FieldKey_ConnectionId];
+        private static readonly string[] WebProcessFields =
+        [
+            WebProxyCaptureSchema.ClientProcessName, WebProxyCaptureSchema.ClientProcessId,
+            WebProxyCaptureSchema.ClientProcessStartTime, WebProxyCaptureSchema.ClientProcessStatus
+        ];
         private static readonly string[] PacketFields =
         [
             "id", NetworkTraceCaptureMethod.FieldKey_DeviceName, NetworkTraceCaptureMethod.FieldKey_ProcessId,
@@ -141,7 +148,7 @@ namespace XMAT.ApplicationServices
                 snapshot = acquisition.Snapshot;
                 await using var preparation = analyze ? await PrepareAnalysisAsync(sourceId, kind, deadline.Token) : null;
                 var result = await ReadSnapshotAsync(snapshot, acquisition.Source, kind, filter, options, analyze, preparation,
-                    null, null, null, null, acquisition.Captures, null, deadline.Token);
+                    null, null, null, null, acquisition.Captures, null, acquisition.TextSource, null, deadline.Token);
                 snapshot = null;
                 return result;
             }
@@ -175,7 +182,9 @@ namespace XMAT.ApplicationServices
                 var result = await ReadSnapshotAsync(source.Snapshot, source.Source, CaptureDataKind.WebProxy, source.Filter,
                     new QueryExecutionOptions(TimeSpan.FromSeconds(60)), true,
                     new Preparation(null, analyzer, null, _dispatcher), source.CaptureId, source.CaptureEpoch, run.Id, outputDirectory,
-                    _model.GetInvestigationCaptureReferences(source.Source.Id), null, cancellationToken);
+                    _model.GetInvestigationCaptureReferences(source.Source.Id), null,
+                    (controller as WebServiceDeviceCaptureController)?.ExportTextSource ?? CaptureTextSource.Unknown,
+                    run.ProcessFilter, cancellationToken);
                 retained = true;
                 _model.RegisterDesktopInvestigation(run, result);
                 return result;
@@ -201,7 +210,7 @@ namespace XMAT.ApplicationServices
                 var result = await ReadSnapshotAsync(source.Snapshot, source.Source, CaptureDataKind.NetworkTrace, source.Filter,
                     new QueryExecutionOptions(TimeSpan.FromSeconds(60)), true, new Preparation(null, null, networkOptions, _dispatcher),
                     source.CaptureId, source.CaptureEpoch, run.Id, null,
-                    _model.GetInvestigationCaptureReferences(source.Source.Id), ids, cancellationToken);
+                    _model.GetInvestigationCaptureReferences(source.Source.Id), ids, null, null, cancellationToken);
                 retained = true;
                 _model.RegisterDesktopInvestigation(run, result);
                 return result;
@@ -217,15 +226,25 @@ namespace XMAT.ApplicationServices
             IQuerySession snapshot, QuerySourceDescriptor source, CaptureDataKind kind, CaptureDataFilter filter,
             QueryExecutionOptions options, bool analyze, Preparation preparation, Guid? captureId, long? captureEpoch,
             long? desktopRunId, string desktopOutputDirectory, IReadOnlyList<CaptureDescriptor> captureReferences,
-            IReadOnlySet<long> selectedRecordIds, CancellationToken cancellationToken)
+            IReadOnlySet<long> selectedRecordIds, CaptureTextSource textSource, ProcessFilterSpec processFilter,
+            CancellationToken cancellationToken)
         {
             var fields = kind == CaptureDataKind.WebProxy ? analyze ? WebAnalysisFields : WebMetadataFields : PacketFields;
             var table = kind == CaptureDataKind.WebProxy ? Web.TableName : NetworkTraceCaptureMethod.TableName;
+            if (kind == CaptureDataKind.WebProxy && analyze)
+            {
+                await using var schema = await snapshot.ExecuteAsync($"SELECT * FROM \"{table}\" LIMIT 0", options, cancellationToken);
+                var available = schema.Columns.Select(column => column.Name).ToHashSet(StringComparer.Ordinal);
+                fields = [.. fields, .. WebProcessFields.Where(available.Contains)];
+            }
             var sql = $"SELECT {string.Join(",", fields.Select(field => $"\"{field}\""))} FROM \"{table}\" ORDER BY \"id\"";
             await using var data = await snapshot.ExecuteAsync(sql, options, cancellationToken);
             var reader = new CaptureSnapshotReader(data);
+            var processOrdinals = data.Columns.Where(column => WebProcessFields.Contains(column.Name, StringComparer.Ordinal))
+                .ToDictionary(column => column.Name, column => column.Ordinal, StringComparer.Ordinal);
             var records = new List<CaptureRecordSummary>();
             var webRecords = new List<IDataRecord>();
+            var malformedRecordIds = new HashSet<long>();
             var packets = new List<NetworkTracePacketDataModel>();
             var budget = new DataBudget(options.MaximumResultBytes);
             long malformed = 0;
@@ -255,7 +274,10 @@ namespace XMAT.ApplicationServices
                     continue;
                 }
                 if (summary.Timestamp == null || malformedMetadata)
+                {
                     malformed++;
+                    malformedRecordIds.Add(summary.RecordId);
+                }
                 if (filter.DeviceName != null &&
                     (reader.Cell(row, "DeviceName").IsTruncated ||
                     !string.Equals(reader.Text(row, "DeviceName"), filter.DeviceName, StringComparison.Ordinal)))
@@ -270,7 +292,9 @@ namespace XMAT.ApplicationServices
                     if (retainedBytes > options.MaximumResultBytes)
                         throw new CaptureDataException(CaptureDataError.LimitExceeded);
                     if (kind == CaptureDataKind.WebProxy)
-                        webRecords.Add(await reader.ReadRecordAsync(row, cancellationToken));
+                        webRecords.Add(new SnapshotWebRecord(
+                            await reader.ReadRecordAsync(row, cancellationToken), row, processOrdinals,
+                            textSource ?? CaptureTextSource.Unknown));
                     else
                         packets.Add(packet);
                 }
@@ -286,15 +310,27 @@ namespace XMAT.ApplicationServices
             long eligible = 0;
             if (kind == CaptureDataKind.WebProxy)
             {
-                HttpMetrics(records, metrics);
                 if (analyze)
                 {
                     var canonical = await Task.Run(() => preparation.Web.AnalyzeRecords(
-                        webRecords, desktopOutputDirectory, desktopRunId ?? 0, cancellationToken: cancellationToken), cancellationToken);
+                        webRecords, desktopOutputDirectory, desktopRunId ?? 0, processFilter: processFilter,
+                        cancellationToken: cancellationToken), cancellationToken);
                     canonicalWeb = canonical;
                     eligible = canonical.ConvertedRecords;
+                    if (!ProcessFilter.IsEmpty(processFilter))
+                    {
+                        var included = canonical.IncludedKeys.Select(key => key.RowId).ToHashSet();
+                        var available = records.Select(record => record.RecordId).ToHashSet();
+                        if (included.Count != canonical.IncludedKeys.Count || !included.IsSubsetOf(available))
+                            throw new InvalidOperationException("The selected process records do not match the capture snapshot.");
+                        records.RemoveAll(record => !included.Contains(record.RecordId));
+                        malformed = records.Count(record => malformedRecordIds.Contains(record.RecordId));
+                    }
+                    HttpMetrics(records, metrics);
                     ProjectRules(canonical, snapshot.SnapshotId, records, metrics, findings, evidence, details, budget, cancellationToken);
                 }
+                else
+                    HttpMetrics(records, metrics);
             }
             else if (analyze)
             {
@@ -351,7 +387,7 @@ namespace XMAT.ApplicationServices
             return result;
         }
 
-        private Task<(IQuerySession Snapshot, IReadOnlyList<CaptureDescriptor> Captures, QuerySourceDescriptor Source)> CreateSnapshotAsync(
+        private Task<(IQuerySession Snapshot, IReadOnlyList<CaptureDescriptor> Captures, QuerySourceDescriptor Source, CaptureTextSource TextSource)> CreateSnapshotAsync(
             Guid sourceId, CancellationToken cancellationToken) =>
             _queries is CaptureQueries applicationQueries
                 ? applicationQueries.ReadSourceAsync(sourceId, async source =>
@@ -359,12 +395,12 @@ namespace XMAT.ApplicationServices
                     var descriptor = (await _queries.GetSourcesAsync(cancellationToken)).Single(source => source.Id == sourceId);
                     var snapshot = await source.CreateQuerySessionAsync(cancellationToken);
                     try
-                    { return (snapshot, _model.GetInvestigationCaptureReferences(sourceId), descriptor); }
+                    { return (snapshot, _model.GetInvestigationCaptureReferences(sourceId), descriptor, CaptureTextSource.Of(source)); }
                     catch { await snapshot.DisposeAsync(); throw; }
                 }, cancellationToken)
                 : CreateUnregisteredSnapshotAsync(sourceId, cancellationToken);
 
-        private async Task<(IQuerySession Snapshot, IReadOnlyList<CaptureDescriptor> Captures, QuerySourceDescriptor Source)> CreateUnregisteredSnapshotAsync(
+        private async Task<(IQuerySession Snapshot, IReadOnlyList<CaptureDescriptor> Captures, QuerySourceDescriptor Source, CaptureTextSource TextSource)> CreateUnregisteredSnapshotAsync(
             Guid sourceId, CancellationToken cancellationToken)
         {
             var snapshot = await _queries.CreateSessionAsync(sourceId, cancellationToken);
@@ -372,7 +408,7 @@ namespace XMAT.ApplicationServices
             {
                 var descriptor = (await _queries.GetSourcesAsync(cancellationToken)).SingleOrDefault(source => source.Id == sourceId)
                     ?? new QuerySourceDescriptor(sourceId, QuerySourceKind.Active, Localization.GetLocalizedString("AGENT_SOURCE_ACTIVE"));
-                return (snapshot, Array.Empty<CaptureDescriptor>(), descriptor);
+                return (snapshot, Array.Empty<CaptureDescriptor>(), descriptor, CaptureTextSource.Unknown);
             }
             catch { await snapshot.DisposeAsync(); throw; }
         }
@@ -662,6 +698,35 @@ namespace XMAT.ApplicationServices
             QueryError.ResultLimit or QueryError.PageTooSmall => CaptureDataError.LimitExceeded,
             _ => CaptureDataError.UnsupportedData
         });
+
+        private sealed class SnapshotWebRecord(
+            IDataRecord record, QueryRow row, IReadOnlyDictionary<string, int> processOrdinals,
+            CaptureTextSource textSource) : IDataRecord, IOptionalTypedDataRecord, ICaptureTextSourceProvider
+        {
+            public int RowId => record.RowId;
+            public CaptureTextSource CaptureTextSource => textSource;
+            public long Int(string fieldName) => record.Int(fieldName);
+            public string Str(string fieldName) => record.Str(fieldName);
+
+            public bool TryReadString(string name, out string value)
+            {
+                value = null;
+                if (!processOrdinals.TryGetValue(name, out var ordinal) || row.Cells[ordinal].Kind != QueryValueKind.Text)
+                    return false;
+                value = record.Str(name);
+                return value != null;
+            }
+
+            public bool TryReadInt64(string name, out long value)
+            {
+                value = default;
+                if (!processOrdinals.TryGetValue(name, out var ordinal) ||
+                    row.Cells[ordinal].Kind != QueryValueKind.Integer || row.Cells[ordinal].Value is not long number)
+                    return false;
+                value = number;
+                return true;
+            }
+        }
 
         private sealed record Preparation(
             IDisposable Lease, XboxLiveCaptureAnalyzer Web, NetworkTraceStatisticsOptions NetworkOptions,

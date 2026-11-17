@@ -141,14 +141,14 @@ namespace XMAT.Tests
             var original = Snapshot(table);
             using var cancellation = new CancellationTokenSource();
             // Materialize the replacement before the delete begins.
-            var values = new ProxyConnectionModel(Assert.Single(table.Dataset.DataRecords)).ToDataTableValues("imported");
+            var values = new ProxyConnectionModel(Assert.Single(table.Dataset.DataRecords)).ToDataTableValues("imported", table);
             IEnumerable<object[]> Replacement()
             {
                 yield return values;
                 cancellation.Cancel();
             }
             Assert.ThrowsAny<OperationCanceledException>(() => ((IImportedCaptureTable)table).ReplaceImportedRows(
-                new FieldValue<string>("DeviceName", "imported"), Replacement(), cancellation.Token));
+                CaptureTextSource.Literal, new FieldValue<string>("DeviceName", "imported"), Replacement(), cancellation.Token));
             Assert.Equal(original, Snapshot(table));
         }
 
@@ -364,9 +364,9 @@ namespace XMAT.Tests
             public event Action<IDataTable, long> RowUpdated { add => inner.RowUpdated += value; remove => inner.RowUpdated -= value; }
             public event Action<IDataTable, long> RowsRemoved { add => inner.RowsRemoved += value; remove => inner.RowsRemoved -= value; }
             public IReadOnlyList<long> ReplaceImportedRows(
-                IFieldValue capture, IEnumerable<object[]> rows, CancellationToken cancellationToken = default)
+                CaptureTextSource source, IFieldValue capture, IEnumerable<object[]> rows, CancellationToken cancellationToken = default)
             {
-                var ids = ((IImportedCaptureTable)inner).ReplaceImportedRows(capture, rows, cancellationToken);
+                var ids = ((IImportedCaptureTable)inner).ReplaceImportedRows(source, capture, rows, cancellationToken);
                 afterCommit();
                 return ids;
             }

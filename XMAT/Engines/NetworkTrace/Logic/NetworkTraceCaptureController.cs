@@ -14,6 +14,7 @@ using System.Threading.Tasks;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using XMAT.DataAbstractionLayer;
 using XMAT.NetworkTrace.Models;
 using XMAT.NetworkTrace.NTDE;
 using XMAT.SharedInterfaces;
@@ -284,8 +285,11 @@ namespace XMAT.NetworkTrace
             return new OperationLease(this);
         }
 
-        internal async Task StartCapture(ICaptureDeviceContext device)
+        internal async Task StartCapture(ICaptureDeviceContext device, IDisposable operationLease = null)
         {
+            if (IsCapturing || DeviceStatus != DeviceStatusEnum.Idle)
+                throw new InvalidOperationException("A capture operation is already in progress.");
+
             var prerequisite = _engineFactory.GetPrerequisite(_deviceType);
             if (prerequisite == CaptureOperationFailure.ElevationRequired)
                 throw new UnauthorizedAccessException();
@@ -309,6 +313,7 @@ namespace XMAT.NetworkTrace
             }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
+                operationLease?.Dispose();
                 var rejected = exception is UnauthorizedAccessException ||
                     exception is NetworkTraceEngineException { MayHaveCommitted: false };
                 if (startAttempted && !rejected)
@@ -338,6 +343,10 @@ namespace XMAT.NetworkTrace
 
         internal async Task StopCapture(ICaptureDeviceContext device)
         {
+            if (!IsCapturing ||
+                DeviceStatus is not (DeviceStatusEnum.Tracing or DeviceStatusEnum.RecoveryRequired))
+                throw new InvalidOperationException("No trace is ready to stop.");
+
             try
             {
                 if (_nextPhase == CaptureTraceRecoveryPhase.Stop)
@@ -403,7 +412,10 @@ namespace XMAT.NetworkTrace
             finally { engine.EventRecordAvailable -= handler; }
             stage.Complete();
             await Task.Run(() => imports.ReplaceImportedRows(
-                new FieldValue<string>(NetworkTraceCaptureMethod.FieldKey_DeviceName, _deviceName), stage.Rows(_deviceName)));
+                CaptureTextSource.Literal,
+                new FieldValue<string>(NetworkTraceCaptureMethod.FieldKey_DeviceName, _deviceName),
+                stage.Rows(_deviceName),
+                CancellationToken.None));
             if (IsCapturing)
                 _nextPhase = CaptureTraceRecoveryPhase.Publish;
         }

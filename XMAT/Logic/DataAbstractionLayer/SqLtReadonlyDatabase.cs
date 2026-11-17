@@ -24,7 +24,10 @@ namespace XMAT.DataAbstractionLayer
         int Columns,
         int ExpressionDepth);
 
-    internal class SqLtReadonlyDatabase : IReadonlyDatabase, IDisposable
+    internal class SqLtReadonlyDatabase :
+        IReadonlyDatabase,
+        IDisposable,
+        ICaptureTextSourceProvider
     {
         public Task<IReadOnlyList<QueryTable>> GetQuerySchemaAsync(CancellationToken cancellationToken = default) =>
             Task.Run(() => SqLtQuerySupport.ReadSchema(_connection, cancellationToken), cancellationToken);
@@ -57,6 +60,7 @@ namespace XMAT.DataAbstractionLayer
         private readonly Dictionary<string, SqLtReadonlyDataTable> _dataTables =
             new(StringComparer.Ordinal);
         private bool _disposed;
+        private volatile bool _sourceAvailable = true;
 
         internal SqLtReadonlyDatabase(string filepath)
             : this(
@@ -119,6 +123,13 @@ namespace XMAT.DataAbstractionLayer
                     SqLtSchemaPreflight.Validate(
                         _snapshot,
                         profile);
+                ValidatedSchema = schema;
+                CaptureTextSource =
+                    global::XMAT.DataAbstractionLayer.CaptureTextSource.CreateFile(
+                        schema.TextSemantics,
+                        Identity,
+                        ComputeSha256,
+                        () => _sourceAvailable);
                 beforeSqliteOpens?.Invoke(databasePath);
                 var connectionString =
                     new SqliteConnectionStringBuilder
@@ -159,6 +170,17 @@ namespace XMAT.DataAbstractionLayer
 
         internal SqLtFileIdentity Identity { get; }
 
+        public CaptureTextSource CaptureTextSource { get; }
+
+        internal SqLtValidatedSchema ValidatedSchema { get; }
+
+        internal SqliteConnection Connection =>
+            _connection;
+
+        internal long SnapshotLength =>
+            RandomAccess.GetLength(
+                _snapshot.SafeFileHandle);
+
         public IEnumerable<string> TableNames() =>
             _dataTables.Keys;
 
@@ -194,8 +216,38 @@ namespace XMAT.DataAbstractionLayer
             ObjectDisposedException.ThrowIf(
                 _disposed,
                 this);
-            SafeFileHandle file =
-                _snapshot.SafeFileHandle;
+            return ComputeSha256(
+                _snapshot.SafeFileHandle,
+                cancellationToken);
+        }
+
+        internal byte[] ComputeSha256(
+            Action<long, long> progress,
+            CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(
+                _disposed,
+                this);
+            return ComputeSha256(
+                _snapshot.SafeFileHandle,
+                progress,
+                cancellationToken);
+        }
+
+        internal static byte[] ComputeSha256(
+            SafeFileHandle file,
+            CancellationToken cancellationToken) =>
+            ComputeSha256(
+                file,
+                null,
+                cancellationToken);
+
+        private static byte[] ComputeSha256(
+            SafeFileHandle file,
+            Action<long, long> progress,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(file);
             long length =
                 RandomAccess.GetLength(file);
             using var hash =
@@ -228,6 +280,9 @@ namespace XMAT.DataAbstractionLayer
                         0,
                         read);
                     offset += read;
+                    progress?.Invoke(
+                        offset,
+                        length);
                 }
                 return hash.GetHashAndReset();
             }
@@ -237,12 +292,94 @@ namespace XMAT.DataAbstractionLayer
             }
         }
 
+        internal void CopySnapshotToExisting(
+            SafeFileHandle output,
+            Action<long, long> progress,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(output);
+            ObjectDisposedException.ThrowIf(
+                _disposed,
+                this);
+            SafeFileHandle input =
+                _snapshot.SafeFileHandle;
+            long length =
+                RandomAccess.GetLength(input);
+            RandomAccess.SetLength(
+                output,
+                length);
+            byte[] buffer =
+                ArrayPool<byte>.Shared.Rent(
+                    HashBufferBytes);
+            try
+            {
+                long offset = 0;
+                while (offset < length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int read =
+                        RandomAccess.Read(
+                            input,
+                            buffer.AsSpan(
+                                0,
+                                (int)Math.Min(
+                                    HashBufferBytes,
+                                    length - offset)),
+                            offset);
+                    if (read == 0)
+                    {
+                        throw new EndOfStreamException();
+                    }
+
+                    RandomAccess.Write(
+                        output,
+                        buffer.AsSpan(
+                            0,
+                            read),
+                        offset);
+                    offset += read;
+                    progress?.Invoke(
+                        offset,
+                        length);
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(
+                    buffer);
+            }
+        }
+
+        internal static int ApplyRepairLengthLimit(
+            SqliteConnection connection,
+            long maxValueBytes)
+        {
+            ArgumentNullException.ThrowIfNull(connection);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+                maxValueBytes);
+            int current =
+                raw.sqlite3_limit(
+                    connection.Handle,
+                    raw.SQLITE_LIMIT_LENGTH,
+                    -1);
+            int requested =
+                checked(
+                    (int)Math.Min(
+                        maxValueBytes,
+                        current));
+            return SetLimit(
+                connection,
+                raw.SQLITE_LIMIT_LENGTH,
+                requested);
+        }
+
         public void Dispose()
         {
             if (_disposed)
             {
                 return;
             }
+            _sourceAvailable = false;
 
             try
             {
@@ -421,7 +558,9 @@ namespace XMAT.DataAbstractionLayer
                     new SqLtReadonlyDataTable(
                         _connection,
                         table.SqliteName,
-                        fields));
+                        fields,
+                        table.Columns,
+                        CaptureTextSource));
             }
         }
 

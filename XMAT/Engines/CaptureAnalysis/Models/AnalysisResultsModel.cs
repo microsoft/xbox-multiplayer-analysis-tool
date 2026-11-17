@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using XMAT.ApplicationServices;
 using XMAT.SharedInterfaces;
+using XMAT.WebServiceCapture;
 using XMAT.XboxLiveCaptureAnalysis.ReportModels;
 
 namespace XMAT.XboxLiveCaptureAnalysis.Models
@@ -64,6 +65,23 @@ namespace XMAT.XboxLiveCaptureAnalysis.Models
         internal XboxLiveAnalysisResult CanonicalAnalysis { get; set; }
         internal CaptureDataResult InvestigationData { get; set; }
         internal CaptureCompletedReportDescriptor CompletedReport => InvestigationData?.Report;
+
+        // The capture tab and session generation that the analysis read.
+        internal CaptureSourceStamp SourceStamp { get; set; }
+
+        // True once that source was closed or changed (sessions deleted, cleared or reloaded): the results stay as they
+        // were and session links are disabled.
+        public bool IsSourceStale { get; private set; }
+
+        internal void MarkSourceStale()
+        {
+            if (!IsSourceStale)
+            {
+                IsSourceStale = true;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSourceStale)));
+            }
+        }
+
         public DateTime CompletedAt { get; internal set; }
         public IReadOnlyList<AnalysisArtifact> ArtifactManifest { get; internal set; }
 

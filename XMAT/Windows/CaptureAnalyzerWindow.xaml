@@ -10,7 +10,7 @@
         WindowStartupLocation="CenterOwner"
         WindowStyle="SingleBorderWindow"
         ResizeMode="NoResize"
-        Height="250" Width="250">
+        SizeToContent="Height" Width="320">
     <StackPanel Orientation="Vertical" Margin="10">
         <Label x:Name="SelectLabel" FontWeight="Bold">Select analyzer</Label>
         <ItemsControl x:Name="AnalyzerList" IsTabStop="True" ItemsSource="{Binding}" MinHeight="100">
@@ -20,6 +20,11 @@
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
+        <!-- Analysis covers the full capture unless this is checked; it is available only while the tab has a process filter. -->
+        <CheckBox x:Name="AnalyzeProcessFilteredSessions" Margin="0,10,0,0" IsEnabled="False" IsChecked="False">
+            <TextBlock x:Name="AnalyzeProcessFilteredText" TextWrapping="Wrap">Analyze process-filtered sessions</TextBlock>
+        </CheckBox>
+        <TextBlock x:Name="ProcessFilterSummary" Margin="20,4,0,0" TextWrapping="Wrap"/>
         <Separator Margin="0,10"/>
         <StackPanel Orientation="Horizontal" FlowDirection="RightToLeft">
             <Button x:Name="CancelButton" Content="Cancel" IsCancel="True" Width="100" Margin="0,0,10,0"/>

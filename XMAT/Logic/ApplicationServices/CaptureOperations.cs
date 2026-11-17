@@ -53,6 +53,10 @@ namespace XMAT.ApplicationServices
                 target, running, progress, cancellationToken));
         }
 
+        internal Task<CaptureOperationResult> StopForCloseAsync(ICaptureDeviceContext target) =>
+            InvokeAsync(() => SetRunningCoreAsync(
+                target, running: false, progress: null, cancellationToken: CancellationToken.None, stoppingForClose: true));
+
         public Task<CaptureRecoveryResult> AcknowledgeExternalTraceRecoveryAsync(
             ICaptureDeviceContext target, CancellationToken cancellationToken = default) =>
             InvokeAsync(async () =>
@@ -75,10 +79,11 @@ namespace XMAT.ApplicationServices
             ICaptureDeviceContext target,
             bool running,
             IProgress<WebProxyStopProgress> progress,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool stoppingForClose = false)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var failure = GetAvailability(target, running, out var adapter);
+            var failure = GetAvailability(target, running, out var adapter, stoppingForClose);
             if (failure != CaptureOperationFailure.None)
             {
                 return new(false, target?.CaptureController?.IsRunning == true, failure);
@@ -90,8 +95,10 @@ namespace XMAT.ApplicationServices
             }
 
             IDisposable operationLease = null;
-            if ((running || adapter.StopRequiresDataOperation) &&
-                !_model.TryBeginCaptureDataOperation(out operationLease))
+            if (stoppingForClose
+                ? !_model.TryBeginCaptureStopForClose(out operationLease)
+                : (running || adapter.StopRequiresDataOperation) &&
+                    !_model.TryBeginCaptureDataOperation(out operationLease))
             {
                 return new(false, target.CaptureController.IsRunning, CaptureOperationFailure.CaptureBusy);
             }
@@ -141,7 +148,8 @@ namespace XMAT.ApplicationServices
         private CaptureOperationFailure GetAvailability(
             ICaptureDeviceContext target,
             bool running,
-            out ICaptureLifecycleAdapter adapter)
+            out ICaptureLifecycleAdapter adapter,
+            bool stoppingForClose = false)
         {
             adapter = null;
             if (target?.CaptureController == null ||
@@ -169,9 +177,9 @@ namespace XMAT.ApplicationServices
             {
                 return CaptureOperationFailure.None;
             }
-            if (running ? !_model.CanModifyCaptureData :
+            if (!stoppingForClose && (running ? !_model.CanModifyCaptureData :
                 !_model.CanStopCaptures ||
-                (adapter.StopRequiresDataOperation && !_model.CanModifyCaptureData))
+                (adapter.StopRequiresDataOperation && !_model.CanModifyCaptureData)))
             {
                 return CaptureOperationFailure.CaptureBusy;
             }

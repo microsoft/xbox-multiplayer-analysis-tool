@@ -21,10 +21,11 @@ namespace XMAT.Cli
         internal static bool IsImplemented(string command) =>
             command != null && CliCommands.Implemented.Contains(command, StringComparer.Ordinal);
 
-        // The Supported capabilities that a command provides, by id.
+        // The Supported capabilities that a command provides, by id: those with a command line of that command.
         internal static IReadOnlyList<Capability> CapabilitiesOf(string command) =>
             CapabilityRegistry.All
-                .Where(capability => capability.Status == CapabilityStatus.Supported && CommandOf(capability.CliRoute) == command)
+                .Where(capability => capability.Status == CapabilityStatus.Supported &&
+                    capability.CliRoutes.Any(route => CommandOf(route) == command))
                 .OrderBy(capability => capability.Id, StringComparer.Ordinal)
                 .ToList();
 
@@ -32,12 +33,13 @@ namespace XMAT.Cli
         internal static IReadOnlyList<string> Commands() =>
             CapabilityRegistry.All
                 .Where(capability => capability.Status == CapabilityStatus.Supported)
-                .Select(capability => CommandOf(capability.CliRoute))
+                .SelectMany(capability => capability.CliRoutes)
+                .Select(CommandOf)
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(command => command, StringComparer.Ordinal)
                 .ToList();
 
-        // xmat doctor --for TARGET checks what a command needs from its installation; only analyze needs anything.
+        // xmat doctor --for TARGET checks the installation prerequisites for analysis or Agent Access.
         internal static bool IsDoctorTarget(string target) => target is CliCommands.Analyze or CliCommands.Agent;
     }
 }

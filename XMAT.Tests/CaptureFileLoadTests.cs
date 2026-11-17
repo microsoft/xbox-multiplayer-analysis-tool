@@ -70,6 +70,48 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void DesktopLoadPublishesFileTextProvenanceAndRejectsFutureVersion()
+        {
+            application.Run(_ =>
+            {
+                using var directory = new CaptureFileExportTests.DirectoryFixture();
+                var path = Path.Combine(directory.Path, "capture.xmatcap");
+                WriteCapture(path, [("loaded", CaptureType.WebProxy)]);
+                SetUserVersion(0);
+
+                var model = new CaptureAppModel();
+                try
+                {
+                    var receipt = Complete(model.CaptureFileLoads.LoadDesktopAsync(path));
+                    Assert.Equal(CaptureTextSemantics.AmbiguousUnmarked, receipt.TextSource.Semantics);
+                    var web = Assert.IsType<WebServiceDeviceCaptureController>(
+                        Assert.Single(model.CaptureDeviceContexts).CaptureController);
+                    Assert.Same(receipt.TextSource, Assert.Single(web.ProxyConnections).CaptureTextSource);
+
+                    SetUserVersion(CaptureTextFormat.LiteralUserVersion + 1);
+                    var failure = Assert.Throws<CaptureFileException>(
+                        () => Complete(model.CaptureFileLoads.LoadDesktopAsync(path)));
+                    Assert.Equal(CaptureFileFailure.UnsupportedVersion, failure.Failure);
+                    Assert.Equal(receipt.SourceId, Complete(model.CaptureFileLoads.GetStateAsync()).LoadedSourceId);
+                }
+                finally
+                {
+                    Finish(model.CaptureFileLoads.DisposeAsync().AsTask());
+                }
+
+                void SetUserVersion(int version)
+                {
+                    using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                        { DataSource = path, Pooling = false }.ToString());
+                    connection.Open();
+                    using var command = connection.CreateCommand();
+                    command.CommandText = $"PRAGMA user_version={version}";
+                    command.ExecuteNonQuery();
+                }
+            });
+        }
+
+        [Fact]
         public void LoadingDoesNotNavigateAnInitiallyEmptyBoundWorkspace()
         {
             application.Run(owner =>
@@ -514,7 +556,7 @@ namespace XMAT.Tests
                 using var dataset = new SqLtDataset(connection, table, new Dictionary<string, IFieldDefinition>
                 {
                     [field] = FieldDefinition.CreateFromSchema(field, typeof(string), 1)
-                });
+                }, [new SqLtSchemaColumn(field, SqLtDeclaredType.Text)], CaptureTextSource.Literal);
                 Assert.Equal(value, Assert.Single(dataset.DataRecordsWhen(
                 new FieldValue<string>(field, value))).Str(field));
             }

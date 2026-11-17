@@ -14,7 +14,5 @@ namespace XMAT.SharedInterfaces
 
         ObservableCollection<ICaptureDeviceContext> CaptureDeviceContexts { get; }
         ObservableCollection<ICaptureAnalysisRun> AnalysisRuns { get; }
-
-        ICaptureDeviceContext SelectCaptureDeviceContext(string deviceContextName);
     }
 }

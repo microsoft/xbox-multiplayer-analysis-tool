@@ -23,7 +23,7 @@ namespace XMAT.AgentAccess
                     CaptureFileFailure.FolderChanged or CaptureFileFailure.InputChanged => AgentAccessError.SourceChanged,
                     CaptureFileFailure.DestinationExists => AgentAccessError.DestinationExists,
                     CaptureFileFailure.InvalidPath or CaptureFileFailure.ProtectedSource => AgentAccessError.InvalidPath,
-                    CaptureFileFailure.InvalidCapture => AgentAccessError.InvalidCapture,
+                    CaptureFileFailure.InvalidCapture or CaptureFileFailure.UnsupportedVersion => AgentAccessError.InvalidCapture,
                     CaptureFileFailure.SchemaLimit => AgentAccessError.LimitExceeded,
                     _ => AgentAccessError.OperationUnavailable
                 });

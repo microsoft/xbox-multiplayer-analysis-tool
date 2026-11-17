@@ -5,7 +5,6 @@
 using System;
 using System.ComponentModel;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -13,6 +12,7 @@ using Microsoft.Win32;
 using XMAT.AgentAccess;
 using XMAT.DataAbstractionLayer;
 using XMAT.Models;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
@@ -90,6 +90,7 @@ namespace XMAT
             ExportRootCert.Header = Localization.GetLocalizedString("EXPORT_ROOT_CERT");
             SetupProxyTrust.Header = Localization.GetLocalizedString("PROXY_TRUST_SETUP");
             TakeOverAgentResources.Header = Localization.GetLocalizedString("AGENT_OPERATOR_TAKEOVER");
+            ComposeRequest.Header = Localization.GetLocalizedString("COMPOSER_NEW_MENU");
 
             // Sync dark mode checkbox with saved preference
             ToggleDarkMode.IsChecked = CaptureAppModel.AppModel.PreferencesModel.Theme == "Dark";
@@ -121,6 +122,12 @@ namespace XMAT
         private void UpdateAgentStatus() =>
             AgentAccessIndicator.Content = Localization.GetLocalizedString(
                 _agentAccess.IsEnabled ? "AGENT_ACCESS_ON" : "AGENT_ACCESS_OFF");
+
+        // Each new request gets its own non-modal composer, like Edit and resend; its sends are recorded in the Replays tab.
+        private void ComposeRequest_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            RequestComposerWindow.OpenForApplication(this);
+        }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
@@ -180,7 +187,8 @@ namespace XMAT
                     return;
                 if (!await CaptureAppModel.AppModel.CanCloseAsync())
                 {
-                    if (CaptureAppModel.AppModel.IsCaptureDataOperationRunning)
+                    if (CaptureAppModel.AppModel.IsCaptureDataOperationRunning ||
+                        CaptureAppModel.AppModel.IsCaptureFileLoadRunning)
                     {
                         MessageBox.Show(
                             Localization.GetLocalizedString("CAPTURE_DATA_BUSY_CLOSE"),
@@ -192,7 +200,7 @@ namespace XMAT
 
                 foreach (var target in CaptureAppModel.AppModel.CaptureDeviceContexts.Where(target => target.CaptureController.IsRunning).ToArray())
                 {
-                    var stopped = await CaptureAppModel.AppModel.CaptureOperations.SetRunningAsync(target, false);
+                    var stopped = await CaptureAppModel.AppModel.CaptureOperations.StopForCloseAsync(target);
                     if (!stopped.Succeeded || stopped.IsRunning)
                         return;
                 }
@@ -225,6 +233,7 @@ namespace XMAT
                     CancelSqlWorkspaceClosing();
                     _analysisReportExportWorkflow.CancelClosing();
                     _agentAccess.ResumeRequests();
+                    CaptureAppModel.AppModel.CancelClosePreparation();
                 }
                 _isCloseInProgress = false;
                 CaptureAppModel.AppModel.DesktopActions.NotifyLifecycleChanged();
@@ -370,6 +379,13 @@ namespace XMAT
                 var receipt = await model.CaptureFileLoads.LoadDesktopAsync(path);
                 if (model.CaptureDeviceContexts.Any())
                     model.SelectedDeviceContext = model.CaptureDeviceContexts.Last();
+                var warning = CaptureOpenWarningKey(new CaptureLoadResult(
+                    receipt.TextSource,
+                    receipt.AddedContexts + receipt.UpdatedContexts > 0));
+                if (warning != null)
+                    MessageBox.Show(Localization.GetLocalizedString(warning),
+                        Localization.GetLocalizedString("CAPTURE_TEXT_AMBIGUOUS_TITLE"),
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
                 if (!receipt.ViewsNotified)
                     MessageBox.Show(Localization.GetLocalizedString("CAPTURE_LOAD_VIEW_WARNING"),
                         Localization.GetLocalizedString("CAPTURE_LOAD_ERROR_TITLE"), MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -381,6 +397,7 @@ namespace XMAT
                     CaptureFileFailure.SchemaLimit => "CAPTURE_OPEN_SCHEMA_LIMIT",
                     CaptureFileFailure.LiveDatabase => "CAPTURE_OPEN_SIDECAR",
                     CaptureFileFailure.UnsupportedLocation => "CAPTURE_OPEN_LOCATION",
+                    CaptureFileFailure.UnsupportedVersion => "CAPTURE_OPEN_FUTURE_VERSION",
                     CaptureFileFailure.InvalidCapture => "CAPTURE_OPEN_SCHEMA_ERROR",
                     _ => "CAPTURE_LOAD_ERROR"
                 } : "CAPTURE_LOAD_ERROR";
@@ -396,8 +413,17 @@ namespace XMAT
                 SqLtSchemaFailure.Limit => "CAPTURE_OPEN_SCHEMA_LIMIT",
                 SqLtSchemaFailure.Sidecar => "CAPTURE_OPEN_SIDECAR",
                 SqLtSchemaFailure.UnsupportedLocation => "CAPTURE_OPEN_LOCATION",
+                SqLtSchemaFailure.UnsupportedVersion => "CAPTURE_OPEN_FUTURE_VERSION",
                 _ => "CAPTURE_OPEN_SCHEMA_ERROR"
             };
+
+        internal static string CaptureOpenWarningKey(
+            CaptureLoadResult result) =>
+            result?.AddedOrReplaced == true &&
+            result.Source?.Semantics ==
+                CaptureTextSemantics.AmbiguousUnmarked
+                ? "CAPTURE_TEXT_AMBIGUOUS_WARNING"
+                : null;
 
         private async void Save_Executed(object sender, RoutedEventArgs e)
         {
@@ -482,24 +508,6 @@ namespace XMAT
             }
         }
 
-        private async void Export_Executed(object sender, RoutedEventArgs e)
-        {
-            if (!CaptureAppModel.AppModel.CanBeginCaptureDataOperation)
-            {
-                return;
-            }
-
-            var saveFileDialog = new SaveFileDialog
-            {
-                Filter = FiddlerFilter
-            };
-
-            if (saveFileDialog.ShowDialog() == true && !string.IsNullOrEmpty(saveFileDialog.FileName))
-            {
-                await SaveCaptureFileAsync(saveFileDialog.FileName, CaptureArchiveFormat.FiddlerSaz);
-            }
-        }
-
         private static async Task SaveCaptureFileAsync(string path, CaptureArchiveFormat format)
         {
             try
@@ -522,73 +530,6 @@ namespace XMAT
 
         private void CaptureFile_CanExecute(object sender, CanExecuteRoutedEventArgs e) =>
             e.CanExecute = CaptureAppModel.AppModel.CanBeginCaptureDataOperation;
-
-        private void ExportSanitized_CanExecute(object sender, CanExecuteRoutedEventArgs e)
-        {
-            e.CanExecute = CaptureAppModel.AppModel.CanExportSanitizedCaptures;
-        }
-
-        private async void ExportSanitized_Executed(object sender, ExecutedRoutedEventArgs e)
-        {
-            if (!CaptureAppModel.AppModel.CanExportSanitizedCaptures)
-            {
-                return;
-            }
-            if (MessageBox.Show(
-                Localization.GetLocalizedString("SANITIZED_EXPORT_CONFIRM"),
-                Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
-            {
-                return;
-            }
-            var dialog = new SaveFileDialog
-            {
-                Filter = FiddlerFilter,
-                DefaultExt = ".saz",
-                AddExtension = true,
-                FileName = "sanitized-capture.saz",
-                Title = Localization.GetLocalizedString("FILE_EXPORT_SANITIZED")
-            };
-            if (dialog.ShowDialog(this) != true)
-            {
-                return;
-            }
-            using var cancellation = new CancellationTokenSource();
-            try
-            {
-                WebServiceCapture.SanitizedExportSummary summary;
-                using (PublicUtilities.BlockingOperation())
-                {
-                    var operation = CaptureAppModel.AppModel.ExportSanitizedDataCapturesAsync(dialog.FileName, cancellation.Token);
-                    if (await Task.WhenAny(operation, Task.Delay(250)) != operation && !operation.IsCompleted)
-                    {
-                        var progress = new SanitizedExportProgressWindow(operation, cancellation.Cancel) { Owner = this };
-                        progress.ShowDialog();
-                    }
-                    summary = await operation;
-                }
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_COMPLETE",
-                        summary.Sessions, summary.RedactedValues, summary.OmittedBodies, summary.OmittedHeaders),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-            {
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_CANCELLED"),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
-            {
-                PublicUtilities.AppLog(LogLevel.ERROR, $"Sanitized export failed: {exception}");
-                MessageBox.Show(
-                    Localization.GetLocalizedString("SANITIZED_EXPORT_FAILED", exception.Message),
-                    Localization.GetLocalizedString("FILE_EXPORT_SANITIZED"),
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
 
         private void Exit_Executed(object sender, RoutedEventArgs e)
         {
@@ -651,6 +592,11 @@ namespace XMAT
                 var target = model.CaptureCatalog.DescribeTarget(model.SelectedDeviceContext);
                 await model.CaptureDataOperations.ClearAsync(target.Id, target.Revision);
             }
+            catch (QueryException exception) when (exception.Error == QueryError.SourceBusy)
+            {
+                MessageBox.Show(Localization.GetLocalizedString("PROXY_OPERATION_BUSY"),
+                    Localization.GetLocalizedString("VIEW_CLEAR_CAPTURES"), MessageBoxButton.OK, MessageBoxImage.Information);
+            }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
                 MessageBox.Show(Localization.GetLocalizedString("ETL_CLEAR_UNAVAILABLE"),
@@ -690,7 +636,9 @@ namespace XMAT
                 list.First().IsSelected = true;
             }
 
-            var selectorWindow = new CaptureAnalyzerWindow
+            var selectorWindow = new CaptureAnalyzerWindow(
+                (captureDeviceContext.CaptureController as WebServiceDeviceCaptureController)?.ProcessFilter ??
+                    ProcessFilterSpec.Empty)
             {
                 Owner = this,
                 DataContext = list
@@ -710,7 +658,9 @@ namespace XMAT
 
                 using (analysisLease)
                 {
-                    var analysisRun = CaptureAppModel.AppModel.AddAnalysisRun(selected);
+                    var analysisRun = CaptureAppModel.AppModel.AddAnalysisRun(
+                        selected,
+                        selectorWindow.ProcessFilterForRun);
                     CaptureErrorsPanel.AddedAnalysis(analysisRun);
                     await HandleAnalyzerChosen(
                         analysisRun,

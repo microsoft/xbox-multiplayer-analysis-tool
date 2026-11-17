@@ -61,6 +61,7 @@ namespace XMAT.Tests
                         Source = new Uri(
                             "pack://application:,,,/XboxMultiplayerAnalysisTool;component/Themes/LightTheme.xaml")
                     });
+                    CaptureChromeTests.AddButtonStyles(_application.Resources);
                     _storage = Path.Join(
                         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", appName);
                     Assert.Equal(_storage, PublicUtilities.StorageDirectoryPath);
@@ -172,6 +173,9 @@ namespace XMAT.Tests
             return host;
         }
 
+        // Runs a test on the shared application's dispatcher, starting the application first if this process has not.
+        internal static void RunOnApplication(Action<Window> test) => GetOrCreateHost().Run(test);
+
         internal void Run(Action<Window> test)
         {
             var host = _shared ?? this;
@@ -182,7 +186,29 @@ namespace XMAT.Tests
                     "The WPF test application has stopped; run the tests in a new process.");
             }
 
-            host._application.Dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
+            var dispatcher = host._application.Dispatcher;
+            if (dispatcher.CheckAccess())
+            {
+                // A caller already on the application's dispatcher runs the test in place, not through a nested call.
+                WpfTestHost.RunOnCurrentDispatcher(test);
+                return;
+            }
+
+            dispatcher.Invoke(() => WpfTestHost.RunOnCurrentDispatcher(test));
+        }
+
+        // Async UI tests share this application's dispatcher and lifetime instead of creating another Application.
+        internal Task RunAsync(Func<Task> test)
+        {
+            var host = _shared ?? this;
+            if (host._stopped)
+            {
+                // A stopped dispatcher would skip the test without running it.
+                throw new InvalidOperationException(
+                    "The WPF test application has stopped; run the tests in a new process.");
+            }
+
+            return host._application.Dispatcher.InvokeAsync(test).Task.Unwrap().WaitAsync(TimeSpan.FromSeconds(30));
         }
 
         public void Dispose()

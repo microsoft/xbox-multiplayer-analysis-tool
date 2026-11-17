@@ -42,8 +42,13 @@ namespace XMAT.DataAbstractionLayer
         internal CaptureSaveFailure Failure { get; }
     }
 
+    internal readonly record struct ImportedCaptureSource(
+        string SourcePath,
+        SqLtFileIdentity Identity);
+
     // Tracks which read-only capture tab owns each loaded capture database. Tabs reused by a reload share the newly
-    // opened database, and the database (with its file handle) is disposed as soon as its last owning tab releases it.
+    // opened database, which is disposed with its file handle when its last owning tab releases it; imported SAZ tabs
+    // retain their source path and identity without an archive handle.
     internal static class LoadedCaptureDatabaseRegistry
     {
         private sealed class SaveDestinationLease :
@@ -109,6 +114,10 @@ namespace XMAT.DataAbstractionLayer
             IDeviceCaptureController,
             Entry> Controllers =
             new(ReferenceEqualityComparer.Instance);
+        private static readonly Dictionary<
+            IDeviceCaptureController,
+            ImportedCaptureSource> ImportedSources =
+            new(ReferenceEqualityComparer.Instance);
 
         internal static IDisposable AcquireSource(SqLtReadonlyDatabase database, string originalPath = null)
         {
@@ -144,6 +153,7 @@ namespace XMAT.DataAbstractionLayer
             SqLtReadonlyDatabase dispose = null;
             lock (Sync)
             {
+                ImportedSources.Remove(controller);
                 if (Controllers.TryGetValue(
                         controller,
                         out Entry existing))
@@ -154,13 +164,7 @@ namespace XMAT.DataAbstractionLayer
                     {
                         return;
                     }
-                    Controllers.Remove(controller);
-                    if (--existing.References == 0)
-                    {
-                        Databases.Remove(
-                            existing.Database);
-                        dispose = existing.Database;
-                    }
+                    dispose = RemoveSqlOwner(controller);
                 }
 
                 if (!Databases.TryGetValue(
@@ -180,25 +184,30 @@ namespace XMAT.DataAbstractionLayer
             DisposeReleased(dispose);
         }
 
+        internal static void AssignImported(
+            IDeviceCaptureController controller,
+            ImportedCaptureSource source)
+        {
+            ArgumentNullException.ThrowIfNull(controller);
+            ArgumentException.ThrowIfNullOrWhiteSpace(source.SourcePath);
+            SqLtReadonlyDatabase dispose;
+            lock (Sync)
+            {
+                ImportedSources[controller] = source;
+                dispose = RemoveSqlOwner(controller);
+            }
+            DisposeReleased(dispose);
+        }
+
         internal static void Release(
             IDeviceCaptureController controller)
         {
             ArgumentNullException.ThrowIfNull(controller);
-            SqLtReadonlyDatabase dispose = null;
+            SqLtReadonlyDatabase dispose;
             lock (Sync)
             {
-                if (!Controllers.Remove(
-                        controller,
-                        out Entry entry))
-                {
-                    return;
-                }
-                if (--entry.References == 0)
-                {
-                    Databases.Remove(
-                        entry.Database);
-                    dispose = entry.Database;
-                }
+                ImportedSources.Remove(controller);
+                dispose = RemoveSqlOwner(controller);
             }
             DisposeReleased(dispose);
         }
@@ -220,15 +229,33 @@ namespace XMAT.DataAbstractionLayer
             }
         }
 
+        internal static ImportedCaptureSource? ImportedSourceFor(
+            IDeviceCaptureController controller)
+        {
+            if (controller == null)
+            {
+                return null;
+            }
+            lock (Sync)
+            {
+                return ImportedSources.TryGetValue(
+                    controller,
+                    out ImportedCaptureSource source)
+                        ? source
+                        : null;
+            }
+        }
+
         internal static IDisposable AcquireSaveDestination(
             string path)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            string normalized = Path.GetFullPath(path);
             SqLtFileIdentity? identity;
             try
             {
-                identity = File.Exists(path)
-                    ? SqLtFileIdentity.FromPath(path)
+                identity = File.Exists(normalized)
+                    ? SqLtFileIdentity.FromPath(normalized)
                     : null;
             }
             catch (Exception exception) when (
@@ -243,7 +270,7 @@ namespace XMAT.DataAbstractionLayer
             Monitor.Enter(Sync);
             try
             {
-                if (Databases.Values.Any(entry => IsProtected(entry, path, identity)))
+                if (IsProtectedDestination(normalized, identity))
                 {
                     throw new CaptureSaveException(
                         CaptureSaveFailure.Refused);
@@ -260,10 +287,14 @@ namespace XMAT.DataAbstractionLayer
         internal static bool IsLoadedPath(
             string path)
         {
-            SqLtFileIdentity? identity = File.Exists(path) ? SqLtFileIdentity.FromPath(path) : null;
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            string normalized = Path.GetFullPath(path);
+            SqLtFileIdentity? identity = File.Exists(normalized)
+                ? SqLtFileIdentity.FromPath(normalized)
+                : null;
             lock (Sync)
             {
-                return Databases.Values.Any(entry => IsProtected(entry, path, identity));
+                return IsProtectedDestination(normalized, identity);
             }
         }
 
@@ -283,6 +314,41 @@ namespace XMAT.DataAbstractionLayer
                         ? entry.References
                         : 0;
             }
+        }
+
+        private static bool IsProtectedDestination(
+            string normalized,
+            SqLtFileIdentity? identity)
+        {
+            if (Databases.Values.Any(entry => IsProtected(entry, normalized, identity)))
+            {
+                return true;
+            }
+            if (ImportedSources.Values.Any(source =>
+                    string.Equals(source.SourcePath, normalized, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+            if (identity is not SqLtFileIdentity resolved)
+            {
+                return false;
+            }
+            return Databases.Keys.Any(database => database.Identity == resolved) ||
+                ImportedSources.Values.Any(source => source.Identity == resolved);
+        }
+
+        private static SqLtReadonlyDatabase RemoveSqlOwner(
+            IDeviceCaptureController controller)
+        {
+            if (!Controllers.Remove(
+                    controller,
+                    out Entry entry) ||
+                --entry.References != 0)
+            {
+                return null;
+            }
+            Databases.Remove(entry.Database);
+            return entry.Database;
         }
 
         private static void DisposeReleased(

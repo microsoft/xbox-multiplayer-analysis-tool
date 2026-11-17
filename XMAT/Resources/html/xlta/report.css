@@ -472,3 +472,12 @@ pre {
     background-color: #3C3C3C;
     color: #7E7E7E;
 }
+
+/* Shown when the analysis covered only the sessions kept by the capture tab's process filter. */
+.process-filter-banner {
+    background-color: #3C3C3C;
+    border-left: 4px solid #E5A50A;
+    color: #DCDCDC;
+    margin: 10px 0px;
+    padding: 8px 12px;
+}

@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.Threading;
+using XMAT.DataAbstractionLayer;
 
 namespace XMAT.SharedInterfaces
 {
@@ -11,6 +12,7 @@ namespace XMAT.SharedInterfaces
     {
         // Imports publish their prepared view only after this atomic replacement succeeds.
         IReadOnlyList<long> ReplaceImportedRows(
+            CaptureTextSource source,
             IFieldValue capture,
             IEnumerable<object[]> rows,
             CancellationToken cancellationToken = default);

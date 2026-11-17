@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using XMAT.DataAbstractionLayer;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
@@ -89,23 +90,7 @@ namespace XMAT.WebServiceCapture
         internal static IDataTable CreateDataTable(IDatabase database) =>
             database.CreateTable(
                 TableName,
-                new Field<string>(FieldKey_DeviceName),
-                new Field<Int64>(FieldKey_RequestNumber),
-                new Field<Int64>(FieldKey_ConnectionId),
-                new Field<string>(FieldKey_RequestTimestamp),
-                new Field<string>(FieldKey_ResponseTimestamp),
-                new Field<string>(FieldKey_RequestScheme),
-                new Field<string>(FieldKey_RequestHost),
-                new Field<string>(FieldKey_RequestPort),
-                new Field<string>(FieldKey_RequestMethod),
-                new Field<string>(FieldKey_RequestPath),
-                new Field<string>(FieldKey_RequestStatus),
-                new Field<string>(FieldKey_RequestLineAndHeaders),
-                new Field<string>(FieldKey_RequestBody),
-                new Field<string>(FieldKey_ResponseLineAndHeaders),
-                new Field<string>(FieldKey_ResponseBody),
-                new Field<string>(FieldKey_ClientIP)
-            );
+                WebProxyCaptureSchema.CreateFields());
 
         public async Task ImportFromFiddlerAsync(string fromFilePath, ICaptureDeviceContext context)
         {
@@ -165,20 +150,27 @@ namespace XMAT.WebServiceCapture
                 controller?.UpdateFilter(connections.Select(connection => connection.Host).Distinct().ToList()),
                 controller?.UpdateFilter(connections.Select(connection => connection.Status).Distinct().ToList()),
                 controller?.UpdateFilter(connections.Select(connection => connection.Method).Distinct().ToList()),
-                result.SkippedIncompleteFrames, result.SkippedMalformedHeaderLines);
+                result.SkippedIncompleteFrames, result.SkippedMalformedHeaderLines, result.Source);
         }
 
         internal static void PersistFiddlerImport(
             WebServiceDeviceCaptureController.ImportedCaptures prepared, IDataTable table, string deviceName,
             long maximumBytes, CancellationToken cancellationToken)
         {
+            IDataset dataset = table.Dataset;
+            IFieldDefinition[] fields;
+            using (dataset as IDisposable)
+            {
+                fields = dataset.FieldDefs.ToArray();
+            }
+
             IEnumerable<object[]> Rows()
             {
                 var remaining = maximumBytes;
                 foreach (var connection in prepared.Connections)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var row = connection.ToDataTableValues(deviceName);
+                    var row = connection.ToDataTableValues(deviceName, fields);
                     long size = 64;
                     foreach (var value in row)
                         size += value is string text ? Encoding.UTF8.GetByteCount(text) + (long)text.Count(c => c == '"') + 16 : 24;
@@ -189,7 +181,10 @@ namespace XMAT.WebServiceCapture
                 }
             }
             var ids = ((IImportedCaptureTable)table).ReplaceImportedRows(
-                new FieldValue<string>(FieldKey_DeviceName, deviceName), Rows(), cancellationToken);
+                CaptureTextSource.Literal,
+                new FieldValue<string>(FieldKey_DeviceName, deviceName),
+                Rows(),
+                cancellationToken);
             for (var index = 0; index < prepared.Connections.Count; index++)
                 prepared.Connections[index].RecordRowId = ids[index];
         }
@@ -204,6 +199,7 @@ namespace XMAT.WebServiceCapture
                 nameof(WebServiceDeviceCaptureController.HostFilterList),
                 nameof(WebServiceDeviceCaptureController.StatusFilterList),
                 nameof(WebServiceDeviceCaptureController.MethodFilterList),
+                nameof(WebServiceDeviceCaptureController.ProcessFilter),
                 nameof(WebServiceDeviceCaptureController.SelectedConnectionModel),
                 nameof(WebServiceDeviceCaptureController.ProxyConnections)
             })
@@ -231,22 +227,6 @@ namespace XMAT.WebServiceCapture
                 }
                 return false;
             }
-        }
-
-        public void ExportToFiddler(string toFilePath)
-        {
-            var list = new List<ProxyConnectionModel>();
-            if (WebProxyConnectionsTable != null)
-            {
-                var records = WebProxyConnectionsTable.Dataset.DataRecords;
-                foreach (var record in records)
-                {
-                    var m = new ProxyConnectionModel(record);
-                    list.Add(m);
-                }
-            }
-
-            FiddlerSazHandler.CreateSazFile(toFilePath, list);
         }
     }
 }

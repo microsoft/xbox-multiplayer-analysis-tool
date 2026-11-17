@@ -32,6 +32,9 @@ namespace XMAT.Tests.Proxy
         public int Port { get; }
         public ConcurrentQueue<ClientRequest> CapturedRequests { get; } = new();
         public ConcurrentQueue<ServerResponse> CapturedResponses { get; } = new();
+        public ConcurrentQueue<ClientProcessContext> CapturedRequestProcessContexts { get; } = new();
+        public ConcurrentQueue<ClientProcessContext> CapturedResponseProcessContexts { get; } = new();
+        public ConcurrentQueue<ClientProcessContext> CapturedSslProcessContexts { get; } = new();
 
         private ProxyTestHarness(
             WebServiceProxy proxy,
@@ -59,21 +62,41 @@ namespace XMAT.Tests.Proxy
             WebServiceProxy proxy = null,
             ProxyRequestReadPolicy requestPolicy = null,
             ProxyRequestBufferBudget requestBufferBudget = null,
-            bool registerRequestReader = true)
+            bool registerRequestReader = true,
+            Action<int, LogLevel, string> logObserver = null)
         {
             X509Certificate2 certificate = CreateCertificate();
             proxy ??= new WebServiceProxy();
             proxy.Reset();
-            requestPolicy ??=
-                ProxyRequestReadPolicy.Default;
+            if (registerRequestReader)
+            {
+                requestPolicy ??= ProxyRequestReadPolicy.Default;
+                requestBufferBudget ??= new ProxyRequestBufferBudget(requestPolicy);
+            }
+            else
+            {
+                if (requestPolicy != null || requestBufferBudget != null)
+                {
+                    throw new ArgumentException(
+                        "Request policy and budget overrides require registerRequestReader.",
+                        nameof(registerRequestReader));
+                }
+
+                // Mirror ForwardProxyConnectionHandler's production fallback.
+                requestPolicy = ProxyRequestReadPolicy.Default;
+                requestBufferBudget = ProxyRequestBufferBudget.Shared;
+            }
 
             var tunnels = new InterceptedTunnelRegistry();
             var upstream = new HttpClient(WebServiceProxy.CreateUpstreamHandler());
             var logger = new Logger();
-            requestBufferBudget ??=
-                new ProxyRequestBufferBudget(
-                    requestPolicy);
-            var application = new InterceptedProxyApplication(proxy, upstream, tunnels);
+            var application = new InterceptedProxyApplication(
+                proxy,
+                upstream,
+                tunnels,
+                requestReadPolicy: requestPolicy,
+                requestBufferBudget: requestBufferBudget,
+                logObserver: logObserver);
             var intercepted = new InterceptedHttpHost((_, _) => certificate, application.InvokeAsync);
             await intercepted.StartAsync(CancellationToken.None);
 
@@ -122,8 +145,18 @@ namespace XMAT.Tests.Proxy
                     .RequestBufferBudget,
                 connectionHandler,
                 port);
-            proxy.ReceivedWebRequest += (_, args) => harness.CapturedRequests.Enqueue(args.Request);
-            proxy.ReceivedWebResponse += (_, args) => harness.CapturedResponses.Enqueue(args.Response);
+            proxy.ReceivedWebRequest += (_, args) =>
+            {
+                harness.CapturedRequests.Enqueue(args.Request);
+                harness.CapturedRequestProcessContexts.Enqueue(args.ProcessContext);
+            };
+            proxy.ReceivedSslConnectionRequest += (_, args) => harness.CapturedSslProcessContexts.Enqueue(
+                args.ProcessContext);
+            proxy.ReceivedWebResponse += (_, args) =>
+            {
+                harness.CapturedResponses.Enqueue(args.Response);
+                harness.CapturedResponseProcessContexts.Enqueue(args.ProcessContext);
+            };
             return harness;
         }
 

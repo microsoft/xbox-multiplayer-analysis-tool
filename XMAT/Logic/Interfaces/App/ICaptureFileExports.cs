@@ -12,7 +12,7 @@ namespace XMAT.SharedInterfaces
     public enum CaptureFileFailure
     {
         InvalidPath, FolderChanged, DestinationExists, ProtectedSource, Unavailable, InputChanged, InvalidCapture,
-        SchemaLimit, LiveDatabase, UnsupportedLocation, PublicationUncertain
+        SchemaLimit, LiveDatabase, UnsupportedLocation, PublicationUncertain, UnsupportedVersion
     }
 
     public sealed class CaptureFileException(

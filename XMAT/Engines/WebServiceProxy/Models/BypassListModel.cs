@@ -5,9 +5,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
-using System.Linq;
-using System.Text.RegularExpressions;
 
 namespace XMAT.WebServiceCapture.Models
 {
@@ -21,84 +18,31 @@ namespace XMAT.WebServiceCapture.Models
     /// </summary>
     public class BypassListModel
     {
+        private readonly HostPatternList _patterns;
+
         public ObservableCollection<string> BypassedUrls => Entries;
+        internal HostListCollection Entries => _patterns.Entries;
 
-        internal HostListCollection Entries { get; }
-        private readonly object _lockObj;
-        private readonly Dictionary<string, Regex> _regexCache = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
-
-        public BypassListModel() : this(new object()) { }
+        public BypassListModel() : this(new object())
+        {
+        }
 
         internal BypassListModel(object gate)
         {
-            _lockObj = gate;
-            Entries = new HostListCollection(gate);
-            Entries.CollectionChanged += (_, args) =>
-            {
-                if (args.Action is NotifyCollectionChangedAction.Remove or NotifyCollectionChangedAction.Replace or NotifyCollectionChangedAction.Reset)
-                    _regexCache.Clear();
-            };
+            _patterns = new HostPatternList(gate);
         }
 
-        public bool Add(string pattern)
-        {
-            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
-                return false;
-
-            lock (_lockObj)
-            {
-                if (BypassedUrls.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase)))
-                    return false;
-
-                BypassedUrls.Add(entry);
-                return true;
-            }
-        }
+        public bool Add(string pattern) => _patterns.Add(pattern);
 
         /// <summary>
         /// Returns true when the list holds exactly this entry (after normalization),
         /// regardless of any other pattern that might also match it.
         /// </summary>
-        public bool Contains(string pattern)
-        {
-            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
-                return false;
+        public bool Contains(string pattern) => _patterns.Contains(pattern);
 
-            lock (_lockObj)
-            {
-                return BypassedUrls.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase));
-            }
-        }
+        public bool Remove(string pattern) => _patterns.Remove(pattern);
 
-        public bool Remove(string pattern)
-        {
-            if (!HostListEntry.TryNormalize(pattern, out string entry, out _))
-                return false;
-
-            bool removed = false;
-            lock (_lockObj)
-            {
-                for (int i = BypassedUrls.Count - 1; i >= 0; i--)
-                {
-                    if (string.Equals(BypassedUrls[i], entry, StringComparison.OrdinalIgnoreCase))
-                    {
-                        BypassedUrls.RemoveAt(i);
-                        removed = true;
-                    }
-                }
-                _regexCache.Remove(entry);
-            }
-            return removed;
-        }
-
-        public void Clear()
-        {
-            lock (_lockObj)
-            {
-                BypassedUrls.Clear();
-                _regexCache.Clear();
-            }
-        }
+        public void Clear() => _patterns.Clear();
 
         /// <summary>
         /// Returns true if the given host matches any pattern in the bypass list.
@@ -108,10 +52,7 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return false;
 
-            string candidate = HostListEntry.MatchCandidate(host);
-            return Snapshot()
-                .Select(GetRegex)
-                .Any(regex => regex.IsMatch(candidate));
+            return _patterns.Matches(HostListEntry.LiteralHostCandidates(host));
         }
 
         /// <summary>
@@ -122,29 +63,7 @@ namespace XMAT.WebServiceCapture.Models
             if (string.IsNullOrEmpty(host))
                 return Array.Empty<string>();
 
-            string candidate = HostListEntry.MatchCandidate(host);
-            return Snapshot().Where(pattern => GetRegex(pattern).IsMatch(candidate)).ToList();
-        }
-
-        private string[] Snapshot()
-        {
-            lock (_lockObj)
-            {
-                return BypassedUrls.ToArray();
-            }
-        }
-
-        private Regex GetRegex(string pattern)
-        {
-            lock (_lockObj)
-            {
-                if (_regexCache.TryGetValue(pattern, out var cached))
-                    return cached;
-
-                var regex = HostListEntry.CreatePattern(pattern);
-                _regexCache[pattern] = regex;
-                return regex;
-            }
+            return _patterns.MatchingPatterns(HostListEntry.LiteralHostCandidates(host));
         }
     }
 }

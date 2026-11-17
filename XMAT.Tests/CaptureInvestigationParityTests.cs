@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Collections.Immutable;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -16,6 +17,7 @@ using XMAT.NetworkTrace;
 using XMAT.NetworkTrace.Models;
 using XMAT.NetworkTraceCaptureAnalysis;
 using XMAT.NetworkTraceCaptureAnalysis.Models;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
@@ -179,6 +181,95 @@ namespace XMAT.Tests
                     Assert.DoesNotContain(CaptureInvestigationTestData.Secret, JsonSerializer.Serialize(result));
                 }
                 finally { Finish(result.DisposeAsync().AsTask()); }
+            });
+        }
+
+        [Fact]
+        public void DesktopProcessFilterScopesCanonicalResultsMetricsAndEvidenceToTheSameRows()
+        {
+            application.Run(_ =>
+            {
+                using var directory = new InvestigationDirectory();
+                using var input = CaptureInvestigationTestData.WebDatabase();
+                CaptureInvestigationTestData.AddWeb(input, 1, duration: 10);
+                CaptureInvestigationTestData.AddWeb(input, 2, duration: 500);
+                using var database = new SqLtDatabase();
+                database.Initialize();
+                var table = database.CreateTable(Web.TableName, WebProxyCaptureSchema.CreateFields());
+                var sourceRows = input.TableByName(Web.TableName).Dataset.DataRecords.ToArray();
+                var rowIds = sourceRows.Select((record, index) =>
+                {
+                    var values = WebProxyCaptureSchema.Fields.Take(16).ToDictionary(
+                        field => field.Name,
+                        field => field.ValueType == typeof(long) ? (object)record.Int(field.Name) : record.Str(field.Name),
+                        StringComparer.Ordinal);
+                    return table.AddRow(WebProxyCaptureSchema.Project(values,
+                        new ClientProcessInfo(index == 0 ? "game.exe" : "other.exe", index + 10, null, ClientProcessStatus.Local)));
+                }).ToArray();
+                var model = new CaptureAppModel { ActiveDatabase = database };
+                var context = new ScriptCaptureContext("test-device");
+                model.CaptureDeviceContexts.Add(context);
+                var trace = new TraceAnalyzer();
+                trace.AddRule(new CaptureInvestigationTestData.SensitiveRule());
+                trace.AddReports([new PerEndpointReport(), new StatsReport(), new CallReport()]);
+                using var map = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(
+                    "\"api.xboxlive.com\",\"test_service\",\"TestService\",\"XblTest\"\n")));
+                trace.LoadURIMap(map);
+                var analyzer = new XboxLiveCaptureAnalyzer(trace, model, directory.Path);
+                model.CaptureAnalyzers.Add(analyzer);
+                var filter = new ProcessFilterSpec(ImmutableArray.Create("game.exe"), ImmutableArray<string>.Empty);
+                var run = model.AddAnalysisRun(analyzer, filter);
+                Assert.True(model.TryBeginAnalysis(context, out var lease));
+                using (lease)
+                    Assert.Equal(ECaptureAnalyzerResult.Success, Complete(model.RunAnalysisAsync(run, context.Controller, _ => { })));
+                var result = Assert.IsType<AnalysisResultsModel>(run.AnalysisData).InvestigationData;
+                Assert.Equal(rowIds[0], Assert.Single(result.Records).RecordId);
+                Assert.Equal(1, result.MatchedRecords);
+                Assert.Equal(1, result.EligibleServiceCalls);
+                Assert.Equal(1, result.Metrics.Single(metric => metric.Id == "http.requests").Count);
+                Assert.Equal(10, result.Metrics.Single(metric => metric.Id == "http.duration.mean").Value);
+                var evidence = result.Evidence.Values.SelectMany(items => items).ToArray();
+                Assert.NotEmpty(evidence);
+                Assert.All(evidence, item => Assert.Equal(rowIds[0], item.RecordId));
+                Assert.NotEmpty(Complete(result.Details.ReadPageAsync(
+                    new(CaptureDetailKind.Record, rowIds[0]), 0, 100, 65536, Options())).Rows);
+                Assert.Equal(CaptureDataError.DetailNotFound, Assert.Throws<CaptureDataException>(() =>
+                    Complete(result.Details.ReadPageAsync(
+                        new(CaptureDetailKind.Record, rowIds[1]), 0, 100, 65536, Options()))).Error);
+                using var scope = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory.Path, $"xlca_{run.Id}", "scope.json")));
+                Assert.Equal(2, scope.RootElement.GetProperty("counts").GetProperty("total").GetInt32());
+                Assert.Equal(1, scope.RootElement.GetProperty("counts").GetProperty("included").GetInt32());
+                Finish(model.DisposeInvestigationAsync());
+            });
+        }
+
+        [Fact]
+        public void DesktopProcessFilterTreatsLegacyRowsAsUnknown()
+        {
+            application.Run(_ =>
+            {
+                using var directory = new InvestigationDirectory();
+                using var database = CaptureInvestigationTestData.WebDatabase();
+                var row = CaptureInvestigationTestData.AddWeb(database, 1);
+                var model = new CaptureAppModel { ActiveDatabase = database };
+                var context = new ScriptCaptureContext("test-device");
+                model.CaptureDeviceContexts.Add(context);
+                var trace = new TraceAnalyzer();
+                trace.AddRule(new ThrottledCallsRule { Endpoint = "*" });
+                trace.AddReports([new PerEndpointReport(), new StatsReport(), new CallReport()]);
+                var analyzer = new XboxLiveCaptureAnalyzer(trace, model, directory.Path);
+                model.CaptureAnalyzers.Add(analyzer);
+                var filter = new ProcessFilterSpec(ImmutableArray<string>.Empty, ImmutableArray.Create("other.exe"));
+                var run = model.AddAnalysisRun(analyzer, filter);
+                Assert.True(model.TryBeginAnalysis(context, out var lease));
+                using (lease)
+                    Assert.Equal(ECaptureAnalyzerResult.Success, Complete(model.RunAnalysisAsync(run, context.Controller, _ => { })));
+                var result = Assert.IsType<AnalysisResultsModel>(run.AnalysisData).InvestigationData;
+                Assert.Equal(row, Assert.Single(result.Records).RecordId);
+                using var scope = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory.Path, $"xlca_{run.Id}", "scope.json")));
+                Assert.Equal(1, scope.RootElement.GetProperty("counts").GetProperty("unknown").GetInt32());
+                Assert.Equal(1, scope.RootElement.GetProperty("counts").GetProperty("included").GetInt32());
+                Finish(model.DisposeInvestigationAsync());
             });
         }
 

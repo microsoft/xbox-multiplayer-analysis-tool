@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using CaptureAnalysisEngine;
+using XMAT.Operations.Captures;
 
 namespace XMAT.XboxLiveCaptureAnalysis
 {
@@ -11,5 +12,9 @@ namespace XMAT.XboxLiveCaptureAnalysis
         TraceAnalysisResult Analysis,
         IReadOnlyDictionary<string, long> RecordByBreadcrumb,
         int ConvertedRecords,
-        int SkippedRecords);
+        int SkippedRecords)
+    {
+        internal ProcessFilterScope ProcessScope { get; init; }
+        internal IReadOnlyList<CaptureRowKey> IncludedKeys { get; init; }
+    }
 }

@@ -6,6 +6,7 @@ using System;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Text;
+using XMAT.Operations.Captures;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -69,6 +70,8 @@ namespace XMAT.WebServiceCapture.Proxy
     [Display(Name = "Request")]
     public class ClientRequest : BaseRequestResponse
     {
+        internal CaptureRowKey RowKey { get; set; }
+
         [Description("WEB_SVC_SCRIPT_PROP_DESC_SCHEME")]
         public string Scheme { get; set; }
         [Description("WEB_SVC_SCRIPT_PROP_DESC_HOST")]

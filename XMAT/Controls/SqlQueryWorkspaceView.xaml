@@ -1,8 +1,15 @@
 <UserControl x:Class="XMAT.SqlQueryWorkspaceView"
   xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:local="clr-namespace:XMAT"
   xmlns:sql="clr-namespace:XMAT.SqlQueries"
   PreviewKeyDown="View_PreviewKeyDown">
+  <UserControl.CommandBindings>
+    <CommandBinding Command="{x:Static local:AppCommands.AnalyzeCaptures}"
+      Executed="IgnoreCaptureCommand" CanExecute="DenyCaptureCommand"/>
+    <CommandBinding Command="{x:Static local:AppCommands.ClearAllCaptures}"
+      Executed="IgnoreCaptureCommand" CanExecute="DenyCaptureCommand"/>
+  </UserControl.CommandBindings>
   <UserControl.Resources>
     <DataTemplate x:Key="SqlDocumentHeader">
       <StackPanel Orientation="Horizontal" Margin="3,1">

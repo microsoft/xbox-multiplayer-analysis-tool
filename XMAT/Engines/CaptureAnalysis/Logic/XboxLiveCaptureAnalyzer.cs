@@ -4,8 +4,11 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using CaptureAnalysisEngine;
@@ -13,6 +16,8 @@ using XMAT.ApplicationServices;
 using XMAT.Models;
 using XMAT.Operations;
 using XMAT.Operations.Analysis;
+using XMAT.Operations.Captures;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 using XMAT.XboxLiveCaptureAnalysis.Models;
@@ -78,6 +83,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
             var directory = Path.Combine(_outputRootProvider(), $"xlca_{analysisRun.Id}");
             model.OutputDirectory = directory;
             model.SourceCaptureName = controller.DeviceName;
+            model.SourceStamp = controller.SourceStamp;
             XboxLiveAnalysisResult canonical;
             try
             {
@@ -93,14 +99,14 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 else
                 {
                     var result = await ExecuteRecordsAsync(controller.GetCaptureRecords(), controller.DeviceName,
-                        directory, step => SetProcessStatus(model, step), CancellationToken.None);
+                        directory, step => SetProcessStatus(model, step), analysisRun.ProcessFilter, CancellationToken.None);
                     if (result.Diagnostics.Any(diagnostic => diagnostic.Code == AnalyzeCaptureOperation.WorkLimitCode))
                         return ECaptureAnalyzerResult.WorkLimit;
                     if (result.Outcome is OperationOutcome.InvalidInput or OperationOutcome.NoAnalyzableData)
                         return ECaptureAnalyzerResult.NoSuitableData;
                     if (!result.Succeeded || result.Value?.Canonical == null)
                         return ECaptureAnalyzerResult.UnknownError;
-                    canonical = Canonical(result.Value.Canonical);
+                    canonical = Canonical(result.Value);
                 }
             }
             catch (AnalysisWorkLimitException) { return ECaptureAnalyzerResult.WorkLimit; }
@@ -112,8 +118,13 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 var view = ReportViewModelFactory.CreateForDocument(
                     _captureAppModel, controller.DeviceName, directory, report);
                 if (view != null && view.Show)
+                {
+                    view.SourceStamp = model.SourceStamp;
                     model.Reports.Add(view);
+                }
             }
+            if (!ProcessFilter.IsEmpty(analysisRun.ProcessFilter))
+                WriteProcessScope(directory, analysisRun.ProcessFilter, canonical.ProcessScope);
             if (model.InvestigationData?.Details is CaptureDataDetails completed)
                 await completed.AdoptDesktopFilesAsync(directory);
             SetProcessStatus(model, AnalysisResultsModel.ProcessStep.Complete);
@@ -124,30 +135,63 @@ namespace XMAT.XboxLiveCaptureAnalysis
 
         internal XboxLiveAnalysisResult AnalyzeRecords(
             IEnumerable<IDataRecord> records, string outputDirectory = null, long runId = 0,
-            Action<AnalysisResultsModel.ProcessStep> progress = null, CancellationToken cancellationToken = default)
+            Action<AnalysisResultsModel.ProcessStep> progress = null, ProcessFilterSpec processFilter = null,
+            CancellationToken cancellationToken = default)
         {
             if (_operation == null)
                 throw new InvalidOperationException("The Xbox Live analyzer is not initialized.");
-            var result = ExecuteRecordsAsync(records, string.Empty, outputDirectory, progress, cancellationToken)
+            var result = ExecuteRecordsAsync(records, string.Empty, outputDirectory, progress, processFilter, cancellationToken)
                 .GetAwaiter().GetResult();
             if (result.Outcome == OperationOutcome.Cancelled)
                 throw new OperationCanceledException(cancellationToken);
             if (result.Diagnostics.Any(diagnostic => diagnostic.Code == AnalyzeCaptureOperation.WorkLimitCode))
                 throw new AnalysisWorkLimitException();
             if (result.Value?.Canonical != null)
-                return Canonical(result.Value.Canonical);
+                return Canonical(result.Value);
             throw new InvalidOperationException("The shared capture analysis operation could not complete.");
         }
 
         private Task<OperationResult<AnalysisResult>> ExecuteRecordsAsync(
             IEnumerable<IDataRecord> records, string deviceName, string outputDirectory,
-            Action<AnalysisResultsModel.ProcessStep> progress, CancellationToken cancellationToken) =>
+            Action<AnalysisResultsModel.ProcessStep> progress, ProcessFilterSpec processFilter,
+            CancellationToken cancellationToken) =>
             _operation.ExecuteAsync(new AnalyzeCaptureRequest(AnalysisInput.FromRecords(records, deviceName),
-                new AnalysisOptions(ProduceLegacyReports: outputDirectory != null, RetainCanonicalResults: true)),
+                new AnalysisOptions(ProduceLegacyReports: outputDirectory != null, RetainCanonicalResults: true,
+                    ProcessFilter: processFilter)),
                 new OperationContext(outputDirectory, progress == null ? null : new ProcessProgress(progress)), cancellationToken);
 
-        private static XboxLiveAnalysisResult Canonical(CanonicalAnalysisResult value) =>
-            new(value.Analysis, value.RecordByBreadcrumb, value.ConvertedRecords, value.SkippedRecords);
+        private static XboxLiveAnalysisResult Canonical(AnalysisResult value) =>
+            new(value.Canonical.Analysis, value.Canonical.RecordByBreadcrumb,
+                value.Canonical.ConvertedRecords, value.Canonical.SkippedRecords)
+            {
+                ProcessScope = value.ProcessScope,
+                IncludedKeys = value.IncludedKeys,
+            };
+
+        private static void WriteProcessScope(string directory, ProcessFilterSpec filter, ProcessFilterScope scope)
+        {
+            File.WriteAllBytes(Path.Join(directory, ProcessScopeJson.ScopeFileName), ProcessScopeJson.Serialize(filter, scope));
+            string index = Path.Join(directory, "index.html");
+            if (!File.Exists(index))
+                return;
+            ProcessFilterCounts counts = scope?.Counts ?? new ProcessFilterCounts(0, 0, 0, 0);
+            string text = Localization.GetLocalizedString(
+                "ANALYSIS_PROCESS_FILTER_BANNER", counts.Included, counts.Total, counts.Hidden, counts.Unknown,
+                Selectors(filter.Include, "ANALYSIS_PROCESS_FILTER_ALL"),
+                Selectors(filter.Exclude, "ANALYSIS_PROCESS_FILTER_NONE"));
+            string banner = "<div id=\"process-filter-banner\" class=\"process-filter-banner\" role=\"note\">" +
+                WebUtility.HtmlEncode(text) + "</div>";
+            const string container = "<div class=\"atg-container\">";
+            string html = File.ReadAllText(index);
+            int position = html.IndexOf(container, StringComparison.Ordinal);
+            html = position >= 0
+                ? html.Insert(position + container.Length, Environment.NewLine + "\t" + banner)
+                : html.Replace("<body>", "<body>" + banner, StringComparison.OrdinalIgnoreCase);
+            File.WriteAllText(index, html, new UTF8Encoding(false));
+        }
+
+        private static string Selectors(ImmutableArray<string> selectors, string emptyKey) =>
+            selectors.IsDefaultOrEmpty ? Localization.GetLocalizedString(emptyKey) : string.Join(", ", selectors);
 
         private static void SetProcessStatus(AnalysisResultsModel model, AnalysisResultsModel.ProcessStep step) =>
             PublicUtilities.SafeInvoke(() => model.ActiveProcessStep = step);

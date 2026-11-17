@@ -37,6 +37,59 @@ namespace XMAT.Tests
                 schema.Tables.Keys.OrderBy(
                     name => name,
                     StringComparer.Ordinal));
+            Assert.Equal(
+                CaptureTextSemantics.Literal,
+                schema.TextSemantics);
+        }
+
+        [Theory]
+        [InlineData(
+            CaptureTextFormat.AmbiguousUserVersion,
+            (int)CaptureTextSemantics.AmbiguousUnmarked)]
+        [InlineData(
+            CaptureTextFormat.LiteralUserVersion,
+            (int)CaptureTextSemantics.Literal)]
+        public void Preflight_ClassifiesTheCaptureTextMarker(
+            int userVersion,
+            int expectedSemantics)
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateOrdinaryCapture(
+                    directory.Path,
+                    "marker.xmatcap",
+                    userVersion: checked((uint)userVersion));
+
+            SqLtValidatedSchema schema =
+                ValidateGui(path);
+
+            Assert.Equal(
+                (CaptureTextSemantics)expectedSemantics,
+                schema.TextSemantics);
+        }
+
+        [Fact]
+        public void FutureMarker_IsRefusedBeforeSqliteOpens()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateOrdinaryCapture(
+                    directory.Path,
+                    "future.xmatcap",
+                    userVersion: 2);
+            bool sqliteOpening = false;
+
+            SqLtSchemaException exception =
+                Assert.Throws<SqLtSchemaException>(
+                    () => new SqLtReadonlyDatabase(
+                        path,
+                        SqLtSchemaProfile.CreateGui(),
+                        _ => sqliteOpening = true));
+
+            Assert.Equal(
+                SqLtSchemaFailure.UnsupportedVersion,
+                exception.Failure);
+            Assert.False(sqliteOpening);
         }
 
         [Fact]
@@ -72,6 +125,65 @@ namespace XMAT.Tests
                 16 + SqLtSchemaProfile.MaxExtensionColumns,
                 schema.Tables["WebProxyConnections"]
                     .Columns.Count);
+            Assert.Equal(
+                CaptureTextSemantics.AmbiguousUnmarked,
+                schema.TextSemantics);
+        }
+
+        [Fact]
+        public void Preflight_AcceptsKnownOptionalProcessColumnsInAnyTrailingOrder()
+        {
+            using var directory = new TestDirectory();
+            string webDdl = HostileSqliteSchemas.AppendWebProxyColumns(
+                $"{WebProxyCaptureSchema.ClientProcessStatus} TEXT",
+                "UnrelatedExtension INTEGER",
+                $"{WebProxyCaptureSchema.ClientProcessStartTime} TEXT",
+                $"{WebProxyCaptureSchema.ClientProcessName} TEXT",
+                $"{WebProxyCaptureSchema.ClientProcessId} INTEGER");
+            string path = HostileSqliteSchemas.CreateOrdinaryCapture(
+                directory.Path,
+                "process-columns-permuted.xmatcap",
+                webDdl);
+
+            SqLtValidatedSchema schema = ValidateGui(path);
+
+            Assert.Equal(
+                new[]
+                {
+                    WebProxyCaptureSchema.ClientProcessStatus,
+                    "UnrelatedExtension",
+                    WebProxyCaptureSchema.ClientProcessStartTime,
+                    WebProxyCaptureSchema.ClientProcessName,
+                    WebProxyCaptureSchema.ClientProcessId,
+                },
+                schema.Tables["WebProxyConnections"].Columns.Skip(16).Select(column => column.Name));
+        }
+
+        [Theory]
+        [InlineData("ClientProcessName INTEGER")]
+        [InlineData("ClientProcessId TEXT")]
+        [InlineData("ClientProcessStartTime INTEGER")]
+        [InlineData("ClientProcessStatus INTEGER")]
+        [InlineData("ClientProcessName")]
+        public void Preflight_RejectsMistypedKnownOptionalProcessColumns(string wrongDeclaration)
+        {
+            using var directory = new TestDirectory();
+            string columnName = wrongDeclaration.Split(' ')[0];
+            string expectedDeclaration = columnName == WebProxyCaptureSchema.ClientProcessId
+                ? columnName + " INTEGER"
+                : columnName + " TEXT";
+            string webDdl = HostileSqliteSchemas.WebProxyConnectionsWithProcessDdl.Replace(
+                expectedDeclaration,
+                wrongDeclaration,
+                StringComparison.Ordinal);
+            string path = HostileSqliteSchemas.CreateOrdinaryCapture(
+                directory.Path,
+                "process-column-wrong-type.xmatcap",
+                webDdl);
+
+            SqLtSchemaException exception = Assert.Throws<SqLtSchemaException>(() => ValidateGui(path));
+
+            Assert.Equal(SqLtSchemaFailure.Unsupported, exception.Failure);
         }
 
         [Theory]
@@ -99,6 +211,49 @@ namespace XMAT.Tests
 
             Assert.Equal(
                 SqLtSchemaFailure.Unsupported,
+                exception.Failure);
+        }
+
+        [Fact]
+        public void Preflight_DistinguishesSqliteWithoutXmatTables()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateDatabase(
+                    directory.Path,
+                    "not-xmat.sqlite",
+                    "CREATE TABLE Other(id INTEGER PRIMARY KEY,Value TEXT)");
+
+            SqLtSchemaException exception =
+                Assert.Throws<SqLtSchemaException>(
+                    () =>
+                        ValidateGui(
+                            path));
+
+            Assert.Equal(
+                SqLtSchemaFailure.NotXmat,
+                exception.Failure);
+        }
+
+        [Fact]
+        public void Preflight_UnsupportedMarkerPrecedesUtf16Classification()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                HostileSqliteSchemas.CreateUtf16Database(
+                    directory.Path,
+                    "utf16-future.sqlite",
+                    2,
+                    "CREATE TABLE Other(id INTEGER PRIMARY KEY,Value TEXT)");
+
+            SqLtSchemaException exception =
+                Assert.Throws<SqLtSchemaException>(
+                    () =>
+                        ValidateGui(
+                            path));
+
+            Assert.Equal(
+                SqLtSchemaFailure.UnsupportedVersion,
                 exception.Failure);
         }
 
@@ -1124,15 +1279,7 @@ namespace XMAT.Tests
 
             internal string Path { get; }
 
-            public void Dispose()
-            {
-                if (Directory.Exists(Path))
-                {
-                    Directory.Delete(
-                        Path,
-                        true);
-                }
-            }
+            public void Dispose() => TestFolderCleanup.Delete(Path);
         }
     }
 }

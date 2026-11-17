@@ -339,7 +339,7 @@ namespace XMAT.Tests
                 new Field<string>("Name"));
             object[] row = [0L, "fixture", 0L, value];
             if (imported)
-                ((IImportedCaptureTable)table).ReplaceImportedRows(new FieldValue<string>("DeviceName", "fixture"), [row]);
+                ((IImportedCaptureTable)table).ReplaceImportedRows(CaptureTextSource.Literal, new FieldValue<string>("DeviceName", "fixture"), [row]);
             else
                 table.AddRow(row);
             var expected = table.Dataset.DataRecords.Single();

@@ -1994,6 +1994,42 @@ namespace XMAT.Tests.Proxy
         }
 
         [Fact]
+        public async Task OptionalReaderFallback_UsesTheProcessWideBudgetForInterceptedHttps()
+        {
+            await using var origin =
+                await LoopbackOrigin.StartAsync(
+                    useTls: true);
+            await using var proxy =
+                await ProxyTestHarness.StartAsync(
+                    registerRequestReader: false);
+            ProxyRequestBufferBudget sharedBudget =
+                ProxyRequestBufferBudget.Shared;
+            Assert.True(
+                sharedBudget.TryReserve(
+                    sharedBudget.MaximumBytes - (16 * 1024),
+                    out ProxyRequestBufferLease heldBudget));
+            using (heldBudget)
+            using (HttpClient client = proxy.CreateClient())
+            using (var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                origin.Url("/shared-budget"))
+            {
+                Content = new ByteArrayContent("body"u8.ToArray()),
+            })
+            using (HttpResponseMessage response = await client.SendAsync(request))
+            {
+                Assert.Equal(
+                    HttpStatusCode.ServiceUnavailable,
+                    response.StatusCode);
+            }
+
+            Assert.Empty(origin.Requests);
+            Assert.DoesNotContain(
+                proxy.CapturedRequests,
+                captured => captured.Method == "POST");
+        }
+
+        [Fact]
         public void ProductionReaderRegistration_UsesTheProcessWideBudget()
         {
             var services =

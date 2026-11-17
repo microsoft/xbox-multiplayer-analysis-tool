@@ -7,6 +7,8 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using XMAT.Cli;
+using XMAT.Operations;
+using XMAT.Tests.Proxy;
 
 namespace XMAT.Tests.Cli
 {
@@ -15,9 +17,11 @@ namespace XMAT.Tests.Cli
     // --out), a published run keeps its result, and a cleanup failure (exit code 7) wins over everything. XmatSignalTests
     // sends a real console signal. Also what a run reports when its staging folder is not private, or when its report
     // cannot be serialized.
+    [Collection(IsolatedProxyTests.Name)]
     public class CliStagedRunTests
     {
         private const string Results = "results";
+        private static readonly TimeSpan ConcurrencyTimeout = TimeSpan.FromSeconds(30);
 
         [Theory]
         [InlineData("while-producing")]
@@ -217,10 +221,10 @@ namespace XMAT.Tests.Cli
             Assert.Equal("failed", report.Status);
         }
 
-        // Storage without Windows permissions (FAT, exFAT, some shares) silently drops the access control that Reserve sets,
-        // and storage that maps permissions imperfectly can drop their inheritance. A staging folder whose access control
-        // changed after Reserve stands in for both: the run refuses before it produces anything, publishes nothing and
-        // removes the staging folder. The folder as Reserve made it reads back as private.
+        // Storage without Windows permissions (FAT, exFAT) is refused by its file system, but storage that maps permissions
+        // imperfectly can still drop the access control that Reserve sets, or its inheritance. A staging folder whose access
+        // control changed after Reserve stands in for that: the run refuses before it produces anything, publishes nothing
+        // and removes the staging folder. The folder as Reserve made it reads back as private.
         [Theory]
         [InlineData("inherits")]
         [InlineData("grants-everyone")]
@@ -277,6 +281,196 @@ namespace XMAT.Tests.Cli
             Assert.Empty(report.Artifacts);
             Assert.Equal(CliCleanupStates.Completed, report.CleanupState);
             Assert.Empty(directory.Entries());
+        }
+
+        [Fact]
+        public async Task PrivateFolder_IsPrivateAndHasExactlyOneOwner()
+        {
+            using var directory = new CliTestDirectory();
+            string parentPath = Path.Join(directory.Root, "broad");
+            Directory.CreateDirectory(parentPath);
+            var parent = new DirectoryInfo(parentPath);
+            DirectorySecurity security = parent.GetAccessControl();
+            security.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                FileSystemRights.ReadAndExecute,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            parent.SetAccessControl(security);
+            string privatePath = Path.Join(parentPath, "private");
+
+            PrivateFolder.Create(privatePath);
+
+            Assert.True(PrivateFolder.IsPrivate(privatePath));
+            string sentinel = Path.Join(privatePath, "sentinel.txt");
+            File.WriteAllText(sentinel, "keep");
+            Assert.Throws<IOException>(() => PrivateFolder.Create(privatePath));
+            Assert.Equal("keep", File.ReadAllText(sentinel));
+
+            string concurrentPath = Path.Join(parentPath, "concurrent");
+            using var barrier = new Barrier(9);
+            Task<bool>[] creators = Enumerable.Range(0, 8).Select(_ =>
+                Task.Factory.StartNew(
+                    () =>
+                    {
+                        Assert.True(
+                            barrier.SignalAndWait(ConcurrencyTimeout),
+                            "A private-folder creator did not reach the barrier.");
+                        try
+                        {
+                            PrivateFolder.Create(concurrentPath);
+                            return true;
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default)).ToArray();
+            Task<bool[]> allCreators = Task.WhenAll(creators);
+            try
+            {
+                Assert.True(
+                    barrier.SignalAndWait(ConcurrencyTimeout),
+                    "The private-folder test did not reach the barrier.");
+                bool[] owners = await allCreators.WaitAsync(ConcurrencyTimeout);
+                Assert.Single(owners, owner => owner);
+                Assert.True(PrivateFolder.IsPrivate(concurrentPath));
+            }
+            finally
+            {
+                try
+                {
+                    await allCreators.WaitAsync(ConcurrencyTimeout);
+                }
+                catch (Exception exception) when (
+                    exception is not TimeoutException &&
+                    !ExceptionUtilities.IsFatal(exception))
+                {
+                    // The primary test path owns worker failures; this wait drains them before barrier disposal.
+                }
+            }
+        }
+
+        [Fact]
+        public void PrivateFolder_UsesExtendedLengthNativePaths()
+        {
+            Assert.Equal(@"\\?\C:\a\b", PrivateFolder.NativePath(@"C:\a\b"));
+            Assert.Equal(@"\\?\UNC\server\share\x", PrivateFolder.NativePath(@"\\server\share\x"));
+            Assert.Equal(@"\\?\C:\x", PrivateFolder.NativePath(@"\\?\C:\x"));
+            Assert.Equal(@"\\.\x", PrivateFolder.NativePath(@"\\.\x"));
+            string relative = Path.Join("relative", "x");
+            Assert.Equal(@"\\?\" + Path.GetFullPath(relative), PrivateFolder.NativePath(relative));
+        }
+
+        [Fact]
+        public void StreamingWrite_CreatesOneNewFileWithoutBuildingItsContents()
+        {
+            using var directory = new CliTestDirectory();
+            var report = NewReport();
+            using CliOutputFolder output = Reserve(
+                directory,
+                report);
+            byte[] expected =
+                Encoding.ASCII.GetBytes(
+                    "streamed");
+
+            output.WriteFile(
+                "nested/streamed.bin",
+                stream =>
+                    stream.Write(
+                        expected,
+                        0,
+                        expected.Length));
+
+            Assert.Equal(
+                expected,
+                File.ReadAllBytes(
+                    Path.Join(
+                        output.StagingPath,
+                        "nested",
+                        "streamed.bin")));
+            Assert.True(output.TryDiscard());
+        }
+
+        [Fact]
+        public async Task AFileWrittenDuringTheRun_IsPublishedWithoutBeingWrittenAgain()
+        {
+            using var directory = new CliTestDirectory();
+            var report = NewReport();
+            CliOutputFolder output = Reserve(directory, report);
+            byte[] capture = Encoding.ASCII.GetBytes("capture");
+            byte[] summary = Encoding.ASCII.GetBytes("{}");
+
+            await CliStagedRun.CompleteAsync(
+                report,
+                output,
+                _ =>
+                {
+                    using (FileStream stream =
+                        output.CreateFile(
+                            "capture.xmatcap"))
+                    {
+                        stream.Write(
+                            capture,
+                            0,
+                            capture.Length);
+                        stream.Flush(
+                            flushToDisk: true);
+                    }
+                    report.SetExitCode(
+                        CliExitCodes.Success);
+                    return Task.FromResult<IReadOnlyList<CliStagedFile>>(
+                        new[]
+                        {
+                            new CliStagedFile(
+                                "capture",
+                                "capture.xmatcap",
+                                null),
+                            new CliStagedFile(
+                                "summary",
+                                "summary.json",
+                                summary),
+                        });
+                },
+                null,
+                CancellationToken.None);
+
+            string published =
+                Path.Join(
+                    directory.Root,
+                    Results);
+            Assert.Equal(
+                capture,
+                File.ReadAllBytes(
+                    Path.Join(
+                        published,
+                        "capture.xmatcap")));
+            Assert.Equal(
+                summary,
+                File.ReadAllBytes(
+                    Path.Join(
+                        published,
+                        "summary.json")));
+            Assert.False(
+                Directory.Exists(
+                    Path.Join(
+                        published,
+                        "work")));
+            Assert.Equal(
+                new[]
+                {
+                    "capture:capture.xmatcap",
+                    "summary:summary.json",
+                },
+                report.Artifacts.Select(
+                    artifact =>
+                        artifact.Kind +
+                        ":" +
+                        artifact.Path));
         }
 
         // A report that cannot be serialized (here a null warning, which also breaks the text on standard error) is replaced
@@ -337,7 +531,7 @@ namespace XMAT.Tests.Cli
         private static CliReport NewReport() => new(CliCommands.Analyze, Guid.NewGuid().ToString("N"));
 
         private static CliOutputFolder Reserve(CliTestDirectory directory, CliReport report) =>
-            CliOutputFolder.Reserve(Path.Combine(directory.Root, Results), report.RunId);
+            CliTestOutput.Reserve(Path.Join(directory.Root, Results), report.RunId);
 
         private static Task<IReadOnlyList<CliStagedFile>> Produce(CliReport report, int exitCode)
         {

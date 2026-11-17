@@ -17,21 +17,21 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using XMAT.DataAbstractionLayer;
 using XMAT.NetworkTrace;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
 namespace XMAT.Models
 {
-    public enum ExportType : int
-    {
-        Fiddler = 0
-    }
-
     public enum ImportType : int
     {
         Fiddler = 0,
         NetTrace = 1
     }
+
+    internal sealed record CaptureLoadResult(
+        CaptureTextSource Source,
+        bool AddedOrReplaced);
 
     internal partial class CaptureAppModel : ICaptureAppModel, INotifyPropertyChanged
     {
@@ -131,7 +131,7 @@ namespace XMAT.Models
 
         internal static readonly CaptureAppModel AppModel = new();
 
-        internal ICaptureOperations CaptureOperations { get; }
+        internal ApplicationServices.CaptureOperations CaptureOperations { get; }
         internal ICaptureDataOperations CaptureDataOperations { get; }
         internal ICaptureRecoveryOperations CaptureRecoveryOperations { get; }
         internal ApplicationServices.CaptureCatalog CaptureCatalog { get; }
@@ -209,6 +209,31 @@ namespace XMAT.Models
                 }
             }
         }
+        // XMAT is exiting (BeginShutdown): no GUI replay starts, and a running one adds no more rows.
+        internal bool IsShuttingDown
+        {
+            get
+            {
+                lock (_analysisStateLock)
+                {
+                    return _isShuttingDown;
+                }
+            }
+        }
+        internal bool IsClosing
+        {
+            get
+            {
+                lock (_analysisStateLock)
+                {
+                    return _isClosing;
+                }
+            }
+        }
+
+
+        // The rows that this session's Replays tab recorded, which every composer's history shows; never saved.
+        internal ReplayHistory ReplayHistory { get; }
         internal bool IsAnyCaptureRunning
         {
             get
@@ -225,19 +250,23 @@ namespace XMAT.Models
         }
         internal bool CanAnalyzeCaptures =>
             SelectedDeviceContext != null &&
+            !IsClosing &&
             !IsAnyCaptureRunning &&
             !IsAnalysisRunning &&
             !IsCaptureDataOperationRunning;
         internal bool CanModifyCaptureData =>
+            !IsClosing &&
             !IsAnalysisRunning &&
             !IsCaptureDataOperationRunning &&
             HostLifecycle?.IsClosing != true;
         internal bool CanBeginCaptureDataOperation =>
             CanModifyCaptureData &&
             !IsAnyCaptureRunning;
-        internal bool CanStopCaptures => !IsAnalysisRunning;
-        internal bool CanExportSanitizedCaptures =>
-            CanBeginCaptureDataOperation &&
+        // Stop waits for a capture-data operation such as an export, which reads the running capture until it publishes.
+        internal bool CanStopCaptures => !IsClosing && !IsAnalysisRunning && !IsCaptureDataOperationRunning;
+        // File > Export and Export Sanitized: the selected web capture, running or not, when it has sessions.
+        internal bool CanExportSelectedCapture =>
+            CanModifyCaptureData &&
             SelectedDeviceContext?.CaptureType == CaptureType.WebProxy &&
             SelectedDeviceContext.CaptureController is WebServiceCapture.WebServiceDeviceCaptureController controller &&
             controller.ProxyConnections.Count > 0;
@@ -253,6 +282,29 @@ namespace XMAT.Models
         private bool _isAnalysisRunning;
         private bool _isCaptureDataOperationRunning;
         private bool _isCaptureFileLoadRunning;
+        private bool _isClosing;
+
+        // The name of the read-only tab that GUI replays and composer sends are recorded in (GetOrAddReplayContext), which is
+        // also the device name of its rows in the shared capture table. No tab that writes to that table can have it, or a
+        // name that starts with it, so their rows never mix with replays: console names have no spaces, the fixed device
+        // names and imports' names ("Fiddler - ...") start otherwise, and AddDeviceContext refuses it. Only tabs loaded
+        // from a saved capture can have it, and they read their own copy of the rows.
+        internal const string ReplayContextName = "XMAT Replays";
+
+        // A name that AddDeviceContext refuses, because it is the replay tab's (ReplayContextName).
+        internal static bool IsReplayContextName(string deviceName) =>
+            deviceName != null && deviceName.StartsWith(ReplayContextName, StringComparison.Ordinal);
+
+        // The read-only tab that GUI replays are recorded in (GetOrAddReplayContext); null until one is needed.
+        private ICaptureDeviceContext _replayContext;
+
+        // The running capture-data operation, if closing XMAT may cancel it and wait for it to end, such as a GUI replay,
+        // the task that completes when it has ended and its lease; and whether XMAT is shutting down (BeginShutdown).
+        // Guarded by _analysisStateLock.
+        private CancellationTokenSource _cancellableOperation;
+        private TaskCompletionSource _cancellableOperationEnded;
+        private CancellableOperationLease _cancellableOperationLease;
+        private bool _isShuttingDown;
 
         public CaptureAppModel() :
             this(Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher)
@@ -283,6 +335,7 @@ namespace XMAT.Models
             CaptureSazImports = new ApplicationServices.CaptureSazImports(this, _dispatcher, queries, CaptureFileInputs);
             CaptureEtlImports = new ApplicationServices.CaptureEtlImports(this, _dispatcher, queries, CaptureFileInputs);
             PreferencesModel = new();
+            ReplayHistory = new ReplayHistory(this);
             _captureDeviceContexts.CollectionChanged += CaptureDeviceContexts_CollectionChanged;
 
             foreach (var context in _captureDeviceContexts)
@@ -293,31 +346,93 @@ namespace XMAT.Models
 
         internal async Task<bool> CanCloseAsync()
         {
-            if (IsCaptureDataOperationRunning || IsCaptureFileLoadRunning)
+            lock (_analysisStateLock)
             {
-                return false;
-            }
-            var devices = CaptureDeviceContexts.Where(context => !context.IsReadOnly).ToList();
-            foreach (var device in devices)
-            {
-                if (!await device.CaptureController.CanCloseAsync())
+                if (_isShuttingDown)
+                {
+                    return true;
+                }
+                if (_isClosing)
                 {
                     return false;
                 }
+
+                _isClosing = true;
             }
 
-            return true;
+            RaisePropertyChange(nameof(IsClosing));
+            InvalidateCommands();
+
+            // A replay is cancelled and waited for, so nothing it still adds races the shutdown; other operations, such as
+            // an import, have to finish first.
+            bool canClose = false;
+            try
+            {
+                if (IsCaptureFileLoadRunning ||
+                    (IsCaptureDataOperationRunning && !await CancelCaptureDataOperationAsync()))
+                {
+                    return false;
+                }
+
+                var devices = CaptureDeviceContexts.Where(context => !context.IsReadOnly).ToList();
+                foreach (var device in devices)
+                {
+                    if (!await device.CaptureController.CanCloseAsync())
+                    {
+                        return false;
+                    }
+                }
+
+                canClose = true;
+                return true;
+            }
+            finally
+            {
+                if (!canClose)
+                {
+                    CancelClosePreparation();
+                }
+            }
         }
 
-        public ICaptureDeviceContext SelectCaptureDeviceContext(string deviceContextName)
+        internal void CancelClosePreparation()
         {
-            ICaptureDeviceContext context = _captureDeviceContexts.FirstOrDefault(
-                captureDeviceContext => captureDeviceContext.DeviceName == deviceContextName);
-            if (context != null && context != SelectedDeviceContext)
+            bool changed = false;
+            lock (_analysisStateLock)
             {
-                SelectedDeviceContext = context;
+                if (!_isShuttingDown && _isClosing)
+                {
+                    _isClosing = false;
+                    changed = true;
+                }
             }
-            return context;
+
+            if (changed)
+            {
+                RaisePropertyChange(nameof(IsClosing));
+                InvalidateCommands();
+            }
+        }
+
+        // The open capture tab that an analysis read, while it still holds the sessions that the analysis saw; null once
+        // that tab was closed or its sessions were deleted, cleared or reloaded. It never selects a tab.
+        internal ICaptureDeviceContext ResolveCaptureSource(CaptureSourceStamp stamp) =>
+            stamp.SourceId == Guid.Empty
+                ? null
+                : _captureDeviceContexts.FirstOrDefault(context =>
+                    context.CaptureController is WebServiceDeviceCaptureController controller && controller.SourceStamp == stamp);
+
+        // Analyses whose source no longer resolves become historical; called on the UI thread after the tabs or their
+        // sessions change.
+        private void RefreshAnalysisSources()
+        {
+            foreach (var results in _analysisRuns
+                .Select(run => run.AnalysisData)
+                .OfType<XboxLiveCaptureAnalysis.Models.AnalysisResultsModel>()
+                .Where(candidate => ResolveCaptureSource(candidate.SourceStamp) == null))
+            {
+                results.MarkSourceStale();
+            }
         }
 
         internal bool TryBeginAnalysis(out IDisposable analysisLease)
@@ -349,6 +464,8 @@ namespace XMAT.Models
             lock (_analysisStateLock)
             {
                 if ((!sourceOnly && target == null) ||
+                    _isClosing ||
+                    _isShuttingDown ||
                     _isAnalysisRunning ||
                     _isCaptureDataOperationRunning ||
                     _runningCaptureControllers.Count != 0)
@@ -368,12 +485,22 @@ namespace XMAT.Models
 
         internal bool TryBeginCaptureDataOperation(
             out IDisposable operationLease,
-            bool requireAllCapturesStopped = false)
+            bool requireAllCapturesStopped = false) =>
+            TryBeginCaptureDataOperationCore(out operationLease, requireAllCapturesStopped, stoppingForClose: false);
+
+        internal bool TryBeginCaptureStopForClose(out IDisposable operationLease) =>
+            TryBeginCaptureDataOperationCore(out operationLease, requireAllCapturesStopped: false, stoppingForClose: true);
+
+        private bool TryBeginCaptureDataOperationCore(
+            out IDisposable operationLease, bool requireAllCapturesStopped, bool stoppingForClose)
         {
             lock (_analysisStateLock)
             {
-                if (_isAnalysisRunning ||
+                if (_isClosing != stoppingForClose ||
+                    _isShuttingDown ||
+                    _isAnalysisRunning ||
                     _isCaptureDataOperationRunning ||
+                    (stoppingForClose && (_isCaptureFileLoadRunning || HostLifecycle.IsClosing)) ||
                     (requireAllCapturesStopped && _runningCaptureControllers.Count != 0))
                 {
                     operationLease = null;
@@ -393,7 +520,7 @@ namespace XMAT.Models
         {
             lock (_analysisStateLock)
             {
-                if (_isCaptureFileLoadRunning)
+                if (_isClosing || _isShuttingDown || _isCaptureFileLoadRunning)
                 {
                     lease = null;
                     return false;
@@ -403,6 +530,119 @@ namespace XMAT.Models
             lease = new CaptureFileLoadLease(this);
             RaisePropertyChange(nameof(IsCaptureFileLoadRunning));
             return true;
+        }
+
+        // Begins a capture-data operation that closing XMAT may cancel through cancellation and then wait for, instead of
+        // refusing to close: a GUI replay (CancelCaptureDataOperationAsync). Disposing the lease ends the operation. None
+        // begins once XMAT is shutting down (BeginShutdown).
+        internal bool TryBeginCancellableCaptureDataOperation(
+            CancellationTokenSource cancellation,
+            out IDisposable operationLease)
+        {
+            ArgumentNullException.ThrowIfNull(cancellation);
+            if (IsShuttingDown || !TryBeginCaptureDataOperation(out IDisposable lease))
+            {
+                operationLease = null;
+                return false;
+            }
+
+            var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cancellableLease = new CancellableOperationLease(this, lease, ended);
+            lock (_analysisStateLock)
+            {
+                _cancellableOperation = cancellation;
+                _cancellableOperationEnded = ended;
+                _cancellableOperationLease = cancellableLease;
+            }
+
+            operationLease = cancellableLease;
+            return true;
+        }
+
+        // Cancels the running capture-data operation if it may be cancelled (TryBeginCancellableCaptureDataOperation) and
+        // waits until it has ended. False when an operation that cannot be cancelled is still running. The operation is
+        // revoked too (IsCaptureDataOperationRevoked): XMAT takes it back to close, also when its user had cancelled it, so
+        // what it would still do once it ends, such as selecting a row that it recorded, must not change what XMAT shows.
+        internal async Task<bool> CancelCaptureDataOperationAsync()
+        {
+            CancellationTokenSource cancellation;
+            Task ended;
+            lock (_analysisStateLock)
+            {
+                cancellation = _cancellableOperation;
+                ended = _cancellableOperationEnded?.Task;
+                if (_cancellableOperationLease != null)
+                {
+                    _cancellableOperationLease.Revoked = true;
+                }
+            }
+
+            if (cancellation != null)
+            {
+                try
+                {
+                    cancellation.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The operation ended and disposed its cancellation meanwhile; ended is complete.
+                }
+
+                await ended;
+            }
+
+            return !IsCaptureDataOperationRunning;
+        }
+
+        // Whether XMAT revoked the cancellable capture-data operation that this lease holds
+        // (TryBeginCancellableCaptureDataOperation), as CancelCaptureDataOperationAsync does when XMAT closes. It stays
+        // revoked once it has ended; another operation has another lease.
+        internal bool IsCaptureDataOperationRevoked(IDisposable operationLease)
+        {
+            lock (_analysisStateLock)
+            {
+                return operationLease is CancellableOperationLease { Revoked: true };
+            }
+        }
+
+        // For XMAT exiting without its main window's Closing, which cancels a GUI replay and waits for it (CanCloseAsync):
+        // Windows ending the session, or Application.Shutdown. Cancels a running GUI replay without waiting for it, since
+        // the UI thread that calls this is the one that adds the replay's rows, and from now on no replay starts and none
+        // adds rows (IsShuttingDown). A request that was being sent may still reach the server.
+        // This is terminal: nothing undoes it, so call it only once XMAT will exit. A handler that lets the exit still be
+        // cancelled, such as SessionEnding setting e.Cancel, must not call it; it would need a reversible preparation that
+        // pauses replays and can resume them.
+        internal void BeginShutdown()
+        {
+            CancellationTokenSource cancellation;
+            lock (_analysisStateLock)
+            {
+                _isShuttingDown = true;
+                _isClosing = true;
+                cancellation = _cancellableOperation;
+            }
+
+            try
+            {
+                cancellation?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The operation ended and disposed its cancellation meanwhile.
+            }
+        }
+
+        private void EndCancellableOperation(TaskCompletionSource ended)
+        {
+            lock (_analysisStateLock)
+            {
+                if (ReferenceEquals(_cancellableOperationEnded, ended))
+                {
+                    _cancellableOperation = null;
+                    _cancellableOperationEnded = null;
+                    _cancellableOperationLease = null;
+                }
+            }
         }
 
         private void CaptureDeviceContexts_CollectionChanged(
@@ -446,6 +686,7 @@ namespace XMAT.Models
                 }
             }
 
+            RefreshAnalysisSources();
             InvalidateCommands();
         }
 
@@ -677,6 +918,7 @@ namespace XMAT.Models
                 LoadedCaptureDatabaseRegistry.Assign(context.CaptureController, database);
             else
                 LoadedCaptureDatabaseRegistry.Release(context.CaptureController);
+            RefreshAnalysisSources();
             CaptureDataRebound?.Invoke(context, source);
         }
 
@@ -701,7 +943,8 @@ namespace XMAT.Models
             }
         }
 
-        internal void LoadDataCaptures(string fromFilePath) =>
+        internal CaptureLoadResult LoadDataCaptures(
+            string fromFilePath) =>
             LoadDataCaptures(
                 fromFilePath,
                 path =>
@@ -711,12 +954,15 @@ namespace XMAT.Models
                     throw new InvalidOperationException(
                         "The loaded capture database has an unsupported implementation."));
 
-        internal void LoadDataCaptures(
+        internal CaptureLoadResult LoadDataCaptures(
             string fromFilePath,
             Func<string, SqLtReadonlyDatabase> openDatabase)
         {
             SqLtReadonlyDatabase opened =
                 openDatabase(fromFilePath);
+            CaptureTextSource source =
+                opened.CaptureTextSource;
+            bool addedOrReplaced = false;
             var staged = new List<ICaptureDeviceContext>();
             try
             {
@@ -817,6 +1063,10 @@ namespace XMAT.Models
                 {
                     transfer();
                 }
+                RefreshAnalysisSources();
+                addedOrReplaced =
+                    added.Count != 0 ||
+                    transfers.Count != 0;
                 IDeviceCaptureController[] distinctOwners =
                     owners.Where(owner =>
                             _captureDeviceContexts.Any(
@@ -877,6 +1127,9 @@ namespace XMAT.Models
                     opened?.Dispose();
                 }
             }
+            return new CaptureLoadResult(
+                source,
+                addedOrReplaced);
         }
 
         private static Action CreateLoadedCaptureTransfer(
@@ -898,9 +1151,84 @@ namespace XMAT.Models
                     SqLtSchemaFailure.Unsupported),
             };
 
+        // Saving is a capture data operation: it never overlaps an import, export, close or analysis.
         internal void SaveDataCaptures(string toFilePath)
         {
-            ActiveDatabase.SaveToFile(toFilePath);
+            if (!TrySaveDataCaptures(toFilePath))
+            {
+                throw new InvalidOperationException("Another capture data operation is running.");
+            }
+        }
+
+        // Returns false, without writing, while another capture data operation runs.
+        internal bool TrySaveDataCaptures(string toFilePath)
+        {
+            if (!TryBeginCaptureDataOperation(out IDisposable operation))
+            {
+                return false;
+            }
+
+            using (operation)
+            {
+                ActiveDatabase.SaveToFile(toFilePath);
+            }
+
+            return true;
+        }
+
+        // Clears one capture. Clearing is a capture data operation, so it never overlaps an import, export, save, close or
+        // analysis: returns false, without clearing, while one of them runs, and releases the lease even if it fails.
+        internal bool TryClearAllCaptures(IDeviceCaptureController controller)
+        {
+            ArgumentNullException.ThrowIfNull(controller);
+            if (!TryBeginCaptureDataOperation(out IDisposable operation))
+            {
+                return false;
+            }
+
+            using (operation)
+            {
+                try
+                {
+                    controller.ClearAllCaptures();
+                }
+                finally
+                {
+                    RefreshAnalysisSources();
+                }
+            }
+
+            return true;
+        }
+
+        // Deletes sessions of a writable capture tab on the UI thread. Deleting is a capture data operation: returns false,
+        // deleting nothing, while another one or an analysis runs. Analyses of that capture become historical.
+        internal bool TryDeleteSessions(
+            WebServiceDeviceCaptureController controller,
+            IReadOnlyList<CaptureDeleteTarget> targets,
+            IReadOnlySet<Operations.Captures.CaptureRowKey> currentlyVisible,
+            out CaptureDeleteResult result)
+        {
+            ArgumentNullException.ThrowIfNull(controller);
+            result = null;
+            if (!TryBeginCaptureDataOperation(out IDisposable operation))
+            {
+                return false;
+            }
+
+            using (operation)
+            {
+                try
+                {
+                    result = controller.DeleteSessions(targets, currentlyVisible);
+                }
+                finally
+                {
+                    RefreshAnalysisSources();
+                }
+            }
+
+            return true;
         }
 
         internal Task ImportDataCapturesAsync(
@@ -1018,6 +1346,11 @@ namespace XMAT.Models
                         }
                         throw;
                     }
+                    finally
+                    {
+                        // Importing again into an existing tab replaces its sessions, so its analyses become historical.
+                        RefreshAnalysisSources();
+                    }
                 }
                 break;
 
@@ -1035,41 +1368,6 @@ namespace XMAT.Models
             }
         }
 
-        internal void ExportDataCaptures(ExportType exportType, string toFilePath)
-        {
-            switch (exportType)
-            {
-                case ExportType.Fiddler:
-                    (SelectedDeviceContext.CaptureController.CaptureMethod as WebServiceCapture.WebServiceCaptureMethod)?.ExportToFiddler(toFilePath);
-                    break;
-            }
-        }
-
-        internal async Task<WebServiceCapture.SanitizedExportSummary> ExportSanitizedDataCapturesAsync(
-            string toFilePath, CancellationToken cancellationToken = default)
-        {
-            if (!CanExportSanitizedCaptures ||
-                !TryBeginCaptureDataOperation(out var operation, requireAllCapturesStopped: true))
-            {
-                throw new InvalidOperationException(Localization.GetLocalizedString("SANITIZED_EXPORT_UNAVAILABLE"));
-            }
-            using (operation)
-            {
-                var controller = (WebServiceCapture.WebServiceDeviceCaptureController)SelectedDeviceContext.CaptureController;
-                IEnumerable<WebServiceCapture.Models.ProxyConnectionModel> Records()
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    foreach (var record in controller.GetCaptureRecords())
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        yield return new WebServiceCapture.Models.ProxyConnectionModel(record);
-                    }
-                }
-                return await Task.Run(() => WebServiceCapture.FiddlerSazHandler.CreateSanitizedSazFile(toFilePath,
-                    Records(), cancellationToken));
-            }
-        }
-
         internal ICaptureDeviceContext AddDeviceContext(
             DeviceType deviceType,
             string deviceName,
@@ -1079,6 +1377,13 @@ namespace XMAT.Models
             bool deferPortAllocation = false,
             Func<ICaptureDeviceContext> createContext = null)
         {
+            // Rows are kept by device name in the shared capture table, and the replay tab's name is its own.
+            if (IsReplayContextName(deviceName))
+            {
+                throw new ArgumentException(
+                    "This name is reserved for the tab that replays are recorded in.", nameof(deviceName));
+            }
+
             var newCaptureDeviceModel = GetDeviceContext(
                 deviceType,
                 deviceName,
@@ -1111,10 +1416,63 @@ namespace XMAT.Models
             return newCaptureDeviceModel;
         }
 
+        // The read-only tab where GUI replays and composer sends are recorded (ReplayRecordingTarget), created on first use
+        // and again after it is closed. Only the replay feature finds it: name lookups (GetDeviceContext) skip it, so no
+        // load, import or new capture reuses it or replaces its rows, and a tab that merely has its name, such as one loaded
+        // from a saved capture, is never used for replays. It is named ReplayContextName, or "XMAT Replays (2)" and so on
+        // while an open tab has that name. Unlike other read-only tabs it is listed with the capture devices, so that saving
+        // keeps it: the saved capture opens it as an ordinary read-only tab.
+        internal ICaptureDeviceContext GetOrAddReplayContext()
+        {
+            if (_replayContext != null)
+            {
+                if (_captureDeviceContexts.Contains(_replayContext))
+                {
+                    return _replayContext;
+                }
+
+                // Removed without RemoveDeviceContextAsync, it still has rows in the capture table, under a name that the new
+                // tab can take: they go first.
+                _replayContext.CaptureController.ClearAllCaptures();
+                UnlistReplayContext(_replayContext);
+                _replayContext = null;
+            }
+
+            string deviceName = ReplayContextName;
+            for (int suffix = 2; _captureDeviceContexts.Any(context => context.DeviceName == deviceName); suffix++)
+            {
+                deviceName = $"{ReplayContextName} ({suffix})";
+            }
+
+            var context = new CaptureDeviceContextModel(
+                DeviceType.Unknown,
+                deviceName,
+                CaptureType.WebProxy,
+                true,
+                null,
+                hostListPolicy: HostListPolicy);
+            CaptureDevicesTable?.AddRow(
+                (Int64)context.DeviceType,
+                context.DeviceName,
+                (Int64)context.CaptureType);
+            _replayContext = context;
+            _captureDeviceContexts.Add(context);
+            InvalidateCommands();
+            return context;
+        }
+
+        private void UnlistReplayContext(ICaptureDeviceContext context) =>
+            CaptureDevicesTable?.RemoveRowsWhere(
+                new FieldValue<Int64>(@"DeviceType", (Int64)context.DeviceType),
+                new FieldValue<string>(@"DeviceName", context.DeviceName),
+                new FieldValue<Int64>(@"CaptureType", (Int64)context.CaptureType));
+
         internal ICaptureDeviceContext GetDeviceContext(DeviceType deviceType, string deviceName, CaptureType captureType, bool readOnly)
         {
+            // The replay tab is found by reference only (GetOrAddReplayContext).
             return (from cc in _captureDeviceContexts
                     where
+                    !ReferenceEquals(cc, _replayContext) &&
                     cc.DeviceType == deviceType &&
                     (captureType == CaptureType.WebProxy && !readOnly
                         ? SameProxyDevice(deviceType, cc.DeviceName, deviceName)
@@ -1138,6 +1496,10 @@ namespace XMAT.Models
                     new FieldValue<Int64>(@"CaptureType", (Int64)captureDeviceContext.CaptureType)
                 );
             }
+            else if (ReferenceEquals(captureDeviceContext, _replayContext))
+            {
+                UnlistReplayContext(captureDeviceContext);
+            }
 
             var index = _captureDeviceContexts.IndexOf(captureDeviceContext);
             bool wasPresent =
@@ -1156,6 +1518,11 @@ namespace XMAT.Models
                     (wasPresent &&
                      !_captureDeviceContexts.Contains(
                          captureDeviceContext));
+                if (actuallyRemoved &&
+                    ReferenceEquals(captureDeviceContext, _replayContext))
+                {
+                    _replayContext = null;
+                }
                 try
                 {
                     // Only a removed tab stops receiving live rows; a failed removal leaves it working.
@@ -1209,13 +1576,25 @@ namespace XMAT.Models
                     StringComparison.OrdinalIgnoreCase)
                 : first == second);
 
-        internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer)
+        internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer) =>
+            AddAnalysisRun(analyzer, ProcessFilterSpec.Empty);
+
+        // A run with a process filter analyzes only the sessions it selects; the specification is immutable, so the run
+        // keeps the filter as it was when the run started.
+        internal AnalysisRunModel AddAnalysisRun(ICaptureAnalyzer analyzer, ProcessFilterSpec processFilter)
         {
+            bool filtered = !ProcessFilter.IsEmpty(processFilter);
             var headerText = $"{analyzer.Description} [{DateTime.Now}]";
+            if (filtered)
+            {
+                headerText += " " + Localization.GetLocalizedString("ANALYSIS_PROCESS_FILTER_TAB");
+            }
+
             var id = (Int64)DateTime.Now.ToFileTimeUtc();
             var analysisRun = new AnalysisRunModel(analyzer, id)
             {
-                Header = headerText
+                Header = headerText,
+                ProcessFilter = filtered ? processFilter : ProcessFilterSpec.Empty,
             };
 
             _analysisRuns.Add(analysisRun);
@@ -1326,6 +1705,43 @@ namespace XMAT.Models
                 lock (model._analysisStateLock)
                 { model._isCaptureFileLoadRunning = false; }
                 model.RaisePropertyChange(nameof(IsCaptureFileLoadRunning));
+            }
+        }
+        // Ends a cancellable capture-data operation, then tells CancelCaptureDataOperationAsync that it has ended.
+        private sealed class CancellableOperationLease : IDisposable
+        {
+            private readonly IDisposable _operationLease;
+            private readonly TaskCompletionSource _ended;
+            private CaptureAppModel _owner;
+
+            internal CancellableOperationLease(CaptureAppModel owner, IDisposable operationLease, TaskCompletionSource ended)
+            {
+                _owner = owner;
+                _operationLease = operationLease;
+                _ended = ended;
+            }
+
+            // XMAT took the operation back (CancelCaptureDataOperationAsync). Guarded by the model's _analysisStateLock.
+            internal bool Revoked { get; set; }
+
+            public void Dispose()
+            {
+                var owner = _owner;
+                _owner = null;
+                if (owner == null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    owner.EndCancellableOperation(_ended);
+                    _operationLease.Dispose();
+                }
+                finally
+                {
+                    _ended.TrySetResult();
+                }
             }
         }
     }

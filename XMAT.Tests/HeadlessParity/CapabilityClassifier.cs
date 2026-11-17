@@ -56,6 +56,8 @@ namespace XMAT.Tests.HeadlessParity
     {
         private static readonly Regex IdPattern = new("^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$");
         private static readonly Regex SlicePattern = new("^S[0-9]+[a-z]?$");
+        // Each policy exception is reviewed on its own; this list grows only with that review.
+        private static readonly HashSet<string> PolicyExceptions = new(StringComparer.Ordinal) { "capture.delete-sessions" };
         private static readonly string[] KeyPrefixes =
         {
             "command:", "click:", "dynamic:", "window:", "enum:", "analyzer:", "preference:",
@@ -142,9 +144,40 @@ namespace XMAT.Tests.HeadlessParity
                             problems.Add($"{id}: a GuiOnly reason starts with 'Presentation:' and says why nothing runs headless.");
                         }
 
-                        if (capability.CliRoute != null || capability.Operation != null || capability.Slice != null)
+                        if (capability.CliRoutes.Any() || capability.Operation != null || capability.Slice != null)
                         {
                             problems.Add($"{id}: a GuiOnly capability has no command line, operation or slice.");
+                        }
+
+                        break;
+
+                    // A reviewed exception to parity, granted per capability: an owner, a slice, the reason and its GUI
+                    // entry points, and nothing headless.
+                    case CapabilityStatus.PolicyException:
+                        if (!PolicyExceptions.Contains(id))
+                        {
+                            problems.Add($"{id}: PolicyException is reviewed per capability; only capture.delete-sessions may use it.");
+                        }
+
+                        if (string.IsNullOrWhiteSpace(capability.Owner))
+                        {
+                            problems.Add($"{id}: a policy exception needs an owner.");
+                        }
+
+                        if (capability.Reason == null || !capability.Reason.StartsWith("Policy exception:", StringComparison.Ordinal))
+                        {
+                            problems.Add($"{id}: a policy exception's reason starts with 'Policy exception:' and says why it stays in the GUI.");
+                        }
+
+                        RequireSlice(capability, problems);
+                        if (capability.GuiEntryPoints.Count == 0)
+                        {
+                            problems.Add($"{id}: a policy exception lists its GUI entry points.");
+                        }
+
+                        if (capability.CliRoutes.Any() || capability.Operation != null)
+                        {
+                            problems.Add($"{id}: a policy exception has no command line or operation.");
                         }
 
                         break;
@@ -170,7 +203,7 @@ namespace XMAT.Tests.HeadlessParity
         {
             if (capability.Reason != null)
             {
-                problems.Add($"{capability.Id}: only GuiOnly capabilities carry a reason.");
+                problems.Add($"{capability.Id}: only GuiOnly and PolicyException capabilities carry a reason.");
             }
         }
 

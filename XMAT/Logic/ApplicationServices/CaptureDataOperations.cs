@@ -5,6 +5,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using XMAT.DataAbstractionLayer;
 using XMAT.Models;
 using XMAT.NetworkTrace;
 using XMAT.NetworkTrace.Models;
@@ -67,7 +68,7 @@ namespace XMAT.ApplicationServices
                     await Task.Run(() =>
                     {
                         backup.Demand();
-                        imported.ReplaceImportedRows(new FieldValue<string>("DeviceName", target.DeviceName),
+                        imported.ReplaceImportedRows(CaptureTextSource.Literal, new FieldValue<string>("DeviceName", target.DeviceName),
                             Array.Empty<object[]>(), cancellationToken);
                     }, cancellationToken);
                     backup.Committed();

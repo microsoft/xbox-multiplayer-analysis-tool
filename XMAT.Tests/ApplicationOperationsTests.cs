@@ -54,6 +54,42 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public void StopForClose_StopsRunningCaptureWithoutReopeningNormalOperations()
+        {
+            _application.Run(owner =>
+            {
+                var model = new CaptureAppModel();
+                var target = new Context();
+                model.CaptureDeviceContexts.Add(target);
+                var adapter = new Adapter(target.Controller);
+                var operations = Create(model, adapter);
+
+                Assert.True(Complete(operations.SetRunningAsync(target, true)).Succeeded);
+                Assert.Equal(CaptureOperationFailure.CaptureBusy,
+                    Complete(operations.StopForCloseAsync(target)).Failure);
+                Assert.True(Complete(model.CanCloseAsync()));
+                Assert.Equal(CaptureOperationFailure.CaptureBusy,
+                    Complete(operations.SetRunningAsync(target, false)).Failure);
+                adapter.StopAction = () =>
+                {
+                    Assert.True(model.IsClosing);
+                    Assert.True(model.IsCaptureDataOperationRunning);
+                    Assert.False(model.TryBeginCaptureFileLoad(out _));
+                    return Task.CompletedTask;
+                };
+
+                Assert.True(Complete(operations.StopForCloseAsync(target)).Succeeded);
+                Assert.False(target.Controller.IsRunning);
+                Assert.False(model.IsCaptureDataOperationRunning);
+                Assert.True(model.IsClosing);
+                Assert.Equal(CaptureOperationFailure.CaptureBusy,
+                    Complete(operations.SetRunningAsync(target, true)).Failure);
+                model.CancelClosePreparation();
+                Assert.True(Complete(operations.SetRunningAsync(target, true)).Succeeded);
+            });
+        }
+
+        [Fact]
         public void SetRunning_RejectsDetachedAndReadOnlyTargets()
         {
             _application.Run(_ =>
@@ -298,7 +334,7 @@ namespace XMAT.Tests
         }
 
         [Fact]
-        public void StopWithoutGlobalDataLease_RemainsAvailableDuringOtherCaptureOperation()
+        public void StopWithoutGlobalDataLease_WaitsForOtherCaptureOperation()
         {
             _application.Run(_ =>
             {
@@ -312,9 +348,13 @@ namespace XMAT.Tests
 
                 using (lease)
                 {
-                    Assert.True(Complete(operations.SetRunningAsync(target, false)).Succeeded);
+                    Assert.Equal(CaptureOperationFailure.CaptureBusy,
+                        Complete(operations.SetRunningAsync(target, false)).Failure);
+                    Assert.True(target.Controller.IsRunning);
+                    Assert.Equal(0, adapter.StopCount);
                     Assert.True(model.IsCaptureDataOperationRunning);
                 }
+                Assert.True(Complete(operations.SetRunningAsync(target, false)).Succeeded);
                 Assert.False(target.Controller.IsRunning);
             });
         }
@@ -624,6 +664,8 @@ namespace XMAT.Tests
             public bool IsProxyEnabled { get; private set; }
             public BypassListModel BypassList { get; set; }
             public Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> SslConnectionRequestPolicyAsync { get; set; }
+            public Task RecheckSslConnectionsAsync(Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> policy,
+                Action<Action> commit, CancellationToken cancellationToken) => Task.CompletedTask;
             public Func<HttpRequestEventArgs, CancellationToken, Task<bool>> WebRequestPolicyAsync { get; set; }
             public Func<HttpResponseEventArgs, CancellationToken, Task<bool>> WebResponsePolicyAsync { get; set; }
             public Task StartProxyAsync(WebServiceProxyOptions options, CancellationToken cancellationToken = default)

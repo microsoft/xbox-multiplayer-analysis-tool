@@ -6,6 +6,8 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Export;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
 
@@ -66,25 +68,24 @@ namespace XMAT.ApplicationServices
                     IReadonlyDatabase loaded => loaded.TableByName(WebServiceCaptureMethod.TableName)?.Dataset,
                     _ => null
                 } ?? throw new CaptureFileException(CaptureFileFailure.Unavailable);
+                var sanitized = format == CaptureArchiveFormat.SanitizedFiddlerSaz;
+                if (sanitized && CaptureTextSource.Of(dataset).Semantics != CaptureTextSemantics.Literal)
+                    throw new CaptureFileException(CaptureFileFailure.InvalidCapture);
+                if (dataset is not IRawCaptureDataset rawDataset)
+                    throw new CaptureFileException(CaptureFileFailure.Unavailable);
                 return StageAsync(sourceId, format, deviceName, maximumBytes, path =>
                 {
-                    System.Collections.Generic.IEnumerable<XMAT.WebServiceCapture.Models.ProxyConnectionModel> Records()
+                    using var writer = FiddlerSazHandler.CreateExportWriter(path, sanitized, expectedRows: 1);
+                    var records = deviceName == null ? dataset.DataRecords : dataset.DataRecordsWhen(
+                        new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, deviceName));
+                    foreach (var record in records)
                     {
-                        var records = deviceName == null ? dataset.DataRecords : dataset.DataRecordsWhen(
-                            new FieldValue<string>(WebServiceCaptureMethod.FieldKey_DeviceName, deviceName));
-                        foreach (var record in records)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            yield return new(record);
-                        }
+                        cancellationToken.ThrowIfCancellationRequested();
+                        writer.Write(new RawExportRow(default, record.RowId, 0,
+                            CaptureRawValues.Read(record, rawDataset.Columns)), cancellationToken);
                     }
-                    if (format == CaptureArchiveFormat.FiddlerSaz)
-                    {
-                        FiddlerSazHandler.CreateSazFile(path, Records(), cancellationToken);
-                        return null;
-                    }
-                    var summary = FiddlerSazHandler.CreateSanitizedSazFile(path, Records(), cancellationToken);
-                    return new CaptureSanitization(summary.Sessions, summary.RedactedValues,
+                    var summary = writer.Complete(cancellationToken).Sanitization;
+                    return summary == null ? null : new CaptureSanitization(summary.Sessions, summary.RedactedValues,
                         summary.OmittedBodies, summary.OmittedHeaders, summary.WorkBudgetOmissions);
                 }, cancellationToken);
             }, cancellationToken);

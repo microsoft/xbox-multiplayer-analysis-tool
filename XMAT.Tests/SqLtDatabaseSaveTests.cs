@@ -2,14 +2,141 @@
 // Licensed under the MIT License.
 // SPDX-License-Identifier: MIT
 
+using System.Buffers.Binary;
 using Microsoft.Data.Sqlite;
 using XMAT.DataAbstractionLayer;
+using XMAT.Operations.Processes;
 using XMAT.SharedInterfaces;
+using XMAT.Tests.Fixtures;
+using XMAT.WebServiceCapture;
 
 namespace XMAT.Tests
 {
     public class SqLtDatabaseSaveTests
     {
+        [Fact]
+        public void SaveToFile_PreservesTheLiteralMarkerAcrossRepeatedSaves()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                Path.Join(
+                    directory.Path,
+                    "marked.xmatcap");
+            using SqLtDatabase database =
+                CreateDatabase(
+                    out IDataTable table);
+            Assert.Same(
+                CaptureTextSource.Literal,
+                database.CaptureTextSource);
+
+            table.AddRow("first");
+            database.SaveToFile(path);
+            AssertLiteralMarker(path);
+            table.AddRow("second");
+            database.SaveToFile(path);
+            AssertLiteralMarker(path);
+        }
+
+        [Fact]
+        public void SaveToFile_RefusesABackupThatLostTheLiteralMarker()
+        {
+            using var directory = new TestDirectory();
+            string path =
+                Path.Join(
+                    directory.Path,
+                    "marker-readback.xmatcap");
+            using SqLtDatabase database =
+                CreateSavedDatabase(
+                    path,
+                    out byte[] original);
+            database.BackupCompleted = connection =>
+            {
+                using var command =
+                    connection.CreateCommand();
+                command.CommandText =
+                    $"PRAGMA user_version={CaptureTextFormat.AmbiguousUserVersion}";
+                command.ExecuteNonQuery();
+            };
+
+            CaptureSaveException exception =
+                Assert.Throws<CaptureSaveException>(
+                    () => database.SaveToFile(path));
+
+            Assert.Equal(
+                CaptureSaveFailure.Failed,
+                exception.Failure);
+            AssertOriginalAndNoTemporaryFile(
+                directory.Path,
+                path,
+                original);
+            AssertLiteralMarker(path);
+        }
+
+        [Fact]
+        public void ReadonlyDatabase_OldShapeHasNotRecordedProcessIdentity()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteXmatcap(
+                directory.Path,
+                "old-shape.xmatcap",
+                new SyntheticXmatcapOptions(RequestsPerDevice: 1));
+
+            using var database = new SqLtReadonlyDatabase(path);
+            IDataRecord record = Assert.Single(
+                database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
+
+            Assert.Equal(ClientProcessInfo.NotRecorded, ClientProcessRecordCodec.Read(record));
+        }
+
+        [Fact]
+        public void ReadonlyDatabase_ProcessShapeRoundTripsTypedIdentity()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteProcessXmatcap(
+                directory.Path,
+                "process-shape.xmatcap",
+                new SyntheticProcessXmatcapOptions(
+                    RequestsPerDevice: 1,
+                    ProcessName: "ExampleGame.exe",
+                    ProcessId: 7788,
+                    ProcessStatus: "local"));
+
+            using var database = new SqLtReadonlyDatabase(path);
+            IDataRecord record = Assert.Single(
+                database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords);
+            ClientProcessInfo process = ClientProcessRecordCodec.Read(record);
+
+            Assert.Equal("ExampleGame.exe", process.Name);
+            Assert.Equal(7788, process.ProcessId);
+            Assert.NotNull(process.StartTimeUtc);
+            Assert.Equal(ClientProcessStatus.Local, process.Status);
+        }
+
+        [Fact]
+        public void ProcessShapeStoresNoNullOrPendingValues()
+        {
+            using var directory = new TestDirectory();
+            string path = SyntheticCaptures.WriteProcessXmatcap(
+                directory.Path,
+                "process-values.xmatcap",
+                new SyntheticProcessXmatcapOptions(RequestsPerDevice: 2));
+
+            using var database = new SqLtReadonlyDatabase(path);
+            foreach (IDataRecord record in database.TableByName(WebServiceCaptureMethod.TableName).Dataset.DataRecords)
+            {
+                var optional = Assert.IsAssignableFrom<IOptionalTypedDataRecord>(record);
+                Assert.True(optional.TryReadString(WebProxyCaptureSchema.ClientProcessName, out string name));
+                Assert.True(optional.TryReadInt64(WebProxyCaptureSchema.ClientProcessId, out long processId));
+                Assert.True(optional.TryReadString(WebProxyCaptureSchema.ClientProcessStartTime, out string startTime));
+                Assert.True(optional.TryReadString(WebProxyCaptureSchema.ClientProcessStatus, out string status));
+                Assert.NotNull(name);
+                Assert.True(processId > 0);
+                Assert.NotNull(startTime);
+                Assert.NotNull(status);
+                Assert.False(string.Equals("pending", status, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
         [Fact]
         public void SaveToFile_ReleasesDestinationAndProducesReadableDatabase()
         {
@@ -701,6 +828,37 @@ namespace XMAT.Tests
             return values.ToArray();
         }
 
+        private static void AssertLiteralMarker(
+            string path)
+        {
+            byte[] header =
+                File.ReadAllBytes(path);
+            Assert.True(header.Length >= 64);
+            Assert.Equal(
+                (uint)CaptureTextFormat.LiteralUserVersion,
+                BinaryPrimitives.ReadUInt32BigEndian(
+                    header.AsSpan(
+                        60,
+                        4)));
+
+            using var connection =
+                new SqliteConnection(
+                    new SqliteConnectionStringBuilder
+                    {
+                        DataSource = path,
+                        Mode = SqliteOpenMode.ReadOnly,
+                        Pooling = false,
+                    }.ToString());
+            connection.Open();
+            using var command =
+                connection.CreateCommand();
+            command.CommandText =
+                "PRAGMA user_version";
+            Assert.Equal(
+                (long)CaptureTextFormat.LiteralUserVersion,
+                command.ExecuteScalar());
+        }
+
         // The directory holds exactly these files and folders.
         private static void AssertEntries(
             string directory,
@@ -797,13 +955,7 @@ namespace XMAT.Tests
 
             internal string Path { get; }
 
-            public void Dispose()
-            {
-                if (Directory.Exists(Path))
-                {
-                    Directory.Delete(Path, true);
-                }
-            }
+            public void Dispose() => TestFolderCleanup.Delete(Path);
         }
     }
 }

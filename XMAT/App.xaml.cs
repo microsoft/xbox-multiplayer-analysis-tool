@@ -39,6 +39,7 @@ namespace XMAT
                 if (!_agentLaunched)
                     RecoverProxySettings();
                 Runtime.Initialize();
+                SessionEnding += Application_SessionEnding;
                 ThemeManager.ApplyTheme(Runtime.Model.PreferencesModel.Theme);
                 MainWindow = new MainWindow();
                 MainWindow.Show();
@@ -54,6 +55,11 @@ namespace XMAT
                     await Runtime.DisposeAsync();
                 Shutdown(70);
             }
+        }
+
+        private void Application_SessionEnding(object sender, SessionEndingCancelEventArgs e)
+        {
+            Runtime?.Model.BeginShutdown();
         }
 
         private void InitializeExceptionHandlers()
@@ -179,6 +185,7 @@ namespace XMAT
 
         private void Application_Exit(object sender, ExitEventArgs e)
         {
+            Runtime?.Model.BeginShutdown();
             ShutdownExceptionHandlers();
         }
 

@@ -5,12 +5,16 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using XMAT.DataAbstractionLayer;
 
 namespace XMAT.SharedInterfaces
 {
     public sealed record CaptureLoadState(Guid? LoadedSourceId, string Revision);
     public sealed record CaptureLoadReceipt(
-        Guid SourceId, int AddedContexts, int UpdatedContexts, bool Published, bool ViewsNotified);
+        Guid SourceId, int AddedContexts, int UpdatedContexts, bool Published, bool ViewsNotified)
+    {
+        internal CaptureTextSource TextSource { get; init; }
+    }
 
     public interface ICaptureFileLoads : IAsyncDisposable
     {

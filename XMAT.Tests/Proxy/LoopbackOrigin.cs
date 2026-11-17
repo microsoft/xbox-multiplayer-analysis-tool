@@ -56,7 +56,8 @@ namespace XMAT.Tests.Proxy
         public static async Task<LoopbackOrigin> StartAsync(
             Func<HttpContext, Task> respond = null,
             bool useTls = false,
-            IPAddress listenAddress = null)
+            IPAddress listenAddress = null,
+            bool useWebSockets = false)
         {
             IPAddress address = listenAddress ?? IPAddress.Loopback;
             var requests = new ConcurrentQueue<ObservedRequest>();
@@ -71,28 +72,33 @@ namespace XMAT.Tests.Proxy
                             listen.UseHttps(certificate);
                         }
                     }));
-                    web.Configure(app => app.Run(async context =>
+                    web.Configure(app =>
                     {
-                        using var buffer = new MemoryStream();
-                        await context.Request.Body.CopyToAsync(buffer);
-                        requests.Enqueue(new ObservedRequest(
-                            context.Request.Method,
-                            context.Request.Path + context.Request.QueryString,
-                            context.Request.Headers.ToDictionary(
-                                h => h.Key,
-                                h => h.Value.ToString(),
-                                StringComparer.OrdinalIgnoreCase),
-                            buffer.ToArray()));
+                        if (useWebSockets)
+                            app.UseWebSockets();
+                        app.Run(async context =>
+                        {
+                            using var buffer = new MemoryStream();
+                            await context.Request.Body.CopyToAsync(buffer);
+                            requests.Enqueue(new ObservedRequest(
+                                context.Request.Method,
+                                context.Request.Path + context.Request.QueryString,
+                                context.Request.Headers.ToDictionary(
+                                    h => h.Key,
+                                    h => h.Value.ToString(),
+                                    StringComparer.OrdinalIgnoreCase),
+                                buffer.ToArray()));
 
-                        if (respond != null)
-                        {
-                            await respond(context);
-                        }
-                        else
-                        {
-                            await context.Response.WriteAsync("origin-ok");
-                        }
-                    }));
+                            if (respond != null)
+                            {
+                                await respond(context);
+                            }
+                            else
+                            {
+                                await context.Response.WriteAsync("origin-ok");
+                            }
+                        });
+                    });
                 })
                 .Build();
 

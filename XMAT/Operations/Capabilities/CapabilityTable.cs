@@ -35,12 +35,14 @@ namespace XMAT.Operations.Capabilities
         {
             CapabilityStatus.Supported => $"Supported ({capability.Slice})",
             CapabilityStatus.Planned => $"Planned ({capability.Slice}, {capability.Owner})",
+            CapabilityStatus.PolicyException => $"GUI only by policy ({capability.Slice}, {capability.Owner}). {capability.Reason}",
             _ => "GUI only. " + capability.Reason,
         };
 
         private static string CommandLine(Capability capability) => capability.Status switch
         {
-            CapabilityStatus.Supported => "`xmat " + Escape(capability.CliRoute) + "`",
+            CapabilityStatus.Supported =>
+                string.Join("<br>", capability.CliRoutes.Select(route => "`xmat " + Escape(route) + "`")),
             CapabilityStatus.Planned => "(not available yet)",
             _ => "(none)",
         };

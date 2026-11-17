@@ -62,5 +62,46 @@ namespace XMAT.Tests
             string result = UriUtils.GetAbsoluteUri("http", "example.com", "", "/path");
             Assert.StartsWith("http://example.com/path", result);
         }
+
+        [Theory]
+        [InlineData("fe80::1%12", "8080", "/path?q=%25", "http://[fe80::1%12]:8080/path?q=%25")]
+        [InlineData("fe80::1%Ethernet", "", "/path", "http://[fe80::1%Ethernet]/path")]
+        [InlineData("fe80::1%25Ethernet", "", "/path", "http://[fe80::1%25Ethernet]/path")]
+        public void GetAbsoluteUri_KeepsAnIpv6Zone(string host, string port, string path, string expected)
+        {
+            Assert.Equal(expected, UriUtils.GetAbsoluteUri("http", host, port, path));
+        }
+
+        [Fact]
+        public void GetAbsoluteUri_KeepsTheZoneOfAnAbsoluteTarget()
+        {
+            Assert.Equal(
+                "http://[fe80::1%Ethernet]/absolute?q=%25",
+                UriUtils.GetAbsoluteUri("https", "ignored.test", "443",
+                    "http://[fe80::1%Ethernet]/absolute?q=%25"));
+        }
+
+        [Theory]
+        [InlineData("/a%20b")]
+        [InlineData("/caf%C3%A9")]
+        public void GetAbsoluteUri_UsesTheSameDisplayFormWithAZone(string path)
+        {
+            string unscoped = new Uri("http://[fe80::1]" + path).ToString();
+            string scoped = UriUtils.GetAbsoluteUri("http", "fe80::1%12", "", path);
+
+            Assert.Equal(unscoped.Replace("[fe80::1]", "[fe80::1%12]", StringComparison.Ordinal), scoped);
+        }
+
+        [Theory]
+        [InlineData("http://a{b@[fe80::1%12]/a%20b")]
+        [InlineData("http://caf\u00e9@[fe80::1%12]/a%20b")]
+        public void GetAbsoluteUri_KeepsAZoneWhenUserInformationNeedsEscaping(string scopedTarget)
+        {
+            string unscopedTarget = scopedTarget.Replace("[fe80::1%12]", "[fe80::1]", StringComparison.Ordinal);
+            string unscoped = UriUtils.GetAbsoluteUri("http", "ignored.test", "", unscopedTarget);
+            string scoped = UriUtils.GetAbsoluteUri("http", "ignored.test", "", scopedTarget);
+
+            Assert.Equal(unscoped.Replace("[fe80::1]", "[fe80::1%12]", StringComparison.Ordinal), scoped);
+        }
     }
 }

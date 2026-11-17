@@ -18,6 +18,7 @@ using XMAT.NetworkTrace;
 using XMAT.NetworkTrace.Models;
 using XMAT.SharedInterfaces;
 using XMAT.WebServiceCapture;
+using CaptureTextSource = XMAT.DataAbstractionLayer.CaptureTextSource;
 
 namespace XMAT.ApplicationServices
 {
@@ -149,6 +150,7 @@ namespace XMAT.ApplicationServices
                     file.Database = _open(file.Path);
                     return ReadDevices(file.Database, cancellationToken);
                 }, cancellationToken);
+                var textSource = CaptureTextSource.Of(file.Database);
                 var targets = await InvokeAsync(() =>
                 {
                     DemandState(expectedState, cancellationToken);
@@ -167,7 +169,7 @@ namespace XMAT.ApplicationServices
                         var dataset = tableName == null ? null : file.Database.TableByName(tableName).Dataset;
                         if (dataset == null)
                             throw new CaptureFileException(CaptureFileFailure.InvalidCapture);
-                        target.Prepare(dataset, cancellationToken);
+                        target.Prepare(dataset, textSource, cancellationToken);
                     }
                 }, cancellationToken);
                 return await InvokeAsync(async () =>
@@ -212,7 +214,10 @@ namespace XMAT.ApplicationServices
                             notified &= Notify(lease.Dispose);
                     }
                     Prune();
-                    return new CaptureLoadReceipt(sourceId, added.Length, targets.Length - added.Length, true, notified);
+                    return new CaptureLoadReceipt(sourceId, added.Length, targets.Length - added.Length, true, notified)
+                    {
+                        TextSource = textSource
+                    };
                 });
             }
             catch (DataAbstractionLayer.SqLtSchemaException exception)
@@ -223,6 +228,7 @@ namespace XMAT.ApplicationServices
                     DataAbstractionLayer.SqLtSchemaFailure.Sidecar or
                         DataAbstractionLayer.SqLtSchemaFailure.WriteAheadLog => CaptureFileFailure.LiveDatabase,
                     DataAbstractionLayer.SqLtSchemaFailure.UnsupportedLocation => CaptureFileFailure.UnsupportedLocation,
+                    DataAbstractionLayer.SqLtSchemaFailure.UnsupportedVersion => CaptureFileFailure.UnsupportedVersion,
                     _ => CaptureFileFailure.InvalidCapture
                 });
             }
@@ -369,12 +375,12 @@ namespace XMAT.ApplicationServices
             internal ICaptureDeviceContext Context { get; } = context;
             private WebServiceDeviceCaptureController.LoadedCaptures _web;
             private NetworkTracePacketsCollection _packets;
-            internal void Prepare(IDataset dataset, CancellationToken token)
+            internal void Prepare(IDataset dataset, CaptureTextSource textSource, CancellationToken token)
             {
                 switch (Context.CaptureController)
                 {
                     case WebServiceDeviceCaptureController web:
-                        _web = web.PrepareLoadedCaptures(dataset, token);
+                        _web = web.PrepareLoadedCaptures(dataset, textSource, token);
                         break;
                     case NetworkTraceCaptureController trace:
                         _packets = trace.PrepareLoadedCaptures(dataset, token);

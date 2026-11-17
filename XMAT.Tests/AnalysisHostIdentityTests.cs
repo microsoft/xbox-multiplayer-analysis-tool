@@ -154,6 +154,45 @@ namespace XMAT.Tests
             Assert.Null(item.PhysicalHost);
         }
 
+        // A row whose scheme makes no URL, unknown or the method that earlier imports stored as the scheme, keeps its request
+        // path, as a hostless row does, but keeps its host: no scheme is made up for it, and none throws, which a scheme
+        // that no URL can have once did for the whole analysis. A scheme that makes a URL still makes one.
+        [Theory]
+        [InlineData("", "/users/me")]
+        [InlineData("GET", "/users/me")]
+        [InlineData("GET_X", "/users/me")]
+        [InlineData("file", "/users/me")]
+        [InlineData("ws", "/users/me")]
+        [InlineData("http", "http://api.example.com:443/users/me")]
+        [InlineData("https", "https://api.example.com/users/me")]
+        [InlineData("ftp", "ftp://api.example.com:443/users/me")]
+        public void ARowWhoseSchemeMakesNoUrl_KeepsItsPathAndItsHost(string scheme, string expectedUri)
+        {
+            ServiceCallItem item = XboxLiveCaptureAnalyzer.ProxyConnectionModelToServiceCallItem(
+                new CaptureRecord("api.example.com", "api.example.com", "/users/me", scheme));
+
+            Assert.NotNull(item);
+            Assert.Equal(expectedUri, item.Uri);
+            Assert.Equal("api.example.com", item.Host);
+            Assert.Equal("api.example.com", item.PhysicalHost);
+        }
+
+        // A row without a Host header is labeled with its stored host: an IPv6 address whole, where the label was once only
+        // its first group, and other text up to a colon, as before.
+        [Theory]
+        [InlineData("fe80::1%12", "https", "fe80::1%12")]
+        [InlineData("2001:db8::1", "https", "2001:db8::1")]
+        [InlineData("api.example.com", "https", "api.example.com")]
+        [InlineData("api.example.com:443", "", "api.example.com")]
+        public void ARowWithoutAHostHeader_IsLabeledWithItsStoredHost(string structuredHost, string scheme, string label)
+        {
+            ServiceCallItem item = XboxLiveCaptureAnalyzer.ProxyConnectionModelToServiceCallItem(
+                new CaptureRecord(structuredHost, null, "/users/me", scheme));
+
+            Assert.NotNull(item);
+            Assert.Equal(label, item.Host);
+        }
+
         // The shipped rules, including the call-frequency rule that applies to every endpoint, analyze hostless rows.
         [Fact]
         public void HostlessCapturedRecords_AreAnalyzedWithTheShippedRules()
@@ -322,7 +361,8 @@ namespace XMAT.Tests
         private sealed class CaptureRecord(
             string structuredHost,
             string hostHeader,
-            string requestPath = "https://api.example.com/users/me") : IDataRecord
+            string requestPath = "https://api.example.com/users/me",
+            string scheme = "https") : IDataRecord
         {
             public int RowId => 1;
 
@@ -332,7 +372,7 @@ namespace XMAT.Tests
             {
                 WebServiceCaptureMethod.FieldKey_RequestTimestamp => Start.ToString("o"),
                 WebServiceCaptureMethod.FieldKey_ResponseTimestamp => Start.AddMilliseconds(25).ToString("o"),
-                WebServiceCaptureMethod.FieldKey_RequestScheme => "https",
+                WebServiceCaptureMethod.FieldKey_RequestScheme => scheme,
                 WebServiceCaptureMethod.FieldKey_RequestHost => structuredHost,
                 WebServiceCaptureMethod.FieldKey_RequestPort => "443",
                 WebServiceCaptureMethod.FieldKey_RequestMethod => "GET",

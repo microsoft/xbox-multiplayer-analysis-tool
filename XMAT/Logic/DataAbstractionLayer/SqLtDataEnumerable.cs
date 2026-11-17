@@ -10,8 +10,12 @@ using XMAT.SharedInterfaces;
 
 namespace XMAT.DataAbstractionLayer
 {
-    internal partial class SqLtDataEnumerable : IEnumerable<IDataRecord>
+    internal partial class SqLtDataEnumerable :
+        IEnumerable<IDataRecord>,
+        ICaptureTextSourceProvider
     {
+        public CaptureTextSource CaptureTextSource { get; }
+
         public IEnumerator<IDataRecord> GetEnumerator()
         {
             return this;
@@ -24,20 +28,26 @@ namespace XMAT.DataAbstractionLayer
 
         internal SqLtDataEnumerable(
             IDictionary<string, IFieldDefinition> fieldDefs,
+            IReadOnlySet<string> untypedColumns,
             SqliteDataReader dataReader,
             Predicate<IDataRecord> predicate,
+            CaptureTextSource captureTextSource,
             Action<SqLtDataEnumerable> disposed,
             object gate = null)
         {
+            ArgumentNullException.ThrowIfNull(captureTextSource);
             _fieldDefs = fieldDefs;
+            _untypedColumns = untypedColumns;
             _dataReader = dataReader;
             _predicate = predicate;
+            CaptureTextSource = captureTextSource;
             _onDisposed = disposed;
             _cachedDataRecord = null;
             _gate = gate ?? new object();
         }
 
         private IDictionary<string, IFieldDefinition> _fieldDefs;
+        private readonly IReadOnlySet<string> _untypedColumns;
         private SqliteDataReader _dataReader;
         private Predicate<IDataRecord> _predicate;
         private Action<SqLtDataEnumerable> _onDisposed;

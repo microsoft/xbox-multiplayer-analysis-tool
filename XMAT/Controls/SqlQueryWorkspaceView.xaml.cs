@@ -24,12 +24,10 @@ namespace XMAT
         public SqlQueryWorkspaceView()
         {
             InitializeComponent();
-            CommandBindings.Add(new CommandBinding(AppCommands.AnalyzeCaptures, IgnoreCaptureCommand, DenyCaptureCommand));
-            CommandBindings.Add(new CommandBinding(AppCommands.ClearAllCaptures, IgnoreCaptureCommand, DenyCaptureCommand));
         }
 
-        private static void IgnoreCaptureCommand(object sender, ExecutedRoutedEventArgs e) => e.Handled = true;
-        private static void DenyCaptureCommand(object sender, CanExecuteRoutedEventArgs e)
+        private void IgnoreCaptureCommand(object sender, ExecutedRoutedEventArgs e) => e.Handled = true;
+        private void DenyCaptureCommand(object sender, CanExecuteRoutedEventArgs e)
         {
             e.CanExecute = false;
             e.Handled = true;

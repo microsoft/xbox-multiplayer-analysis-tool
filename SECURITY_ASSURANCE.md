@@ -173,7 +173,7 @@ are countered.
 
 | Weakness | Mitigation |
 |---|---|
-| **SQL Injection** | The SQLite data abstraction layer (`SqLtDataset`, `SqLtDataTable`) uses `FieldDefinition.EscapeText()` to escape quotes in all field values before query construction. Table and column names are controlled by application code, not user input. |
+| **SQL Injection** | The SQLite data abstraction layer (`SqLtDataset`, `SqLtDataTable`) binds all data values as SQLite parameters. Table and column names come from application code, not user input. |
 | **Cross-Site Scripting** | Not applicable — XMAT is a desktop WPF application, not a web application. WebView2 is used only for rendering static local report HTML. |
 | **Command Injection** | The application does not shell out to external processes based on user input. Device communication uses structured API calls via GDK tooling, not command-line invocation. |
 

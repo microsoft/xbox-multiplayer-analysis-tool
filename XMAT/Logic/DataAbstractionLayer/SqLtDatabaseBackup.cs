@@ -97,6 +97,12 @@ namespace XMAT.DataAbstractionLayer
                     destination.Open();
                     hooks?.BackupFailureInjection?.Invoke(temporary);
                     Copy(source, destination, maximumBytes, cancellationToken);
+                    if (hooks != null)
+                    {
+                        hooks.BackupCompleted?.Invoke(destination);
+                        if (SqLtDatabase.ReadUserVersion(destination) != CaptureTextFormat.LiteralUserVersion)
+                            throw new InvalidOperationException("The saved capture database did not keep its literal text marker.");
+                    }
                 }
                 cancellationToken.ThrowIfCancellationRequested();
                 using (var durable = new FileStream(temporary, FileMode.Open, FileAccess.ReadWrite, FileShare.None))

@@ -28,7 +28,7 @@ namespace XMAT.Tests
                 yield return ["one", "after"];
             }
             var publishing = Task.Run(() => ((IImportedCaptureTable)captured).ReplaceImportedRows(
-                new FieldValue<string>("Device", "one"), Rows()));
+                CaptureTextSource.Literal, new FieldValue<string>("Device", "one"), Rows()));
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var writing = Task.Run(() => other.AddRow("new"));
             var reading = Task.Run(() => other.Dataset.DataRecords.ToArray());

@@ -25,9 +25,19 @@ namespace NetworkTraceCaptureControls
     /// </summary>
     public partial class NetworkTraceCaptureView : UserControl
     {
+        private readonly CaptureAppModel _appModel;
+        private readonly Action<Exception> _reportError;
+
         // Potential TODO: Move this to the CaptureController to save state between tabs?
         public NetworkTraceCaptureView()
+            : this(CaptureAppModel.AppModel)
         {
+        }
+
+        internal NetworkTraceCaptureView(CaptureAppModel appModel, Action<Exception> reportError = null)
+        {
+            _appModel = appModel ?? throw new ArgumentNullException(nameof(appModel));
+            _reportError = reportError;
             InitializeComponent();
 
             AnalyzeCaptureButton.Content = XMAT.Localization.GetLocalizedString("NETCAP_ANALYZE");
@@ -72,15 +82,16 @@ namespace NetworkTraceCaptureControls
 
         private async void StartStopCapture_Executed(object sender, ExecutedRoutedEventArgs e)
         {
-            if (this.DataContext is not ICaptureDeviceContext captureDeviceContext ||
-                captureDeviceContext.CaptureController is not NetworkTraceCaptureController ntdcc)
+            if (DataContext is not ICaptureDeviceContext captureDeviceContext ||
+                captureDeviceContext.CaptureController is not NetworkTraceCaptureController ntdcc ||
+                !CanStartStopCapture(captureDeviceContext, ntdcc))
             {
                 return;
             }
 
             try
             {
-                var result = await CaptureAppModel.AppModel.CaptureOperations.SetRunningAsync(
+                var result = await _appModel.CaptureOperations.SetRunningAsync(
                     captureDeviceContext, !ntdcc.IsCapturing);
                 if (result.Failure == CaptureOperationFailure.ElevationRequired)
                 {
@@ -98,8 +109,15 @@ namespace NetworkTraceCaptureControls
             }
             catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
             {
-                MessageBox.Show(ntdcc.RecoveryRequired ? ntdcc.RecoveryStatusText : ex.Message,
-                    XMAT.Localization.GetLocalizedString("NETCAP_ERROR"));
+                if (_reportError != null)
+                {
+                    _reportError(ex);
+                }
+                else
+                {
+                    MessageBox.Show(ntdcc.RecoveryRequired ? ntdcc.RecoveryStatusText : ex.Message,
+                        XMAT.Localization.GetLocalizedString("NETCAP_ERROR"));
+                }
             }
         }
 
@@ -117,7 +135,7 @@ namespace NetworkTraceCaptureControls
                 IsReadOnly: false,
                 CaptureController: NetworkTraceCaptureController { RecoveryRequired: true, IsTransitioning: false }
             } &&
-                CaptureAppModel.AppModel.CanModifyCaptureData;
+                _appModel.CanModifyCaptureData;
 
         private async void AcknowledgeRecovery_Executed(object sender, ExecutedRoutedEventArgs e)
         {
@@ -129,7 +147,7 @@ namespace NetworkTraceCaptureControls
                     MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
                 return;
             try
-            { await CaptureAppModel.AppModel.CaptureRecoveryOperations.AcknowledgeExternalTraceRecoveryAsync(target); }
+            { await _appModel.CaptureRecoveryOperations.AcknowledgeExternalTraceRecoveryAsync(target); }
             catch (Exception exception) when (!ExceptionUtilities.IsFatal(exception))
             {
                 MessageBox.Show(XMAT.Localization.GetLocalizedString("NETCAP_RECOVERY_ACK_FAILED"),
@@ -137,31 +155,17 @@ namespace NetworkTraceCaptureControls
             }
         }
 
-        private void StartStopCapture_CanExecute(object sender, CanExecuteRoutedEventArgs e)
-        {
-            var captureDeviceContext = this.DataContext as ICaptureDeviceContext;
-            if (captureDeviceContext != null)
-            {
-                var ntdcc = captureDeviceContext.CaptureController as NetworkTraceCaptureController;
+        private void StartStopCapture_CanExecute(object sender, CanExecuteRoutedEventArgs e) =>
+            e.CanExecute = DataContext is ICaptureDeviceContext target &&
+                target.CaptureController is NetworkTraceCaptureController controller &&
+                CanStartStopCapture(target, controller);
 
-                if (captureDeviceContext.IsReadOnly || ntdcc.IsTransitioning)
-                {
-                    e.CanExecute = false;
-                }
-                else if (ntdcc.IsCapturing)
-                {
-                    e.CanExecute =
-                        CaptureAppModel.AppModel.CanStopCaptures &&
-                        ntdcc.DeviceStatus is DeviceStatusEnum.Tracing or DeviceStatusEnum.RecoveryRequired;
-                }
-                else
-                {
-                    e.CanExecute =
-                        CaptureAppModel.AppModel.CanModifyCaptureData &&
-                        ntdcc.DeviceStatus == DeviceStatusEnum.Idle;
-                }
-            }
-        }
+        private bool CanStartStopCapture(ICaptureDeviceContext target, NetworkTraceCaptureController controller) =>
+            !target.IsReadOnly && !controller.IsTransitioning &&
+            (controller.IsCapturing
+                ? _appModel.CanStopCaptures &&
+                    controller.DeviceStatus is DeviceStatusEnum.Tracing or DeviceStatusEnum.RecoveryRequired
+                : _appModel.CanModifyCaptureData && controller.DeviceStatus == DeviceStatusEnum.Idle);
 
         public ObservableCollection<NetworkTracePacketDataModel> NetworkTracePackets { get; set; }
 
@@ -181,7 +185,12 @@ namespace NetworkTraceCaptureControls
 
         private void Ntdcc_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
-            if (e.PropertyName == nameof(NetworkTraceCaptureController.NetworkTracePackets))
+            if (e.PropertyName is nameof(NetworkTraceCaptureController.DeviceStatus)
+                or nameof(NetworkTraceCaptureController.IsTransitioning))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
+            else if (e.PropertyName == nameof(NetworkTraceCaptureController.NetworkTracePackets))
             {
                 UpdateFilteredData();
             }

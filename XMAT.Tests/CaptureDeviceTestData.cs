@@ -209,6 +209,8 @@ namespace XMAT.Tests
             public bool IsProxyEnabled { get; private set; }
             public BypassListModel BypassList { get; set; }
             public Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> SslConnectionRequestPolicyAsync { get; set; }
+            public Task RecheckSslConnectionsAsync(Func<SslConnectionRequestEventArgs, CancellationToken, Task<bool>> policy,
+                Action<Action> commit, CancellationToken cancellationToken) => Task.CompletedTask;
             public Func<HttpRequestEventArgs, CancellationToken, Task<bool>> WebRequestPolicyAsync { get; set; }
             public Func<HttpResponseEventArgs, CancellationToken, Task<bool>> WebResponsePolicyAsync { get; set; }
 

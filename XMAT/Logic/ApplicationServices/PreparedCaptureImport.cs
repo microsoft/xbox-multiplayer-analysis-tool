@@ -8,6 +8,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using XMAT.DataAbstractionLayer;
 using XMAT.NetworkTrace;
 using XMAT.NetworkTrace.Models;
 using XMAT.NetworkTrace.NTDE;
@@ -67,7 +68,8 @@ namespace XMAT.ApplicationServices
             else
             {
                 var ids = ((IImportedCaptureTable)table).ReplaceImportedRows(
-                    new FieldValue<string>(NetworkTraceCaptureMethod.FieldKey_DeviceName, name), Rows(name, maximumBytes, token), token);
+                    CaptureTextSource.Literal, new FieldValue<string>(NetworkTraceCaptureMethod.FieldKey_DeviceName, name),
+                    Rows(name, maximumBytes, token), token);
                 for (var index = 0; index < _packets.Count; index++)
                     _packets[index].RecordRowId = ids[index];
             }
@@ -80,7 +82,7 @@ namespace XMAT.ApplicationServices
             {
                 token.ThrowIfCancellationRequested();
                 var size = 64L + row.Sum(value => value is string text
-                    ? Encoding.UTF8.GetByteCount(text) + (long)text.Count(character => character == '"') + 16 : 24);
+                    ? Encoding.UTF8.GetByteCount(text) + 16L : 24);
                 if (size > remaining)
                     throw new QueryException(QueryError.ResultLimit, "The imported trace rows exceed the approved data limit.");
                 remaining -= size;

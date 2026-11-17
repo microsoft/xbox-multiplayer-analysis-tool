@@ -57,6 +57,48 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task CanCloseAsync_BlocksNewOperationsWhileCheckingDevices_AndReopensWhenCloseIsDeclined()
+        {
+            var closeResult = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var controller = new TestCaptureController(() => closeResult.Task);
+            var model = new CaptureAppModel();
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(controller));
+
+            Task<bool> closeTask = model.CanCloseAsync();
+
+            Assert.True(model.IsClosing);
+            Assert.False(model.CanModifyCaptureData);
+            Assert.False(model.TryBeginCaptureDataOperation(out IDisposable operation));
+            Assert.Null(operation);
+            using var cancellation = new CancellationTokenSource();
+            Assert.False(model.TryBeginCancellableCaptureDataOperation(cancellation, out operation));
+            Assert.Null(operation);
+
+            closeResult.SetResult(false);
+
+            Assert.False(await closeTask);
+            Assert.False(model.IsClosing);
+            Assert.True(model.TryBeginCaptureDataOperation(out operation));
+            operation.Dispose();
+        }
+
+        [Fact]
+        public async Task CancelClosePreparation_ReopensAdmissionAfterSuccessfulCheck()
+        {
+            var model = new CaptureAppModel();
+            model.CaptureDeviceContexts.Add(new TestCaptureDeviceContext(new TestCaptureController(() => Task.FromResult(true))));
+
+            Assert.True(await model.CanCloseAsync());
+            Assert.True(model.IsClosing);
+
+            model.CancelClosePreparation();
+
+            Assert.False(model.IsClosing);
+            Assert.True(model.TryBeginCaptureDataOperation(out IDisposable operation));
+            operation.Dispose();
+        }
+
+        [Fact]
         public async Task CanCloseAsync_SkipsReadOnlyCaptures()
         {
             var imported = new TestCaptureController(() => throw new InvalidOperationException("Read-only capture checked."));
@@ -381,7 +423,13 @@ namespace XMAT.Tests
             var model = new CaptureAppModel();
             try
             {
-                model.LoadDataCaptures(path);
+                CaptureLoadResult load =
+                    model.LoadDataCaptures(path);
+                Assert.True(
+                    load.AddedOrReplaced);
+                Assert.Equal(
+                    CaptureTextSemantics.Literal,
+                    load.Source.Semantics);
                 var database =
                     Assert.IsType<
                         SqLtReadonlyDatabase>(
@@ -443,6 +491,42 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
+                TestFolderCleanup.Delete(directory);
+            }
+        }
+
+        [Fact]
+        public void LoadDataCaptures_NoRowsReturnsTheSourceWithoutAddingATab()
+        {
+            string directory =
+                Path.Combine(
+                    AppContext.BaseDirectory,
+                    "CaptureAppModelFixtures",
+                    Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string path =
+                HostileSqliteSchemas.CreateOrdinaryCapture(
+                    directory,
+                    "empty.xmatcap");
+            var model =
+                new CaptureAppModel();
+            try
+            {
+                CaptureLoadResult result =
+                    model.LoadDataCaptures(path);
+
+                Assert.False(
+                    result.AddedOrReplaced);
+                Assert.Equal(
+                    CaptureTextSemantics.AmbiguousUnmarked,
+                    result.Source.Semantics);
+                Assert.Empty(
+                    model.CaptureDeviceContexts);
+                Assert.Null(
+                    model.LoadedDatabase);
+            }
+            finally
+            {
                 Directory.Delete(
                     directory,
                     true);
@@ -495,9 +579,7 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -568,9 +650,7 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -635,9 +715,7 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -719,9 +797,39 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
+            }
+        }
+
+        [Fact]
+        public void SaveDataCaptures_DoesNotOverlapAnotherCaptureDataOperation()
+        {
+            string directory = Path.Join(
+                AppContext.BaseDirectory,
+                "CaptureAppModelFixtures",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string destination = Path.Join(directory, "saved.xmatcap");
+            using var active = new SqLtDatabase();
+            active.Initialize();
+            active.CreateTable("LiveData", new Field<string>("Value")).AddRow("live");
+            var model =
+                new CaptureAppModel
+                {
+                    ActiveDatabase = active,
+                };
+            try
+            {
+                Assert.True(model.TryBeginCaptureDataOperation(out IDisposable lease));
+                using (lease)
+                {
+                    Assert.Throws<InvalidOperationException>(() => model.SaveDataCaptures(destination));
+                }
+                Assert.False(File.Exists(destination));
+            }
+            finally
+            {
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -818,13 +926,19 @@ namespace XMAT.Tests
         public async Task ImportDataCapturesAsync_FailedReimportPreservesExistingTabSelectionAndRows()
         {
             string path = CreateRepositoryLocalSazPath();
+            string alias = Path.Join(
+                Path.GetDirectoryName(path),
+                Path.GetFileNameWithoutExtension(path) + "-alias.saz");
             string deviceName = $"Fiddler - {Path.GetFileName(path)}";
             using var database = CreateCaptureDatabase(out var table);
             AddCaptureRow(table, "Unrelated capture", "unrelated.example", "/keep", "unrelated");
+            ICaptureDeviceContext importedContext = null;
+            CaptureAppModel model = null;
             try
             {
                 WriteSaz(path, "original.example", "/original", "original body");
-                var model = new CaptureAppModel();
+                CreateHardLink(alias, path);
+                model = new CaptureAppModel();
                 var originalContext = new TestCaptureDeviceContext(false);
                 model.CaptureDeviceContexts.Add(originalContext);
                 model.SelectedDeviceContext = originalContext;
@@ -835,7 +949,7 @@ namespace XMAT.Tests
                     path,
                     importer);
 
-                var importedContext = model.SelectedDeviceContext;
+                importedContext = model.SelectedDeviceContext;
                 var importedController =
                     (WebServiceDeviceCaptureController)importedContext.CaptureController;
                 var selectedConnection =
@@ -852,6 +966,7 @@ namespace XMAT.Tests
                     Assert.Single(RowsForDevice(table, deviceName)).RowId;
 
                 model.SelectedDeviceContext = originalContext;
+                TestFolderCleanup.DeleteFile(path);
                 await File.WriteAllTextAsync(path, "not a ZIP archive");
 
                 await Assert.ThrowsAsync<InvalidDataException>(
@@ -882,10 +997,20 @@ namespace XMAT.Tests
                     "unrelated.example",
                     "/keep",
                     "unrelated");
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(path));
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(alias));
+                Assert.Equal(CaptureSaveFailure.Refused, SaveDestinationFailure(path));
             }
             finally
             {
-                File.Delete(path);
+                if (model != null &&
+                    importedContext != null &&
+                    model.CaptureDeviceContexts.Contains(importedContext))
+                {
+                    await model.RemoveDeviceContextAsync(importedContext);
+                }
+                TestFolderCleanup.DeleteFile(path);
+                TestFolderCleanup.DeleteFile(alias);
             }
         }
 
@@ -893,14 +1018,18 @@ namespace XMAT.Tests
         public async Task ImportDataCapturesAsync_SuccessfulReimportReplacesRowsWithoutAppending()
         {
             string path = CreateRepositoryLocalSazPath();
+            string oldAlias = Path.Join(
+                Path.GetDirectoryName(path),
+                Path.GetFileNameWithoutExtension(path) + "-old.saz");
             string deviceName = $"Fiddler - {Path.GetFileName(path)}";
             using var database = CreateCaptureDatabase(out var table);
             AddCaptureRow(table, "Unrelated capture", "unrelated.example", "/keep", "unrelated");
+            var model = new CaptureAppModel();
             try
             {
-                var model = new CaptureAppModel();
                 var importer = CreateFiddlerImporter(table);
                 WriteSaz(path, "original.example", "/original", "original body");
+                CreateHardLink(oldAlias, path);
 
                 await model.ImportDataCapturesAsync(
                     ImportType.Fiddler,
@@ -915,6 +1044,7 @@ namespace XMAT.Tests
                 var changedProperties = new List<string>();
                 controller.PropertyChanged += (_, args) =>
                     changedProperties.Add(args.PropertyName);
+                TestFolderCleanup.DeleteFile(path);
                 WriteSaz(path, "replacement.example", "/replacement", "replacement body");
 
                 await model.ImportDataCapturesAsync(
@@ -950,10 +1080,59 @@ namespace XMAT.Tests
                     "/keep",
                     "unrelated");
                 Assert.Equal(2, table.Dataset.DataRecords.Count());
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(path));
+                Assert.False(LoadedCaptureDatabaseRegistry.IsLoadedPath(oldAlias));
             }
             finally
             {
-                File.Delete(path);
+                await RemoveReadOnlyContextsAsync(model);
+                TestFolderCleanup.DeleteFile(path);
+                TestFolderCleanup.DeleteFile(oldAlias);
+            }
+        }
+
+        [Fact]
+        public async Task ImportDataCapturesAsync_SharedImportedSourceProtectedUntilLastOwnerReleasesIt()
+        {
+            string path = CreateRepositoryLocalSazPath();
+            string alias = Path.Join(
+                Path.GetDirectoryName(path),
+                Path.GetFileNameWithoutExtension(path) + "-shared.saz");
+            using var database = CreateCaptureDatabase(out var table);
+            var model = new CaptureAppModel();
+            try
+            {
+                WriteSaz(path, "shared.example", "/shared", "shared body");
+                CreateHardLink(alias, path);
+                var importer = CreateFiddlerImporter(table);
+
+                await model.ImportDataCapturesAsync(ImportType.Fiddler, path, importer);
+                ICaptureDeviceContext first = model.SelectedDeviceContext;
+                await model.ImportDataCapturesAsync(ImportType.Fiddler, alias, importer);
+                ICaptureDeviceContext second = model.SelectedDeviceContext;
+
+                Assert.NotSame(first, second);
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(path));
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(alias));
+                Assert.Equal(CaptureSaveFailure.Refused, SaveDestinationFailure(alias));
+
+                await model.RemoveDeviceContextAsync(first);
+
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(path));
+                Assert.True(LoadedCaptureDatabaseRegistry.IsLoadedPath(alias));
+                Assert.Equal(CaptureSaveFailure.Refused, SaveDestinationFailure(alias));
+
+                await model.RemoveDeviceContextAsync(second);
+
+                Assert.False(LoadedCaptureDatabaseRegistry.IsLoadedPath(path));
+                Assert.False(LoadedCaptureDatabaseRegistry.IsLoadedPath(alias));
+                LoadedCaptureDatabaseRegistry.AcquireSaveDestination(alias).Dispose();
+            }
+            finally
+            {
+                await RemoveReadOnlyContextsAsync(model);
+                TestFolderCleanup.DeleteFile(path);
+                TestFolderCleanup.DeleteFile(alias);
             }
         }
 
@@ -1024,7 +1203,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1093,7 +1272,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1148,7 +1327,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1216,7 +1395,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1282,7 +1461,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1357,7 +1536,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1494,9 +1673,7 @@ namespace XMAT.Tests
                     await model.RemoveDeviceContextAsync(
                         model.CaptureDeviceContexts[^1]);
                 }
-                Directory.Delete(
-                    directory,
-                    true);
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -1505,6 +1682,8 @@ namespace XMAT.Tests
         [InlineData("limit")]
         [InlineData("sidecar")]
         [InlineData("location")]
+        [InlineData("future")]
+        [InlineData("utf16-future")]
         public async Task LoadDataCaptures_OpenRefusalPreservesPriorStateAndClosesNewDatabase(
             string kind)
         {
@@ -1556,6 +1735,23 @@ namespace XMAT.Tests
                             .MaxSchemaRecordBytes *
                         2) +
                     ")");
+            }
+            else if (kind == "future")
+            {
+                HostileSqliteSchemas.SetUserVersion(
+                    hostilePath,
+                    2);
+            }
+            else if (kind == "utf16-future")
+            {
+                File.Delete(
+                    hostilePath);
+                hostilePath =
+                    HostileSqliteSchemas.CreateUtf16Database(
+                        directory,
+                        "hostile.xmatcap",
+                        2,
+                        "CREATE TABLE Other(id INTEGER PRIMARY KEY,Value TEXT)");
             }
 
             byte[] hostileHash =
@@ -1614,6 +1810,10 @@ namespace XMAT.Tests
                         "location" => (
                             SqLtSchemaFailure.UnsupportedLocation,
                             "CAPTURE_OPEN_LOCATION"),
+                        "future" or
+                        "utf16-future" => (
+                            SqLtSchemaFailure.UnsupportedVersion,
+                            "CAPTURE_OPEN_FUTURE_VERSION"),
                         _ => (
                             SqLtSchemaFailure.Unsupported,
                             "CAPTURE_OPEN_SCHEMA_ERROR"),
@@ -1663,6 +1863,14 @@ namespace XMAT.Tests
                 string message =
                     Localization.GetLocalizedString(
                         expectedKey);
+                if (kind is
+                    "future" or
+                    "utf16-future")
+                {
+                    Assert.Equal(
+                        "The SQLite file has an unsupported user_version value. XMAT accepts only 0 or 1.",
+                        message);
+                }
                 Assert.DoesNotContain(
                     "NO_IMPL_",
                     message,
@@ -1702,8 +1910,10 @@ namespace XMAT.Tests
                     Assert.True(
                         exclusive.Length > 0);
                 }
-                DeleteDirectoryWithRetry(
-                    directory);
+
+                // The exclusive open above already proves that XMAT released its handles; the cleanup tolerates only
+                // a scanner that touches the new fixture for a moment.
+                TestFolderCleanup.Delete(directory);
             }
         }
 
@@ -1745,7 +1955,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1795,7 +2005,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -1836,6 +2046,7 @@ namespace XMAT.Tests
             }
 
             var rowIds = ((IImportedCaptureTable)table).ReplaceImportedRows(
+                CaptureTextSource.Literal,
                 new FieldValue<string>(
                     WebServiceCaptureMethod.FieldKey_DeviceName,
                     deviceName),
@@ -1849,7 +2060,7 @@ namespace XMAT.Tests
                 rowIds.ToArray(),
                 records.Select(record => (long)record.RowId).ToArray());
             Assert.Equal(
-                "first\"\"quoted.example",
+                "first\"quoted.example",
                 records[0].Str(WebServiceCaptureMethod.FieldKey_RequestHost));
             Assert.Equal(
                 "/first's",
@@ -1902,6 +2113,7 @@ namespace XMAT.Tests
 
             var actual = Assert.Throws<InvalidOperationException>(() =>
                 ((IImportedCaptureTable)table).ReplaceImportedRows(
+                    CaptureTextSource.Literal,
                     new FieldValue<string>(
                         WebServiceCaptureMethod.FieldKey_DeviceName,
                         deviceName),
@@ -1921,6 +2133,20 @@ namespace XMAT.Tests
                     context,
                     table);
         }
+
+        private static async Task RemoveReadOnlyContextsAsync(CaptureAppModel model)
+        {
+            foreach (ICaptureDeviceContext context in model.CaptureDeviceContexts
+                .Where(context => context.IsReadOnly)
+                .ToArray())
+            {
+                await model.RemoveDeviceContextAsync(context);
+            }
+        }
+
+        private static CaptureSaveFailure SaveDestinationFailure(string path) =>
+            Assert.Throws<CaptureSaveException>(
+                () => LoadedCaptureDatabaseRegistry.AcquireSaveDestination(path).Dispose()).Failure;
 
         [Fact]
         public async Task ImportDataCapturesAsync_PersistsInBackgroundAndPublishesFiltersBeforeConnections()
@@ -1959,7 +2185,7 @@ namespace XMAT.Tests
                     Assert.Same(context, model.SelectedDeviceContext);
                     Assert.Equal(
                         new[] { nameof(controller.HostFilterList), nameof(controller.StatusFilterList),
-                            nameof(controller.MethodFilterList), nameof(controller.SelectedConnectionModel),
+                            nameof(controller.MethodFilterList), nameof(controller.ProcessFilter), nameof(controller.SelectedConnectionModel),
                             nameof(controller.ProxyConnections) },
                         properties);
                     Assert.Contains("Injected view notification failure", Assert.Single(errors));
@@ -1968,7 +2194,7 @@ namespace XMAT.Tests
                 }
                 finally
                 {
-                    File.Delete(path);
+                    TestFolderCleanup.DeleteFile(path);
                 }
             });
         }
@@ -1998,7 +2224,7 @@ namespace XMAT.Tests
             }
             finally
             {
-                File.Delete(path);
+                TestFolderCleanup.DeleteFile(path);
             }
         }
 
@@ -2050,23 +2276,7 @@ namespace XMAT.Tests
             table = new ObservedImportDataTable(
                 new SqLtDataTable(database,
                     WebServiceCaptureMethod.TableName,
-                    new IField[] {
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_DeviceName),
-                    new Field<long>(WebServiceCaptureMethod.FieldKey_RequestNumber),
-                    new Field<long>(WebServiceCaptureMethod.FieldKey_ConnectionId),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestTimestamp),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseTimestamp),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestScheme),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestHost),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPort),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestMethod),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestPath),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestStatus),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestLineAndHeaders),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_RequestBody),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ResponseBody),
-                    new Field<string>(WebServiceCaptureMethod.FieldKey_ClientIP) }));
+                    WebProxyCaptureSchema.CreateFields()));
             return database;
         }
 
@@ -2108,32 +2318,7 @@ namespace XMAT.Tests
             return Path.Combine(directory, $"{Guid.NewGuid():N}.saz");
         }
 
-        private static void DeleteDirectoryWithRetry(
-            string path)
-        {
-            const int Attempts = 6;
-            for (var attempt = 1;
-                attempt <= Attempts;
-                attempt++)
-            {
-                try
-                {
-                    Directory.Delete(
-                        path,
-                        true);
-                    return;
-                }
-                catch (IOException) when (
-                    attempt < Attempts)
-                {
-                    // The exclusive-open assertion already proves XMAT released its handles; allow a bounded delay
-                    // only for transient external scanners touching a newly created fixture.
-                    Thread.Sleep(25);
-                }
-            }
-        }
-
-        private static void CreateHardLink(
+        internal static void CreateHardLink(
             string linkPath,
             string existingPath)
         {
@@ -2255,7 +2440,11 @@ namespace XMAT.Tests
                 string.Empty,
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n",
                 Convert.ToBase64String(Encoding.UTF8.GetBytes(responseBody)),
-                "10.0.0.1"
+                "10.0.0.1",
+                string.Empty,
+                0L,
+                string.Empty,
+                string.Empty
             };
         }
 
@@ -2455,10 +2644,17 @@ namespace XMAT.Tests
             }
 
             public IReadOnlyList<long> ReplaceImportedRows(
-                IFieldValue capture, IEnumerable<object[]> rows, CancellationToken cancellationToken = default)
+                CaptureTextSource source,
+                IFieldValue capture,
+                IEnumerable<object[]> rows,
+                CancellationToken cancellationToken = default)
             {
                 ImportThreadId = Environment.CurrentManagedThreadId;
-                return ((IImportedCaptureTable)_inner).ReplaceImportedRows(capture, rows, cancellationToken);
+                return ((IImportedCaptureTable)_inner).ReplaceImportedRows(
+                    source,
+                    capture,
+                    rows,
+                    cancellationToken);
             }
 
             public IDataset Subset(params string[] fieldNames)

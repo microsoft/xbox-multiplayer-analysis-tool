@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.WebSockets;
@@ -21,6 +23,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using XMAT.WebServiceCapture.Models;
 
 namespace XMAT.WebServiceCapture.Proxy
 {
@@ -33,11 +36,22 @@ namespace XMAT.WebServiceCapture.Proxy
         internal static async Task<ClientRequest> CreateAsync(
             HttpContext context,
             int requestNumber,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ProxyRequestReadPolicy policy = null,
+            ProxyRequestBufferBudget bufferBudget = null)
         {
             ArgumentNullException.ThrowIfNull(context);
+            policy ??= ProxyRequestReadPolicy.Default;
+            bufferBudget ??= ProxyRequestBufferBudget.Shared;
+            policy.Validate();
 
             var request = context.Request;
+            if (request.ContentLength > policy.MaxBodyBytes)
+            {
+                throw new ProxyRequestBodyReadException(
+                    ProxyRequestBodyReadFailure.BodyTooLarge);
+            }
+
             var result = new ClientRequest
             {
                 RequestNumber = requestNumber,
@@ -67,13 +81,93 @@ namespace XMAT.WebServiceCapture.Proxy
                 }
             }
 
-            // Scripts operate on complete bodies, so retain the existing
-            // buffering behavior for each independent HTTP/2 stream.
-            using var body = new MemoryStream();
-            await request.Body.CopyToAsync(body, cancellationToken).ConfigureAwait(false);
-            result.BodyBytes = body.ToArray();
+            result.BodyBytes = await ReadBodyAsync(
+                request.Body,
+                result,
+                policy,
+                bufferBudget,
+                cancellationToken).ConfigureAwait(false);
 
             return result;
+        }
+
+        private static async Task<byte[]> ReadBodyAsync(
+            Stream source,
+            ClientRequest request,
+            ProxyRequestReadPolicy policy,
+            ProxyRequestBufferBudget bufferBudget,
+            CancellationToken cancellationToken)
+        {
+            const int BufferSize = 16 * 1024;
+            using ProxyRequestBufferLease lease = bufferBudget.CreateLease();
+            using var totalDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            totalDeadline.CancelAfter(policy.BodyTotalTimeout);
+            using var body = new MemoryStream();
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+            try
+            {
+                long retainedHeaders = InitialProxyRequestReader.EstimateRetainedRequestBytes(request);
+                if (!lease.TryEnsure(checked(retainedHeaders + buffer.Length)))
+                {
+                    throw new ProxyRequestBodyReadException(
+                        ProxyRequestBodyReadFailure.BufferExhausted);
+                }
+
+                while (true)
+                {
+                    using var inactivityDeadline =
+                        CancellationTokenSource.CreateLinkedTokenSource(totalDeadline.Token);
+                    inactivityDeadline.CancelAfter(policy.BodyInactivityTimeout);
+
+                    int read;
+                    try
+                    {
+                        read = await source.ReadAsync(
+                            buffer.AsMemory(0, BufferSize),
+                            inactivityDeadline.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        throw new ProxyRequestBodyReadException(
+                            totalDeadline.IsCancellationRequested
+                                ? ProxyRequestBodyReadFailure.TotalTimeout
+                                : ProxyRequestBodyReadFailure.InactivityTimeout);
+                    }
+
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (totalDeadline.IsCancellationRequested)
+                    {
+                        throw new ProxyRequestBodyReadException(
+                            ProxyRequestBodyReadFailure.TotalTimeout);
+                    }
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    long nextLength = checked(body.Length + read);
+                    if (nextLength > policy.MaxBodyBytes)
+                    {
+                        throw new ProxyRequestBodyReadException(
+                            ProxyRequestBodyReadFailure.BodyTooLarge);
+                    }
+
+                    long reservation = checked(retainedHeaders + buffer.Length + (nextLength * 3));
+                    if (!lease.TryEnsure(reservation))
+                    {
+                        throw new ProxyRequestBodyReadException(
+                            ProxyRequestBodyReadFailure.BufferExhausted);
+                    }
+
+                    body.Write(buffer, 0, read);
+                }
+
+                return body.ToArray();
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
 
         // Kestrel already removed the final chunked coding from request.Body,
@@ -117,22 +211,24 @@ namespace XMAT.WebServiceCapture.Proxy
                 RequestUri = uri,
                 Version = HttpVersion.Version20,
                 VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
-                Content = new ByteArrayContent(request.BodyBytes ?? Array.Empty<byte>())
+                Content = CreateContent(request.BodyBytes ?? Array.Empty<byte>())
             };
 
+            var connectionHeaderNames = ProxyHeaderUtilities.GetConnectionHeaderNames(request.Headers);
             foreach (KeyValuePair<string, IEnumerable<string>> header in request.Headers)
             {
-                if (!ProxyHeaderUtilities.IsHopByHopHeader(header.Key))
+                if (!ProxyHeaderUtilities.IsHopByHopHeader(header.Key, connectionHeaderNames))
                     message.Headers.TryAddWithoutValidation(header.Key, header.Value);
             }
             foreach (KeyValuePair<string, IEnumerable<string>> header in request.ContentHeaders)
             {
-                // ByteArrayContent calculates the length from the potentially
+                // Content calculates the length from the potentially
                 // script-modified body, so never forward a stale client value.
-                if (!string.Equals(
-                    header.Key,
-                    "Content-Length",
-                    StringComparison.OrdinalIgnoreCase))
+                if (!ProxyHeaderUtilities.IsHopByHopHeader(header.Key, connectionHeaderNames) &&
+                    !string.Equals(
+                        header.Key,
+                        "Content-Length",
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     message.Content.Headers.TryAddWithoutValidation(
                         header.Key,
@@ -140,6 +236,30 @@ namespace XMAT.WebServiceCapture.Proxy
                 }
             }
             return message;
+        }
+
+        // The content that Create gives the proxy's HTTP/2-capable forwarding and replay's Parsed sends, and that replay gives
+        // a redirect that keeps the body: a complete buffered body that HttpClient may send duplex, and send again.
+        internal static HttpContent CreateContent(byte[] body) => new BufferedRequestContent(body);
+
+        // ByteArrayContent disables duplex HTTP/2 sending. An origin that
+        // responds while reading can then exhaust its response window before the
+        // upload finishes. Custom content allows HttpClient to drain both directions,
+        // while XMAT still captures and edits complete buffered bodies.
+        private sealed class BufferedRequestContent(byte[] body) : HttpContent
+        {
+            protected override bool TryComputeLength(out long length)
+            {
+                length = body.Length;
+                return true;
+            }
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext context) =>
+                SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+            protected override Task SerializeToStreamAsync(
+                Stream stream, TransportContext context, CancellationToken cancellationToken) =>
+                stream.WriteAsync(body, cancellationToken).AsTask();
         }
     }
 
@@ -151,15 +271,18 @@ namespace XMAT.WebServiceCapture.Proxy
     {
         internal InterceptedTunnelContext(
             int connectionId,
-            ClientRequest connectRequest)
+            ClientRequest connectRequest,
+            ClientProcessContext processContext = null)
         {
             ConnectionId = connectionId;
             ConnectRequest = connectRequest ??
                 throw new ArgumentNullException(nameof(connectRequest));
+            ProcessContext = processContext;
         }
 
         internal int ConnectionId { get; }
         internal ClientRequest ConnectRequest { get; }
+        internal ClientProcessContext ProcessContext { get; }
         private int _tlsCompleted;
 
         internal bool TryMarkTlsCompleted()
@@ -212,12 +335,18 @@ namespace XMAT.WebServiceCapture.Proxy
         private readonly InterceptedTunnelRegistry _tunnels;
         private readonly Logger _logger;
         private readonly CancellationToken _stoppingToken;
+        private readonly ProxyRequestReadPolicy _requestReadPolicy;
+        private readonly ProxyRequestBufferBudget _requestBufferBudget;
+        private readonly Action<int, LogLevel, string> _logObserver;
 
         internal InterceptedProxyApplication(
             WebServiceProxy proxy,
             HttpClient httpClient,
             InterceptedTunnelRegistry tunnels,
             Logger logger = null,
+            ProxyRequestReadPolicy requestReadPolicy = null,
+            ProxyRequestBufferBudget requestBufferBudget = null,
+            Action<int, LogLevel, string> logObserver = null,
             CancellationToken stoppingToken = default)
         {
             _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
@@ -225,6 +354,10 @@ namespace XMAT.WebServiceCapture.Proxy
             _tunnels = tunnels ?? throw new ArgumentNullException(nameof(tunnels));
             _logger = logger;
             _stoppingToken = stoppingToken;
+            _requestReadPolicy = requestReadPolicy ?? ProxyRequestReadPolicy.Default;
+            _requestReadPolicy.Validate();
+            _requestBufferBudget = requestBufferBudget ?? ProxyRequestBufferBudget.Shared;
+            _logObserver = logObserver;
         }
 
         internal async Task InvokeAsync(HttpContext context)
@@ -259,21 +392,61 @@ namespace XMAT.WebServiceCapture.Proxy
                 return;
             }
 
-            ClientRequest clientRequest = await AspNetCoreRequestAdapter.CreateAsync(
-                context,
-                _proxy.GetNextRequestID(),
-                cancellationToken).ConfigureAwait(false);
+            ClientRequest clientRequest;
+            try
+            {
+                clientRequest = await AspNetCoreRequestAdapter.CreateAsync(
+                    context,
+                    _proxy.GetNextRequestID(),
+                    cancellationToken,
+                    _requestReadPolicy,
+                    _requestBufferBudget).ConfigureAwait(false);
+            }
+            catch (ProxyRequestBodyReadException ex)
+            {
+                int statusCode = ex.Failure switch
+                {
+                    ProxyRequestBodyReadFailure.InactivityTimeout or
+                    ProxyRequestBodyReadFailure.TotalTimeout => StatusCodes.Status408RequestTimeout,
+                    ProxyRequestBodyReadFailure.BodyTooLarge => StatusCodes.Status413PayloadTooLarge,
+                    _ => StatusCodes.Status503ServiceUnavailable,
+                };
+                string limit = ex.Failure switch
+                {
+                    ProxyRequestBodyReadFailure.InactivityTimeout =>
+                        $"the {_requestReadPolicy.BodyInactivityTimeout:g} request-body inactivity limit",
+                    ProxyRequestBodyReadFailure.TotalTimeout =>
+                        $"the {_requestReadPolicy.BodyTotalTimeout:g} total request-body time limit",
+                    ProxyRequestBodyReadFailure.BodyTooLarge =>
+                        $"the {_requestReadPolicy.MaxBodyBytes} byte request-body size limit",
+                    _ =>
+                        $"the {_requestBufferBudget.MaximumBytes} byte aggregate request-buffer budget",
+                };
+                Log(tunnel.ConnectionId, LogLevel.WARN, $"Intercepted request body rejected at {limit}.");
+                context.Response.StatusCode = statusCode;
+                context.Response.ContentLength = 0;
+                if (context.Request.Protocol.StartsWith("HTTP/1.", StringComparison.Ordinal))
+                    context.Response.Headers.Connection = "close";
+                return;
+            }
 
             if (!await _proxy.RaiseReceivedWebRequestAsync(
                 tunnel.ConnectionId,
                 clientRequest,
-                cancellationToken).ConfigureAwait(false))
+                cancellationToken,
+                tunnel.ProcessContext).ConfigureAwait(false))
             {
                 context.Abort();
                 return;
             }
 
             Uri uri = ProxyUriFactory.Create(clientRequest);
+            if (!HostListEntry.IsSupportedTargetScheme(uri.Scheme))
+            {
+                Log(tunnel.ConnectionId, LogLevel.WARN, "Client request used an unsupported target scheme.");
+                context.Abort();
+                return;
+            }
             if (context.WebSockets.IsWebSocketRequest)
             {
                 await ProxyWebSocketAsync(
@@ -321,7 +494,8 @@ namespace XMAT.WebServiceCapture.Proxy
                     tunnel.ConnectionId,
                     clientRequest,
                     serverResponse,
-                    cancellationToken).ConfigureAwait(false))
+                    cancellationToken,
+                    tunnel.ProcessContext).ConfigureAwait(false))
                 {
                     context.Abort();
                     return;
@@ -480,6 +654,7 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private void Log(int connectionId, LogLevel level, string message)
         {
+            _logObserver?.Invoke(connectionId, level, message);
             _logger?.Log(connectionId, level, message);
         }
 
@@ -517,9 +692,11 @@ namespace XMAT.WebServiceCapture.Proxy
                 statusCode != HttpStatusCode.NotModified;
         }
 
+        // "HTTP/1.1" or "HTTP/1.0" as the upstream's status line names them, and "HTTP/2" for HTTP/2, which has no minor
+        // version.
         private static string GetProtocol(Version version)
         {
-            return version.Minor == 0
+            return version.Major >= 2
                 ? $"HTTP/{version.Major}"
                 : $"HTTP/{version.Major}.{version.Minor}";
         }
@@ -532,8 +709,9 @@ namespace XMAT.WebServiceCapture.Proxy
             var statusCode = int.Parse(response.Status);
             context.Response.StatusCode = statusCode;
 
-            CopyHeaders(response.Headers, context.Response);
-            CopyHeaders(response.ContentHeaders, context.Response);
+            var connectionHeaderNames = ProxyHeaderUtilities.GetConnectionHeaderNames(response.Headers);
+            CopyHeaders(response.Headers, context.Response, connectionHeaderNames);
+            CopyHeaders(response.ContentHeaders, context.Response, connectionHeaderNames);
 
             if (statusCode < 200 || statusCode == StatusCodes.Status204NoContent)
             {
@@ -566,11 +744,12 @@ namespace XMAT.WebServiceCapture.Proxy
 
         private static void CopyHeaders(
             HeaderCollection source,
-            HttpResponse response)
+            HttpResponse response,
+            ISet<string> connectionHeaderNames)
         {
             foreach (KeyValuePair<string, IEnumerable<string>> header in source)
             {
-                if (ProxyHeaderUtilities.IsHopByHopHeader(header.Key))
+                if (ProxyHeaderUtilities.IsHopByHopHeader(header.Key, connectionHeaderNames))
                     continue;
 
                 response.Headers[header.Key] = new Microsoft.Extensions.Primitives.StringValues(
@@ -611,6 +790,10 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 webBuilder.UseKestrel(options =>
                 {
+                    // The request adapter applies the shared bounded read policy and
+                    // reports 408/413 consistently for HTTP/1.1 and HTTP/2.
+                    options.Limits.MinRequestBodyDataRate = null;
+                    options.Limits.MaxRequestBodySize = null;
                     // Port zero lets the OS choose a collision-free private port.
                     // Only the outer forward proxy connects to this listener.
                     options.Listen(IPAddress.Loopback, 0, listenOptions =>
@@ -726,8 +909,23 @@ namespace XMAT.WebServiceCapture.Proxy
             };
         }
 
-        internal static bool IsHopByHopHeader(string headerKey)
+        internal static ISet<string> GetConnectionHeaderNames(HeaderCollection headers)
         {
+            return (headers.GetHeaderValuesAsList("Connection") ?? Array.Empty<string>())
+                .Where(value => value != null)
+                .SelectMany(value => value.Split(','))
+                .Select(name => name.Trim())
+                .Where(name => name.Length != 0)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        internal static bool IsHopByHopHeader(
+            string headerKey,
+            ISet<string> connectionHeaderNames = null)
+        {
+            if (connectionHeaderNames?.Contains(headerKey) == true)
+                return true;
+
             return headerKey.ToLowerInvariant() switch
             {
                 "connection" or "keep-alive" or "proxy-authenticate" or
