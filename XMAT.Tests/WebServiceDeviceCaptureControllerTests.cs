@@ -108,6 +108,39 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task ImportsIntoAWritableTabLeaveRoomToDisconnectAndTurnOff()
+        {
+            static NetworkShapingMetadata History(int traces, int changesPerTrace = 1)
+            {
+                var trace = new NetworkShapingTrace(120, Enumerable.Range(1, changesPerTrace)
+                    .Select(sequence => new NetworkShapingChange(
+                        sequence, DateTimeOffset.UnixEpoch, NetworkShapingProfile.Preset("min")))
+                    .ToArray());
+                return new NetworkShapingMetadata(1, Enumerable.Repeat(trace, traces).ToArray());
+            }
+            // The live trace restarts at the current condition, then Disconnect and Off must still fit.
+            int changeRoom = NetworkShapingMetadata.MaximumChanges - 3;
+            foreach ((NetworkShapingMetadata fits, NetworkShapingMetadata full) in new[]
+            {
+                (History(NetworkShapingMetadata.MaximumTraces - 1), History(NetworkShapingMetadata.MaximumTraces)),
+                (History(1, changeRoom), History(1, changeRoom + 1)),
+            })
+            {
+                CreateController(new PreferencesModel(), readOnly: true).EnsureRoomForImportedShaping(full);
+                var controller = CreateController(new PreferencesModel());
+                Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("min"), 120)).Succeeded);
+                Assert.Throws<InvalidDataException>(() => controller.EnsureRoomForImportedShaping(full));
+
+                controller.EnsureRoomForImportedShaping(fits);
+                controller.ReplaceShapingHistory(fits);
+
+                Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Preset("disconnect"), 120)).Succeeded);
+                Assert.True((await controller.ConfigureShapingAsync(NetworkShapingProfile.Off, 120)).Succeeded);
+                Assert.NotNull(NetworkShapingMetadata.Parse(NetworkShapingMetadata.Serialize(controller.RecordedShaping)));
+            }
+        }
+
+        [Fact]
         public async Task LiveShapingIsStoredInTheDeviceRowAsExactJson()
         {
             using var database = new SqLtDatabase();

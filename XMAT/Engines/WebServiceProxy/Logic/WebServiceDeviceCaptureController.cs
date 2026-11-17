@@ -280,9 +280,22 @@ namespace XMAT.WebServiceCapture
                 _ => 2,
             };
             int liveChanges = newTrace ? 2 : Shaping.History.Count + 1;
-            return kept.Length < NetworkShapingMetadata.MaximumTraces &&
-                kept.Sum(trace => trace.Changes.Count) + liveChanges + reserve <=
-                    NetworkShapingMetadata.MaximumChanges;
+            return HasRoomForLiveTrace(kept, liveChanges + reserve);
+        }
+
+        private static bool HasRoomForLiveTrace(IReadOnlyCollection<NetworkShapingTrace> kept, int liveChanges) =>
+            kept.Count < NetworkShapingMetadata.MaximumTraces &&
+            kept.Sum(trace => trace.Changes.Count) + liveChanges <= NetworkShapingMetadata.MaximumChanges;
+
+        // Call before replacing any rows. A writable tab keeps recording after an import, so the imported
+        // history must leave room for the live trace (restarted at the current condition) plus Disconnect
+        // and then Off. A read-only tab records nothing live.
+        internal void EnsureRoomForImportedShaping(NetworkShapingMetadata imported)
+        {
+            if (!_readOnly && imported != null && !HasRoomForLiveTrace(imported.Traces, 3))
+            {
+                throw new System.IO.InvalidDataException(Localization.GetLocalizedString("WEBCAP_IMPORT_SHAPING_FULL"));
+            }
         }
 
         // Replacing the captured rows replaces their shaping history too. The current condition stays active.
@@ -2977,6 +2990,7 @@ namespace XMAT.WebServiceCapture
                     // convert what we can from a Fiddler file into a bunch of
                     // proxy connection models...
                     FiddlerSazImportResult imported = FiddlerSazHandler.ImportSazFileWithDiagnostics(fromFilePath, cancelToken);
+                    EnsureRoomForImportedShaping(imported.Shaping);
                     ProxyConnections = imported.Records;
                     ReplaceShapingHistory(imported.Shaping);
 

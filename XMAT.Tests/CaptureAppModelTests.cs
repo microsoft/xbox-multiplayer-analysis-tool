@@ -2199,6 +2199,48 @@ namespace XMAT.Tests
                     table);
         }
 
+        [Fact]
+        public async Task ImportFromFiddlerAsync_WritableTabRefusesFullShapingHistoryBeforeReplacingRows()
+        {
+            const string deviceName = "writable-console";
+            string path = CreateRepositoryLocalSazPath();
+            using var database = CreateCaptureDatabase(out var table);
+            try
+            {
+                WriteSaz(path, "replacement.example", "/replacement", "replacement body");
+                var recorded = new XMAT.WebServiceCapture.Proxy.NetworkShapingController();
+                recorded.Apply(XMAT.WebServiceCapture.Proxy.NetworkShapingProfile.Preset("min"));
+                var trace = Assert.Single(XMAT.Operations.Captures.NetworkShapingMetadata.From(recorded, 120).Traces);
+                using (var archive = ZipFile.Open(path, ZipArchiveMode.Update))
+                {
+                    WriteArchiveEntry(
+                        archive,
+                        XMAT.Operations.Captures.NetworkShapingMetadata.ArchiveEntry,
+                        XMAT.Operations.Captures.NetworkShapingMetadata.Serialize(new(
+                            1,
+                            Enumerable.Repeat(trace, XMAT.Operations.Captures.NetworkShapingMetadata.MaximumTraces)
+                                .ToArray())));
+                }
+                AddCaptureRow(table, deviceName, "original.example", "/original", "original body");
+                var originalRows = SnapshotRows(table);
+                var controller = new WebServiceDeviceCaptureController(deviceName, DeviceType.LocalPC, false);
+
+                var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                    WebServiceCaptureMethod.MethodInstance.ImportFromFiddlerAsync(
+                        path,
+                        new TestCaptureContext(controller, deviceName, false, DeviceType.LocalPC),
+                        table));
+
+                Assert.Equal(Localization.GetLocalizedString("WEBCAP_IMPORT_SHAPING_FULL"), error.Message);
+                Assert.Equal(originalRows, SnapshotRows(table));
+                Assert.Null(controller.RecordedShaping);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
         private static async Task RemoveReadOnlyContextsAsync(CaptureAppModel model)
         {
             foreach (ICaptureDeviceContext context in model.CaptureDeviceContexts

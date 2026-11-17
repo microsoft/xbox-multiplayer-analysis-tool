@@ -137,6 +137,7 @@ namespace XMAT.WebServiceCapture
                                 : "WEBCAP_IMPORT_ARCHIVE_LIMIT"),
                         ex);
                 }
+                captureController.EnsureRoomForImportedShaping(import.Shaping);
                 var connections = import.Records;
                 var hostFilters = captureController.UpdateFilter(
                     connections.Select(connection => connection.Host).Distinct().ToList());
