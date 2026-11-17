@@ -93,9 +93,21 @@ namespace XMAT.Tests.Proxy
             ObservedRequest received = Assert.Single(origin.Requests);
             Assert.Equal(editedBody, received.Body);
             Assert.Equal("application/octet-stream", received.Headers["Content-Type"]);
-            Assert.Equal(editedLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                received.Headers["Content-Length"]);
-            Assert.False(received.Headers.ContainsKey("Transfer-Encoding"));
+            if (chunked)
+            {
+                // A script can replace the body, but forwarding keeps the upload's original chunked framing.
+                Assert.Contains(
+                    "chunked",
+                    received.Headers.GetValueOrDefault("Transfer-Encoding") ?? string.Empty,
+                    StringComparison.OrdinalIgnoreCase);
+                Assert.False(received.Headers.ContainsKey("Content-Length"));
+            }
+            else
+            {
+                Assert.Equal(editedLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    received.Headers["Content-Length"]);
+                Assert.False(received.Headers.ContainsKey("Transfer-Encoding"));
+            }
             IDataRecord row = capture.CapturedRow("POST");
             Assert.Equal(editedBody, Convert.FromBase64String(
                 row.Str(WebServiceCaptureMethod.FieldKey_RequestBody)));

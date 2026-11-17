@@ -37,7 +37,15 @@ namespace XMAT.WebServiceCapture
             return Decode(body, maximumBodyBytes);
         }
 
-        internal static byte[] Decode(byte[] body, int maximumBodyBytes, Action<int> spendWork = null)
+        // trailerField sees each trailer line before it is checked, and trailersUnreadable is called when the trailer
+        // section can't be read to its end (a line that is too long or has no CRLF, or bytes after the final CRLF), so a
+        // caller that must not miss a trailer's content can treat the whole message as uninspectable.
+        internal static byte[] Decode(
+            byte[] body,
+            int maximumBodyBytes,
+            Action<int> spendWork = null,
+            Action<string> trailerField = null,
+            Action trailersUnreadable = null)
         {
             using var output = new MemoryStream();
             int position = 0;
@@ -59,13 +67,26 @@ namespace XMAT.WebServiceCapture
                     while (true)
                     {
                         spendWork?.Invoke(1);
-                        string trailer = ReadLine();
+                        string trailer;
+                        try
+                        {
+                            trailer = ReadLine();
+                        }
+                        catch (InvalidDataException)
+                        {
+                            trailersUnreadable?.Invoke();
+                            throw;
+                        }
                         if (trailer.Length == 0)
                         {
                             if (position != body.Length)
+                            {
+                                trailersUnreadable?.Invoke();
                                 throw new InvalidDataException("Unexpected bytes after the final chunk.");
+                            }
                             return output.ToArray();
                         }
+                        trailerField?.Invoke(trailer);
                         int separator = trailer.IndexOf(':');
                         if (separator <= 0 ||
                             !trailer[..separator].All(c => char.IsAsciiLetterOrDigit(c) || "!#$%&'*+-.^_`|~".Contains(c)) ||

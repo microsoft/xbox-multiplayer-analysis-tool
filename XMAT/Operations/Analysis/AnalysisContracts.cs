@@ -19,12 +19,16 @@ namespace XMAT.Operations.Analysis
         internal const long BytesPerMib = 1024 * 1024;
         internal const int DefaultInputMib = 512;
         internal const int DefaultDataMib = 256;
-        internal const int DefaultRecordMib = 32;
+        internal const int DefaultRecordMib = 128;
         internal const int DefaultRecords = 100_000;
 
-        // 512 MiB source, 32 MiB per archive entry or database record,
+        // 512 MiB source, 128 MiB per archive entry or database record,
         // 256 MiB aggregate retained data, and 100,000 format-specific records
         // (SAZ requests, or CaptureDevices and WebProxyConnections rows combined).
+        // A capture row holds its bodies as base64 (4 bytes for every 3), so the
+        // record default admits a row with a 32 MiB request body (the proxy's
+        // limit) and a response body at the largest capture limit, 40 MiB
+        // (ResponseStreamingOptions.MaximumCaptureLimitMegabytes): about 96 MiB.
         internal static AnalysisLimits Default { get; } = FromMib(
             DefaultInputMib,
             DefaultDataMib,

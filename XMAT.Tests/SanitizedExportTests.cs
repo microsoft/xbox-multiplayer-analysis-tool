@@ -185,9 +185,11 @@ namespace XMAT.Tests
                 }
                 var flags = session.Element("SessionFlags").Elements("SessionFlag")
                     .ToDictionary(flag => (string)flag.Attribute("N"), flag => (string)flag.Attribute("V"));
-                // x-clientip, XMAT's request number, connection id, two timestamps and scheme, and any omission markers.
-                Assert.Equal(index == 1 ? 8 : 6, flags.Count);
+                // x-clientip, XMAT's request number, connection id, two timestamps, scheme and header history, and any
+                // omission markers.
+                Assert.Equal(index == 1 ? 9 : 7, flags.Count);
                 Assert.Equal("0.0.0.0", flags["x-clientip"]);
+                Assert.Equal("0", flags["x-xmat-headers-uninspectable"]);
                 if (index == 1)
                 {
                     Assert.Equal("uninspectable", flags["x-xmat-request-body-omitted"]);
@@ -250,18 +252,33 @@ namespace XMAT.Tests
             Assert.Contains("Authorization: \r\nX-Keep: keep-value\r\n", result.Headers);
         }
 
-        [Fact]
-        public void ResponseHeaders_RetainRepeatedCookiesAndDropMalformedLines()
+        // Repeated cookies are kept and redacted; a malformed line, whether it has no colon, a name that is not a token
+        // or no field before its continuation, leaves the whole message out instead of being dropped unread.
+        [Theory]
+        [InlineData("none")]
+        [InlineData("no-colon")]
+        [InlineData("invalid-name")]
+        [InlineData("stray-continuation")]
+        public void ResponseHeaders_RetainRepeatedCookiesUnlessALineIsMalformed(string malformed)
         {
             var sanitizer = new SazSanitizer();
             var result = sanitizer.SanitizeMessage(
-                "HTTP/1.1 200 OK\r\nSet-Cookie: first=one-canary\r\nset-cookie: second=two-canary\r\n" +
-                "malformed-canary\r\nX-Keep: keep-value\r\n\r\n", Array.Empty<byte>(), false);
+                "HTTP/1.1 200 OK\r\n" + (malformed == "stray-continuation" ? " malformed-canary\r\n" : "") +
+                "Set-Cookie: first=one-canary\r\nset-cookie: second=two-canary\r\n" +
+                (malformed == "no-colon" ? "malformed-canary\r\n" : malformed == "invalid-name" ? "bad name: malformed-canary\r\n" : "") +
+                "X-Keep: keep-value\r\n\r\n", Array.Empty<byte>(), false);
 
             Assert.DoesNotContain("canary", result.Headers);
-            Assert.Contains("Set-Cookie: [REDACTED]\r\nset-cookie: [REDACTED]\r\n", result.Headers);
-            Assert.Contains("X-Keep: keep-value", result.Headers);
-            Assert.Equal(1, sanitizer.Summary.OmittedHeaders);
+            if (malformed == "none")
+            {
+                Assert.Contains("Set-Cookie: [REDACTED]\r\nset-cookie: [REDACTED]\r\n", result.Headers);
+                Assert.Contains("X-Keep: keep-value", result.Headers);
+                Assert.Equal(0, sanitizer.Summary.OmittedHeaders);
+            }
+            else
+            {
+                Assert.Equal("HTTP/1.1 200 " + SazSanitizer.Redacted + "\r\nContent-Length: 0\r\n\r\n", result.Headers);
+            }
         }
 
         [Theory]

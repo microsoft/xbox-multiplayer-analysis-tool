@@ -85,7 +85,7 @@ reservation-time storage failure.
   invalid prepared output entry (`capture.repair.output-invalid`); no refusal publishes `DIR`.
 - xmat treats its input as untrusted. By default it refuses an input (exit code 3) larger than 512 MiB
   (`analysis.input.too-large`), or one with more than 100,000 requests (a Fiddler archive) or rows in its device and
-  connection tables together (an XMAT capture), an archive entry or row over 32 MiB, or more than 256 MiB of data in
+  connection tables together (an XMAT capture), an archive entry or row over 128 MiB, or more than 256 MiB of data in
   total, unzipped or read (`analysis.input.limit`); the options below change these four limits. These other limits
   are fixed or follow the allowed requests (`analysis.input.limit`): for a Fiddler archive, more than 300,064 archive
   entries of any kind by default (three per allowed request plus 64, and never more than 750,064), a central directory
@@ -106,18 +106,27 @@ reservation-time storage failure.
   column may be NULL, which counts nothing; a NULL in a known column is rejected (`analysis.input.malformed`).
   WebProxyConnections may also hold, among its extra columns, the optional client process columns that XMAT writes
   (`ClientProcessName` TEXT, `ClientProcessId` INTEGER, `ClientProcessStartTime` TEXT and `ClientProcessStatus` TEXT;
-  see [Capture files](capture-files.md#process-information)). One of them spelled or typed otherwise is rejected
-  (`analysis.input.schema`), but a NULL or unreadable value in them is read as missing, never rejected: a session
-  without usable process information counts as unknown, as in a capture saved without these columns. A Fiddler
+  see [Capture files](capture-files.md#process-information)), its optional response columns (`ResponseTrailers`
+  TEXT and `ResponseBodyTruncatedAt` INTEGER; see [Capture files](capture-files.md#streamed-responses)) and
+  `HeadersUninspectable` INTEGER, which records each session's header history (see
+  [Capture files](capture-files.md#header-history)). One of them
+  spelled or typed otherwise is rejected (`analysis.input.schema`), but a NULL or unreadable value in them is never
+  rejected. In the process and response columns it is read as missing: a session without usable process information
+  counts as unknown, as in a capture saved without these columns, and one without response columns has no trailers and
+  a complete body. In `HeadersUninspectable`, `-1` is an unknown history, `0` no known loss, and NULL or any other value
+  uninspectable; a capture saved without the column has an unknown history. A Fiddler
   archive whose directory records are missing, inconsistent or span several disks is rejected too
   (`analysis.input.malformed`); single-disk ZIP64 archives are supported. These limits bound the capture data that
   xmat reads, not its exact memory use, and how many calls fit depends on the data: typical Xbox Live traffic stores
   about 5.6 KB per call, so about 45,000 calls fit in the default 256 MiB. For a capture that only these limits
   refuse, raise them, up to their maximums, or use the GUI; the GUI applies the header and schema checks too, but they
   do not bound how much memory it uses. HTTP bodies are analyzed as stored: compressed or chunked bodies are never
-  decoded. A malformed HTTP header line in a Fiddler archive is skipped instead of refusing the archive, and the run
-  reports the warning `analysis.input.malformed-header` once. Header lines are read as Latin-1, and a header name may
-  contain an apostrophe, as HTTP allows. The header limits cover the sanitized exports that were
+  decoded. A Fiddler archive's start lines and headers are read as Latin-1, one character per byte, or as UTF-8 for a
+  message whose XMAT encoding flag says so (see [Capture files](capture-files.md)); a header name may contain an
+  apostrophe, as HTTP allows. A malformed HTTP header line in a Fiddler archive is skipped instead of refusing the
+  archive, and its session's header history is uninspectable, so `--format sanitized-saz` leaves it out; the XMAT
+  captures and Fiddler archives that `xmat export` writes keep each session's header history. The run reports the
+  warning `analysis.input.malformed-header` once. The header limits cover the sanitized exports that were
   tested, not every archive that can be written: XMAT can record messages whose headers exceed them and export them in a
   plain or sanitized Fiddler archive; xmat refuses such an archive (`analysis.input.limit`) and the GUI does not import
   it, rather than truncating it. A request whose request line, other than a `CONNECT`'s, names an absolute `http`,
@@ -142,12 +151,13 @@ reservation-time storage failure.
   analyzed rows come from that one guarded file even if an alias is retargeted.
 - `--max-input-mib`, `--max-data-mib`, `--max-record-mib` and `--max-records` set the four input limits of one run, in
   MiB (1,048,576 bytes) or records: the input's size (512 by default, at most 2,048), the data that xmat holds in total
-  (256 by default, at most 512), one archive entry or row (32 by default, at most 128, and never more than
-  `--max-data-mib`) and the requests or rows (100,000 by default, at most 250,000). Each takes a whole number of ASCII
-  digits from 1 to its maximum, at most once; any other value, or a record limit above the data limit, is a usage
-  error (`cli.usage.invalid-value`, or `cli.usage.duplicate-option` for a repeated option; exit code 2) whose message
-  names the option, with its range for an invalid value or both options for a record limit above the data limit, but
-  never the value. `--max-records` is an upper bound, not a guaranteed capacity: a
+  (256 by default, at most 512), one archive entry or row (128 by default, or the data limit when that is lower; at
+  most 128, and never more than `--max-data-mib`) and the requests or rows (100,000 by default, at most 250,000). Each
+  takes a whole number of ASCII digits from 1 to its maximum, at most once; any other value, or a record limit above
+  the data limit, is a usage error (`cli.usage.invalid-value`, or `cli.usage.duplicate-option` for a repeated option;
+  exit code 2) whose message names the option, with its range for an invalid value or both options for a record limit
+  above the data limit, but never the value. A lower `--max-data-mib` alone also lowers the record limit; a
+  `--max-record-mib` that was given is never lowered. `--max-records` is an upper bound, not a guaranteed capacity: a
   Fiddler archive with fewer requests can still exceed the data limit or the archive limits above. The JSON output and
   `summary.json` report the effective values in `limits`. An XMAT capture's file may be as large as `--max-input-mib`,
   and SQLite may read values as large as `--max-record-mib` plus 1 MiB. Raising the limits lets xmat read larger
@@ -157,6 +167,18 @@ reservation-time storage failure.
   guaranteed capacity or a bound on memory use, so still run xmat with time and memory limits. The limits do not
   change the rule budget below, so a larger capture can still stop with `analysis.rules.work-limit`, nor the fixed
   limits above.
+- An XMAT capture stores each session's request and response bodies in its row as base64, which takes 4 bytes for every
+  3 (a 32 MiB body takes about 42.7 MiB), so its rows count about a third more than their bodies against the record
+  and data limits. The default record limit of 128 MiB holds a row with a request body of up to 32 MiB, the most the
+  proxy reads, and a response body at the largest capture limit, 40 MB (see
+  [Streaming and large responses](web-proxy.md#streaming-and-large-responses)), with room for its headers and other
+  values. A row can be larger: a Web Request or Web Response script can give a buffered message a larger body, and
+  captures from other XMAT versions or other tools can hold larger bodies. xmat refuses a row over 128 MiB, the most
+  that `--max-record-mib` allows; the GUI opens it. The limits on the whole capture apply as well (512 MiB
+  of file, 256 MiB of data and 100,000 rows), so xmat can refuse a capture whose rows each fit: three rows with the
+  largest bodies already exceed the 256 MiB data limit. Raise these limits with the options above, up to their
+  maximums, or use the GUI. Reading a capture is not the same as analyzing it: a capture that xmat reads can be
+  exported, but `xmat analyze` can still stop at the rule budget below (`analysis.rules.work-limit`).
 - `--process` and `--exclude-process` choose the sessions to analyze by the client process that sent them, with the
   same rules as the process filter of a capture tab in the GUI. Each takes one selector and may be given again, up to
   64 times each: an image name such as `game.exe` or `game*.exe` (`*` and `?` are wildcards, case does not matter and
@@ -175,7 +197,8 @@ reservation-time storage failure.
   extension, and one that does not agree with it is a usage error. It reads `INPUT` with `analyze`'s reader and
   limits and never changes it, but equal limits do not mean equal codes: the reader's diagnostics keep their
   `analysis.*` codes, except that an input over a limit is `export.input.limit`, and session data that cannot be
-  exported is `export.input.invalid-http` (an HTTP message that a sanitized archive cannot rewrite) or
+  exported is `export.input.invalid-http` (an HTTP message that a sanitized archive cannot rewrite, or start-line or
+  header text that a Fiddler archive can store neither as Latin-1 nor as UTF-8, such as an unpaired surrogate) or
   `export.input.invalid-body` (a stored body or value that is not valid data), all with exit code 3. A sanitized
   archive needs a capture whose text format is known: an unmarked XMAT capture is refused before anything is written
   (`capture.text.ambiguous-export`, exit code 3); export a copy marked with `xmat mark-capture-text` instead. An
@@ -202,6 +225,16 @@ reservation-time storage failure.
   publishes nothing (`export.no-eligible-rows`, exit code 3). An `.xmatcap` export also publishes nothing
   (`export.write.failed`, exit code 6) when its staged file, in the folder next to `FILE`, would have a path longer
   than Windows' 260-character limit; choose a shorter folder. `.saz` outputs are not affected.
+- A sanitized archive's sessions whose header history is unknown, such as those of a Fiddler archive from another tool
+  or of a capture saved before XMAT recorded the history (see
+  [Capture files](capture-files.md#sessions-with-an-unknown-header-history)), are sanitized from the data that is
+  stored, and a published archive that holds any reports the warning `export.sanitization.header-provenance-unknown`
+  once, on standard error too: "Header history is unknown for N exported sessions. Earlier processing may have
+  discarded context needed to recognize secrets. Sanitization inspected the data available; review the archive before
+  sharing." N counts the exported sessions, not those that the selectors left out or that were skipped, and so does
+  `sanitization.unknownHeaderProvenanceSessions` in the JSON output. The warning doesn't change the exit code, so an
+  export that otherwise succeeds exits with code 0. A run that publishes nothing never reports it, and ordinary exports
+  carry each session's header history without it.
 - Exact rule evaluation has one work and live-memory budget shared across all selected devices, consoles, endpoints
   and rules, and never samples, truncates or publishes partial findings. Analysis uses safety budgets, not a fixed
   duration limit. In testing, one regular 1 Hz polling key completed at 75 minutes but exceeded the budget at
@@ -714,7 +747,7 @@ An abridged result:
   "exitCode": 0,
   "input": { "kind": "saz", "sha256": "..." },
   "storedText": { "semantics": "notApplicable", "policy": "notNeeded" },
-  "limits": { "maxInputMib": 512, "maxDataMib": 256, "maxRecordMib": 32, "maxRecords": 100000 },
+  "limits": { "maxInputMib": 512, "maxDataMib": 256, "maxRecordMib": 128, "maxRecords": 100000 },
   "processFilter": { "applied": true, "include": [], "exclude": [],
     "counts": { "total": 4, "included": 4, "hidden": 0, "unknown": 4 },
     "devices": [ { "id": "d1", "total": 4, "included": 4, "hidden": 0, "unknown": 4 } ] },
@@ -729,7 +762,8 @@ An abridged result:
 ```
 
 `status` is `succeeded`, `findingsFound`, `mismatchFound`, `requestsFailed`, `cancelled` or `failed`. `warnings` and
-`errors` hold stable codes, such as `analysis.input.not-found`, with fixed messages, and `artifacts` lists what was
+`errors` hold stable codes, such as `analysis.input.not-found`, with fixed messages
+(`export.sanitization.header-provenance-unknown` also states a count), and `artifacts` lists what was
 published. `analyze` publishes only when the run completes successfully: status `succeeded`, or `findingsFound` with
 `--fail-on findings`; otherwise `artifacts` is empty. `replay` and `compose` publish once every request was sent,
 whatever the responses were (status `succeeded`, `mismatchFound` or `requestsFailed`). Once its command line is valid, `analyze` reports the effective input limits in `limits`, even when it fails,
@@ -751,7 +785,8 @@ the command provides); and `--version` reports `version`.
 not given) and `matchNone`; `processFilter` as for `analyze`; `counts` with `total`, `matched` (by the filters),
 `selected`, `eligible`, `exported`, `unavailable`, `skippedIncomplete` and `noRecordedResponse` (sessions without a
 recorded response, part of `skippedIncomplete`), and the same counts per device in `devices`; `sanitization`
-(`redactedValues`, `omittedBodies`, `omittedHeaders`) for a sanitized archive; and `output` (`published`, `bytes`,
+(`redactedValues`, `omittedBodies`, `omittedHeaders` and `unknownHeaderProvenanceSessions`, the exported sessions whose
+header history is unknown) for a sanitized archive; and `output` (`published`, `bytes`,
 `sha256`). Fields that the run did not reach are `null`.
 
 Instead of the analysis fields, `replay` and `compose` report `options` (`repeat`, `parallel`, `timeoutSeconds`,
@@ -878,6 +913,7 @@ handshakes and reports the frames it observed without their payloads; archiving 
 | Capture this PC (`capture.local-pc`) | (not available yet) | Planned (S6, XMAT-021) |
 | Capture low-level network traces (`capture.network-trace`) | (not available yet) | Planned (S8b, XMAT-021) |
 | Filter captured sessions by client process (`capture.process-filter`) | `xmat analyze INPUT --out DIR [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...`<br>`xmat export INPUT --out FILE [--process NAME_OR_PID]... [--exclude-process NAME_OR_PID]...` | Supported (S9) |
+| Stream responses and limit how much of each response body a capture keeps (`capture.response-streaming`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Run capture scripts (`capture.scripts`) | (not available yet) | Planned (S8a, XMAT-021) |
 | Stop a running capture (`capture.stop`) | (not available yet) | Planned (S5, XMAT-021) |
 | Record WebSocket handshakes and report observed frames without their payloads (`capture.websocket-handshakes`) | (not available yet) | Planned (S4, XMAT-021) |

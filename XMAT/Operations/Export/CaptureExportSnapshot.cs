@@ -133,7 +133,8 @@ namespace XMAT.Operations.Export
                             record.Str(WebServiceCaptureMethod.FieldKey_ResponseLineAndHeaders)),
                         !string.IsNullOrEmpty(
                             record.Str(WebServiceCaptureMethod.FieldKey_ResponseTimestamp)),
-                        0));
+                        0,
+                        WebProxyCaptureSchema.ReadHeaderProvenance(record)));
                     rows.Add(key, new LoadedExportRow(record, process));
                 }
             }

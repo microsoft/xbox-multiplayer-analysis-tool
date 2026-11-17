@@ -147,8 +147,9 @@ namespace XMAT.XboxLiveCaptureAnalysis
         }
 
         // The request headers that analysis reads, Host and those that name an analyzed service. A line that
-        // WebHeaderCollection refuses, such as a name with an apostrophe that replay sends and the SAZ readers keep, is
-        // left out of these headers only; the stored head (ReqHeader) keeps it.
+        // WebHeaderCollection refuses, such as a name with an apostrophe that replay sends and the SAZ readers keep, or
+        // a character above U+00FF that it checks only by its low byte, is left out of these headers only; the stored
+        // head (ReqHeader) keeps it.
         private static WebHeaderCollection GetRequestHeadersForString(
             string requestLineAndHeaders)
         {
@@ -159,7 +160,7 @@ namespace XMAT.XboxLiveCaptureAnalysis
                 for (var index = 1; index < lines.Length; index++)
                 {
                     var line = lines[index];
-                    if (!string.IsNullOrEmpty(line) && line.Contains(':'))
+                    if (FiddlerSazHandler.IsValidHeaderLine(line))
                     {
                         try
                         {

@@ -59,6 +59,34 @@ connection id, exact request and response times, scheme, request path (with its
 query) and client IP address. XMAT's import restores each value whose flag is
 present and valid, and otherwise reads the archive as Fiddler wrote it.
 
+A `.SAZ` export writes each message's start line and headers as Latin-1, one byte per
+character, unless one of their characters is above U+00FF, such as a `€` that a device
+sent in UTF-8. That message's start line and headers are then written as UTF-8, without
+a byte order mark, and its `x-xmat-request-header-encoding` or
+`x-xmat-response-header-encoding` flag is `utf-8`, so XMAT's import reads back the text
+the capture stored. Bodies are written as they are. The flags describe how the archive
+stores the text, not how a device sent it, and other tools don't necessarily read them.
+Text that neither encoding can hold, such as an unpaired surrogate, is never replaced:
+the export fails with an error instead.
+
+### Streamed responses
+
+A response body that passes the capture limit (see
+[Streaming and large responses](web-proxy.md#streaming-and-large-responses)) is captured
+only up to the limit, and the response pane says where it was truncated: "Capture
+truncated at 32 MB; additional bytes are not captured." XMAT keeps forwarding the rest of
+the body to the device. The stored headers stay as the server sent them, so a
+truncated body can be shorter than its `Content-Length`. Trailer fields that followed a
+response body are listed under its headers. `.XMATCAP` files keep both in two optional
+columns of the `WebProxyConnections` table: `ResponseTrailers` (the trailer lines) and
+`ResponseBodyTruncatedAt` (the body bytes kept; 0 when the body is complete). Captures
+saved without these columns load with complete bodies and no trailers. A `.SAZ` export
+writes them as the `x-xmat-response-trailers` and `x-xmat-response-body-truncated-at`
+flags, which an import restores when they are valid; trailer text that isn't valid
+header lines is kept as it is. A sanitized `.SAZ` keeps the truncation but never writes
+the trailers (see below). Exports of a running capture skip a response that is still
+streaming, as they skip any response that is not complete yet.
+
 ### Process information
 
 Web proxy captures on a PC record the program that opened each connection (see
@@ -107,7 +135,9 @@ XMAT checks capture files before reading them and never changes them:
   of header data (its first line, the header lines and the empty line that ends them);
   a larger message stops the import rather than being truncated. Malformed header
   lines and incomplete frames are skipped, and the status bar notes that data was
-  skipped. A request whose request line, other than a `CONNECT`'s, names an absolute
+  skipped. A session whose malformed header lines were skipped keeps only its valid
+  lines, and its header history is uninspectable, so a sanitized export leaves its pair
+  out (see below). A request whose request line, other than a `CONNECT`'s, names an absolute
   `http`, `https` or `ftp` URL with a valid host name or address and a port from 1 to
   65535 takes its scheme, host and port from that URL, as HTTP requires, even when its
   `Host` header is missing, malformed or names another host; its request line and
@@ -126,8 +156,14 @@ XMAT checks capture files before reading them and never changes them:
   an IPv4 address written in its IPv6 form, such as `::ffff:10.0.0.1`, is kept as
   `10.0.0.1`. A session without the flag has the address `0.0.0.0`, and an archive
   with a flag that has no value is malformed and is not imported.
-- Header lines are read as Latin-1, so a byte from 0x80 to 0xFF shows as that
-  character rather than `?`, and a line of such characters alone, such as 0x85 or 0xA0,
+- A message's start line and headers are read as Latin-1, one character per byte, so a
+  byte from 0x80 to 0xFF shows as that character rather than `?`, or as UTF-8 when
+  XMAT's `x-xmat-request-header-encoding` or `x-xmat-response-header-encoding` flag for
+  that message is `utf-8` (see above). Either way, header syntax is checked on the
+  bytes. A session whose encoding flag has another value or appears with different
+  values, or whose bytes aren't valid UTF-8 under a `utf-8` flag, has an uninspectable
+  header history; that message's text stays Latin-1, which keeps every byte. A line of
+  such characters alone, such as 0x85 or 0xA0,
   is a malformed header line rather than the empty line that ends the headers. A header
   name may contain an apostrophe, as HTTP allows. Each header line is kept in its order
   and with its name as written, its value without the spaces around it, so a name that
@@ -158,6 +194,35 @@ zone into an HTTP `Host` header, CONNECT target or TLS server name. It refuses t
 any such destination, or to export it as executable cURL, rather than silently choose
 another interface. Request-file save and load retain the exact zone spelling as data,
 but do not grant permission to send it.
+
+### Header history
+
+Each web session records what is known about its header history, which a sanitized
+export relies on (see [Export a sanitized capture](#export-a-sanitized-capture)):
+
+- **No known loss**: XMAT captured the session itself, or the file it came from recorded
+  that no header lines were lost when it was stored. This is not proof that none were
+  lost before.
+- **Unknown**: nothing recorded it, as in captures and archives saved before XMAT
+  recorded it and in archives from other tools, such as Fiddler. Earlier processing may
+  have dropped header lines without a trace.
+- **Uninspectable**: an import left header lines out or couldn't trust how they were
+  encoded (see above).
+
+`.XMATCAP` files keep the state in the optional `HeadersUninspectable` column of the
+`WebProxyConnections` table: `0` for no known loss, `-1` for unknown and `1` for
+uninspectable. A capture saved without the column has an unknown history; NULL or any
+other stored value counts as uninspectable. A `.SAZ` export, sanitized or not, writes
+the state as the `x-xmat-headers-uninspectable` flag with the same values. An import
+reads that flag whatever its case: an archive without it has an unknown history, and a
+value other than `-1`, `0` or `1`, or values that differ, count as uninspectable. Header
+lines that the import itself leaves out always make the session uninspectable, and a
+flag never clears an unknown or uninspectable history. Wherever two states meet, the
+more cautious one wins: uninspectable over unknown over no known loss. Saving, copying
+and exporting keep each session's state, and adding live sessions to a capture never
+changes the state of the sessions already in it. A tool that drops XMAT's flags or
+columns drops this record too: such a session's history is then unknown, even if it was
+uninspectable.
 
 ### Replays saved by xmat
 
@@ -238,14 +303,32 @@ empty; open it with the current XMAT version.
 1. Select the web proxy capture to share.
 2. Choose **File > Export Selected Tab Sanitized...** (or export selected or visible
    sessions and choose the sanitized file type), confirm, and select a destination.
-3. Review the completion dialog's redactions and omissions.
+3. Review the completion dialog's redactions, omissions and warnings.
 4. **Review the exported archive manually before sharing.**
 
 Sanitization is per export, not a preference. Ordinary exports and native
 **Save Captures** remain unsanitized. Only the chosen sessions are exported;
 the original capture is not sanitized in place. A sanitized archive keeps XMAT's
 request numbers, connection ids, times and schemes, but not the client IP address,
-the raw request path or the client process.
+the raw request path, the client process or response trailers. It keeps each session's
+header history (see [Header history](#header-history)), so exporting it again keeps
+what is known.
+
+### Sessions with an unknown header history
+
+A session whose header history is unknown is sanitized from the data that is stored,
+like any other session, but earlier processing may have dropped header lines, and with
+them context, such as a field's name, that would have identified a value as a secret.
+Such a value can remain in the archive. Before it writes anything, the confirmation
+warns how many of the sessions to export have an unknown history, from their stored
+state alone. The completion dialog, and `xmat export` as the warning
+`export.sanitization.header-provenance-unknown`, report how many of the exported
+sessions have one: "Header history is unknown for N exported sessions. Earlier
+processing may have discarded context needed to recognize secrets. Sanitization
+inspected the data available; review the archive before sharing." The warning doesn't
+stop the export. A session whose history is uninspectable is left out instead (see
+[Omissions and processing limits](#omissions-and-processing-limits)), and an ordinary
+export carries each session's state without this warning.
 
 An unmarked or unclassified selected capture is refused before export work
 starts. Create a marked copy with `xmat mark-capture-text`, open that copy, and
@@ -260,7 +343,17 @@ and private JWK members), and common token/private-key patterns in text.
 Credential discovery covers headers, URLs, forms, and structured fields before
 either direction of a session is written. This includes decoded Basic/userinfo
 components, token parameters, and individual cookies from repeated or combined headers.
-Header names are case-insensitive and repeated headers are retained.
+Header names are case-insensitive and repeated headers are retained. Header and trailer
+values are learned as stored, apart from the spaces and tabs around them; a learned
+value that starts or ends with other whitespace, such as a no-break space, is also
+learned without it. Stored header text can't show whether its bytes were meant as
+Latin-1 or UTF-8, and an import's encoding flag can be absent or forged, so a learned
+value whose characters are all Latin-1 but not all ASCII is also learned as the other
+readings of its bytes, with and without such whitespace at their edges: the UTF-8 text
+its Latin-1 bytes form, when they're valid UTF-8, and the Latin-1 reading of its UTF-8
+bytes. These strict conversions never substitute a character, and nothing further is
+derived from them. Every form counts toward the pair's limits (see
+[Omissions and processing limits](#omissions-and-processing-limits)).
 
 JSON keys and query/form parameter names are inspected. Learned values in names are
 masked when long (at least eight characters) or numeric identifiers (at least four
@@ -269,7 +362,11 @@ collision-safe names. Xbox profile IDs/display names, recognized structured-body
 credential echoes across a request/response pair, and client-IP metadata are masked.
 Client process metadata (`x-ProcessInfo` and XMAT's process flags) is never written;
 each session for which an ordinary export would write any of it counts as one
-redaction.
+redaction. Response trailers (`x-xmat-response-trailers`) are never written either,
+because their values can hold secrets. They're inspected like response headers first,
+so a secret in a trailer is redacted wherever either message echoes it; each trailer
+left out counts as an omitted header. Trailer fields inside a captured chunked body are
+inspected the same way before the chunk framing is removed.
 JWT recognition does not depend on a particular encoded-header prefix. Standalone
 Xbox credentials and PGP private-key armor are recognized.
 
@@ -280,7 +377,8 @@ Xbox credentials and PGP private-key armor are recognized.
 - Exported text is UTF-8 with updated HTTP framing, including bodyless
   HEAD/CONNECT/1xx/204/304 responses.
 - Genuine chunk framing is decoded before scanning; already-dechunked captures
-  remain supported. Ambiguous or malformed framing is omitted.
+  remain supported. Ambiguous or malformed framing is omitted, but a trailer section
+  that can't be read to its end discards the pair (see below).
 - Sensitive namespace URLs are remapped consistently in XML. Password-input
   values in inspected XML are redacted.
 - Percent-encoded paths and nested URI/form values are inspected through at most
@@ -297,21 +395,32 @@ Xbox credentials and PGP private-key armor are recognized.
 Unsupported content (including binary, HTML/XHTML, and multipart bodies), malformed
 structured data, JSON/XML nesting beyond 64 levels, unknown compression/character
 encodings, and bodies exceeding the **4 MiB** inspection limit are omitted rather
-than copied unchecked.
+than copied unchecked. A body over the limit that still has its chunked framing, as
+in some imported archives, discards its whole pair instead (see below), because its
+trailer fields can't be read. XMAT's own captures store decoded bodies, so a large
+body there is only omitted, and its response's stored trailers are still inspected.
 
 Scanning has a finite work budget and remembers at most **64 distinct sensitive
 values or representations**, each up to **4,096 characters**, per request/response
-pair. XML discovery includes individual values and sensitive containers' combined
-text. Learned values are matched at token boundaries and reset before the next pair.
+pair. A response's trailers share its work budget, and the values learned from them
+count toward the pair's limit. XML discovery includes individual values and sensitive
+containers' combined text. Learned values are matched at token boundaries and reset
+before the next pair.
 
-If credential discovery exceeds capacity, or scanning exhausts its work budget or
-regex timeout in either pass, partial output is discarded. The pair's original URLs,
-headers, and bodies are replaced with minimal HTTP framing. Large authorization
-values or profile batches can therefore lose diagnostic content; these limits do not
-guarantee diagnostic completeness.
+If credential discovery exceeds capacity, scanning exhausts its work budget or
+regex timeout in either pass, a header or trailer value has a character that HTTP
+doesn't allow in it (a control character other than tab, or a character above
+U+00FF), a header or trailer line isn't a valid header field (such as a line without a
+colon), a start line has a character above U+00FF, as for header values, the session's
+header history is uninspectable because an import skipped some of its header lines or
+couldn't trust its header encoding (see [Header history](#header-history)), or a
+chunked body's trailer section can't be read to its end, partial output is discarded. The pair's original URLs, headers, and bodies are
+replaced with minimal HTTP framing. Large authorization values or profile batches can
+therefore lose diagnostic content; these limits do not guarantee diagnostic
+completeness.
 
-The completion dialog reports redactions and omissions, and SAZ session metadata
-identifies omitted request/response bodies. Exports can retain headers exceeding the
+The completion dialog reports redactions and omissions, and how many sessions have an
+unknown header history; SAZ session metadata identifies omitted request/response bodies. Exports can retain headers exceeding the
 import limits (16,384 lines or 16 MiB, see above); XMAT refuses to import such an
 archive rather than truncating it.
 
