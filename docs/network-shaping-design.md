@@ -39,6 +39,11 @@ non-UI proxy core so the GUI and CLI use the same behavior.
   loss, reordering, duplication, or corruption on a TCP stream.
 - Queued chunks are pooled and bounded. Every cancellation, write failure, and
   connection shutdown path must return rented buffers and release budget slots.
+  Each pump direction owns a small private reserve; only `Shape` mode borrows
+  from the shared listener pool, and never waits on it, so a stalled peer or an
+  unshaped connection cannot starve others.
+- The live history cap must never prevent turning shaping off: at the cap,
+  `Disconnect` and then `Off` remain accepted.
 - The default request-body limits and inactivity timeout remain in force. Only
   the explicit, bounded total-body-deadline option changes the total upload
   deadline; do not silently relax protection when shaping is slow.

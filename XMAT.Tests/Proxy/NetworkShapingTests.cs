@@ -352,6 +352,60 @@ namespace XMAT.Tests.Proxy
             }
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task StalledClientsCannotStarveOtherConnections(bool shaped)
+        {
+            byte[] large = Payload(8 * 1024 * 1024);
+            await using var origin = await LoopbackOrigin.StartAsync(context =>
+                context.Response.Body.WriteAsync(context.Request.Path == "/large" ? large : new byte[16]).AsTask());
+            var controller = new NetworkShapingController();
+            if (shaped)
+            {
+                controller.Apply(new(NetworkShapingMode.Shape, DownKbps: 1_000_000));
+            }
+            await using var proxy = await StartAsync(controller);
+            var stalled = new List<TcpClient>();
+            try
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    // The client never reads, so its download queue fills and stays full.
+                    var client = new TcpClient { ReceiveBufferSize = 4096 };
+                    stalled.Add(client);
+                    await client.ConnectAsync(IPAddress.Loopback, proxy.Port);
+                    await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(
+                        $"GET {origin.Url("/large")} HTTP/1.1\r\nHost: 127.0.0.1:{origin.Port}\r\n\r\n"));
+                }
+                var elapsed = Stopwatch.StartNew();
+                while (origin.Requests.Count < stalled.Count && elapsed.Elapsed < TimeSpan.FromSeconds(10))
+                {
+                    await Task.Delay(20);
+                }
+                Assert.Equal(stalled.Count, origin.Requests.Count);
+                // Shaped queues borrow the shared pool until it is empty; unshaped queues use only their reserve.
+                var filling = Stopwatch.StartNew();
+                while (controller.BufferSlots.CurrentCount > 0 &&
+                    filling.Elapsed < (shaped ? TimeSpan.FromSeconds(10) : TimeSpan.FromSeconds(1.5)))
+                {
+                    await Task.Delay(20);
+                }
+                Assert.Equal(shaped ? 0 : 256, controller.BufferSlots.CurrentCount);
+
+                using HttpClient other = proxy.CreateClient();
+                other.Timeout = TimeSpan.FromSeconds(5);
+                Assert.Equal(new byte[16], await other.GetByteArrayAsync(origin.Url("/small")));
+            }
+            finally
+            {
+                foreach (TcpClient client in stalled)
+                {
+                    client.Dispose();
+                }
+            }
+        }
+
         private static Task<ProxyTestHarness> StartAsync(NetworkShapingController controller) =>
             ProxyTestHarness.StartAsync(configureListen: builder => builder.UseNetworkShaping(controller));
 

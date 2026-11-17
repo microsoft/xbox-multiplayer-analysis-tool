@@ -4,12 +4,14 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
 using System.Windows;
 
 namespace XMAT.WebServiceCapture.Proxy
@@ -34,6 +36,7 @@ namespace XMAT.WebServiceCapture.Proxy
         private X509Certificate2 _rootCert;
 
         private readonly ConcurrentDictionary<string, X509Certificate2> _certCache = new();
+        private readonly ConcurrentDictionary<string, Lazy<X509Certificate2>> _pendingCerts = new();
         private readonly bool _storeCerts;
         private readonly object _rootLock = new();
 
@@ -121,24 +124,39 @@ namespace XMAT.WebServiceCapture.Proxy
             {
                 return cached;
             }
-            lock (_rootLock)
+
+            // One creation per host, so no duplicate is leaked; different hosts still generate keys in parallel.
+            Lazy<X509Certificate2> pending = _pendingCerts.GetOrAdd(
+                hostname,
+                host => new Lazy<X509Certificate2>(
+                    () => CreateAndCacheHostCertificate(host), LazyThreadSafetyMode.ExecutionAndPublication));
+            try
             {
-                if (_certCache.TryGetValue(hostname, out cached))
-                {
-                    return cached;
-                }
-                X509Certificate2 cert = CreateHostCertificate(hostname);
-                try
-                {
-                    _myStore?.Add(cert);
-                    _certCache[hostname] = cert;
-                    return cert;
-                }
-                catch
-                {
-                    cert.Dispose();
-                    throw;
-                }
+                return pending.Value;
+            }
+            finally
+            {
+                _pendingCerts.TryRemove(KeyValuePair.Create(hostname, pending));
+            }
+        }
+
+        private X509Certificate2 CreateAndCacheHostCertificate(string hostname)
+        {
+            if (_certCache.TryGetValue(hostname, out X509Certificate2 cached))
+            {
+                return cached;
+            }
+            X509Certificate2 cert = CreateHostCertificate(hostname);
+            try
+            {
+                _myStore?.Add(cert);
+                _certCache[hostname] = cert;
+                return cert;
+            }
+            catch
+            {
+                cert.Dispose();
+                throw;
             }
         }
 
@@ -255,8 +273,9 @@ namespace XMAT.WebServiceCapture.Proxy
 
             // Safety net: clamp notAfter to never exceed the issuer cert's NotAfter in case
             // the root cert expires before host certs.
+            X509Certificate2 issuer = Volatile.Read(ref _rootCert);
             DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddYears(HostCertValidityYears);
-            DateTimeOffset issuerNotAfter = _rootCert.NotAfter;
+            DateTimeOffset issuerNotAfter = issuer.NotAfter;
 
             if (issuerNotAfter <= DateTimeOffset.UtcNow)
                 throw new InvalidOperationException("Root certificate has expired and cannot be used to issue host certificates.");
@@ -266,14 +285,14 @@ namespace XMAT.WebServiceCapture.Proxy
                 notAfter = issuerNotAfter;
             }
             DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddYears(-1);
-            DateTimeOffset issuerNotBefore = _rootCert.NotBefore;
+            DateTimeOffset issuerNotBefore = issuer.NotBefore;
             if (notBefore < issuerNotBefore)
             {
                 notBefore = issuerNotBefore;
             }
 
             using X509Certificate2 cert = req.Create(
-                _rootCert,
+                issuer,
                 notBefore,
                 notAfter,
                 serial);

@@ -1,5 +1,6 @@
 {
 	"SHAPING_TITLE": "Network Shaping",
+	"SHAPING_PRESET": "Network condition",
 	"SHAPING_HELP": "Share bandwidth across this capture's proxied connections. Changes apply live. Rates of 0 are unlimited. Presets approximate bandwidth/latency only, not packet loss. Broken rejects new connections; Disconnect also aborts active connections, not the console's network link.",
 	"SHAPING_DOWN": "Download (kbps; 0 = unlimited)",
 	"SHAPING_UP": "Upload (kbps; 0 = unlimited)",

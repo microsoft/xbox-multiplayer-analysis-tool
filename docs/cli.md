@@ -109,6 +109,20 @@ connections; `broken` rejects only new connections, while `disconnect` also abor
 The GUI and CLI share profile validation and the shaping operation; GUI preferences are never CLI defaults.
 `analyze` and `export` preserve the recorded conditions without activating them, including sanitized SAZ export.
 
+Capture failures use stable codes and never echo paths or values:
+
+| Code | Exit | Meaning |
+|---|---|---|
+| `cli.output.exists`, `capture.output.exists` | 5 | `--out` already exists |
+| `capture.output.locked` | 5 | Another program locked `--out` while publishing |
+| `cli.output.parent-missing`, `capture.output.parent-missing` | 2 / 3 | The folder that should contain `--out` does not exist |
+| `capture.listen.unavailable` | 5 | `--listen`/`--port` is in use, reserved or not assigned to this PC |
+| `capture.ca.invalid` | 3 | `--root-pfx` is unreadable, expired, password-protected or not a CA with its private key |
+| `capture.profile.unreadable` | 3 | The `--shape-profile` file could not be read |
+| `capture.profile.invalid` | 3 | Profile JSON, values or schedule are invalid, or a change is at or after the duration |
+| `capture.output.unprotected` | 6 | `--out` is on storage without Windows permissions |
+| `capture.failed` | 6 | Capture failed after starting, for example a recorder limit |
+
 ### Analyze and export
 
 - `xmat analyze` reads a Fiddler archive (`.saz`) or an XMAT capture (`.xmatcap`), recognized by its content, and runs
@@ -902,8 +916,8 @@ as `help`, `--version` or a passing `doctor`, exits with code 70 instead.
 | 2 | Usage error: an unknown command, option or doctor target (including those planned for later releases), a missing or invalid value, or no folder to create `--out` in |
 | 3 | Invalid input or nothing to analyze or export: the input is missing, unreadable, unsupported, corrupt or over a safety limit, `--device` names no device, the process selectors leave no session, `export` has no session to write, capture-text marking refuses the input or interpretation, or `export --format sanitized-saz` reads an unmarked XMAT capture (`capture.text.ambiguous-export`; nothing is published); for `replay` and `compose` also a selection, edit, sequence, `--body-file` or `--form` body, HTTP version, connect-to endpoint, proxy, client certificate or Windows authentication that cannot be used, a Fiddler control header, a `--raw` file or request that Raw mode refuses, or a request that needs `--allow-raw`, `--allow-unsafe-methods`, `--allow-origin-change`, `--allow-connect-to`, `--allow-proxy`, `--allow-client-cert` or `--allow-windows-auth` for its origin (nothing is sent); and for `replay`, `save-request` and `curl` an unmarked XMAT capture without `--accept-stored-text` (`replay.capture-text.ambiguous`, `capture.text.ambiguous-export`; nothing is sent or published) |
 | 4 | A prerequisite is missing or damaged, such as the analysis data next to `xmat.exe` |
-| 5 | Conflict: `--out` already exists, or `export`'s `--out` names the input or is locked by another program (`export.output.locked`) |
-| 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`), or `export`'s `--out` is on storage without Windows permissions (`export.output.unprotected`) |
+| 5 | Conflict: `--out` already exists, or `export`'s `--out` names the input or is locked by another program (`export.output.locked`), `capture`'s `--out` is locked while publishing (`capture.output.locked`), or `capture`'s listening address or port is unavailable (`capture.listen.unavailable`) |
+| 6 | The operation failed, for example the output could not be written, or `--out` is not on a local NTFS volume reached without a network path, substituted drive or link (`cli.output.unprotected`), or `export`'s or `capture`'s `--out` is on storage without Windows permissions (`export.output.unprotected` or `capture.output.unprotected`) |
 | 7 | Cleanup failed: a staging folder could not be removed (overrides the other codes, cancellation included) |
 | 10 | `--fail-on findings` and the rules reported findings |
 | 11 | `--verify` (or `--verify-diff`) and a replayed response differs from the captured one (the results are published) |

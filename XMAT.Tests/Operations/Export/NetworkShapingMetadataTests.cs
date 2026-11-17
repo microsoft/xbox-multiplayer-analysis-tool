@@ -26,6 +26,27 @@ namespace XMAT.Tests.Operations.Export
             Assert.NotNull(NetworkShapingMetadata.Parse(NetworkShapingMetadata.Serialize(metadata)));
         }
 
+        [Fact]
+        public void FullHistoryCanStillDisconnectAndTurnOffAndIsStillExportable()
+        {
+            var controller = new NetworkShapingController();
+            var shape = new NetworkShapingProfile(NetworkShapingMode.Shape, DownKbps: 192);
+            for (int count = 1; count < NetworkShapingController.MaximumHistory; count++)
+            {
+                controller.Apply(shape);
+            }
+            Assert.Throws<InvalidOperationException>(() => controller.Apply(shape));
+            Assert.Throws<InvalidOperationException>(() => controller.Apply(new(NetworkShapingMode.Broken)));
+            controller.Apply(new(NetworkShapingMode.Disconnect));
+            controller.Apply(NetworkShapingProfile.Off);
+            Assert.Equal(NetworkShapingMode.Off, controller.Current.Mode);
+            Assert.Throws<InvalidOperationException>(() => controller.Apply(new(NetworkShapingMode.Disconnect)));
+            NetworkShapingMetadata metadata = NetworkShapingMetadata.From(controller, 120);
+            Assert.Equal(
+                NetworkShapingController.MaximumHistory + 2,
+                NetworkShapingMetadata.Parse(NetworkShapingMetadata.Serialize(metadata)).Traces[0].Changes.Count);
+        }
+
         [Theory]
         [InlineData(false)]
         [InlineData(true)]

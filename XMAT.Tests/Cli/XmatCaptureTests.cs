@@ -21,17 +21,114 @@ namespace XMAT.Tests.Cli
     public class XmatCaptureTests
     {
         [Theory]
-        [InlineData("--shape secret-canary")]
-        [InlineData("--shape off --down-kbps 1000")]
-        [InlineData("--shape-profile secret-canary --up-kbps 100")]
-        [InlineData("--body-timeout-seconds 1801")]
-        [InlineData("--listen secret-canary")]
-        public void InvalidCaptureOptionsAreDataFreeAndCannotStartAListener(string options)
+        [InlineData("--shape secret-canary", "cli.usage.invalid-value", "--shape")]
+        [InlineData("--shape off --down-kbps 1000", "cli.usage.invalid-value", "--down-kbps")]
+        [InlineData("--shape-profile secret-canary --up-kbps 100", "cli.usage.invalid-value", "--shape-profile")]
+        [InlineData("--body-timeout-seconds 1801", "cli.usage.invalid-value", "--body-timeout-seconds")]
+        [InlineData("--listen secret-canary", "cli.usage.invalid-value", "--listen")]
+        [InlineData("--latency-ms 50 --jitter-ms 60", "cli.usage.invalid-value", "--jitter-ms")]
+        [InlineData("--down-kbps 1000001", "cli.usage.invalid-value", "--down-kbps")]
+        public void InvalidCaptureOptionsAreDataFreeAndCannotStartAListener(string options, string code, string option)
         {
             CliParseResult result = CliCommandLine.Parse(
                 ("capture --port 8888 --duration-seconds 10 --out capture.xmatcap " + options).Split(' '));
             Assert.False(result.Succeeded);
+            Assert.Equal(code, result.Error.Code);
+            Assert.Contains(option, result.Error.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("secret-canary", result.Error.Message);
+        }
+
+        [Theory]
+        [InlineData("capture --duration-seconds 10 --out capture.xmatcap", "cli.usage.missing-option", "--port")]
+        [InlineData("capture --port 8888 --out capture.xmatcap", "cli.usage.missing-option", "--duration-seconds")]
+        [InlineData("capture --port 8888 --duration-seconds 10", "cli.usage.missing-option", "--out")]
+        [InlineData("capture --port 8888 --duration-seconds 10 --out secret-canary.saz", "cli.usage.invalid-value", "--out")]
+        [InlineData("capture --port 0 --duration-seconds 10 --out capture.xmatcap", "cli.usage.invalid-value", "--port")]
+        [InlineData("capture --port 8888 --duration-seconds 86401 --out capture.xmatcap", "cli.usage.invalid-value", "--duration-seconds")]
+        [InlineData("capture secret-canary --port 8888 --duration-seconds 10 --out capture.xmatcap", "cli.usage.unexpected-argument", "INPUT")]
+        public void CaptureUsageErrorsNameTheOption(string commandLine, string code, string option)
+        {
+            CliParseResult result = CliCommandLine.Parse(commandLine.Split(' '));
+            Assert.False(result.Succeeded);
+            Assert.Equal(code, result.Error.Code);
+            Assert.Contains(option, result.Error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret-canary", result.Error.Message);
+        }
+
+        [Fact]
+        public async Task OccupiedListeningPortIsAConflictAndPublishesNothing()
+        {
+            using var directory = new CliTestDirectory();
+            using var occupied = new TcpListener(IPAddress.Loopback, 0);
+            occupied.Start();
+            int port = ((IPEndPoint)occupied.LocalEndpoint).Port;
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root, "capture", "--port", port.ToString(), "--duration-seconds", "1", "--out", "capture.xmatcap");
+            CliAssert.ExitCode(5, run);
+            Assert.Equal(new[] { "capture.listen.unavailable" }, run.ErrorCodes());
+            Assert.DoesNotContain(directory.Name, run.Stdout + run.Stderr);
+            Assert.Empty(directory.Entries());
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("not a certificate")]
+        public async Task UnusableRootAuthorityIsInvalidInputBeforeListening(string contents)
+        {
+            using var directory = new CliTestDirectory();
+            if (contents != null)
+            {
+                File.WriteAllText(Path.Join(directory.Root, "root.pfx"), contents);
+            }
+            int port = AvailablePort();
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root, "capture", "--port", port.ToString(), "--duration-seconds", "1",
+                "--out", "capture.xmatcap", "--root-pfx", "root.pfx");
+            CliAssert.ExitCode(3, run);
+            Assert.Equal(new[] { "capture.ca.invalid" }, run.ErrorCodes());
+            Assert.DoesNotContain(directory.Name, run.Stdout + run.Stderr);
+            Assert.DoesNotContain("capture.xmatcap", directory.Entries());
+            AssertListenerReleased(port);
+        }
+
+        [Theory]
+        [InlineData("missing\\capture.xmatcap", 2, "cli.output.parent-missing")]
+        [InlineData("existing.xmatcap", 5, "cli.output.exists")]
+        public async Task OutputMistakesFailBeforeListening(string output, int exitCode, string code)
+        {
+            using var directory = new CliTestDirectory();
+            File.WriteAllText(Path.Join(directory.Root, "existing.xmatcap"), "keep");
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root, "capture", "--port", AvailablePort().ToString(), "--duration-seconds", "1", "--out", output);
+            CliAssert.ExitCode(exitCode, run);
+            Assert.Equal(new[] { code }, run.ErrorCodes());
+            Assert.Equal(new[] { "existing.xmatcap" }, directory.Entries());
+            Assert.Equal("keep", File.ReadAllText(Path.Join(directory.Root, "existing.xmatcap")));
+        }
+
+        [Theory]
+        [InlineData(null, "capture.profile.unreadable")]
+        [InlineData("{\"version\":1,\"initial\":{\"mode\":\"off\"},\"secret-canary\":1}", "capture.profile.invalid")]
+        [InlineData("{\"version\":2,\"initial\":{\"mode\":\"off\"}}", "capture.profile.invalid")]
+        [InlineData("{\"version\":1,\"initial\":{\"mode\":\"off\"},\"schedule\":[{\"afterSeconds\":2,\"profile\":{\"mode\":\"broken\"}}]}",
+            "capture.profile.invalid")]
+        public async Task UnusableShapingProfileIsInvalidInputBeforeListening(string profile, string code)
+        {
+            using var directory = new CliTestDirectory();
+            if (profile != null)
+            {
+                File.WriteAllText(Path.Join(directory.Root, "profile.json"), profile);
+            }
+            int port = AvailablePort();
+            XmatRun run = await XmatProcess.RunAsync(
+                directory.Root, "capture", "--port", port.ToString(), "--duration-seconds", "2",
+                "--out", "capture.xmatcap", "--shape-profile", "profile.json");
+            CliAssert.ExitCode(3, run);
+            Assert.Equal(new[] { code }, run.ErrorCodes());
+            Assert.DoesNotContain("secret-canary", run.Stdout + run.Stderr);
+            Assert.DoesNotContain(directory.Name, run.Stdout + run.Stderr);
+            Assert.DoesNotContain("capture.xmatcap", directory.Entries());
+            AssertListenerReleased(port);
         }
 
         [Theory]
@@ -199,7 +296,7 @@ namespace XMAT.Tests.Cli
             NetworkShapingTrace trace = Assert.Single(history.Traces);
             Assert.Equal(1800, trace.BodyTimeoutSeconds);
             Assert.Equal(
-                new[] { NetworkShapingMode.Off, NetworkShapingMode.Shape, NetworkShapingMode.Off },
+                new[] { NetworkShapingMode.Shape, NetworkShapingMode.Off },
                 trace.Changes.Select(change => change.Profile.Mode));
             AssertListenerReleased(port);
             gui.AssertUnchanged();

@@ -132,8 +132,10 @@ are required. The pacer allows up to about 50 ms of burst credit to absorb timer
 
 Only the **client-to-XMAT leg** is shaped: HTTP/1.1, intercepted HTTPS including HTTP/2, opaque bypass tunnels
 and proxied WebSockets. CONNECT and TLS handshakes also incur latency. XMAT-to-origin traffic is not shaped.
-Timestamped queues pipeline latency rather than adding a delay to every sequential read. Shaping buffers are
-bounded to 4 MiB of pooled chunks per listener, plus pipe buffers; backpressure applies when queues fill.
+Timestamped queues pipeline latency rather than adding a delay to every sequential read. Each connection
+direction keeps a private 64 KiB chunk reserve, so a stalled peer cannot block other connections. Only shaped
+connections borrow extra chunks, without waiting, from a 4 MiB pool shared per listener to pipeline latency.
+Pipe buffers are separate. Backpressure applies when queues fill.
 Disabling shaping wakes waiting transfers and removes pacing/latency from subsequent slices.
 
 **Broken** rejects new proxy connections; existing connections continue without shaping. **Disconnect** also
@@ -154,7 +156,8 @@ Native captures record profiles and timestamped changes. SAZ export adds an XMAT
 Export includes history only for devices whose rows are actually written. Analysis displays a warning because
 timing and rate findings can be affected, and CLI summaries include `networkShaping`. Importing a capture **never
 turns shaping on**. A SAZ combining several listeners retains anonymous histories, not identifying device labels;
-other SAZ tools may ignore or discard this extension. History is capped at 4096 changes per live controller.
+other SAZ tools may ignore or discard this extension. History is capped at 4096 changes per live controller; at
+the cap, new shaping or Broken changes are refused, but Disconnect and then Off are still accepted and recorded.
 Clearing captured data also clears imported/past history, but keeps the currently selected shaping condition
 as the start of the new history. An explicit nondefault upload deadline is recorded even when shaping is off.
 

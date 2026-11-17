@@ -8,10 +8,14 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
+using System.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Connections;
+using XMAT.DataAbstractionLayer;
 using XMAT.Operations.Export;
 using XMAT.WebServiceCapture.Models;
 using XMAT.WebServiceCapture.Proxy;
@@ -30,36 +34,104 @@ namespace XMAT.Operations.Captures
             CaptureProxyRequest request, OperationContext context, CancellationToken cancellationToken)
         {
             context ??= OperationContext.None;
-            long records = 0;
-            NetworkShapingMetadata metadata = null;
             try
             {
-                if (request == null || request.Port is < 1 or > 65535 ||
-                    request.DurationSeconds is < 1 or > 86400 ||
-                    !string.Equals(Path.GetExtension(request.OutputPath), ".xmatcap", StringComparison.OrdinalIgnoreCase))
+                // Everything a user can fix is checked before any listener or staging file exists.
+                OperationResult<CaptureProxyResult> invalid = Validate(request);
+                if (invalid != null)
                 {
-                    throw new ArgumentException("Invalid capture request.");
+                    return invalid;
                 }
-                ArgumentNullException.ThrowIfNull(request.Shaping);
-                request.Shaping.Validate();
-                if (request.Shaping.Schedule != null)
+                X509Certificate2 authority;
+                try
                 {
-                    foreach (ScheduledShapingChange change in request.Shaping.Schedule)
+                    authority = LoadAuthority(request.RootPfx);
+                }
+                catch (Exception ex) when (request.RootPfx != null && IsUnusableAuthority(ex))
+                {
+                    return InvalidAuthority();
+                }
+                using (authority)
+                {
+                    CertificateManager certificates;
+                    try
                     {
-                        if (change.AfterSeconds >= request.DurationSeconds)
-                        {
-                            throw new ArgumentException("The schedule extends past the capture duration.");
-                        }
+                        certificates = new CertificateManager(authority);
+                    }
+                    catch (ArgumentException)
+                    {
+                        return InvalidAuthority();
+                    }
+                    using (certificates)
+                    {
+                        return await CaptureAsync(request, certificates, context, cancellationToken).ConfigureAwait(false);
                     }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                return Failure(OperationOutcome.Cancelled, "capture.cancelled", "Capture was cancelled; no output was published.");
+            }
+            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            {
+                return Failure(OperationOutcome.Failed, "capture.failed", "The capture failed; no output was published.");
+            }
+        }
+
+        private static OperationResult<CaptureProxyResult> Validate(CaptureProxyRequest request)
+        {
+            if (request == null || request.Port is < 1 or > 65535 ||
+                request.DurationSeconds is < 1 or > 86400 ||
+                !string.Equals(Path.GetExtension(request.OutputPath), ".xmatcap", StringComparison.OrdinalIgnoreCase))
+            {
+                return Failure(OperationOutcome.InvalidInput, "capture.options.invalid", "Capture options are invalid.");
+            }
+            try
+            {
+                ArgumentNullException.ThrowIfNull(request.Shaping);
+                request.Shaping.Validate();
+            }
+            catch (ArgumentException)
+            {
+                return Failure(OperationOutcome.InvalidInput, "capture.profile.invalid", "The shaping settings are invalid.");
+            }
+            if (request.Shaping.Schedule?.Any(change => change.AfterSeconds >= request.DurationSeconds) == true)
+            {
+                return Failure(
+                    OperationOutcome.InvalidInput, "capture.profile.invalid",
+                    "Scheduled shaping changes must occur before the capture duration ends.");
+            }
+            string parent;
+            try
+            {
+                parent = Path.GetDirectoryName(Path.GetFullPath(request.OutputPath));
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or SecurityException)
+            {
+                return Failure(OperationOutcome.InvalidInput, "capture.options.invalid", "Capture options are invalid.");
+            }
+            return string.IsNullOrEmpty(parent) || !Directory.Exists(parent)
+                ? Failure(
+                    OperationOutcome.InvalidInput, "capture.output.parent-missing",
+                    "The folder that should contain the output file does not exist.")
+                : null;
+        }
+
+        private static async Task<OperationResult<CaptureProxyResult>> CaptureAsync(
+            CaptureProxyRequest request, CertificateManager certificates,
+            OperationContext context, CancellationToken cancellationToken)
+        {
+            long records = 0;
+            NetworkShapingMetadata metadata = null;
+            bool listenUnavailable = false;
+            try
+            {
                 var diagnostics = new List<OperationDiagnostic>();
                 var publisher = new CaptureExportPublisher();
                 PublishedCapture publication = await publisher.PublishAsync(
                     request.OutputPath, false, false, _ => { },
                     async (staged, token) =>
                     {
-                        using X509Certificate2 authority = LoadAuthority(request.RootPfx);
-                        using var certificates = new CertificateManager(authority);
                         var proxy = new WebServiceProxy(certificates, applicationDiagnostics: false);
                         if (request.RootPfx == null)
                         {
@@ -81,6 +153,8 @@ namespace XMAT.Operations.Captures
                         {
                             throw new ArgumentException("Invalid initial shaping profile.");
                         }
+                        // The recorded history starts at the requested profile, not the controller's initial Off.
+                        shaping.ResetHistory();
                         diagnostics.AddRange(initial.Diagnostics);
                         using var recorder = new ProxyCaptureRecorder(staged);
                         recorder.Attach(proxy);
@@ -89,15 +163,23 @@ namespace XMAT.Operations.Captures
                         Task schedule = Task.CompletedTask;
                         try
                         {
-                            await proxy.StartProxyAsync(new WebServiceProxyOptions
+                            try
                             {
-                                Port = request.Port,
-                                ListenAddress = request.ListenAddress ?? IPAddress.Loopback,
-                                LogFilePath = log,
-                                CurrentLogLevel = LogLevel.NONE,
-                                Shaping = shaping,
-                                BodyTimeoutSeconds = request.Shaping.BodyTimeoutSeconds,
-                            }, token).ConfigureAwait(false);
+                                await proxy.StartProxyAsync(new WebServiceProxyOptions
+                                {
+                                    Port = request.Port,
+                                    ListenAddress = request.ListenAddress ?? IPAddress.Loopback,
+                                    LogFilePath = log,
+                                    CurrentLogLevel = LogLevel.NONE,
+                                    Shaping = shaping,
+                                    BodyTimeoutSeconds = request.Shaping.BodyTimeoutSeconds,
+                                }, token).ConfigureAwait(false);
+                            }
+                            catch (Exception ex) when (IsListenUnavailable(ex))
+                            {
+                                listenUnavailable = true;
+                                throw;
+                            }
                             context.Progress.Report(new OperationProgress("capture.listening", request.Port));
                             schedule = ScheduleAsync(shaping, request.Shaping, diagnostics, running.Token);
                             Task duration = Task.Delay(TimeSpan.FromSeconds(request.DurationSeconds), token);
@@ -151,19 +233,68 @@ namespace XMAT.Operations.Captures
                     new[] { new OperationDiagnostic(
                         "capture.cleanup.failed", OperationDiagnosticSeverity.Error, "Capture cleanup failed.") });
             }
-            catch (CaptureExportDestinationException)
+            catch (CaptureExportDestinationException ex)
+            {
+                return ex.Code switch
+                {
+                    "export.output.exists" => Failure(
+                        OperationOutcome.Conflict, "capture.output.exists",
+                        "The output file already exists; capture never overwrites output."),
+                    "export.output.locked" => Failure(
+                        OperationOutcome.Conflict, "capture.output.locked", "The output file is locked by another program."),
+                    _ => Failure(OperationOutcome.Conflict, "capture.output.conflict", "The output path cannot be used."),
+                };
+            }
+            catch (CaptureSaveException ex) when (ex.Failure == CaptureSaveFailure.Refused)
             {
                 return Failure(OperationOutcome.Conflict, "capture.output.conflict", "The output path cannot be used.");
             }
-            catch (Exception ex) when (ex is ArgumentException or CryptographicException)
+            catch (CaptureExportException ex) when (ex.Code == CaptureExportErrorCodes.OutputUnprotected)
             {
-                return Failure(OperationOutcome.InvalidInput, "capture.options.invalid", "Capture options or the supplied CA certificate are invalid.");
+                return Failure(
+                    OperationOutcome.Failed, "capture.output.unprotected",
+                    "The output folder cannot keep the capture private; use storage with Windows permissions, such as NTFS.");
             }
-            catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex))
+            catch (Exception) when (listenUnavailable)
             {
-                return Failure(OperationOutcome.Failed, "capture.failed", "The capture failed; no output was published.");
+                return Failure(
+                    OperationOutcome.Conflict, "capture.listen.unavailable",
+                    "The listening address or port could not be opened. It may be in use, reserved, or not assigned to this PC.");
+            }
+            catch (ArgumentException)
+            {
+                return Failure(OperationOutcome.InvalidInput, "capture.options.invalid", "Capture options are invalid.");
             }
         }
+
+        private static bool IsListenUnavailable(Exception exception)
+        {
+            for (Exception current = exception; current != null; current = current.InnerException)
+            {
+                if (current is AddressInUseException ||
+                    current is SocketException
+                    {
+                        SocketErrorCode: SocketError.AddressAlreadyInUse or SocketError.AddressNotAvailable or SocketError.AccessDenied,
+                    })
+                {
+                    return true;
+                }
+                if (current is AggregateException aggregate && aggregate.InnerExceptions.Any(IsListenUnavailable))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsUnusableAuthority(Exception exception) =>
+            exception is IOException or UnauthorizedAccessException or CryptographicException or
+                ArgumentException or NotSupportedException or SecurityException;
+
+        private static OperationResult<CaptureProxyResult> InvalidAuthority() =>
+            Failure(
+                OperationOutcome.InvalidInput, "capture.ca.invalid",
+                "The CA certificate could not be read or is not a currently valid, passwordless CA PFX with its private key.");
 
         private static async Task ScheduleAsync(
             NetworkShapingController controller, NetworkShapingPlan plan,

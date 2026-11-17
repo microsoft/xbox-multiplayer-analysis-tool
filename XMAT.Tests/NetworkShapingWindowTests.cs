@@ -39,5 +39,55 @@ namespace XMAT.Tests
                 }
             });
         }
+
+        [Fact]
+        public void MatchingPresetIsSelectedAndNonShapingModesNeverRecordRates()
+        {
+            application.Run(_ =>
+            {
+                var dialog = new NetworkShapingWindow(NetworkShapingProfile.Preset("avg"), 120, running: false);
+                try
+                {
+                    var preset = Assert.IsType<ComboBox>(dialog.FindName("Preset"));
+                    var down = Assert.IsType<TextBox>(dialog.FindName("Down"));
+                    Assert.Equal("avg", preset.SelectedItem);
+                    Assert.True(down.IsEnabled);
+
+                    preset.SelectedItem = "broken";
+                    Assert.False(down.IsEnabled);
+                    down.Text = "500";
+                    Assert.True(dialog.TryReadSelection());
+                    Assert.Equal(new NetworkShapingProfile(NetworkShapingMode.Broken), dialog.SelectedProfile);
+
+                    preset.SelectedItem = "custom";
+                    Assert.True(down.IsEnabled);
+                    down.Text = "500";
+                    Assert.True(dialog.TryReadSelection());
+                    Assert.Equal(500, dialog.SelectedProfile.DownKbps);
+                }
+                finally
+                {
+                    dialog.Close();
+                }
+            });
+        }
+
+        [Fact]
+        public void EditedShapingValuesShowAsCustom()
+        {
+            application.Run(_ =>
+            {
+                var dialog = new NetworkShapingWindow(
+                    new NetworkShapingProfile(NetworkShapingMode.Shape, DownKbps: 500), 120, running: false);
+                try
+                {
+                    Assert.Equal("custom", Assert.IsType<ComboBox>(dialog.FindName("Preset")).SelectedItem);
+                }
+                finally
+                {
+                    dialog.Close();
+                }
+            });
+        }
     }
 }

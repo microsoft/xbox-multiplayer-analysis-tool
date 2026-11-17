@@ -105,6 +105,7 @@ namespace XMAT.Cli
                 yield return "No system proxy, trust-store, firewall or console settings are changed. TLS is opaque unless";
                 yield return "--root-pfx supplies a private, passwordless CA PFX trusted by the client. Protect that private key.";
                 yield return "Rates are shared across this listener's connections; latency/jitter are added RTT in milliseconds.";
+                yield return "Ranges: rates 0-1000000 kbps (0 = unlimited), latency 0-10000 ms, jitter 0 to the latency.";
                 yield return "A version-1 JSON --shape-profile can schedule live changes. Do not mix it with shaping flags.";
                 yield return "Duration is 1-86400 seconds. The 120-second upload deadline can be explicitly set to 1-1800.";
                 yield return "Ctrl+C cancels and publishes nothing, like analyze/export; normal duration expiry saves the capture.";

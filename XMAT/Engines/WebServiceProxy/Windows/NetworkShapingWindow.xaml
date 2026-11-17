@@ -6,6 +6,7 @@
         Foreground="{DynamicResource PrimaryForegroundBrush}">
   <StackPanel Margin="16">
     <TextBlock x:Name="Instructions" TextWrapping="Wrap" Margin="0,0,0,12"/>
+    <Label x:Name="PresetLabel" Target="{Binding ElementName=Preset}"/>
     <ComboBox x:Name="Preset" SelectionChanged="Preset_SelectionChanged" Margin="0,0,0,8"/>
     <Label x:Name="DownLabel" Target="{Binding ElementName=Down}"/>
     <TextBox x:Name="Down"/>

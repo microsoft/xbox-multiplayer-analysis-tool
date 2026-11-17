@@ -59,6 +59,24 @@ namespace XMAT.Tests
         }
 
         [Fact]
+        public async Task ConcurrentRequestsForOneHostShareOneCertificate()
+        {
+            using RSA rsa = RSA.Create(2048);
+            var request = new CertificateRequest("CN=XMAT synthetic CA", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+            using X509Certificate2 root = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+            using var manager = new CertificateManager(root);
+            using var start = new Barrier(8);
+            X509Certificate2[] issued = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Factory.StartNew(() =>
+            {
+                start.SignalAndWait();
+                return manager.GetCertificateForHost("concurrent.example");
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)));
+            Assert.All(issued, certificate => Assert.Same(issued[0], certificate));
+            Assert.NotSame(issued[0], manager.GetCertificateForHost("other.example"));
+        }
+
+        [Fact]
         public void CreateRootCertificate_ReturnsTrue_WhenCachedRootCertCanIssueHostCertificates()
         {
             using var manager = new CertificateManager(storeCerts: false);

@@ -18,6 +18,9 @@ namespace XMAT.WebServiceCapture.Proxy
     {
         private const int ChunkSize = 16 * 1024;
 
+        // Each pump direction owns this many chunks, so a stalled peer can never starve other connections.
+        private const int ReservedChunks = 4;
+
         internal static IConnectionBuilder UseNetworkShaping(
             this IConnectionBuilder builder,
             NetworkShapingController controller)
@@ -89,13 +92,14 @@ namespace XMAT.WebServiceCapture.Proxy
             CancellationToken cancellationToken)
         {
             using var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var reserve = new SemaphoreSlim(ReservedChunks, ReservedChunks);
             var queue = Channel.CreateBounded<Chunk>(new BoundedChannelOptions(64)
             {
                 SingleReader = true,
                 SingleWriter = true,
                 FullMode = BoundedChannelFullMode.Wait,
             });
-            Task producer = ProduceAsync(source, queue.Writer, controller, stopping.Token);
+            Task producer = ProduceAsync(source, queue.Writer, controller, reserve, stopping.Token);
             Exception failure = null;
             try
             {
@@ -147,6 +151,7 @@ namespace XMAT.WebServiceCapture.Proxy
             PipeReader source,
             ChannelWriter<Chunk> destination,
             NetworkShapingController controller,
+            SemaphoreSlim reserve,
             CancellationToken cancellationToken)
         {
             Exception failure = null;
@@ -162,11 +167,12 @@ namespace XMAT.WebServiceCapture.Proxy
                         while (!buffer.IsEmpty)
                         {
                             int length = (int)Math.Min(ChunkSize, buffer.Length);
-                            await controller.BufferSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
+                            SemaphoreSlim slots = await AcquireSlotAsync(reserve, controller, cancellationToken)
+                                .ConfigureAwait(false);
                             Chunk chunk = null;
                             try
                             {
-                                chunk = new Chunk(controller, length, arrived);
+                                chunk = new Chunk(slots, length, arrived);
                                 buffer.Slice(0, length).CopyTo(chunk.Buffer);
                                 await destination.WriteAsync(chunk, cancellationToken).ConfigureAwait(false);
                             }
@@ -174,7 +180,7 @@ namespace XMAT.WebServiceCapture.Proxy
                             {
                                 if (chunk == null)
                                 {
-                                    controller.BufferSlots.Release();
+                                    slots.Release();
                                 }
                                 else
                                 {
@@ -206,6 +212,26 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
+        // Shaped transfers may borrow shared slots, without waiting, to pipeline latency. Unshaped transfers
+        // and transfers whose borrowing failed wait only for their own reserve to drain.
+        private static async ValueTask<SemaphoreSlim> AcquireSlotAsync(
+            SemaphoreSlim reserve,
+            NetworkShapingController controller,
+            CancellationToken cancellationToken)
+        {
+            if (reserve.Wait(0, CancellationToken.None))
+            {
+                return reserve;
+            }
+            if (controller.ReadSnapshot().Profile.Mode == NetworkShapingMode.Shape
+                && controller.BufferSlots.Wait(0, CancellationToken.None))
+            {
+                return controller.BufferSlots;
+            }
+            await reserve.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return reserve;
+        }
+
         private static async Task DelayAsync(
             Chunk chunk,
             NetworkShapingController controller,
@@ -229,7 +255,7 @@ namespace XMAT.WebServiceCapture.Proxy
             }
         }
 
-        private sealed class Chunk(NetworkShapingController controller, int length, double arrived) : IDisposable
+        private sealed class Chunk(SemaphoreSlim slots, int length, double arrived) : IDisposable
         {
             internal byte[] Buffer { get; } = ArrayPool<byte>.Shared.Rent(ChunkSize);
             internal int Length { get; } = length;
@@ -239,7 +265,7 @@ namespace XMAT.WebServiceCapture.Proxy
             public void Dispose()
             {
                 ArrayPool<byte>.Shared.Return(Buffer, clearArray: true);
-                controller.BufferSlots.Release();
+                slots.Release();
             }
         }
 

@@ -17,6 +17,8 @@ namespace XMAT.WebServiceCapture.Proxy
 
     public sealed class NetworkShapingController
     {
+        internal const int MaximumHistory = 4096;
+
         private readonly object _gate = new();
         private readonly HashSet<ConnectionContext> _connections = new();
         private readonly List<NetworkShapingChange> _history = new();
@@ -53,7 +55,15 @@ namespace XMAT.WebServiceCapture.Proxy
             Snapshot previous;
             lock (_gate)
             {
-                if (_history.Count >= 4096)
+                // Shape and Broken stop at the cap. Disconnect, then Off, keep reserved entries, so a full
+                // history can always return to an unshaped state.
+                int limit = profile.Mode switch
+                {
+                    NetworkShapingMode.Off => MaximumHistory + 2,
+                    NetworkShapingMode.Disconnect => MaximumHistory + 1,
+                    _ => MaximumHistory,
+                };
+                if (_history.Count >= limit)
                 {
                     throw new InvalidOperationException("The capture's shaping history is full.");
                 }

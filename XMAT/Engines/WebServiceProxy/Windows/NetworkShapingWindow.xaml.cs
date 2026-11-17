@@ -13,6 +13,8 @@ namespace XMAT.WebServiceCapture
 {
     public partial class NetworkShapingWindow : Window
     {
+        private static readonly string[] ShapedPresets = { "min", "avg", "exc" };
+
         internal NetworkShapingProfile SelectedProfile { get; private set; }
         internal int BodyTimeoutSeconds { get; private set; }
 
@@ -21,6 +23,7 @@ namespace XMAT.WebServiceCapture
             InitializeComponent();
             Title = Localization.GetLocalizedString("SHAPING_TITLE");
             Instructions.Text = Localization.GetLocalizedString("SHAPING_HELP");
+            PresetLabel.Content = Localization.GetLocalizedString("SHAPING_PRESET");
             DownLabel.Content = Localization.GetLocalizedString("SHAPING_DOWN");
             UpLabel.Content = Localization.GetLocalizedString("SHAPING_UP");
             LatencyLabel.Content = Localization.GetLocalizedString("SHAPING_LATENCY");
@@ -30,11 +33,15 @@ namespace XMAT.WebServiceCapture
             CancelButton.Content = Localization.GetLocalizedString("CANCEL");
             Preset.ItemsSource = new[] { "off", "min", "avg", "exc", "custom", "broken", "disconnect" };
             Preset.SelectedItem = current.Mode == NetworkShapingMode.Shape
-                ? "custom" : current.Mode.ToString().ToLowerInvariant();
+                ? Array.Find(ShapedPresets, name => NetworkShapingProfile.Preset(name) == current) ?? "custom"
+                : current.Mode.ToString().ToLowerInvariant();
             ShowValues(current);
             Timeout.Text = timeout.ToString(CultureInfo.InvariantCulture);
             Timeout.IsEnabled = !running;
         }
+
+        // Rates apply only to shaping; off, broken and disconnect never record the edited values.
+        private bool Shaped => Preset.SelectedItem is string name && (name == "custom" || Array.IndexOf(ShapedPresets, name) >= 0);
 
         private void Preset_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
@@ -42,6 +49,7 @@ namespace XMAT.WebServiceCapture
             {
                 ShowValues(NetworkShapingProfile.Preset(name));
             }
+            Down.IsEnabled = Up.IsEnabled = Latency.IsEnabled = Jitter.IsEnabled = Shaped;
         }
 
         private void ShowValues(NetworkShapingProfile profile)
@@ -54,23 +62,30 @@ namespace XMAT.WebServiceCapture
 
         private void Apply_Click(object sender, RoutedEventArgs e)
         {
+            if (TryReadSelection())
+            {
+                DialogResult = true;
+            }
+        }
+
+        internal bool TryReadSelection()
+        {
             try
             {
-                string preset = Preset.SelectedItem as string;
-                NetworkShapingMode mode = preset is "off" or "broken" or "disconnect"
-                    ? NetworkShapingProfile.Preset(preset).Mode
-                    : NetworkShapingMode.Shape;
-                var profile = new NetworkShapingProfile(
-                    mode, Number(Down), Number(Up), Number(Latency), Number(Jitter));
+                NetworkShapingProfile profile = Shaped
+                    ? new NetworkShapingProfile(
+                        NetworkShapingMode.Shape, Number(Down), Number(Up), Number(Latency), Number(Jitter))
+                    : NetworkShapingProfile.Preset((string)Preset.SelectedItem);
                 int timeout = Number(Timeout);
                 new NetworkShapingPlan(1, profile, BodyTimeoutSeconds: timeout).Validate();
                 SelectedProfile = profile;
                 BodyTimeoutSeconds = timeout;
-                DialogResult = true;
+                return true;
             }
             catch (Exception ex) when (ex is ArgumentException or FormatException or OverflowException)
             {
                 ValidationMessage.Text = Localization.GetLocalizedString("SHAPING_INVALID");
+                return false;
             }
         }
 

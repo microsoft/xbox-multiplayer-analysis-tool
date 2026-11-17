@@ -8,7 +8,9 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Security;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using XMAT.Operations;
@@ -19,6 +21,8 @@ namespace XMAT.Cli
 {
     internal static class CliCaptureCommand
     {
+        private const int MaximumProfileBytes = 256 * 1024;
+
         private static readonly HashSet<string> Options = new(StringComparer.Ordinal)
         {
             "--port", "--duration-seconds", "--out", "--listen", "--root-pfx",
@@ -26,81 +30,196 @@ namespace XMAT.Cli
             "--body-timeout-seconds", "--shape-profile",
         };
 
+        private static readonly string[] Presets = { "off", "min", "avg", "exc", "broken", "disconnect" };
+        private static readonly string[] CustomShapingOptions = { "--down-kbps", "--up-kbps", "--latency-ms", "--jitter-ms" };
+
+        // Each usage error names the option at fault but never repeats its value.
         internal static CliParseResult Parse(IReadOnlyList<string> args)
         {
+            const string command = CliCommands.Capture;
             var arguments = new CliArguments();
-            CliParseResult error = arguments.Read(args, CliCommands.Capture, Options);
+            CliParseResult error = arguments.Read(args, command, Options);
             if (error != null)
             {
                 return error;
             }
             if (arguments.HelpRequested)
             {
-                return CliParseResult.Success(new CliRequest(CliCommands.Help, Topic: CliCommands.Capture));
+                return CliParseResult.Success(new CliRequest(CliCommands.Help, Topic: command));
+            }
+            if (arguments.Positionals.Count != 0)
+            {
+                return CliParseResult.UsageError(command, "cli.usage.unexpected-argument", "capture takes no INPUT; use its options.");
+            }
+            foreach ((string required, string message) in new[]
+            {
+                ("--port", "capture needs --port N (1-65535)."),
+                ("--duration-seconds", "capture needs --duration-seconds N (1-86400)."),
+                ("--out", "capture needs --out FILE.xmatcap."),
+            })
+            {
+                if (!arguments.Options.ContainsKey(required))
+                {
+                    return CliParseResult.UsageError(command, "cli.usage.missing-option", message);
+                }
+            }
+            string output = arguments.Options["--out"];
+            if (!string.Equals(Path.GetExtension(output), ".xmatcap", StringComparison.OrdinalIgnoreCase))
+            {
+                return Invalid("--out must name a .xmatcap file.");
+            }
+            if (!TryNumber(arguments, "--port", 1, 65535, 0, out int port))
+            {
+                return Invalid("--port takes a number from 1 to 65535.");
+            }
+            if (!TryNumber(arguments, "--duration-seconds", 1, 86400, 0, out int duration))
+            {
+                return Invalid("--duration-seconds takes a number from 1 to 86400.");
+            }
+            IPAddress address = IPAddress.Loopback;
+            if (arguments.Options.TryGetValue("--listen", out string listen) && !IPAddress.TryParse(listen, out address))
+            {
+                return Invalid("--listen takes an IP address, such as 127.0.0.1 or 0.0.0.0.");
+            }
+            arguments.Options.TryGetValue("--root-pfx", out string root);
+            arguments.Options.TryGetValue("--shape-profile", out string file);
+            if (file != null &&
+                (arguments.Options.ContainsKey("--shape") || arguments.Options.ContainsKey("--body-timeout-seconds") ||
+                 CustomShapingOptions.Any(arguments.Options.ContainsKey)))
+            {
+                return Invalid("--shape-profile cannot be combined with --shape, --down-kbps, --up-kbps, " +
+                    "--latency-ms, --jitter-ms or --body-timeout-seconds.");
+            }
+
+            NetworkShapingPlan plan = null;
+            if (file == null)
+            {
+                error = ReadShapingPlan(arguments, out plan);
+                if (error != null)
+                {
+                    return error;
+                }
+            }
+            return CliParseResult.Success(new CliRequest(
+                command,
+                Output: output,
+                Capture: new(port, duration, output, plan, root, address),
+                ShapingProfilePath: file));
+        }
+
+        private static CliParseResult ReadShapingPlan(CliArguments arguments, out NetworkShapingPlan plan)
+        {
+            plan = null;
+            bool custom = CustomShapingOptions.Any(arguments.Options.ContainsKey);
+            NetworkShapingProfile profile = new(custom ? NetworkShapingMode.Shape : NetworkShapingMode.Off);
+            if (arguments.Options.TryGetValue("--shape", out string preset))
+            {
+                if (!Presets.Contains(preset, StringComparer.Ordinal))
+                {
+                    return Invalid("--shape takes off, min, avg, exc, broken or disconnect.");
+                }
+                profile = NetworkShapingProfile.Preset(preset);
+            }
+            if (custom && profile.Mode != NetworkShapingMode.Shape)
+            {
+                return Invalid("--down-kbps, --up-kbps, --latency-ms and --jitter-ms need --shape min, avg or exc, or no --shape.");
+            }
+            if (!TryNumber(arguments, "--down-kbps", 0, 1_000_000, profile.DownKbps, out int down) ||
+                !TryNumber(arguments, "--up-kbps", 0, 1_000_000, profile.UpKbps, out int up))
+            {
+                return Invalid("--down-kbps and --up-kbps take a number from 0 (unlimited) to 1000000.");
+            }
+            if (!TryNumber(arguments, "--latency-ms", 0, 10_000, profile.LatencyMs, out int latency))
+            {
+                return Invalid("--latency-ms takes a number from 0 to 10000.");
+            }
+            if (!TryNumber(arguments, "--jitter-ms", 0, latency, profile.JitterMs, out int jitter))
+            {
+                return Invalid("--jitter-ms takes a number from 0 to the added round-trip latency.");
+            }
+            if (!TryNumber(arguments, "--body-timeout-seconds", 1, 1800, 120, out int bodyTimeout))
+            {
+                return Invalid("--body-timeout-seconds takes a number from 1 to 1800.");
+            }
+            plan = new NetworkShapingPlan(
+                1, profile with { DownKbps = down, UpKbps = up, LatencyMs = latency, JitterMs = jitter },
+                BodyTimeoutSeconds: bodyTimeout);
+            plan.Validate();
+            return null;
+        }
+
+        private static bool TryNumber(CliArguments arguments, string name, int minimum, int maximum, int fallback, out int value)
+        {
+            value = fallback;
+            return !arguments.Options.TryGetValue(name, out string text) ||
+                (int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value) &&
+                 value >= minimum && value <= maximum);
+        }
+
+        private static CliParseResult Invalid(string message) =>
+            CliParseResult.UsageError(CliCommands.Capture, "cli.usage.invalid-value", message);
+
+        // Mirrors analyze's --out checks, so output mistakes fail before a listener or profile is opened.
+        private static CliFailure CheckOutput(string output)
+        {
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(output);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or SecurityException)
+            {
+                return new CliFailure(CliExitCodes.Usage, "cli.usage.invalid-value", "--out is not a valid file path.");
+            }
+            if (Path.Exists(fullPath))
+            {
+                return new CliFailure(
+                    CliExitCodes.Conflict, "cli.output.exists", "The --out file already exists; xmat never overwrites output.");
+            }
+            string parent = Path.GetDirectoryName(fullPath);
+            return string.IsNullOrEmpty(parent) || !Directory.Exists(parent)
+                ? new CliFailure(
+                    CliExitCodes.Usage, "cli.output.parent-missing", "The folder that should contain the --out file does not exist.")
+                : null;
+        }
+
+        private static async Task<(CliFailure Failure, NetworkShapingPlan Plan)> ReadProfileAsync(
+            string path, CancellationToken cancellationToken)
+        {
+            byte[] bytes;
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (stream.Length > MaximumProfileBytes)
+                {
+                    return (Profile("The --shape-profile file exceeds 256 KiB."), null);
+                }
+                bytes = new byte[(int)stream.Length];
+                await stream.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or SecurityException)
+            {
+                return (new CliFailure(
+                    CliExitCodes.InvalidInput, "capture.profile.unreadable", "The --shape-profile file could not be read."), null);
             }
             try
             {
-                if (arguments.Positionals.Count != 0 ||
-                    !arguments.Options.TryGetValue("--out", out string output) ||
-                    !arguments.Options.ContainsKey("--port") ||
-                    !arguments.Options.ContainsKey("--duration-seconds") ||
-                    !string.Equals(Path.GetExtension(output), ".xmatcap", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new ArgumentException("Capture requires a port, duration and native output path.");
-                }
-                int Number(string name, int fallback) => arguments.Options.TryGetValue(name, out string text)
-                    ? int.Parse(text, NumberStyles.None, CultureInfo.InvariantCulture) : fallback;
-                int port = Number("--port", 0);
-                int duration = Number("--duration-seconds", 0);
-                if (port is < 1 or > 65535 || duration is < 1 or > 86400)
-                {
-                    throw new ArgumentException("Capture port or duration is out of range.");
-                }
-                arguments.Options.TryGetValue("--shape-profile", out string file);
-                string[] shapingOptions =
-                    { "--shape", "--down-kbps", "--up-kbps", "--latency-ms", "--jitter-ms", "--body-timeout-seconds" };
-                if (file != null && shapingOptions.Any(arguments.Options.ContainsKey))
-                {
-                    throw new ArgumentException("Profile files and shaping flags cannot be combined.");
-                }
-                arguments.Options.TryGetValue("--shape", out string preset);
-                bool custom = shapingOptions.Skip(1).Take(4).Any(arguments.Options.ContainsKey);
-                NetworkShapingProfile profile = preset == null
-                    ? new(custom ? NetworkShapingMode.Shape : NetworkShapingMode.Off)
-                    : NetworkShapingProfile.Preset(preset);
-                if (custom && profile.Mode != NetworkShapingMode.Shape)
-                {
-                    throw new ArgumentException("Bandwidth and latency options require shaping mode.");
-                }
-                profile = profile with
-                {
-                    DownKbps = Number("--down-kbps", profile.DownKbps),
-                    UpKbps = Number("--up-kbps", profile.UpKbps),
-                    LatencyMs = Number("--latency-ms", profile.LatencyMs),
-                    JitterMs = Number("--jitter-ms", profile.JitterMs),
-                };
-                var plan = new NetworkShapingPlan(1, profile, BodyTimeoutSeconds: Number("--body-timeout-seconds", 120));
-                plan.Validate();
-                IPAddress address = IPAddress.Loopback;
-                if (arguments.Options.TryGetValue("--listen", out string listen) &&
-                    !IPAddress.TryParse(listen, out address))
-                {
-                    throw new ArgumentException("An IP listening address is required.");
-                }
-                arguments.Options.TryGetValue("--root-pfx", out string root);
-                return CliParseResult.Success(new CliRequest(
-                    CliCommands.Capture,
-                    Output: output,
-                    Capture: new(port, duration, output, plan, root, address),
-                    ShapingProfilePath: file));
+                return (null, NetworkShapingPlan.Parse(Encoding.UTF8.GetString(bytes)));
             }
-            catch (Exception ex) when (ex is ArgumentException or FormatException or OverflowException)
+            catch (JsonException)
             {
-                return CliParseResult.UsageError(
-                    CliCommands.Capture, "cli.capture.options",
-                    "capture needs --port (1-65535), --duration-seconds (1-86400), and --out FILE.xmatcap. " +
-                    "Shaping values must be valid; --shape-profile cannot be combined with shaping flags.");
+                return (Profile(
+                    "The --shape-profile file is not valid shaping profile JSON; check its syntax and property names."), null);
             }
+            catch (ArgumentException)
+            {
+                return (Profile(
+                    "The --shape-profile values are invalid; check the version, value ranges and schedule order."), null);
+            }
+
+            static CliFailure Profile(string message) =>
+                new(CliExitCodes.InvalidInput, "capture.profile.invalid", message);
         }
 
         internal static async Task<CliReport> RunAsync(
@@ -108,24 +227,23 @@ namespace XMAT.Cli
         {
             var report = new CliReport(CliCommands.Capture, runId);
             CaptureProxyRequest capture = request.Capture;
-            if (request.ShapingProfilePath != null)
+            CliFailure failure = CheckOutput(capture.OutputPath);
+            if (failure == null && request.ShapingProfilePath != null)
             {
-                try
-                {
-                    using var stream = new FileStream(request.ShapingProfilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    if (stream.Length > 256 * 1024)
-                    {
-                        throw new InvalidDataException();
-                    }
-                    var bytes = new byte[(int)stream.Length];
-                    await stream.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
-                    capture = capture with { Shaping = NetworkShapingPlan.Parse(Encoding.UTF8.GetString(bytes)) };
-                }
-                catch (Exception ex) when (!ExceptionUtilities.IsFatal(ex) && ex is not OperationCanceledException)
-                {
-                    report.Fail(CliExitCodes.InvalidInput, "capture.profile.invalid", "The shaping profile could not be read or is invalid.");
-                    return report;
-                }
+                (failure, NetworkShapingPlan plan) = await ReadProfileAsync(
+                    request.ShapingProfilePath, cancellationToken).ConfigureAwait(false);
+                capture = capture with { Shaping = plan };
+            }
+            if (failure == null && capture.Shaping.Schedule?.Any(change => change.AfterSeconds >= capture.DurationSeconds) == true)
+            {
+                failure = new CliFailure(
+                    CliExitCodes.InvalidInput, "capture.profile.invalid",
+                    "Scheduled shaping changes in --shape-profile must occur before --duration-seconds ends.");
+            }
+            if (failure != null)
+            {
+                report.Fail(failure.ExitCode, failure.Code, failure.Message);
+                return report;
             }
             OperationResult<CaptureProxyResult> result = await new CaptureProxyOperation().ExecuteAsync(
                 capture,
